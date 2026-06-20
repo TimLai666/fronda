@@ -80,6 +80,8 @@ enum Transcription {
 
     static func matchLocale(candidates: [Locale], supported: [Locale]) -> Locale? {
         for candidate in candidates {
+            // Strip Unicode extension tags (e.g. -u-rg-zazzzz from en-US-u-rg-zazzzz) before
+            // matching — the Speech framework doesn't recognise composite BCP 47 tags.
             let baseId = candidate.identifier(.bcp47).components(separatedBy: "-u-").first
                 ?? candidate.identifier
             let base = Locale(identifier: baseId)
