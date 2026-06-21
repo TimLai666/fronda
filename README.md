@@ -22,6 +22,12 @@
 
 Palmier Pro is an open source video editor for Mac. You and your agent can generate and edit videos together inside the timeline.
 
+## Fork status
+
+This repository is a modified fork of [Palmier Pro](https://github.com/palmier-io/palmier-pro). The goal of this fork is a Rust-based, cross-platform rewrite.
+
+Until that rewrite lands, parts of this repository still reflect the original Swift and macOS-specific implementation from upstream.
+
 ### Swift-native video editor
 
 We built Palmier Pro from scratch with Swift. The north star is Premiere Pro, with our take on integrating AI into the workflow.
@@ -39,11 +45,13 @@ Connects your Claude/Codex/Cursor via MCP, or use the in-app agent to work on th
 When the app is open, it exposes an MCP server at `http://127.0.0.1:19789/mcp` via HTTP. To connect:
 
 **Claude Code**
+
 ```bash
 claude mcp add --transport http palmier-pro http://127.0.0.1:19789/mcp
 ```
 
 **Codex**
+
 ```bash
 codex mcp add palmier-pro --url http://127.0.0.1:19789/mcp
 ```
@@ -93,7 +101,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 - **Discord:** Join the community on **[Discord](https://discord.com/invite/SMVW6pKYmg)**.
 - **Twitter / X:** Follow **[@Palmier_io](https://x.com/Palmier_io)** for updates and announcements.
-- **Instagram:** Follow [@palmier.io](https://www.instagram.com/palmier.io) 
+- **Instagram:** Follow [@palmier.io](https://www.instagram.com/palmier.io)
 - **Feedback &amp; Support:** Create a [Github Issue](https://github.com/palmier-io/palmier-pro/issues) or email us at founders@palmier.io
 
 ## Star History
@@ -108,6 +116,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 
-Copyright (C) 2026 Palmier, Inc.
+- Modified fork copyright: Copyright (C) 2026 TimLai666
+- Original upstream copyright: Copyright (C) 2026 Palmier, Inc.
+- Original project source: <https://github.com/palmier-io/palmier-pro>
 
-Palmier Pro is open source under [GPLv3](LICENSE).
+This repository remains available under [GPLv3](LICENSE). See [NOTICE.md](NOTICE.md) for fork and modification notices.
