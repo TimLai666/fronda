@@ -6,6 +6,12 @@ This file maps the spec families to recommended Rust test layers and the best cu
 
 Suggested structure:
 
+- `crates/runtime_contract`
+  - package/runtime metadata snapshots
+  - bundle/document/updater contract checks
+  - design-token snapshots
+  - settings/help/menu contract snapshots
+  - generation catalog schema and cost formulas
 - `crates/core_model`
   - timeline structs
   - clip math
@@ -49,7 +55,7 @@ Suggested structure:
   - shortcuts
   - mention picker
   - chat send/stop behavior
-  - settings/help/app shell glue
+  - settings/help/feedback/app shell glue
 
 ## B. Test-layer rules
 
@@ -72,6 +78,8 @@ Suggested structure:
 
 | Spec families                                                     | Preferred Rust test layer                            | Best current Swift evidence                                                                     | Biggest gaps                                        |
 | ----------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `RUN`, `PKG`, `BNDL`, `BOOT`, `WIN`, `MENU`, `KEY`, `UIX`, `THM`  | Snapshot + UI contract tests                         | mostly source-only: `Package.swift`, `Info.plist`, `Constants.swift`, `AppTheme.swift`          | package/UI-token drift detection                    |
+| `SETUI`, `HELP`, `FBK`, `CAT`, `GPAY`, `COST`, `CFG`              | Snapshot + state-machine/unit tests                  | mostly source-only: `Settings/**`, `Help/**`, `Generation/Catalog/**`, `BackendConfig.swift`    | model catalog/backend config fixtures               |
 | `CORE`, `FMT`, `RES`, `PCFG`                                      | Unit + serde round-trip                              | `ProjectRoundTripTests`, `MediaResolverTests`, `ClipMutationsTests`                             | file-package integration coverage                   |
 | `PRJ`, `REC`                                                      | Temp-dir integration tests                           | `ProjectRegistryTests`                                                                          | full `VideoProject` open/save integration           |
 | `MED`, `FLD`, `PST`, `CCB`, `RLK`, `SAV`, `SMP`, `PSET`           | Temp-dir integration + some UI routing tests         | `MediaPanelTests`, `LottieImportTests`, `SegmentTrimTests`                                      | relink, save-as-media, sample-project flows         |
@@ -133,13 +141,16 @@ These should become first-wave Rust acceptance tests:
 10. telemetry enable/disable + launch-latched behavior
 11. MCP transport and resource listing
 12. chat-session tab lifecycle and agent-panel UX under `gpui-ce`
+13. runtime/package metadata and Info.plist drift checks
+14. AppTheme/design-token snapshot checks
+15. generation model catalog schema and cost-estimation fixtures
 
 ## E. What should use `gpui-ce` test support
 
 Use `gpui-ce` UI tests for behavior that is inherently interactive and view-bound:
 
 - pane visibility / maximize / layout preset switching
-- keyboard shortcut routing between timeline and media panel
+- main-menu command routing and keyboard shortcut routing between timeline and media panel
 - agent input send/stop behavior
 - mention picker open/close/navigation/insert
 - media-panel selection navigation

@@ -24,11 +24,14 @@ That means the rewrite should keep most business logic out of the view layer and
 
 These specs were derived from the current repository state, primarily from:
 
+- `Package.swift`
 - `Sources/PalmierPro/**`
 - `Tests/PalmierProTests/**`
 - `README.md`
 - `FAQ.md`
-- the current MCP / agent / export / persistence contracts encoded in code
+- `CONTRIBUTING.md`
+- `AGENTS.md`
+- the current runtime / packaging / MCP / agent / export / persistence contracts encoded in code
 
 ## How to read these specs
 
@@ -56,11 +59,22 @@ Palmier's server-side generative processing is not in this repo. These docs only
 - UI behavior
 - agent/MCP behavior
 - search/transcription/indexing behavior
+- runtime, packaging, and design-token behavior
 
 They do **not** specify private backend implementation details.
 
 ## Document map
 
+- `00-runtime-packaging-design-and-shell.md`
+  - current Swift/runtime baseline
+  - package dependencies and resources
+  - bundle, document, URL, and updater metadata
+  - startup and app lifecycle
+  - window/menu/shortcut contracts
+  - AppTheme design tokens
+  - settings/help/feedback UX
+  - generation catalog schema and cost formulas
+  - backend config keys
 - `01-foundation-and-project-model.md`
   - project packages
   - recent-project registry
@@ -129,6 +143,8 @@ They do **not** specify private backend implementation details.
    - send/stop behavior
    - mention picker
    - drag/drop routing
+   - menu/shortcut routing
+   - settings/help/feedback window behavior
 
 ## Rewrite rule of thumb
 
