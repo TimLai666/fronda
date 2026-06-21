@@ -137,7 +137,7 @@ Scope sources:
 - [ ] `PRV-012`: Still images must remain renderable as synthetic video sources for preview/export.
 - [ ] `PRV-013`: Lottie assets must remain renderable as timeline media.
 - [ ] `PRV-014`: Starting playback from the end of the timeline rewinds to frame `0` before playing.
-- [ ] `PRV-015`: Source trim starts and durations inserted into AV compositions are converted through the source track's natural timescale rather than blindly reusing project fps timescale, preventing invalid source ranges and export/preview hangs.
+- [ ] `PRV-015`: Video-backed source trim starts and durations inserted into AV compositions are converted through the source track's natural timescale rather than blindly reusing project fps timescale, preventing invalid source ranges and deep-seek export/preview hangs on high-frame-rate sources while preserving existing audio composition timing behavior.
 
 ## J. Editor shell and layout behavior
 

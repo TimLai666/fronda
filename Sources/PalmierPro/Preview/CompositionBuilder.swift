@@ -308,7 +308,12 @@ enum CompositionBuilder {
     ) async -> Bool {
         let clipStart = CMTime(value: CMTimeValue(clip.startFrame), timescale: timescale)
         let trimStartFrame = clip.mediaType == .image ? max(0, clip.trimStartFrame) : clip.trimStartFrame
-        let sourceTimescale = (try? await sourceTrack.load(.naturalTimeScale)) ?? timescale
+        let sourceTimescale: CMTimeScale
+        if clip.mediaType == .audio {
+            sourceTimescale = timescale
+        } else {
+            sourceTimescale = (try? await sourceTrack.load(.naturalTimeScale)) ?? timescale
+        }
         let startSeconds = Double(trimStartFrame) / Double(timescale)
         let trimStart = CMTime(seconds: startSeconds, preferredTimescale: sourceTimescale)
         let clipDuration = CMTime(value: CMTimeValue(clip.durationFrames), timescale: timescale)
