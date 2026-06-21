@@ -39,6 +39,8 @@ These specs were derived from the current repository state, primarily from:
 
 Each checklist item is a future acceptance requirement.
 
+The repo also includes a structural CI guardrail at `scripts/check_rust_rewrite_specs.py` to make sure this spec set does not silently drift while the Rust rewrite is being built.
+
 Format:
 
 - `[ ] PREFIX-###`: a behavior that should be covered by automated tests in the Rust rewrite
@@ -117,6 +119,10 @@ They do **not** specify private backend implementation details.
   - generation
   - account/settings/help/app shell
   - telemetry
+- `98-verification-plan.md`
+  - execution waves for converting spec families into Rust tests
+  - fixture / snapshot layout guidance
+  - definition-of-done gates per verification wave
 - `99-test-matrix.md`
   - recommended Rust test layers
   - current Swift evidence

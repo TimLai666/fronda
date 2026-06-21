@@ -11,6 +11,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validate-rewrite-specs:
+    name: Validate Rust rewrite specs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Python toolchain
+        run: python3 --version
+
+      - name: Validate spec baseline
+        run: python3 scripts/check_rust_rewrite_specs.py
+
   build-test:
     name: Build and test Swift baseline
     runs-on: macos-26
