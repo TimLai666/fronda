@@ -65,7 +65,7 @@ Scope sources:
 
 - [ ] `TRN-012`: Locale matching prefers exact language+region matches first.
 - [ ] `TRN-013`: If no exact region exists, locale matching falls back to any supported locale with the same language.
-- [ ] `TRN-014`: Region override suffixes do not block language matching.
+- [ ] `TRN-014`: Region override suffixes and Unicode extension tags such as `@rg=...` and `-u-rg-...` do not block language matching.
 - [ ] `TRN-015`: If no supported language matches, locale selection returns `nil`.
 - [ ] `TRN-016`: Video transcription first extracts audio to a temp PCM `.caf` file using the current sample-rate/channel/bit-depth contract.
 - [ ] `TRN-017`: If a video has no audio track, video transcription fails cleanly.
@@ -131,7 +131,7 @@ Scope sources:
 
 ## G. Help, feedback, and app shell behavior
 
-- [ ] `APP-001`: App startup still performs logging bootstrap, telemetry startup, account configuration, model catalog configuration, notifications configuration, MCP startup when enabled, and updater initialization.
+- [ ] `APP-001`: App startup still performs logging bootstrap, telemetry startup, bundled font registration, notifications configuration, MCP startup when enabled, updater initialization, and deferred account/model configuration after the first Home window is shown.
 - [ ] `APP-002`: Reopening the app with no visible windows shows Home again.
 - [ ] `APP-003`: Feedback submission requires non-empty message and current maximum length validation.
 - [ ] `APP-004`: Feedback screenshot capture occurs before the feedback window becomes key, so the feedback window does not capture itself.

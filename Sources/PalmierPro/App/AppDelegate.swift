@@ -14,6 +14,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppNotifications.configure()
 
         AppState.shared.startMCPService()
+
+        Task { @MainActor in
+            AccountService.shared.configure()
+            ModelCatalog.shared.configure()
+        }
     }
 
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {

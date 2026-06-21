@@ -1,6 +1,6 @@
-# PalmierPro
+# Palmier Pro fork / Fronda rewrite
 
-AI-native macOS video editor. Swift 6.2, SwiftUI + AppKit, AVFoundation. macOS 26 only, arm64 only. Non-sandboxed Developer ID app.
+Current runnable baseline: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation. The Rust rewrite is named `Fronda`. Current runtime target is macOS 26 only, arm64 only. Non-sandboxed Developer ID app.
 
 ## Build
 
@@ -38,9 +38,7 @@ Rule: **any drop target that spans an area containing other drop targets must us
 
 ## Voice
 
-Palmier Pro speaks like a quietly capable native Mac app for filmmakers: direct, technical, calm, and
-confident. Prefer Apple HIG-style terseness over warmth. Never chatty or cute. Never marketing. When the
-product needs to ask for action, lead with the action verb; when it reports state, name the thing.
+For Rust-side product and UI copy, Fronda speaks like a quietly capable desktop editor for filmmakers: direct, technical, calm, and confident. Prefer Apple HIG-style terseness over warmth. Never chatty or cute. Never marketing. When the product needs to ask for action, lead with the action verb; when it reports state, name the thing.
 
 ## Rust rewrite rules
 
@@ -49,6 +47,7 @@ This repo is being rewritten into a cross-platform Rust app. The current Swift c
 - Treat `specs/rust-rewrite/` as the compatibility baseline for the rewrite. If behavior changes intentionally, update the relevant spec in the same change and mark the decision explicitly.
 - For rewrite work, prefer preserving observable behavior over line-by-line source translation. Port the contract, not the syntax.
 - Default Rust UI stack: `gpui-ce`. Use it for windows, panes, focus, input, drag/drop, and app shell behavior.
+- `Fronda` is the Rust rewrite name. The current Swift module/resource/runtime identifiers such as `PalmierPro`, `palmier-pro`, and `palmier://` are still compatibility identifiers. Do not rename them piecemeal; any identifier migration must be explicit and spec-backed.
 - Keep non-UI logic out of `gpui-ce` whenever possible. Timeline math, persistence, media-library logic, agent/MCP contracts, search/indexing state, and export planning should live in plain Rust crates/modules with no UI dependency.
 - Core Rust logic must not depend on platform APIs directly. Wrap platform-specific behavior such as file dialogs, notifications, secure credential storage, updater hooks, trash/reveal-in-file-manager, and window chrome behind explicit adapters.
 - Preserve compatibility with existing on-disk/project contracts unless a spec says otherwise:

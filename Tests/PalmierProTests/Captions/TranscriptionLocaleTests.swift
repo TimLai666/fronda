@@ -13,6 +13,11 @@ struct TranscriptionLocaleTests {
         #expect(result?.identifier == "en_US")
     }
 
+    @Test func unicodeExtensionRegionOverrideIsStrippedToLanguageMatch() {
+        let result = Transcription.matchLocale(candidates: [Locale(identifier: "en-US-u-rg-zazzzz")], supported: supported)
+        #expect(result?.identifier == "en_US")
+    }
+
     @Test func languageRegionMismatchFallsBackToSameLanguage() {
         // n_FR (English language, France region) has no en_FR model → any en_*.
         let result = Transcription.matchLocale(candidates: [Locale(identifier: "en_FR")], supported: supported)

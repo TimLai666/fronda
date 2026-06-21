@@ -173,6 +173,7 @@ Scope sources:
 - [ ] `MUT-020`: `add_texts` rejects audio tracks as destinations.
 - [ ] `MUT-021`: `add_captions` supports explicit clip targets or auto-detects the primary spoken track.
 - [ ] `MUT-022`: Folder/media tools preserve current single-item and batch forms.
+- [ ] `MUT-023`: Hex color parsing for text/caption style fields accepts `#RGB`, `#RRGGBB`, and `#RRGGBBAA`, trims surrounding spaces/newlines, and still rejects embedded/internal whitespace.
 
 ## G. Undo semantics
 

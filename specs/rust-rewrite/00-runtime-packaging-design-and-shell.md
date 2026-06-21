@@ -25,7 +25,7 @@ Scope sources:
 - [ ] `RUN-004`: Standard development commands remain `swift build` and `swift run`; bundled debug launch remains `./scripts/dev.sh`.
 - [ ] `RUN-005`: The current app is a native Mac app built with SwiftUI, AppKit, and AVFoundation, and the rewrite must preserve observable native-editor behavior before changing architecture.
 - [ ] `RUN-006`: The current app is intended as a non-sandboxed Developer ID app; any rewrite/package plan must explicitly preserve or replace this distribution/security model.
-- [ ] `RUN-007`: The rewrite may target Rust + `gpui-ce`, but compatibility specs in this folder describe current Palmier Pro behavior, not only desired future architecture.
+- [ ] `RUN-007`: The rewrite may target Rust + `gpui-ce`, but compatibility specs in this folder describe the current Palmier Pro-derived compatibility baseline that the future Fronda rewrite must satisfy, not only desired future architecture.
 
 ## B. Package dependencies and bundled resources
 
@@ -48,6 +48,7 @@ Scope sources:
   - `Resources/Changelog`
 - [ ] `PKG-005`: The app must register bundled fonts at startup before UI use.
 - [ ] `PKG-006`: The bundled Claude Desktop extension remains `palmier-pro.mcpb` unless intentionally renamed with matching help/install updates.
+- [ ] `PKG-007`: Bundled font discovery checks both `Fonts` and `PalmierPro_PalmierPro.bundle/Fonts` under `Bundle.main.resourceURL` at runtime instead of relying on compile-time environment splits.
 
 ## C. Bundle, document, URL, and updater metadata
 
@@ -67,10 +68,10 @@ Scope sources:
 
 ## D. Startup and app lifecycle
 
-- [ ] `BOOT-001`: Startup order remains logging bootstrap, telemetry startup, bundled font registration, account service configuration, model catalog configuration, tooltip-delay override, AppKit app/delegate/menu setup, then `NSApplication.run()`.
+- [ ] `BOOT-001`: Pre-run startup order remains logging bootstrap, telemetry startup, bundled font registration, tooltip-delay override, AppKit app/delegate/menu setup, then `NSApplication.run()`.
 - [ ] `BOOT-002`: Startup sets `NSInitialToolTipDelay` to `10` milliseconds, shortening the default tooltip delay from 2 seconds to 0.01 seconds.
 - [ ] `BOOT-003`: On launch, the app sets activation policy to regular and activates itself, including when launched from CLI.
-- [ ] `BOOT-004`: On launch, the app initializes the updater, shows Home, configures notifications, and starts MCP if the user preference allows it.
+- [ ] `BOOT-004`: On launch, the app initializes the updater, shows Home, configures notifications, starts MCP if the user preference allows it, and only then defers account/model client configuration onto the main actor so backend setup cannot block first paint.
 - [ ] `BOOT-005`: `applicationShouldOpenUntitledFile` returns `false`; opening the app must not auto-create an untitled project document.
 - [ ] `BOOT-006`: Reopening the app with no visible windows shows Home and returns `true` from the reopen handler.
 - [ ] `BOOT-007`: Closing active project state through `showHome()` autosaves edited projects before hiding project windows and showing Home.
@@ -235,3 +236,4 @@ Scope sources:
 - `Decision:` The Rust rewrite should decide whether this file remains a compatibility appendix for the Swift/macOS app or becomes the source of truth for the first cross-platform packaging target.
 - `Decision:` Several AppTheme constants are visual-identity tokens rather than pure behavior. The rewrite should preserve them for visual parity unless a deliberate redesign is approved.
 - `Decision:` Sparkle, Clerk, Convex, Sentry, Keychain, and macOS notification/window behavior are platform-specific. The rewrite must either preserve them on macOS or document cross-platform substitutions with equivalent user-visible states.
+- `Decision:` `Fronda` is the Rust rewrite name, while current bundle names, executable names, package extensions, URL schemes, and MCP identifiers still use inherited Palmier identifiers. Any identifier migration should happen as one explicit compatibility change, not piecemeal.

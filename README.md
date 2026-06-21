@@ -1,66 +1,96 @@
 <div align="center">
 
-# Palmier Pro
+# Fronda
 
-**The video editor built for AI.**
-
-<a href="https://github.com/palmier-io/palmier-pro/releases/latest/download/PalmierPro.dmg">
-  <img src="./assets/macos-badge.png" alt="Download palmierpro for macOS" width="180" />
-</a>
-
-<sub><i>Requires macOS 26 (Tahoe) on Apple Silicon</i></sub>
-
-<a href="https://x.com/Palmier_io"><img src="https://img.shields.io/badge/Follow-%40Palmier__io-000000?style=flat&logo=x&logoColor=white" alt="Follow on X" /></a>
-<a href="https://discord.com/invite/SMVW6pKYmg"><img src="https://img.shields.io/badge/Join-Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Join Discord" /></a>
-<a href="https://www.ycombinator.com/companies/palmier"><img src="https://img.shields.io/badge/Y%20Combinator-S24-orange" alt="Y Combinator S24" /></a>
+**Planned name of the cross-platform Rust successor to Palmier Pro.**
 
 </div>
 
-<img src="./assets/palmier-ui.png" alt="palmierpro UI" width="900" />
+<img src="./assets/palmier-ui.png" alt="Palmier Pro Swift compatibility baseline UI" width="900" />
 
----
+This repository is a modified fork of [Palmier Pro](https://github.com/palmier-io/palmier-pro). The current runnable application is still the inherited Swift/AppKit codebase; `Fronda` is the intended name of the Rust rewrite being developed in this fork.
 
-Palmier Pro is an open source video editor for Mac. You and your agent can generate and edit videos together inside the timeline.
+## Current status
 
-## Fork status
+- Current runnable baseline: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation
+- Current supported runtime: macOS 26+ on Apple Silicon
+- Rust rewrite name: `Fronda`
+- Rewrite target stack: Rust + `gpui-ce`
+- Compatibility baseline: `specs/rust-rewrite/`
 
-This repository is a modified fork of [Palmier Pro](https://github.com/palmier-io/palmier-pro). The goal of this fork is a Rust-based, cross-platform rewrite.
+## Repository goals
 
-Until that rewrite lands, parts of this repository still reflect the original Swift and macOS-specific implementation from upstream.
+- preserve the current editor's observable behavior in a testable spec
+- port non-UI logic into pure Rust modules first
+- use `gpui-ce` for windows, panes, input, shortcuts, and drag/drop
+- make platform-specific behavior explicit behind adapters
 
-### Swift-native video editor
+## What is in the repo today
 
-We built Palmier Pro from scratch with Swift. The north star is Premiere Pro, with our take on integrating AI into the workflow.
+1. the original macOS-native Swift implementation that still defines current behavior
+2. rewrite specs that list the behaviors the Rust port must satisfy with automated tests
+3. fork-specific attribution, legal notices, and rewrite rules
 
-### Built-in Generative AI
+## Build the current Swift baseline
 
-Generate videos and images with SOTA models like Seedance, Kling, Nano Banana Pro inside the timeline editor.
+```bash
+swift build
+swift run
+```
 
-### Integrates with your agents
+For a bundled debug build that launches the `.app` and streams OSLog:
 
-Connects your Claude/Codex/Cursor via MCP, or use the in-app agent to work on the same project together.
+```bash
+./scripts/dev.sh
+```
 
-## MCP server
+## Test the current Swift baseline
 
-When the app is open, it exposes an MCP server at `http://127.0.0.1:19789/mcp` via HTTP. To connect:
+```bash
+swift test
+```
 
-**Claude Code**
+GitHub Actions runs `swift build` and `swift test` on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
+
+## Rust rewrite spec baseline
+
+Start here:
+
+- `specs/rust-rewrite/README.md`
+- `specs/rust-rewrite/99-test-matrix.md`
+- `AGENTS.md`
+
+The rule of thumb for rewrite work is simple: preserve observable behavior first, improve architecture second. If behavior changes intentionally, update the relevant spec in the same change.
+
+## Current Palmier compatibility identifiers
+
+`Fronda` is the Rust version name. Until identifier migration is made explicit, the current Swift baseline still exposes inherited identifiers that are part of the compatibility surface:
+
+- Swift package / target / source paths still use `PalmierPro`
+- project packages still use the `.palmier` extension
+- MCP server name is still `palmier-pro`
+- MCP resource URIs are still `palmier://...`
+- auth callback scheme is still `palmier://callback`
+
+So current MCP setup examples still use the legacy server name:
+
+### Claude Code
 
 ```bash
 claude mcp add --transport http palmier-pro http://127.0.0.1:19789/mcp
 ```
 
-**Codex**
+### Codex
 
 ```bash
 codex mcp add palmier-pro --url http://127.0.0.1:19789/mcp
 ```
 
-**Cursor**
+### Cursor
 
-The easiest way is go inside the app `Help` -> `MCP Instructions` -> `Install in Cursor`, or install manually by adding this to `~/.cursor/mcp.json`:
+Add this to `~/.cursor/mcp.json`:
 
-```
+```json
 {
   "mcpServers": {
     "palmier-pro": {
@@ -71,53 +101,26 @@ The easiest way is go inside the app `Help` -> `MCP Instructions` -> `Install in
 }
 ```
 
-**Claude Desktop**
+## Contributing
 
-We bundle a [mcpb](https://github.com/modelcontextprotocol/mcpb) with the app that allows a one click install Desktop Extension on Claude Desktop. Go to `Help` -> `MCP Instructions` -> `Install in Claude Desktop`
+See `CONTRIBUTING.md`.
 
-## FAQ
+For rewrite work, prefer:
 
-**Is Palmier Pro fully open source?**
+- bug fixes to the Swift baseline
+- spec capture
+- migration scaffolding
+- compatibility-preserving refactors
 
-The video editor (without the generative AI features) is fully open source. The MCP server and the agent chat are also open source. The only thing that is closed source is the generative AI processing.
+Avoid expanding the legacy Swift app with large new features unless that is the explicit goal.
 
-**Is it free?**
+## Upstream source and license
 
-The editor is free. You can download it with no login required, and use it as a video editor like CapCut or Adobe Premiere. You can also use the MCP server for free, and start experimenting using Claude Code/Desktop or Cursor to interact with your timeline editor.
+- Rust rewrite name: Fronda
+- Original project: Palmier Pro
+- Upstream repository: <https://github.com/palmier-io/palmier-pro>
+- Fork repository: <https://github.com/TimLai666/fronda>
+- Fork copyright: Copyright (C) 2026 TimLai666
+- Upstream copyright: Copyright (C) 2026 Palmier, Inc.
 
-Generative AI features require login and subscription.
-
-**What platforms does it support?**
-
-macOS 26 (Tahoe) on Apple Silicon only.
-
-See [FAQ.md](FAQ.md) for more.
-
-## Development
-
-See [CONTRIBUTING.md](CONTRIBUTING.md)
-
-## Community &amp; Support
-
-- **Discord:** Join the community on **[Discord](https://discord.com/invite/SMVW6pKYmg)**.
-- **Twitter / X:** Follow **[@Palmier_io](https://x.com/Palmier_io)** for updates and announcements.
-- **Instagram:** Follow [@palmier.io](https://www.instagram.com/palmier.io)
-- **Feedback &amp; Support:** Create a [Github Issue](https://github.com/palmier-io/palmier-pro/issues) or email us at founders@palmier.io
-
-## Star History
-
-<a href="https://www.star-history.com/?type=date&repos=palmier-io%2Fpalmier-pro">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=palmier-io/palmier-pro&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=palmier-io/palmier-pro&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=palmier-io/palmier-pro&type=date&legend=top-left" />
- </picture>
-</a>
-
-## License
-
-- Modified fork copyright: Copyright (C) 2026 TimLai666
-- Original upstream copyright: Copyright (C) 2026 Palmier, Inc.
-- Original project source: <https://github.com/palmier-io/palmier-pro>
-
-This repository remains available under [GPLv3](LICENSE). See [NOTICE.md](NOTICE.md) for fork and modification notices.
+This repository remains available under [GPLv3](LICENSE). See [NOTICE.md](NOTICE.md) for attribution and modification notices.

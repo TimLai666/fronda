@@ -2,6 +2,8 @@
 
 This folder is the compatibility baseline for rewriting `fronda` from the current Swift/AppKit/SwiftUI/AVFoundation implementation into a cross-platform Rust application.
 
+`Fronda` is the intended product name of that Rust rewrite, but the current Swift baseline still uses inherited `PalmierPro` / `palmier-*` runtime identifiers. Those identifiers remain part of the compatibility surface until they are migrated explicitly.
+
 ## Chosen UI stack
 
 The rewrite target is:
@@ -49,7 +51,7 @@ A rewrite milestone should not be considered done until the relevant items are e
 
 ## Closed-source boundary
 
-Palmier's server-side generative processing is not in this repo. These docs only specify the **observable client-side contract**:
+Upstream Palmier server-side generative processing is not in this repo. These docs only specify the **observable client-side contract**:
 
 - request shaping
 - model selection rules

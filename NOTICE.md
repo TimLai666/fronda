@@ -4,11 +4,11 @@
 
 Copyright (C) 2026 TimLai666
 
-This repository includes derivative work and modifications made by TimLai666, unless a file or asset states otherwise.
+This repository includes derivative work and modifications made in this fork, including work toward the Fronda Rust rewrite, unless a file or asset states otherwise.
 
 ## Modification notice
 
-This repository is a modified fork of Palmier Pro and is being adapted toward a Rust-based, cross-platform rewrite.
+This repository is a modified fork of Palmier Pro. `Fronda` is the intended name of the Rust rewrite being developed in this fork, while the current Swift application remains the Palmier Pro-derived compatibility baseline until replaced.
 
 The upstream project and its contributors retain copyright in their original work. Changes introduced in this fork remain identifiable through this notice, file-level notices where present, and the Git history.
 
