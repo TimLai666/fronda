@@ -11,10 +11,12 @@ Use it together with:
 
 ## A. What is already automated
 
-Current CI now protects two things:
+Current CI now protects four things:
 
 1. the Swift baseline still builds and tests cleanly,
-2. the Rust rewrite spec set remains structurally sane.
+2. the Rust rewrite spec set remains structurally sane,
+3. the first Rust rewrite workspace crates compile and pass compatibility tests,
+4. the first `gpui-ce` app-shell scaffold compiles on macOS.
 
 The spec lint is intentionally narrow for now. It validates:
 
@@ -23,7 +25,17 @@ The spec lint is intentionally narrow for now. It validates:
 - checklist IDs stay unique across the family docs,
 - each family doc still contains executable acceptance items.
 
-That is not product verification yet. It is only the guardrail that keeps the rewrite baseline from drifting before Rust implementation begins.
+The first executable Rust coverage now lives in:
+
+- `crates/core_model/tests/compatibility.rs`
+- `crates/project_io/tests/project_bundle.rs`
+- `fixtures/rust-rewrite/projects/**`
+
+The first `gpui-ce` shell scaffold now lives in:
+
+- `crates/app_shell_gpui/src/**`
+
+That is still only wave-1 coverage, not full product verification. But it does mean the rewrite baseline is no longer purely documentary.
 
 ## B. Tracking rules for the rewrite
 
@@ -46,17 +58,29 @@ Keep the linkage explicit enough that a failed test can be traced back to one or
 
 ## C. Suggested test asset layout
 
-When the Rust workspace appears, keep compatibility fixtures outside UI crates where possible.
+Keep compatibility fixtures outside UI crates where possible.
 
-Suggested layout:
+Current layout in this repo:
 
-- `crates/*/src/**`
-- `crates/*/tests/**`
-- `tests/fixtures/projects/**`
-- `tests/fixtures/media/**`
-- `tests/fixtures/transcripts/**`
-- `tests/fixtures/search/**`
-- `tests/fixtures/xml/**`
+- `crates/core_model/src/**`
+- `crates/core_model/tests/**`
+- `crates/project_io/src/**`
+- `crates/project_io/tests/**`
+- `crates/app_shell_gpui/src/**`
+- `fixtures/rust-rewrite/projects/**`
+
+Why `fixtures/` instead of `tests/fixtures/`:
+
+- this repo already has a top-level `Tests/` directory for Swift,
+- the working environment is case-insensitive on Windows,
+- keeping Rust fixtures under `fixtures/` avoids `Tests/` vs `tests/` path collisions.
+
+Recommended future additions under the same approach:
+
+- `fixtures/rust-rewrite/media/**`
+- `fixtures/rust-rewrite/transcripts/**`
+- `fixtures/rust-rewrite/search/**`
+- `fixtures/rust-rewrite/xml/**`
 - `tests/snapshots/**`
 
 Suggested naming pattern:
@@ -132,14 +156,13 @@ Do not move pure timeline math, file persistence, export planning, or search ran
 
 ## H. Near-term repo tasks
 
-As Rust implementation starts, the next concrete repo changes should be:
+As Rust implementation continues, the next concrete repo changes should be:
 
-1. add a Rust workspace with crate boundaries that match `99-test-matrix.md`,
-2. add fixture directories under `tests/fixtures/`,
-3. add the first serde compatibility tests for project files,
-4. add pure-core timeline property tests,
-5. add snapshot support for XML and agent/MCP contracts,
-6. add `gpui-ce` tests only after non-UI cores are already isolated.
+1. expand wave-1 coverage from serde/load tests into save/write parity tests,
+2. add pure-core timeline property tests,
+3. add snapshot support for XML and agent/MCP contracts,
+4. add fixture families for transcripts/search/export,
+5. layer `gpui-ce` interaction tests on top of the existing shell compile check only after non-UI cores are already isolated.
 
 ## I. Release gate for calling Fronda compatible
 

@@ -1,0 +1,22 @@
+[package]
+name = "fronda-app-shell-gpui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "app_shell_gpui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fronda"
+path = "src/main.rs"
+required-features = ["desktop-app"]
+
+[features]
+default = []
+desktop-app = ["dep:gpui", "dep:gpui_platform"]
+
+[dependencies]
+gpui = { git = "https://github.com/gpui-ce/gpui-ce", optional = true }
+gpui_platform = { git = "https://github.com/gpui-ce/gpui-ce", optional = true }

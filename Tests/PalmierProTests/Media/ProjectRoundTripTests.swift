@@ -236,6 +236,20 @@ struct ProjectRoundTripTests {
         #expect(manifest.folders.isEmpty)
     }
 
+    @Test func mediaSourceEncodesAsAssociatedValueEnumShape() throws {
+        let external = MediaSource.external(absolutePath: "/abs/path/video.mp4")
+        let project = MediaSource.project(relativePath: "media/img.png")
+
+        let externalJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(external)) as? [String: Any])
+        let projectJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(project)) as? [String: Any])
+
+        let externalPayload = try #require(externalJSON["external"] as? [String: Any])
+        let projectPayload = try #require(projectJSON["project"] as? [String: Any])
+
+        #expect(externalPayload["absolutePath"] as? String == "/abs/path/video.mp4")
+        #expect(projectPayload["relativePath"] as? String == "media/img.png")
+    }
+
     // MARK: - GenerationLog
 
     @Test func generationLogSurvivesRoundTrip() throws {

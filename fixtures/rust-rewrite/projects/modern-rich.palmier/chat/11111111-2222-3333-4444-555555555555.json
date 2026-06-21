@@ -1,0 +1,76 @@
+{
+  "id": "11111111-2222-3333-4444-555555555555",
+  "title": "Rewrite parity",
+  "updatedAt": "2026-06-22T12:34:56Z",
+  "messages": [
+    {
+      "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "role": "user",
+      "blocks": [
+        {
+          "kind": "text",
+          "text": "Check @Interview-Audio and @Range-00:00:00:00-00:00:03:00"
+        }
+      ],
+      "mentions": [
+        {
+          "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+          "displayName": "Interview-Audio",
+          "mediaRef": "asset-external-audio",
+          "type": "audio",
+          "clipId": "clip-audio-1"
+        },
+        {
+          "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+          "displayName": "Range-00:00:00:00-00:00:03:00",
+          "timelineRange": {
+            "startFrame": 0,
+            "endFrame": 90,
+            "durationFrames": 90,
+            "fps": 30,
+            "startTimecode": "00:00:00:00",
+            "endTimecode": "00:00:03:00",
+            "durationTimecode": "00:00:03:00",
+            "rangeSemantics": "startInclusiveEndExclusive"
+          }
+        }
+      ],
+      "contextHint": "Referenced assets and timeline context in this message: []"
+    },
+    {
+      "id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+      "role": "assistant",
+      "blocks": [
+        {
+          "kind": "text",
+          "text": "I'll inspect the clip and selected range."
+        },
+        {
+          "kind": "toolUse",
+          "id": "tool-1",
+          "name": "inspect_timeline",
+          "input": "{\"clipId\":\"clip-video-1\"}"
+        },
+        {
+          "kind": "toolResult",
+          "toolUseId": "tool-1",
+          "content": [
+            {
+              "kind": "text",
+              "text": "Clip looks stable."
+            },
+            {
+              "kind": "image",
+              "base64": "ZmFrZS1pbWFnZQ==",
+              "mediaType": "image/png"
+            }
+          ],
+          "isError": false
+        }
+      ],
+      "mentions": [],
+      "contextHint": null
+    }
+  ],
+  "isOpen": false
+}

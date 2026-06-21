@@ -2,7 +2,7 @@
 
 # Fronda
 
-**Planned name of the cross-platform Rust successor to Palmier Pro.**
+**Rust rewrite name for the cross-platform successor to Palmier Pro.**
 
 </div>
 
@@ -30,6 +30,7 @@ This repository is a modified fork of [Palmier Pro](https://github.com/palmier-i
 1. the original macOS-native Swift implementation that still defines current behavior
 2. rewrite specs that list the behaviors the Rust port must satisfy with automated tests
 3. fork-specific attribution, legal notices, and rewrite rules
+4. the first Rust rewrite workspace crates plus a `gpui-ce` app-shell scaffold for `Fronda`
 
 ## Build the current Swift baseline
 
@@ -50,7 +51,27 @@ For a bundled debug build that launches the `.app` and streams OSLog:
 swift test
 ```
 
-GitHub Actions runs `swift build` and `swift test` on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
+GitHub Actions runs spec validation, Rust workspace tests, a `gpui-ce` shell compile check, and the Swift baseline build/test on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
+
+## Rust rewrite workspace
+
+Run the current Rust compatibility tests:
+
+```bash
+cargo test --workspace
+```
+
+Check the first `gpui-ce` desktop shell scaffold on a supported desktop toolchain:
+
+```bash
+cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda
+```
+
+Launch the placeholder desktop shell on a supported desktop toolchain:
+
+```bash
+cargo run -p fronda-app-shell-gpui --features desktop-app --bin fronda
+```
 
 ## Rust rewrite spec baseline
 

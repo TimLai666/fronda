@@ -1,0 +1,73 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "asset-project-video",
+      "name": "Generated Shot",
+      "type": "video",
+      "source": {
+        "project": {
+          "relativePath": "media/generated-shot.mp4"
+        }
+      },
+      "duration": 3.0,
+      "generationInput": {
+        "prompt": "Medium close-up of an editor timeline",
+        "model": "veo-3.1-fast",
+        "duration": 3,
+        "aspectRatio": "16:9",
+        "resolution": "1080p",
+        "quality": "high",
+        "imageURLs": ["https://example.com/board.png"],
+        "generateAudio": true,
+        "referenceImageURLs": ["https://example.com/ref-image.png"],
+        "referenceVideoURLs": ["https://example.com/ref-video.mp4"],
+        "referenceAudioURLs": ["https://example.com/ref-audio.wav"],
+        "imageURLAssetIds": ["asset-image-ref-1"],
+        "referenceImageAssetIds": ["asset-image-ref-1"],
+        "referenceVideoAssetIds": ["asset-video-ref-1"],
+        "referenceAudioAssetIds": ["asset-audio-ref-1"],
+        "createdAt": 804611696.25
+      },
+      "sourceWidth": 1920,
+      "sourceHeight": 1080,
+      "sourceFPS": 30.0,
+      "hasAudio": true,
+      "folderId": "folder-generated"
+    },
+    {
+      "id": "asset-external-audio",
+      "name": "Interview Audio",
+      "type": "audio",
+      "source": {
+        "external": {
+          "absolutePath": "/Users/example/Interview.wav"
+        }
+      },
+      "duration": 3.0,
+      "sourceFPS": 30.0,
+      "hasAudio": true,
+      "cachedRemoteURL": "https://cdn.example.com/interview.wav",
+      "cachedRemoteURLExpiresAt": 804697200.0
+    },
+    {
+      "id": "asset-text-1",
+      "name": "Title Card",
+      "type": "text",
+      "source": {
+        "project": {
+          "relativePath": "media/title-card.json"
+        }
+      },
+      "duration": 1.5,
+      "folderId": "folder-generated"
+    }
+  ],
+  "folders": [
+    {
+      "id": "folder-generated",
+      "name": "Generated",
+      "parentFolderId": null
+    }
+  ]
+}

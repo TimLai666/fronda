@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "gen-entry-1",
+      "model": "veo-3.1-fast",
+      "costCredits": 123,
+      "createdAt": 804611696.25
+    },
+    {
+      "id": "gen-entry-2",
+      "model": "nano-banana-pro",
+      "costCredits": null,
+      "createdAt": null
+    }
+  ]
+}

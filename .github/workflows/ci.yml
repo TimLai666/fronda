@@ -26,6 +26,46 @@ jobs:
       - name: Validate spec baseline
         run: python3 scripts/check_rust_rewrite_specs.py
 
+  rust-tests:
+    name: Build and test Rust rewrite workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Show Rust toolchain
+        run: |
+          cargo --version
+          rustc --version
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+  gpui-shell-check:
+    name: Check gpui-ce app shell scaffold
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Show Rust toolchain
+        run: |
+          cargo --version
+          rustc --version
+
+      - name: Check desktop shell scaffold
+        run: cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda
+
   build-test:
     name: Build and test Swift baseline
     runs-on: macos-26

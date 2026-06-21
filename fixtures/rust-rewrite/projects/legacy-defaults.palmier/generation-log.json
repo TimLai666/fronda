@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "legacy-log-1",
+      "model": "legacy-model",
+      "cost": 0.051,
+      "createdAt": 700000000.0
+    },
+    {
+      "model": "legacy-no-id"
+    }
+  ]
+}

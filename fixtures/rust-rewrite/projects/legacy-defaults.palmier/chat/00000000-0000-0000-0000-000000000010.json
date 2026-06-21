@@ -1,0 +1,26 @@
+{
+  "id": "00000000-0000-0000-0000-000000000010",
+  "title": "Legacy chat",
+  "updatedAt": "2026-06-20T08:00:00Z",
+  "messages": [
+    {
+      "id": "00000000-0000-0000-0000-000000000011",
+      "role": "user",
+      "blocks": [
+        {
+          "kind": "text",
+          "text": "Inspect @Legacy-Video"
+        }
+      ],
+      "mentions": [
+        {
+          "id": "00000000-0000-0000-0000-000000000012",
+          "displayName": "Legacy-Video",
+          "mediaRef": "legacy-video-1",
+          "type": "video",
+          "clipId": null
+        }
+      ]
+    }
+  ]
+}

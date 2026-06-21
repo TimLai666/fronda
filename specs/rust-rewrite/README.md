@@ -41,6 +41,18 @@ Each checklist item is a future acceptance requirement.
 
 The repo also includes a structural CI guardrail at `scripts/check_rust_rewrite_specs.py` to make sure this spec set does not silently drift while the Rust rewrite is being built.
 
+The first executable Rust coverage now lives under:
+
+- `crates/core_model/**`
+- `crates/project_io/**`
+- `fixtures/rust-rewrite/projects/**`
+
+The first `gpui-ce` shell scaffold now lives under:
+
+- `crates/app_shell_gpui/**`
+
+The desktop shell binary is feature-gated behind `desktop-app` so the core rewrite workspace can keep fast portable tests while CI still checks a real `gpui-ce` desktop target on macOS.
+
 Format:
 
 - `[ ] PREFIX-###`: a behavior that should be covered by automated tests in the Rust rewrite

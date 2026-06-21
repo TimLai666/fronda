@@ -1,0 +1,184 @@
+{
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "settingsConfigured": true,
+  "tracks": [
+    {
+      "id": "track-video-1",
+      "type": "video",
+      "muted": false,
+      "hidden": false,
+      "syncLocked": true,
+      "clips": [
+        {
+          "id": "clip-video-1",
+          "mediaRef": "asset-project-video",
+          "mediaType": "video",
+          "sourceClipType": "video",
+          "startFrame": 0,
+          "durationFrames": 90,
+          "trimStartFrame": 15,
+          "trimEndFrame": 5,
+          "speed": 1.0,
+          "volume": 1.0,
+          "fadeInFrames": 4,
+          "fadeOutFrames": 6,
+          "fadeInInterpolation": "linear",
+          "fadeOutInterpolation": "smooth",
+          "opacity": 0.85,
+          "transform": {
+            "centerX": 0.48,
+            "centerY": 0.52,
+            "width": 0.75,
+            "height": 0.42,
+            "rotation": 12.5,
+            "flipHorizontal": true,
+            "flipVertical": false
+          },
+          "crop": {
+            "left": 0.05,
+            "top": 0.08,
+            "right": 0.02,
+            "bottom": 0.03
+          },
+          "linkGroupId": "linked-av-1",
+          "captionGroupId": "caption-1",
+          "opacityTrack": {
+            "keyframes": [
+              { "frame": 0, "value": 0.0, "interpolationOut": "linear" },
+              { "frame": 20, "value": 0.85, "interpolationOut": "smooth" }
+            ]
+          },
+          "positionTrack": {
+            "keyframes": [
+              { "frame": 0, "value": { "a": 0.1, "b": 0.12 }, "interpolationOut": "linear" },
+              { "frame": 60, "value": { "a": 0.18, "b": 0.16 }, "interpolationOut": "smooth" }
+            ]
+          },
+          "scaleTrack": {
+            "keyframes": [
+              { "frame": 0, "value": { "a": 0.7, "b": 0.4 }, "interpolationOut": "smooth" },
+              { "frame": 60, "value": { "a": 0.75, "b": 0.42 }, "interpolationOut": "smooth" }
+            ]
+          },
+          "rotationTrack": {
+            "keyframes": [
+              { "frame": 0, "value": 0.0, "interpolationOut": "hold" },
+              { "frame": 30, "value": 12.5, "interpolationOut": "smooth" }
+            ]
+          },
+          "cropTrack": {
+            "keyframes": [
+              { "frame": 0, "value": { "left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0 }, "interpolationOut": "linear" },
+              { "frame": 45, "value": { "left": 0.05, "top": 0.08, "right": 0.02, "bottom": 0.03 }, "interpolationOut": "smooth" }
+            ]
+          }
+        },
+        {
+          "id": "clip-text-1",
+          "mediaRef": "asset-text-1",
+          "mediaType": "text",
+          "sourceClipType": "text",
+          "startFrame": 100,
+          "durationFrames": 45,
+          "trimStartFrame": 0,
+          "trimEndFrame": 0,
+          "speed": 1.0,
+          "volume": 1.0,
+          "fadeInFrames": 0,
+          "fadeOutFrames": 0,
+          "fadeInInterpolation": "linear",
+          "fadeOutInterpolation": "linear",
+          "opacity": 1.0,
+          "transform": {
+            "centerX": 0.5,
+            "centerY": 0.18,
+            "width": 0.9,
+            "height": 0.18,
+            "rotation": 0.0,
+            "flipHorizontal": false,
+            "flipVertical": false
+          },
+          "crop": {
+            "left": 0.0,
+            "top": 0.0,
+            "right": 0.0,
+            "bottom": 0.0
+          },
+          "textContent": "Fronda",
+          "textStyle": {
+            "fontName": "Helvetica-Bold",
+            "fontSize": 88,
+            "fontScale": 0.85,
+            "color": { "r": 1.0, "g": 0.95, "b": 0.8, "a": 1.0 },
+            "alignment": "center",
+            "shadow": {
+              "enabled": true,
+              "color": { "r": 0.0, "g": 0.0, "b": 0.0, "a": 0.6 },
+              "offsetX": 0.0,
+              "offsetY": -2.0,
+              "blur": 6.0
+            },
+            "background": {
+              "enabled": true,
+              "color": { "r": 0.0, "g": 0.0, "b": 0.0, "a": 0.5 }
+            },
+            "border": {
+              "enabled": false,
+              "color": { "r": 0.0, "g": 0.0, "b": 0.0, "a": 1.0 }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "track-audio-1",
+      "type": "audio",
+      "muted": false,
+      "hidden": false,
+      "syncLocked": true,
+      "clips": [
+        {
+          "id": "clip-audio-1",
+          "mediaRef": "asset-external-audio",
+          "mediaType": "audio",
+          "sourceClipType": "audio",
+          "startFrame": 0,
+          "durationFrames": 90,
+          "trimStartFrame": 0,
+          "trimEndFrame": 0,
+          "speed": 1.0,
+          "volume": 0.7,
+          "fadeInFrames": 5,
+          "fadeOutFrames": 5,
+          "fadeInInterpolation": "linear",
+          "fadeOutInterpolation": "hold",
+          "opacity": 1.0,
+          "transform": {
+            "centerX": 0.5,
+            "centerY": 0.5,
+            "width": 1.0,
+            "height": 1.0,
+            "rotation": 0.0,
+            "flipHorizontal": false,
+            "flipVertical": false
+          },
+          "crop": {
+            "left": 0.0,
+            "top": 0.0,
+            "right": 0.0,
+            "bottom": 0.0
+          },
+          "linkGroupId": "linked-av-1",
+          "volumeTrack": {
+            "keyframes": [
+              { "frame": 0, "value": -12.0, "interpolationOut": "linear" },
+              { "frame": 45, "value": -3.0, "interpolationOut": "smooth" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

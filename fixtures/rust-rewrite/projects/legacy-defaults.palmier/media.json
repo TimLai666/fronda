@@ -1,0 +1,26 @@
+{
+  "entries": [
+    {
+      "id": "legacy-video-1",
+      "name": "Legacy Video",
+      "type": "video",
+      "source": {
+        "external": {
+          "absolutePath": "/legacy/source.mov"
+        }
+      },
+      "duration": 2.0
+    },
+    {
+      "id": "legacy-text-1",
+      "name": "Legacy Text",
+      "type": "text",
+      "source": {
+        "project": {
+          "relativePath": "media/title.txt"
+        }
+      },
+      "duration": 1.0
+    }
+  ]
+}
