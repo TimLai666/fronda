@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 fn new_id() -> String {
@@ -412,6 +413,8 @@ pub struct Timeline {
     #[serde(default = "default_false")]
     pub settings_configured: bool,
     #[serde(default)]
+    pub selected_clip_ids: HashSet<String>,
+    #[serde(default)]
     pub tracks: Vec<Track>,
 }
 
@@ -422,6 +425,7 @@ impl Default for Timeline {
             width: 1920,
             height: 1080,
             settings_configured: false,
+            selected_clip_ids: HashSet::new(),
             tracks: Vec::new(),
         }
     }

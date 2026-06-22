@@ -53,7 +53,7 @@ Scope sources:
 - [x] `CLP-011`: After splitting a linked group, the right-half clips receive a new link group id distinct from the left-half group.
 - [x] `CLP-012`: Split operations preserve keyframe continuity by inserting boundary keyframes where needed.
 - [x] `CLP-013`: Splitting resets fade-in/fade-out at the cut boundary and clamps fades to new durations.
-- [ ] `CLP-014`: Removing clips must not leave stale selected clip ids behind.
+- [x] `CLP-014`: Removing clips must not leave stale selected clip ids behind.
 - [x] `CLP-015`: Changing speed recomputes duration from preserved source coverage.
 - [x] `CLP-016`: When a speed change changes clip end time, the contiguous same-track chain starting at the old end ripples as a block.
 - [x] `CLP-017`: Speed changes clamp fades and keyframes to the new duration.
@@ -115,10 +115,10 @@ Scope sources:
 - [ ] `INS-009`: Resizing non-text clips preserves source aspect ratio when source aspect is known.
 - [ ] `INS-010`: Resizing text changes font scaling and then refits the text box to content.
 - [ ] `INS-011`: `fitTextClipToContent` updates both text-box size and horizontal anchoring according to text alignment.
-- [ ] `INS-012`: Keyframes remain clip-relative in storage.
-- [ ] `INS-013`: Keyframe interpolation modes remain `linear`, `hold`, and `smooth`.
-- [ ] `INS-014`: Duplicate keyframes at the same frame collapse deterministically with last-value-wins behavior.
-- [ ] `INS-015`: Fade lengths are clamped so `fadeInFrames + fadeOutFrames <= durationFrames`.
+- [x] `INS-012`: Keyframes remain clip-relative in storage.
+- [x] `INS-013`: Keyframe interpolation modes remain `linear`, `hold`, and `smooth`.
+- [x] `INS-014`: Duplicate keyframes at the same frame collapse deterministically with last-value-wins behavior.
+- [x] `INS-015`: Fade lengths are clamped so `fadeInFrames + fadeOutFrames <= durationFrames`.
 - [ ] `INS-016`: Audio volume keyframes support direct editing in time and dB/value space while respecting neighboring keyframe ordering.
 
 ## I. Preview and render-pipeline behavior

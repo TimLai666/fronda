@@ -52,6 +52,7 @@ fn tim_001_total_frames_is_max_clip_end_across_tracks() {
         width: 1920,
         height: 1080,
         settings_configured: true,
+        selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![
             track(ClipType::Video, vec![clip(100, 50), clip(220, 25)]),
             track(ClipType::Audio, vec![clip(0, 400)]),
@@ -102,6 +103,7 @@ fn tim_006_seek_clamps_into_zero_to_total_frames() {
         width: 1920,
         height: 1080,
         settings_configured: false,
+        selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![track(ClipType::Video, vec![clip(100, 50)])],
     };
 

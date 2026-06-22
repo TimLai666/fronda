@@ -45,6 +45,7 @@ fn timeline(clips: Vec<Clip>) -> Timeline {
         width: 1920,
         height: 1080,
         settings_configured: true,
+        selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![Track {
             id: "video-track".to_string(),
             r#type: ClipType::Video,

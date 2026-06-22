@@ -2,7 +2,7 @@ use core_model::{
     AnimPair, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, Timeline, Track,
     Transform,
 };
-use timeline_core::{apply_clip_speed, split_clip};
+use timeline_core::{apply_clip_speed, clear_region, split_clip};
 
 fn clip(id: &str, media_type: ClipType, start_frame: i64, duration_frames: i64) -> Clip {
     Clip {
@@ -64,6 +64,7 @@ fn timeline(tracks: Vec<Track>) -> Timeline {
         width: 1920,
         height: 1080,
         settings_configured: true,
+        selected_clip_ids: std::collections::HashSet::new(),
         tracks,
     }
 }
@@ -299,4 +300,39 @@ fn clp_013_split_resets_fades_across_cut() {
     assert_eq!(halves[0].fade_out_frames, 0);
     assert_eq!(halves[1].fade_in_frames, 0);
     assert_eq!(halves[1].fade_out_frames, 20);
+}
+
+#[test]
+fn clp_014_remove_clips_clears_stale_selected_clip_ids() {
+    use std::collections::HashSet;
+    let c1 = clip("c1", ClipType::Video, 0, 30);
+    let c2 = clip("c2", ClipType::Video, 30, 30);
+    let mut t = timeline(vec![video_track(vec![c1, c2])]);
+    t.selected_clip_ids = HashSet::from(["c1".to_string(), "c2".to_string()]);
+
+    // remove_clips is called indirectly through clear_region
+    clear_region(&mut t, 0, 0, 60, false);
+
+    assert!(
+        t.selected_clip_ids.is_empty(),
+        "stale ids after region clear"
+    );
+}
+
+#[test]
+fn clp_014_remove_clips_keeps_unrelated_selected_ids() {
+    use std::collections::HashSet;
+    let c1 = clip("c1", ClipType::Video, 0, 30);
+    let c2 = clip("c2", ClipType::Video, 30, 30);
+    let mut t = timeline(vec![video_track(vec![c1, c2])]);
+    t.selected_clip_ids = HashSet::from(["c2".to_string(), "unrelated".to_string()]);
+
+    clear_region(&mut t, 0, 0, 30, false);
+
+    assert!(t.selected_clip_ids.contains("c2"), "c2 should remain");
+    assert!(
+        t.selected_clip_ids.contains("unrelated"),
+        "unrelated id should remain"
+    );
+    assert_eq!(t.selected_clip_ids.len(), 2);
 }

@@ -224,6 +224,7 @@ where
     for track in &mut timeline.tracks {
         track.clips.retain(|clip| !ids.contains(&clip.id));
     }
+    timeline.selected_clip_ids.retain(|id| !ids.contains(id));
     if prune {
         prune_empty_tracks(timeline);
     }
