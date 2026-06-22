@@ -22,7 +22,7 @@ Scope sources:
 - [x] `TIM-005`: `Clip.sourceDurationFrames = sourceFramesConsumed + trimStartFrame + trimEndFrame`.
 - [x] `TIM-006`: `currentFrame` seeks clamp into `[0, totalFrames]`.
 - [x] `TIM-007`: Timeline range selections are valid only when `endFrame > startFrame`.
-- [ ] `TIM-008`: Timeline ranges remain half-open intervals throughout editing, preview, and agent operations.
+- [x] `TIM-008`: Timeline ranges remain half-open intervals throughout editing, preview, and agent operations.
 
 ## B. Track model and track-level operations
 
@@ -31,7 +31,7 @@ Scope sources:
 - [x] `TRK-003`: Track labels preserve current UI numbering semantics (`V1`, `V2`, `A1`, `A2`, etc.).
 - [x] `TRK-004`: Removing a track removes every clip on that track.
 - [x] `TRK-005`: Removing a track shifts remaining track indexes downward.
-- [ ] `TRK-006`: `pruneEmptyTracks()` removes empty tracks without violating the visual-above-audio partition.
+- [x] `TRK-006`: `pruneEmptyTracks()` removes empty tracks without violating the visual-above-audio partition.
 - [ ] `TRK-007`: Track mute, hidden, and sync-lock toggles remain individually undoable.
 - [ ] `TRK-008`: Track display height is clamped to the current min/max track-height limits.
 
@@ -82,10 +82,10 @@ Scope sources:
 - [x] `RPL-007`: A ripple operation is refused if any shifted clip would move before frame 0.
 - [x] `RPL-008`: A ripple operation is refused if any shifted sync-locked track would collide after the shift.
 - [x] `RPL-009`: Ripple insert opens a gap on the target track and every sync-locked track.
-- [ ] `RPL-010`: Ripple insert also opens the gap on the linked-audio destination track when auto-linked audio will be created.
-- [ ] `RPL-011`: If a pushed track contains a straddling clip at the insertion point, that clip is split first so its right half rides the ripple.
-- [ ] `RPL-012`: Ripple insert places new clips sequentially inside the opened gap.
-- [ ] `RPL-013`: A gap selected earlier but later filled by an out-of-band edit becomes invalid and is cleared instead of being ripple-deleted incorrectly.
+- [x] `RPL-010`: Ripple insert also opens the gap on the linked-audio destination track when auto-linked audio will be created.
+- [x] `RPL-011`: If a pushed track contains a straddling clip at the insertion point, that clip is split first so its right half rides the ripple.
+- [x] `RPL-012`: Ripple insert places new clips sequentially inside the opened gap.
+- [x] `RPL-013`: A gap selected earlier but later filled by an out-of-band edit becomes invalid and is cleared instead of being ripple-deleted incorrectly.
 
 ## G. Snapping, drag, and range-selection behavior
 

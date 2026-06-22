@@ -1,13 +1,14 @@
 use crate::{
     linked_partner_ids,
     ripple::{
-        compute_ripple_shifts_for_ranges, gap_is_still_empty, merge_ranges, validate_track_shifts,
-        ClipShift, FrameRange,
+        compute_ripple_push, compute_ripple_shifts_for_ranges, gap_is_still_empty, merge_ranges,
+        validate_track_shifts, ClipShift, FrameRange,
     },
     ClipMathExt,
 };
 use core_model::{Clip, Timeline};
 use std::collections::BTreeSet;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RippleShiftSet {
@@ -128,6 +129,103 @@ pub fn compute_ripple_delete_gap(
         shifts_by_track.push(shifts);
     }
     Ok(shifts_by_track)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RippleInsertOutcome {
+    Ok(RippleInsertReport),
+    Refused(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RippleInsertReport {
+    pub total_push: i64,
+    pub push_track_indices: Vec<usize>,
+    pub created_clip_ids: Vec<String>,
+    pub shifts_by_track: Vec<Vec<ClipShift>>,
+}
+
+pub fn compute_ripple_insert(
+    timeline: &Timeline,
+    config: RippleInsertConfig,
+) -> RippleInsertOutcome {
+    if config.clips.is_empty() {
+        return RippleInsertOutcome::Refused("No clips to insert".into());
+    }
+    if config.insert_frame < 0 {
+        return RippleInsertOutcome::Refused("Insert frame is negative".into());
+    }
+    if config.track_index >= timeline.tracks.len() {
+        return RippleInsertOutcome::Refused("Track index out of bounds".into());
+    }
+
+    let total_push: i64 = config.clips.iter().map(|c| c.duration_frames).sum();
+    if total_push <= 0 {
+        return RippleInsertOutcome::Refused("Total push must be positive".into());
+    }
+
+    // Collect tracks to push: target + linked audio + sync-locked
+    let mut push_track_indices: BTreeSet<usize> = BTreeSet::from([config.track_index]);
+    if let Some(audio_ti) = config.linked_audio_track_index {
+        if audio_ti < timeline.tracks.len() {
+            push_track_indices.insert(audio_ti);
+        }
+    }
+    for (ti, track) in timeline.tracks.iter().enumerate() {
+        if track.sync_locked {
+            push_track_indices.insert(ti);
+        }
+    }
+
+    // Validate that no straddling clip is at an invalid split boundary
+    for ti in &push_track_indices {
+        if let Some(straddler) = timeline.tracks[*ti]
+            .clips
+            .iter()
+            .find(|c| c.start_frame < config.insert_frame && config.insert_frame < c.end_frame())
+        {
+            if config.insert_frame <= straddler.start_frame
+                || config.insert_frame >= straddler.end_frame()
+            {
+                return RippleInsertOutcome::Refused(
+                    "Straddling clip insert frame at boundary".into(),
+                );
+            }
+        }
+    }
+
+    // Compute push shifts for each pushed track
+    let mut shifts_by_track: Vec<Vec<ClipShift>> = Vec::new();
+    for ti in 0..timeline.tracks.len() {
+        if push_track_indices.contains(&ti) {
+            let shifts = compute_ripple_push(
+                &timeline.tracks[ti].clips,
+                config.insert_frame,
+                total_push,
+                &BTreeSet::new(),
+            );
+            if let Err(err) = validate_track_shifts(&timeline.tracks[ti], &shifts) {
+                return RippleInsertOutcome::Refused(format!("{err:?}"));
+            }
+            shifts_by_track.push(shifts);
+        } else {
+            shifts_by_track.push(Vec::new());
+        }
+    }
+
+    // Generate created clip IDs
+    let created_clip_ids: Vec<String> = config
+        .clips
+        .iter()
+        .map(|_| Uuid::new_v4().to_string())
+        .collect();
+
+    RippleInsertOutcome::Ok(RippleInsertReport {
+        total_push,
+        push_track_indices: push_track_indices.into_iter().collect(),
+        created_clip_ids,
+        shifts_by_track,
+    })
 }
 
 pub fn timing_propagation_partners(

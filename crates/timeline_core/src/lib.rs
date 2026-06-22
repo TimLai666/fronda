@@ -10,7 +10,9 @@ mod workflow;
 
 use core_model::{Clip, Timeline};
 
-pub use edit::{apply_clip_speed, clear_region, find_clip, split_clip, ClipLocation};
+pub use edit::{
+    apply_clip_speed, clear_region, find_clip, prune_empty_tracks, split_clip, ClipLocation,
+};
 pub use linking::{
     build_link_index, expand_to_link_group, link_clips, link_group_offsets, linked_partner_ids,
     partner_moves_for_move_of, unlink_clips, LinkIndex, LinkedPartnerMove,
@@ -31,9 +33,10 @@ pub use track_ops::{
     TrackInsertionError,
 };
 pub use workflow::{
-    compute_ripple_delete, compute_ripple_delete_gap, compute_trim_values,
+    compute_ripple_delete, compute_ripple_delete_gap, compute_ripple_insert, compute_trim_values,
     timing_propagation_partners, ClipFragment, RippleDeleteConfig, RippleDeleteOutcome,
-    RippleDeleteReport, RippleInsertClipSpec, RippleInsertConfig, RippleShiftSet, TrimEdge,
+    RippleDeleteReport, RippleInsertClipSpec, RippleInsertConfig, RippleInsertOutcome,
+    RippleInsertReport, RippleShiftSet, TrimEdge,
 };
 
 pub trait ClipMathExt {

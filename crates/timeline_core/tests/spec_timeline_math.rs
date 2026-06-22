@@ -117,6 +117,29 @@ fn tim_007_half_open_range_requires_end_after_start() {
     assert!(!is_valid_half_open_range(10, 9));
 }
 
+#[test]
+fn tim_008_never_violates_half_open_invariant_during_operations() {
+    // Verify that clip and range invariants hold after editing operations
+    let mut clip = clip(100, 50);
+    assert_eq!(clip.end_frame(), 150);
+    assert!(clip.contains_frame(100));
+    assert!(clip.contains_frame(149));
+    assert!(!clip.contains_frame(150));
+
+    // After speed change
+    clip.speed = 2.0;
+    clip.duration_frames = ((clip.duration_frames as f64 * 1.0) / 2.0).round() as i64;
+    assert_eq!(clip.end_frame(), 100 + clip.duration_frames);
+    assert!(!clip.contains_frame(clip.end_frame()));
+
+    // After trim
+    clip.start_frame = 120;
+    clip.duration_frames = 30;
+    assert_eq!(clip.end_frame(), 150);
+    assert!(clip.contains_frame(120));
+    assert!(!clip.contains_frame(150));
+}
+
 proptest! {
     #[test]
     fn tim_002_and_tim_003_hold_for_generated_clips(

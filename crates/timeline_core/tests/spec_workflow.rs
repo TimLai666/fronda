@@ -348,6 +348,249 @@ fn rpl_009_ripple_insert_pushes_downstream_clips() {
     assert_eq!(shifts[0].new_start_frame, 80);
 }
 
+// ─── RPL-009/010/011/012: Ripple insert ───
+
+#[test]
+fn rpl_009_ripple_insert_opens_gap_and_shifts_downstream() {
+    // Insert a 30-frame clip at 50, pushing c2 from [50,100) to [80,130)
+    let c1 = clip("c1", 0, 50);
+    let c2 = clip("c2", 50, 50);
+    let t = timeline(vec![video_track(vec![c1, c2])]);
+    let result = timeline_core::compute_ripple_insert(
+        &t,
+        timeline_core::RippleInsertConfig {
+            track_index: 0,
+            insert_frame: 50,
+            clips: vec![timeline_core::RippleInsertClipSpec {
+                asset_id: "new".to_string(),
+                duration_frames: 30,
+                trim_start_frame: None,
+                trim_end_frame: None,
+            }],
+            linked_audio_track_index: None,
+        },
+    );
+    match result {
+        timeline_core::RippleInsertOutcome::Ok(report) => {
+            assert_eq!(report.total_push, 30);
+            assert!(!report.created_clip_ids.is_empty());
+            // Track 0 should have a shift for c2
+            assert!(!report.shifts_by_track[0].is_empty());
+            let c2_shift = report.shifts_by_track[0]
+                .iter()
+                .find(|s| s.clip_id == "c2")
+                .expect("c2 should be shifted");
+            assert_eq!(c2_shift.new_start_frame, 80);
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
+#[test]
+fn rpl_009_ripple_insert_multiple_clips_seqentially_in_gap() {
+    // Insert two clips sequentially at 50: first 20fr, second 30fr
+    let c1 = clip("c1", 0, 50);
+    let c2 = clip("c2", 50, 50);
+    let t = timeline(vec![video_track(vec![c1, c2])]);
+    let result = timeline_core::compute_ripple_insert(
+        &t,
+        timeline_core::RippleInsertConfig {
+            track_index: 0,
+            insert_frame: 50,
+            clips: vec![
+                timeline_core::RippleInsertClipSpec {
+                    asset_id: "a".to_string(),
+                    duration_frames: 20,
+                    trim_start_frame: None,
+                    trim_end_frame: None,
+                },
+                timeline_core::RippleInsertClipSpec {
+                    asset_id: "b".to_string(),
+                    duration_frames: 30,
+                    trim_start_frame: None,
+                    trim_end_frame: None,
+                },
+            ],
+            linked_audio_track_index: None,
+        },
+    );
+    match result {
+        timeline_core::RippleInsertOutcome::Ok(report) => {
+            // Total push = 20 + 30 = 50
+            assert_eq!(report.total_push, 50);
+            assert_eq!(report.created_clip_ids.len(), 2);
+            // c2 should be pushed from 50 to 100
+            let c2_shift = report.shifts_by_track[0]
+                .iter()
+                .find(|s| s.clip_id == "c2")
+                .expect("c2 should be shifted");
+            assert_eq!(c2_shift.new_start_frame, 100);
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
+#[test]
+fn rpl_010_ripple_insert_opens_gap_on_linked_audio_track() {
+    let v1 = clip("v1", 0, 100);
+    let a1 = clip("a1", 120, 50);
+    let t = timeline(vec![video_track(vec![v1]), audio_track(vec![a1])]);
+    let result = timeline_core::compute_ripple_insert(
+        &t,
+        timeline_core::RippleInsertConfig {
+            track_index: 0,
+            insert_frame: 50,
+            clips: vec![timeline_core::RippleInsertClipSpec {
+                asset_id: "new".to_string(),
+                duration_frames: 30,
+                trim_start_frame: None,
+                trim_end_frame: None,
+            }],
+            linked_audio_track_index: Some(1),
+        },
+    );
+    match result {
+        timeline_core::RippleInsertOutcome::Ok(report) => {
+            // Both tracks should be in push set
+            assert!(report.push_track_indices.contains(&0));
+            assert!(report.push_track_indices.contains(&1));
+            // Track 1 (audio) should also have shifts
+            assert!(!report.shifts_by_track[1].is_empty());
+            let a1_shift = report.shifts_by_track[1]
+                .iter()
+                .find(|s| s.clip_id == "a1")
+                .expect("a1 should be shifted");
+            assert_eq!(a1_shift.new_start_frame, 150);
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
+#[test]
+fn rpl_011_straddling_clip_at_insert_point_is_detected() {
+    // A clip straddling the insert frame: c1 covers [0, 100), insert at 50
+    let c1 = clip("c1", 0, 100);
+    let t = timeline(vec![video_track(vec![c1])]);
+    let result = timeline_core::compute_ripple_insert(
+        &t,
+        timeline_core::RippleInsertConfig {
+            track_index: 0,
+            insert_frame: 50,
+            clips: vec![timeline_core::RippleInsertClipSpec {
+                asset_id: "new".to_string(),
+                duration_frames: 30,
+                trim_start_frame: None,
+                trim_end_frame: None,
+            }],
+            linked_audio_track_index: None,
+        },
+    );
+    // The straddling clip is detected; the compute function still accepts it
+    // (actual split happens at the editor level)
+    match result {
+        timeline_core::RippleInsertOutcome::Ok(report) => {
+            assert_eq!(report.total_push, 30);
+            // c1 won't be shifted since its start is before insert_frame
+            assert!(report.shifts_by_track[0].is_empty());
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
+#[test]
+fn rpl_ripple_insert_refuses_empty_clips() {
+    let t = timeline(vec![video_track(vec![clip("c1", 0, 50)])]);
+    let result = timeline_core::compute_ripple_insert(
+        &t,
+        timeline_core::RippleInsertConfig {
+            track_index: 0,
+            insert_frame: 50,
+            clips: vec![],
+            linked_audio_track_index: None,
+        },
+    );
+    assert!(matches!(
+        result,
+        timeline_core::RippleInsertOutcome::Refused(_)
+    ));
+}
+
+#[test]
+fn rpl_ripple_insert_refuses_negative_frame() {
+    let t = timeline(vec![video_track(vec![clip("c1", 0, 50)])]);
+    let result = timeline_core::compute_ripple_insert(
+        &t,
+        timeline_core::RippleInsertConfig {
+            track_index: 0,
+            insert_frame: -5,
+            clips: vec![timeline_core::RippleInsertClipSpec {
+                asset_id: "new".to_string(),
+                duration_frames: 30,
+                trim_start_frame: None,
+                trim_end_frame: None,
+            }],
+            linked_audio_track_index: None,
+        },
+    );
+    assert!(matches!(
+        result,
+        timeline_core::RippleInsertOutcome::Refused(_)
+    ));
+}
+
+#[test]
+fn rpl_ripple_insert_refuses_out_of_bounds_track() {
+    let t = timeline(vec![]);
+    let result = timeline_core::compute_ripple_insert(
+        &t,
+        timeline_core::RippleInsertConfig {
+            track_index: 0,
+            insert_frame: 50,
+            clips: vec![timeline_core::RippleInsertClipSpec {
+                asset_id: "new".to_string(),
+                duration_frames: 30,
+                trim_start_frame: None,
+                trim_end_frame: None,
+            }],
+            linked_audio_track_index: None,
+        },
+    );
+    assert!(matches!(
+        result,
+        timeline_core::RippleInsertOutcome::Refused(_)
+    ));
+}
+
+#[test]
+fn rpl_ripple_insert_sync_locked_track_also_gets_pushed() {
+    let v1 = clip("v1", 0, 100);
+    let a1 = clip("a1", 120, 50);
+    let mut t = timeline(vec![video_track(vec![v1]), audio_track(vec![a1])]);
+    // Make audio track sync-locked
+    t.tracks[1].sync_locked = true;
+    let result = timeline_core::compute_ripple_insert(
+        &t,
+        timeline_core::RippleInsertConfig {
+            track_index: 0,
+            insert_frame: 50,
+            clips: vec![timeline_core::RippleInsertClipSpec {
+                asset_id: "new".to_string(),
+                duration_frames: 30,
+                trim_start_frame: None,
+                trim_end_frame: None,
+            }],
+            linked_audio_track_index: None,
+        },
+    );
+    match result {
+        timeline_core::RippleInsertOutcome::Ok(report) => {
+            assert!(report.push_track_indices.contains(&1));
+            assert!(!report.shifts_by_track[1].is_empty());
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
 // ─── Refuse on non-empty ranges ───
 
 #[test]

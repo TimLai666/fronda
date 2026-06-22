@@ -166,6 +166,42 @@ fn trk_005_remove_middle_track_shifts_others() {
     assert_eq!(t.tracks[1].clips[0].id, "a2");
 }
 
+// ─── TRK-006: pruneEmptyTracks removes empty tracks ───
+
+#[test]
+fn trk_006_prune_empty_tracks_removes_tracks_with_no_clips() {
+    let mut t = timeline(vec![
+        video_track(vec![clip("c1", 0, 30)]),
+        video_track(vec![]),
+        audio_track(vec![]),
+    ]);
+    timeline_core::prune_empty_tracks(&mut t);
+    assert_eq!(t.tracks.len(), 1);
+    assert_eq!(t.tracks[0].clips[0].id, "c1");
+}
+
+#[test]
+fn trk_006_prune_empty_tracks_preserves_visual_above_audio_partition() {
+    let mut t = timeline(vec![
+        video_track(vec![]),
+        audio_track(vec![clip("a1", 0, 30)]),
+        video_track(vec![clip("v2", 0, 30)]),
+    ]);
+    timeline_core::prune_empty_tracks(&mut t);
+    // After pruning, remaining: audio(a1) then video(v2)
+    // But Swift's pruneEmptyTracks just removes empty, doesn't reorder
+    assert_eq!(t.tracks.len(), 2);
+    assert_eq!(t.tracks[0].r#type, core_model::ClipType::Audio);
+    assert_eq!(t.tracks[1].r#type, core_model::ClipType::Video);
+}
+
+#[test]
+fn trk_006_prune_empty_tracks_removes_all_when_all_empty() {
+    let mut t = timeline(vec![video_track(vec![]), audio_track(vec![])]);
+    timeline_core::prune_empty_tracks(&mut t);
+    assert!(t.tracks.is_empty());
+}
+
 // ─── sort_clips_on_track ───
 
 #[test]

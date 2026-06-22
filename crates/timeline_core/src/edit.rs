@@ -208,7 +208,7 @@ fn sort_clips(track: &mut Track) {
     track.clips.sort_by_key(|clip| clip.start_frame);
 }
 
-fn prune_empty_tracks(timeline: &mut Timeline) {
+pub fn prune_empty_tracks(timeline: &mut Timeline) {
     timeline.tracks.retain(|track| !track.clips.is_empty());
 }
 
