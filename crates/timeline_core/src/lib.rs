@@ -3,6 +3,7 @@ mod keyframes;
 mod linking;
 mod overwrite;
 mod ripple;
+mod workflow;
 
 use core_model::{Clip, Timeline};
 
@@ -16,6 +17,11 @@ pub use ripple::{
     compute_ripple_push, compute_ripple_shifts, compute_ripple_shifts_for_ranges,
     gap_is_still_empty, merge_ranges, validate_track_shifts, ClipShift, FrameRange, GapSelection,
     RippleValidationError,
+};
+pub use workflow::{
+    compute_ripple_delete, compute_ripple_delete_gap, compute_trim_values,
+    timing_propagation_partners, ClipFragment, RippleDeleteConfig, RippleDeleteOutcome,
+    RippleDeleteReport, RippleInsertClipSpec, RippleInsertConfig, RippleShiftSet, TrimEdge,
 };
 
 pub trait ClipMathExt {

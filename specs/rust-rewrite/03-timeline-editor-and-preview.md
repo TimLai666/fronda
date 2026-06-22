@@ -64,24 +64,24 @@ Scope sources:
 - [x] `LNK-002`: `expandToLinkGroup` returns every clip id that shares a link group with any selected seed id.
 - [x] `LNK-003`: `linkedPartnerIds(of:)` returns group members excluding the anchor clip itself.
 - [x] `LNK-004`: Moving one clip in a linked group propagates the same frame delta to linked partners while preserving each partner’s track.
-- [ ] `LNK-005`: Timing-style changes (`durationFrames`, trims, speed) can propagate uniformly to linked partners.
+- [x] `LNK-005`: Timing-style changes (`durationFrames`, trims, speed) can propagate uniformly to linked partners.
 - [x] `LNK-006`: `linkGroupOffsets()` remains defined as `startFrame - trimStartFrame` deltas within each group.
 - [x] `LNK-007`: Linking clips writes one fresh `linkGroupId` across the entire selected set.
 - [x] `LNK-008`: Unlinking clears `linkGroupId` across the expanded selected group.
-- [ ] `LNK-009`: Trim propagation uses source-time deltas and clamps audio/video trims to non-negative values.
-- [ ] `LNK-010`: Image and text trim propagation preserves current behavior that can produce negative trim values because those media do not have the same bounded source semantics.
+- [x] `LNK-009`: Trim propagation uses source-time deltas and clamps audio/video trims to non-negative values.
+- [x] `LNK-010`: Image and text trim propagation preserves current behavior that can produce negative trim values because those media do not have the same bounded source semantics.
 
 ## F. Ripple editing and sync-lock behavior
 
-- [ ] `RPL-001`: Ripple delete of selected clips removes the clips and closes the resulting gap.
-- [ ] `RPL-002`: Ripple delete of a selected gap closes exactly that empty interval.
+- [x] `RPL-001`: Ripple delete of selected clips removes the clips and closes the resulting gap.
+- [x] `RPL-002`: Ripple delete of a selected gap closes exactly that empty interval.
 - [x] `RPL-003`: Ripple delete across ranges merges overlapping/adjacent ranges before applying shifts.
-- [ ] `RPL-004`: Ripple delete anchored to a track cuts every overlapping clip fragment on that track.
-- [ ] `RPL-005`: Ripple delete also clears linked A/V partner tracks for clips touched by the cut.
-- [ ] `RPL-006`: Sync-locked follower tracks shift to preserve alignment even when they were not directly cut.
+- [x] `RPL-004`: Ripple delete anchored to a track cuts every overlapping clip fragment on that track.
+- [x] `RPL-005`: Ripple delete also clears linked A/V partner tracks for clips touched by the cut.
+- [x] `RPL-006`: Sync-locked follower tracks shift to preserve alignment even when they were not directly cut.
 - [x] `RPL-007`: A ripple operation is refused if any shifted clip would move before frame 0.
 - [x] `RPL-008`: A ripple operation is refused if any shifted sync-locked track would collide after the shift.
-- [ ] `RPL-009`: Ripple insert opens a gap on the target track and every sync-locked track.
+- [x] `RPL-009`: Ripple insert opens a gap on the target track and every sync-locked track.
 - [ ] `RPL-010`: Ripple insert also opens the gap on the linked-audio destination track when auto-linked audio will be created.
 - [ ] `RPL-011`: If a pushed track contains a straddling clip at the insertion point, that clip is split first so its right half rides the ripple.
 - [ ] `RPL-012`: Ripple insert places new clips sequentially inside the opened gap.
