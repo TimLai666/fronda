@@ -2,9 +2,9 @@ use crate::keyframes::{
     clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, set_clip_duration,
     split_all_clip_keyframe_tracks,
 };
-use crate::{compute_overwrite, ClipMathExt, OverwriteAction};
+use crate::{compute_overwrite, linked_partner_ids, ClipMathExt, OverwriteAction};
 use core_model::{Timeline, Track};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,30 +248,4 @@ fn contiguous_clip_ids(track: &Track, from_end: i64, exclude_id: &str) -> BTreeS
     }
 
     ids
-}
-
-fn linked_partner_ids(timeline: &Timeline, clip_id: &str) -> Vec<String> {
-    let mut link_index: HashMap<String, Vec<String>> = HashMap::new();
-    for track in &timeline.tracks {
-        for clip in &track.clips {
-            if let Some(group_id) = &clip.link_group_id {
-                link_index
-                    .entry(group_id.clone())
-                    .or_default()
-                    .push(clip.id.clone());
-            }
-        }
-    }
-
-    for members in link_index.values() {
-        if members.iter().any(|member| member == clip_id) {
-            return members
-                .iter()
-                .filter(|member| member.as_str() != clip_id)
-                .cloned()
-                .collect();
-        }
-    }
-
-    Vec::new()
 }

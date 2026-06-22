@@ -1,11 +1,22 @@
 mod edit;
 mod keyframes;
+mod linking;
 mod overwrite;
+mod ripple;
 
 use core_model::{Clip, Timeline};
 
 pub use edit::{apply_clip_speed, clear_region, find_clip, split_clip, ClipLocation};
+pub use linking::{
+    build_link_index, expand_to_link_group, link_clips, link_group_offsets, linked_partner_ids,
+    partner_moves_for_move_of, unlink_clips, LinkIndex, LinkedPartnerMove,
+};
 pub use overwrite::{compute_overwrite, OverwriteAction};
+pub use ripple::{
+    compute_ripple_push, compute_ripple_shifts, compute_ripple_shifts_for_ranges,
+    gap_is_still_empty, merge_ranges, validate_track_shifts, ClipShift, FrameRange, GapSelection,
+    RippleValidationError,
+};
 
 pub trait ClipMathExt {
     fn end_frame(&self) -> i64;
