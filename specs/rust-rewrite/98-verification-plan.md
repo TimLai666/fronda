@@ -15,7 +15,7 @@ Current CI now protects four things:
 
 1. the Swift baseline still builds and tests cleanly,
 2. the Rust rewrite spec set remains structurally sane,
-3. the first Rust rewrite workspace crates compile and pass compatibility tests, including `.palmier` save/write parity and first pure-core timeline math/property coverage,
+3. the first Rust rewrite workspace crates compile and pass compatibility tests, including `.palmier` save/write parity plus pure-core timeline math, split, overwrite/clear-region, and speed-change coverage,
 4. the first `gpui-ce` app-shell scaffold compiles on macOS.
 
 The spec lint is intentionally narrow for now. It validates:
@@ -30,13 +30,15 @@ The first executable Rust coverage now lives in:
 - `crates/core_model/tests/compatibility.rs`
 - `crates/project_io/tests/project_bundle.rs`
 - `crates/timeline_core/tests/spec_timeline_math.rs`
+- `crates/timeline_core/tests/spec_overwrite.rs`
+- `crates/timeline_core/tests/spec_clip_mutations.rs`
 - `fixtures/rust-rewrite/projects/**`
 
 The first `gpui-ce` shell scaffold now lives in:
 
 - `crates/app_shell_gpui/src/**`
 
-That is still only wave-1 coverage, not full product verification. But it does mean the rewrite baseline is no longer purely documentary.
+That is still only early wave-3 coverage, not full product verification. But it does mean the rewrite baseline is no longer purely documentary.
 
 ## B. Tracking rules for the rewrite
 
@@ -162,7 +164,7 @@ Do not move pure timeline math, file persistence, export planning, or search ran
 As Rust implementation continues, the next concrete repo changes should be:
 
 1. expand wave-2 coverage into relink and save-as-media flows,
-2. broaden wave-3 from timeline invariants into split, speed-change, overwrite, ripple, and linking engines,
+2. broaden wave-3 from the current timeline invariants, split, speed-change, and overwrite coverage into ripple, track operations, and fuller linking engines,
 3. add snapshot support for XML and agent/MCP contracts,
 4. add fixture families for transcripts/search/export,
 5. layer `gpui-ce` interaction tests on top of the existing shell compile check only after non-UI cores are already isolated.

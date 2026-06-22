@@ -15,13 +15,13 @@ Scope sources:
 
 ## A. Timeline model invariants
 
-- [ ] `TIM-001`: `Timeline.totalFrames` equals the maximum `endFrame` across all clips on all tracks.
-- [ ] `TIM-002`: A clip occupies the half-open interval `[startFrame, startFrame + durationFrames)`.
-- [ ] `TIM-003`: `Clip.endFrame = startFrame + durationFrames`.
-- [ ] `TIM-004`: `Clip.sourceFramesConsumed = round(durationFrames * speed)`.
-- [ ] `TIM-005`: `Clip.sourceDurationFrames = sourceFramesConsumed + trimStartFrame + trimEndFrame`.
-- [ ] `TIM-006`: `currentFrame` seeks clamp into `[0, totalFrames]`.
-- [ ] `TIM-007`: Timeline range selections are valid only when `endFrame > startFrame`.
+- [x] `TIM-001`: `Timeline.totalFrames` equals the maximum `endFrame` across all clips on all tracks.
+- [x] `TIM-002`: A clip occupies the half-open interval `[startFrame, startFrame + durationFrames)`.
+- [x] `TIM-003`: `Clip.endFrame = startFrame + durationFrames`.
+- [x] `TIM-004`: `Clip.sourceFramesConsumed = round(durationFrames * speed)`.
+- [x] `TIM-005`: `Clip.sourceDurationFrames = sourceFramesConsumed + trimStartFrame + trimEndFrame`.
+- [x] `TIM-006`: `currentFrame` seeks clamp into `[0, totalFrames]`.
+- [x] `TIM-007`: Timeline range selections are valid only when `endFrame > startFrame`.
 - [ ] `TIM-008`: Timeline ranges remain half-open intervals throughout editing, preview, and agent operations.
 
 ## B. Track model and track-level operations
@@ -42,21 +42,21 @@ Scope sources:
 - [ ] `CLP-003`: Moving clips removes the moved clips from their source tracks before clearing destination overlaps.
 - [ ] `CLP-004`: Moving clips then clears destination conflicts and inserts the moved clips at exact target frames.
 - [ ] `CLP-005`: Destination track compatibility is enforced for clip moves.
-- [ ] `CLP-006`: `clearRegion` deterministically trims, splits, or removes overlapping clips rather than leaving partial overlap.
+- [x] `CLP-006`: `clearRegion` deterministically trims, splits, or removes overlapping clips rather than leaving partial overlap.
 - [ ] `CLP-007`: Placing a video asset with audio may auto-create a linked audio clip on an audio track.
 - [ ] `CLP-008`: Auto-created linked audio uses a shared `linkGroupId` with the visual clip.
 
 ## D. Split, remove, and speed-change behavior
 
-- [ ] `CLP-009`: `splitClip` is valid only when the split frame lies strictly inside the clip span.
-- [ ] `CLP-010`: Splitting a linked clip also splits all linked partners at the same timeline frame.
-- [ ] `CLP-011`: After splitting a linked group, the right-half clips receive a new link group id distinct from the left-half group.
-- [ ] `CLP-012`: Split operations preserve keyframe continuity by inserting boundary keyframes where needed.
-- [ ] `CLP-013`: Splitting resets fade-in/fade-out at the cut boundary and clamps fades to new durations.
+- [x] `CLP-009`: `splitClip` is valid only when the split frame lies strictly inside the clip span.
+- [x] `CLP-010`: Splitting a linked clip also splits all linked partners at the same timeline frame.
+- [x] `CLP-011`: After splitting a linked group, the right-half clips receive a new link group id distinct from the left-half group.
+- [x] `CLP-012`: Split operations preserve keyframe continuity by inserting boundary keyframes where needed.
+- [x] `CLP-013`: Splitting resets fade-in/fade-out at the cut boundary and clamps fades to new durations.
 - [ ] `CLP-014`: Removing clips must not leave stale selected clip ids behind.
-- [ ] `CLP-015`: Changing speed recomputes duration from preserved source coverage.
-- [ ] `CLP-016`: When a speed change changes clip end time, the contiguous same-track chain starting at the old end ripples as a block.
-- [ ] `CLP-017`: Speed changes clamp fades and keyframes to the new duration.
+- [x] `CLP-015`: Changing speed recomputes duration from preserved source coverage.
+- [x] `CLP-016`: When a speed change changes clip end time, the contiguous same-track chain starting at the old end ripples as a block.
+- [x] `CLP-017`: Speed changes clamp fades and keyframes to the new duration.
 
 ## E. Link groups and timing propagation
 

@@ -1,0 +1,302 @@
+use core_model::{
+    AnimPair, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, Timeline, Track,
+    Transform,
+};
+use timeline_core::{apply_clip_speed, split_clip};
+
+fn clip(id: &str, media_type: ClipType, start_frame: i64, duration_frames: i64) -> Clip {
+    Clip {
+        id: id.to_string(),
+        media_ref: format!("asset-{id}"),
+        media_type,
+        source_clip_type: media_type,
+        start_frame,
+        duration_frames,
+        trim_start_frame: 0,
+        trim_end_frame: 0,
+        speed: 1.0,
+        volume: 1.0,
+        fade_in_frames: 0,
+        fade_out_frames: 0,
+        fade_in_interpolation: Interpolation::Linear,
+        fade_out_interpolation: Interpolation::Linear,
+        opacity: 1.0,
+        transform: Transform::default(),
+        crop: Crop::default(),
+        link_group_id: None,
+        caption_group_id: None,
+        text_content: None,
+        text_style: None,
+        opacity_track: None,
+        position_track: None,
+        scale_track: None,
+        rotation_track: None,
+        crop_track: None,
+        volume_track: None,
+    }
+}
+
+fn video_track(clips: Vec<Clip>) -> Track {
+    Track {
+        id: "video-track".to_string(),
+        r#type: ClipType::Video,
+        muted: false,
+        hidden: false,
+        sync_locked: true,
+        clips,
+    }
+}
+
+fn audio_track(clips: Vec<Clip>) -> Track {
+    Track {
+        id: "audio-track".to_string(),
+        r#type: ClipType::Audio,
+        muted: false,
+        hidden: false,
+        sync_locked: true,
+        clips,
+    }
+}
+
+fn timeline(tracks: Vec<Track>) -> Timeline {
+    Timeline {
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        settings_configured: true,
+        tracks,
+    }
+}
+
+#[test]
+fn clp_015_apply_clip_speed_recomputes_duration_from_source_coverage() {
+    let clip = clip("c1", ClipType::Video, 0, 60);
+    let mut timeline = timeline(vec![video_track(vec![clip])]);
+
+    assert!(apply_clip_speed(&mut timeline, "c1", 2.0));
+    let updated = &timeline.tracks[0].clips[0];
+
+    assert_eq!(updated.speed, 2.0);
+    assert_eq!(updated.duration_frames, 30);
+}
+
+#[test]
+fn clp_015_apply_clip_speed_can_expand_duration() {
+    let clip = clip("c1", ClipType::Video, 0, 60);
+    let mut timeline = timeline(vec![video_track(vec![clip])]);
+
+    assert!(apply_clip_speed(&mut timeline, "c1", 0.5));
+    assert_eq!(timeline.tracks[0].clips[0].duration_frames, 120);
+}
+
+#[test]
+fn clp_016_apply_clip_speed_ripples_contiguous_same_track_followers() {
+    let c1 = clip("c1", ClipType::Video, 0, 60);
+    let c2 = clip("c2", ClipType::Video, 60, 30);
+    let mut timeline = timeline(vec![video_track(vec![c1, c2])]);
+
+    assert!(apply_clip_speed(&mut timeline, "c1", 2.0));
+    let updated = &timeline.tracks[0].clips;
+
+    assert_eq!(updated[0].duration_frames, 30);
+    assert_eq!(updated[1].start_frame, 30);
+}
+
+#[test]
+fn clp_016_apply_clip_speed_does_not_ripple_non_contiguous_followers() {
+    let c1 = clip("c1", ClipType::Video, 0, 60);
+    let c2 = clip("c2", ClipType::Video, 100, 30);
+    let mut timeline = timeline(vec![video_track(vec![c1, c2])]);
+
+    assert!(apply_clip_speed(&mut timeline, "c1", 2.0));
+    let updated = timeline.tracks[0]
+        .clips
+        .iter()
+        .find(|clip| clip.id == "c2")
+        .unwrap();
+
+    assert_eq!(updated.start_frame, 100);
+}
+
+#[test]
+fn clp_017_apply_clip_speed_clamps_fades_and_keyframes_to_new_duration() {
+    let mut clip = clip("c1", ClipType::Video, 0, 60);
+    clip.fade_in_frames = 20;
+    clip.fade_out_frames = 20;
+    clip.opacity_track = Some(KeyframeTrack {
+        keyframes: vec![
+            Keyframe {
+                frame: 15,
+                value: 0.4,
+                interpolation_out: Interpolation::Linear,
+            },
+            Keyframe {
+                frame: 45,
+                value: 0.9,
+                interpolation_out: Interpolation::Smooth,
+            },
+        ],
+    });
+    let mut timeline = timeline(vec![video_track(vec![clip])]);
+
+    assert!(apply_clip_speed(&mut timeline, "c1", 2.0));
+    let updated = &timeline.tracks[0].clips[0];
+
+    assert_eq!(updated.duration_frames, 30);
+    assert_eq!(updated.fade_in_frames, 20);
+    assert_eq!(updated.fade_out_frames, 10);
+    assert_eq!(
+        updated
+            .opacity_track
+            .as_ref()
+            .unwrap()
+            .keyframes
+            .iter()
+            .map(|keyframe| keyframe.frame)
+            .collect::<Vec<_>>(),
+        vec![15]
+    );
+}
+
+#[test]
+fn clp_009_split_clip_divides_at_frame_and_returns_right_half_id() {
+    let clip = clip("c1", ClipType::Video, 0, 60);
+    let mut timeline = timeline(vec![video_track(vec![clip])]);
+
+    let right_ids = split_clip(&mut timeline, "c1", 30);
+    let clips = &timeline.tracks[0].clips;
+
+    assert_eq!(right_ids.len(), 1);
+    assert_eq!(clips.len(), 2);
+    assert_eq!(clips[0].duration_frames, 30);
+    assert_eq!(clips[1].duration_frames, 30);
+    assert_eq!(clips[1].id, right_ids[0]);
+}
+
+#[test]
+fn clp_009_split_clip_returns_empty_for_unknown_or_boundary_frame() {
+    let clip = clip("c1", ClipType::Video, 0, 60);
+    let mut timeline = timeline(vec![video_track(vec![clip])]);
+
+    assert!(split_clip(&mut timeline, "ghost", 10).is_empty());
+    assert!(split_clip(&mut timeline, "c1", 0).is_empty());
+    assert!(split_clip(&mut timeline, "c1", 60).is_empty());
+    assert_eq!(timeline.tracks[0].clips.len(), 1);
+}
+
+#[test]
+fn clp_010_and_clp_011_split_linked_partners_and_regroup_right_halves() {
+    let mut video = clip("v", ClipType::Video, 0, 60);
+    video.link_group_id = Some("g1".to_string());
+    let mut audio = clip("a", ClipType::Audio, 0, 60);
+    audio.link_group_id = Some("g1".to_string());
+    let mut timeline = timeline(vec![video_track(vec![video]), audio_track(vec![audio])]);
+
+    let right_ids: std::collections::BTreeSet<String> =
+        split_clip(&mut timeline, "v", 30).into_iter().collect();
+    let all_clips: Vec<&Clip> = timeline
+        .tracks
+        .iter()
+        .flat_map(|track| track.clips.iter())
+        .collect();
+
+    assert_eq!(right_ids.len(), 2);
+
+    let right_groups: std::collections::BTreeSet<String> = all_clips
+        .iter()
+        .filter(|clip| right_ids.contains(&clip.id))
+        .filter_map(|clip| clip.link_group_id.clone())
+        .collect();
+    assert_eq!(right_groups.len(), 1);
+    assert_ne!(right_groups.first().map(String::as_str), Some("g1"));
+
+    let left_groups: std::collections::BTreeSet<String> = all_clips
+        .iter()
+        .filter(|clip| clip.id == "v" || clip.id == "a")
+        .filter_map(|clip| clip.link_group_id.clone())
+        .collect();
+    assert_eq!(
+        left_groups,
+        std::collections::BTreeSet::from(["g1".to_string()])
+    );
+}
+
+#[test]
+fn clp_012_split_inserts_boundary_keyframes_and_rebases_right_half() {
+    let mut clip = clip("c1", ClipType::Video, 0, 60);
+    clip.opacity_track = Some(KeyframeTrack {
+        keyframes: vec![
+            Keyframe {
+                frame: 0,
+                value: 0.0,
+                interpolation_out: Interpolation::Linear,
+            },
+            Keyframe {
+                frame: 60,
+                value: 1.0,
+                interpolation_out: Interpolation::Linear,
+            },
+        ],
+    });
+    clip.position_track = Some(KeyframeTrack {
+        keyframes: vec![Keyframe {
+            frame: 60,
+            value: AnimPair { a: 0.2, b: 0.4 },
+            interpolation_out: Interpolation::Smooth,
+        }],
+    });
+    let mut timeline = timeline(vec![video_track(vec![clip])]);
+
+    let right_ids = split_clip(&mut timeline, "c1", 30);
+    let left = &timeline.tracks[0].clips[0];
+    let right = timeline.tracks[0]
+        .clips
+        .iter()
+        .find(|clip| clip.id == right_ids[0])
+        .unwrap();
+
+    assert_eq!(
+        left.opacity_track
+            .as_ref()
+            .unwrap()
+            .keyframes
+            .iter()
+            .map(|kf| kf.frame)
+            .collect::<Vec<_>>(),
+        vec![0, 30]
+    );
+    assert_eq!(
+        right
+            .opacity_track
+            .as_ref()
+            .unwrap()
+            .keyframes
+            .iter()
+            .map(|kf| kf.frame)
+            .collect::<Vec<_>>(),
+        vec![0, 30]
+    );
+    assert_eq!(left.opacity_track.as_ref().unwrap().keyframes[1].value, 0.5);
+    assert_eq!(
+        right.opacity_track.as_ref().unwrap().keyframes[0].value,
+        0.5
+    );
+    assert_eq!(right.position_track.as_ref().unwrap().keyframes[0].frame, 0);
+}
+
+#[test]
+fn clp_013_split_resets_fades_across_cut() {
+    let mut clip = clip("c1", ClipType::Video, 0, 60);
+    clip.fade_in_frames = 15;
+    clip.fade_out_frames = 20;
+    let mut timeline = timeline(vec![video_track(vec![clip])]);
+
+    let _ = split_clip(&mut timeline, "c1", 30);
+    let halves = &timeline.tracks[0].clips;
+
+    assert_eq!(halves.len(), 2);
+    assert_eq!(halves[0].fade_in_frames, 15);
+    assert_eq!(halves[0].fade_out_frames, 0);
+    assert_eq!(halves[1].fade_in_frames, 0);
+    assert_eq!(halves[1].fade_out_frames, 20);
+}

@@ -1833,6 +1833,7 @@ version = "0.1.0"
 dependencies = [
  "fronda-core-model",
  "proptest",
+ "uuid",
 ]
 
 [[package]]

@@ -1,4 +1,11 @@
+mod edit;
+mod keyframes;
+mod overwrite;
+
 use core_model::{Clip, Timeline};
+
+pub use edit::{apply_clip_speed, clear_region, find_clip, split_clip, ClipLocation};
+pub use overwrite::{compute_overwrite, OverwriteAction};
 
 pub trait ClipMathExt {
     fn end_frame(&self) -> i64;

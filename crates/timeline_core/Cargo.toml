@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 core_model = { package = "fronda-core-model", path = "../core_model" }
+uuid.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
