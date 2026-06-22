@@ -14,8 +14,7 @@ Suggested structure:
   - generation catalog schema and cost formulas
 - `crates/core_model`
   - timeline structs
-  - clip math
-  - keyframes
+  - keyframe payload types
   - serde compatibility
 - `crates/project_io`
   - `.palmier` package read/write
@@ -27,6 +26,7 @@ Suggested structure:
   - relink
   - clipboard/paste routing
 - `crates/timeline_core`
+  - timeline invariants and clip math
   - overwrite engine
   - ripple engine
   - link groups
@@ -76,18 +76,18 @@ Suggested structure:
 
 ## C. Family-to-layer mapping
 
-| Spec families                                                     | Preferred Rust test layer                            | Best current Swift evidence                                                                     | Biggest gaps                                        |
-| ----------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `RUN`, `PKG`, `BNDL`, `BOOT`, `WIN`, `MENU`, `KEY`, `UIX`, `THM`  | Snapshot + UI contract tests                         | mostly source-only: `Package.swift`, `Info.plist`, `Constants.swift`, `AppTheme.swift`          | package/UI-token drift detection                    |
-| `SETUI`, `HELP`, `FBK`, `CAT`, `GPAY`, `COST`, `CFG`              | Snapshot + state-machine/unit tests                  | mostly source-only: `Settings/**`, `Help/**`, `Generation/Catalog/**`, `BackendConfig.swift`    | model catalog/backend config fixtures               |
-| `CORE`, `FMT`, `RES`, `PCFG`                                      | Unit + serde round-trip                              | `ProjectRoundTripTests`, `MediaResolverTests`, `ClipMutationsTests`                             | file-package integration coverage                   |
-| `PRJ`, `REC`                                                      | Temp-dir integration tests                           | `ProjectRegistryTests`                                                                          | full `VideoProject` open/save integration           |
-| `MED`, `FLD`, `DRAG`, `PST`, `CCB`, `RLK`, `SAV`, `SMP`, `PSET`   | Temp-dir integration + some UI routing tests         | `MediaPanelTests`, `LottieImportTests`, `SegmentTrimTests`                                      | relink, drag/drop routing, save-as-media flows      |
-| `TIM`, `TRK`, `CLP`, `LNK`, `RPL`, `SNP`, `RNG`, `INS`            | Pure-core unit/property tests                        | `Tests/PalmierProTests/Timeline/**`                                                             | some interaction glue still only implied by UI code |
-| `PRV`, `RND`, `TXT`, `EXP`, `XML`, `BND`, `PAR`                   | Fixture integration + snapshot/golden tests          | `Tests/PalmierProTests/Export/**`, `Tests/PalmierProTests/Rendering/**`                         | preview/export golden parity across backends        |
-| `TDEF`, `SES`, `MNT`, `AID`, `READ`, `MUT`, `UNDO`, `MCP`, `CHAT` | Snapshot + unit + contract tests                     | `Tests/PalmierProTests/Agent/**`                                                                | MCP transport, session lifecycle, panel UX          |
-| `SRCH`, `TRN`, `CAP`                                              | Unit + fixture integration tests                     | `Tests/PalmierProTests/Search/**`, `Tests/PalmierProTests/Captions/**`, `TranscriptSearchTests` | loader lifecycle, some cache/install failure paths  |
-| `EDT`, `GEN`, `ACC`, `SET`, `APP`, `TEL`                          | State-machine tests + selective UI/integration tests | mostly source-only, little/no direct test coverage                                              | largest current coverage gap                        |
+| Spec families                                                     | Preferred Rust test layer                            | Best current Swift evidence                                                                     | Biggest gaps                                             |
+| ----------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `RUN`, `PKG`, `BNDL`, `BOOT`, `WIN`, `MENU`, `KEY`, `UIX`, `THM`  | Snapshot + UI contract tests                         | mostly source-only: `Package.swift`, `Info.plist`, `Constants.swift`, `AppTheme.swift`          | package/UI-token drift detection                         |
+| `SETUI`, `HELP`, `FBK`, `CAT`, `GPAY`, `COST`, `CFG`              | Snapshot + state-machine/unit tests                  | mostly source-only: `Settings/**`, `Help/**`, `Generation/Catalog/**`, `BackendConfig.swift`    | model catalog/backend config fixtures                    |
+| `CORE`, `FMT`, `RES`, `PCFG`                                      | Unit + serde round-trip                              | `ProjectRoundTripTests`, `MediaResolverTests`, `ClipMutationsTests`                             | file-package integration coverage                        |
+| `PRJ`, `REC`                                                      | Temp-dir integration tests                           | `ProjectRegistryTests`                                                                          | full `VideoProject` open/save integration                |
+| `MED`, `FLD`, `DRAG`, `PST`, `CCB`, `RLK`, `SAV`, `SMP`, `PSET`   | Temp-dir integration + some UI routing tests         | `MediaPanelTests`, `LottieImportTests`, `SegmentTrimTests`                                      | relink, drag/drop routing, save-as-media flows           |
+| `TIM`, `TRK`, `CLP`, `LNK`, `RPL`, `SNP`, `RNG`, `INS`            | Pure-core unit/property tests                        | `Tests/PalmierProTests/Timeline/**`                                                             | editing engines beyond first invariant/property coverage |
+| `PRV`, `RND`, `TXT`, `EXP`, `XML`, `BND`, `PAR`                   | Fixture integration + snapshot/golden tests          | `Tests/PalmierProTests/Export/**`, `Tests/PalmierProTests/Rendering/**`                         | preview/export golden parity across backends             |
+| `TDEF`, `SES`, `MNT`, `AID`, `READ`, `MUT`, `UNDO`, `MCP`, `CHAT` | Snapshot + unit + contract tests                     | `Tests/PalmierProTests/Agent/**`                                                                | MCP transport, session lifecycle, panel UX               |
+| `SRCH`, `TRN`, `CAP`                                              | Unit + fixture integration tests                     | `Tests/PalmierProTests/Search/**`, `Tests/PalmierProTests/Captions/**`, `TranscriptSearchTests` | loader lifecycle, some cache/install failure paths       |
+| `EDT`, `GEN`, `ACC`, `SET`, `APP`, `TEL`                          | State-machine tests + selective UI/integration tests | mostly source-only, little/no direct test coverage                                              | largest current coverage gap                             |
 
 ## D. Existing Swift evidence by area
 
@@ -125,7 +125,7 @@ Suggested structure:
 
 These should become first-wave Rust acceptance tests:
 
-1. full `.palmier` package open/save integration from the document layer
+1. expand current `.palmier` crate-level open/save parity into document-layer integration
 2. relink flows
 3. save-clip-as-media and save-timeline-range-as-media
 4. sample-project materialization

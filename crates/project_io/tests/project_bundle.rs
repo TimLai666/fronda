@@ -1,4 +1,7 @@
-use core_model::{ClipType, GENERATION_LOG_FILENAME, MANIFEST_FILENAME, TIMELINE_FILENAME};
+use core_model::{
+    ClipType, CHAT_DIRECTORY_NAME, GENERATION_LOG_FILENAME, MANIFEST_FILENAME,
+    MEDIA_DIRECTORY_NAME, THUMBNAIL_FILENAME, TIMELINE_FILENAME,
+};
 use project_io::{BundleError, ProjectBundle};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +27,13 @@ fn copy_dir_all(source: &Path, destination: &Path) {
             fs::copy(&source_path, &destination_path).unwrap();
         }
     }
+}
+
+fn assert_bundle_semantics(actual: &ProjectBundle, expected: &ProjectBundle) {
+    assert_eq!(actual.timeline, expected.timeline);
+    assert_eq!(actual.manifest, expected.manifest);
+    assert_eq!(actual.generation_log, expected.generation_log);
+    assert_eq!(actual.chat_sessions, expected.chat_sessions);
 }
 
 #[test]
@@ -81,7 +91,7 @@ fn skips_corrupt_chat_files() {
     );
     fs::write(
         destination
-            .join("chat")
+            .join(CHAT_DIRECTORY_NAME)
             .join("00000000-0000-0000-0000-000000000010.json"),
         "not valid json",
     )
@@ -121,4 +131,75 @@ fn missing_project_json_is_fatal() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn saves_bundle_to_new_path_with_semantic_round_trip_and_assets() {
+    let source = ProjectBundle::open(fixture_bundle_path("modern-rich.palmier")).unwrap();
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("saved-copy.palmier");
+
+    source.save_to(&destination).unwrap();
+
+    let reopened = ProjectBundle::open(&destination).unwrap();
+    assert_bundle_semantics(&reopened, &source);
+    assert!(reopened.thumbnail_path.is_some());
+    assert!(reopened.media_dir.is_some());
+    assert!(reopened.chat_dir.is_some());
+    assert!(destination.join(THUMBNAIL_FILENAME).is_file());
+    assert!(destination.join(MEDIA_DIRECTORY_NAME).is_dir());
+    assert!(destination
+        .join(MEDIA_DIRECTORY_NAME)
+        .join("generated-shot.mp4")
+        .is_file());
+}
+
+#[test]
+fn save_in_place_persists_timeline_changes() {
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("modern-rich.palmier");
+    copy_dir_all(&fixture_bundle_path("modern-rich.palmier"), &destination);
+
+    let mut bundle = ProjectBundle::open(&destination).unwrap();
+    bundle.timeline.fps = 24;
+    bundle.timeline.tracks[0].clips[0].duration_frames = 72;
+
+    bundle.save().unwrap();
+
+    let reopened = ProjectBundle::open(&destination).unwrap();
+    assert_eq!(reopened.timeline.fps, 24);
+    assert_eq!(reopened.timeline.tracks[0].clips[0].duration_frames, 72);
+    assert!(reopened.thumbnail_path.is_some());
+    assert!(reopened.media_dir.is_some());
+}
+
+#[test]
+fn save_removes_stale_optional_files_and_directories_when_absent() {
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("modern-rich.palmier");
+    copy_dir_all(&fixture_bundle_path("modern-rich.palmier"), &destination);
+
+    let mut bundle = ProjectBundle::open(&destination).unwrap();
+    bundle.manifest = None;
+    bundle.generation_log = None;
+    bundle.chat_sessions.clear();
+    bundle.thumbnail_path = None;
+    bundle.media_dir = None;
+    bundle.chat_dir = None;
+
+    bundle.save().unwrap();
+
+    assert!(!destination.join(MANIFEST_FILENAME).exists());
+    assert!(!destination.join(GENERATION_LOG_FILENAME).exists());
+    assert!(!destination.join(CHAT_DIRECTORY_NAME).exists());
+    assert!(!destination.join(THUMBNAIL_FILENAME).exists());
+    assert!(!destination.join(MEDIA_DIRECTORY_NAME).exists());
+
+    let reopened = ProjectBundle::open(&destination).unwrap();
+    assert!(reopened.manifest.is_none());
+    assert!(reopened.generation_log.is_none());
+    assert!(reopened.chat_sessions.is_empty());
+    assert!(reopened.thumbnail_path.is_none());
+    assert!(reopened.media_dir.is_none());
+    assert!(reopened.chat_dir.is_none());
 }

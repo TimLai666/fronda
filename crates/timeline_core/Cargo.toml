@@ -1,0 +1,15 @@
+[package]
+name = "fronda-timeline-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "timeline_core"
+path = "src/lib.rs"
+
+[dependencies]
+core_model = { package = "fronda-core-model", path = "../core_model" }
+
+[dev-dependencies]
+proptest.workspace = true

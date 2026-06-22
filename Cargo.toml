@@ -2,6 +2,7 @@
 members = [
     "crates/core_model",
     "crates/project_io",
+    "crates/timeline_core",
     "crates/app_shell_gpui",
 ]
 resolver = "2"
@@ -13,3 +14,4 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 tempfile = "3"
+proptest = "1"

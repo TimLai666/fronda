@@ -15,7 +15,7 @@ Current CI now protects four things:
 
 1. the Swift baseline still builds and tests cleanly,
 2. the Rust rewrite spec set remains structurally sane,
-3. the first Rust rewrite workspace crates compile and pass compatibility tests,
+3. the first Rust rewrite workspace crates compile and pass compatibility tests, including `.palmier` save/write parity and first pure-core timeline math/property coverage,
 4. the first `gpui-ce` app-shell scaffold compiles on macOS.
 
 The spec lint is intentionally narrow for now. It validates:
@@ -29,6 +29,7 @@ The first executable Rust coverage now lives in:
 
 - `crates/core_model/tests/compatibility.rs`
 - `crates/project_io/tests/project_bundle.rs`
+- `crates/timeline_core/tests/spec_timeline_math.rs`
 - `fixtures/rust-rewrite/projects/**`
 
 The first `gpui-ce` shell scaffold now lives in:
@@ -66,6 +67,8 @@ Current layout in this repo:
 - `crates/core_model/tests/**`
 - `crates/project_io/src/**`
 - `crates/project_io/tests/**`
+- `crates/timeline_core/src/**`
+- `crates/timeline_core/tests/**`
 - `crates/app_shell_gpui/src/**`
 - `fixtures/rust-rewrite/projects/**`
 
@@ -158,8 +161,8 @@ Do not move pure timeline math, file persistence, export planning, or search ran
 
 As Rust implementation continues, the next concrete repo changes should be:
 
-1. expand wave-1 coverage from serde/load tests into save/write parity tests,
-2. add pure-core timeline property tests,
+1. expand wave-2 coverage into relink and save-as-media flows,
+2. broaden wave-3 from timeline invariants into split, speed-change, overwrite, ripple, and linking engines,
 3. add snapshot support for XML and agent/MCP contracts,
 4. add fixture families for transcripts/search/export,
 5. layer `gpui-ce` interaction tests on top of the existing shell compile check only after non-UI cores are already isolated.

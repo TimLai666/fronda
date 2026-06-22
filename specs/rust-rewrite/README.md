@@ -45,7 +45,10 @@ The first executable Rust coverage now lives under:
 
 - `crates/core_model/**`
 - `crates/project_io/**`
+- `crates/timeline_core/**`
 - `fixtures/rust-rewrite/projects/**`
+
+Wave-1 now includes fixture-backed `.palmier` save/write parity in `project_io`, and wave-3 has started in `timeline_core` with pure Rust timeline invariant and property tests.
 
 The first `gpui-ce` shell scaffold now lives under:
 
