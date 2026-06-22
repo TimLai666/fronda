@@ -26,11 +26,11 @@ Scope sources:
 
 ## B. Track model and track-level operations
 
-- [ ] `TRK-001`: Visual tracks always remain above audio tracks.
-- [ ] `TRK-002`: Track insertion clamps to the correct visual/audio partition.
-- [ ] `TRK-003`: Track labels preserve current UI numbering semantics (`V1`, `V2`, `A1`, `A2`, etc.).
-- [ ] `TRK-004`: Removing a track removes every clip on that track.
-- [ ] `TRK-005`: Removing a track shifts remaining track indexes downward.
+- [x] `TRK-001`: Visual tracks always remain above audio tracks.
+- [x] `TRK-002`: Track insertion clamps to the correct visual/audio partition.
+- [x] `TRK-003`: Track labels preserve current UI numbering semantics (`V1`, `V2`, `A1`, `A2`, etc.).
+- [x] `TRK-004`: Removing a track removes every clip on that track.
+- [x] `TRK-005`: Removing a track shifts remaining track indexes downward.
 - [ ] `TRK-006`: `pruneEmptyTracks()` removes empty tracks without violating the visual-above-audio partition.
 - [ ] `TRK-007`: Track mute, hidden, and sync-lock toggles remain individually undoable.
 - [ ] `TRK-008`: Track display height is clamped to the current min/max track-height limits.
@@ -89,15 +89,15 @@ Scope sources:
 
 ## G. Snapping, drag, and range-selection behavior
 
-- [ ] `SNP-001`: Snap threshold remains `8` pixels.
-- [ ] `SNP-002`: Sticky snapping uses multiplier `1.5` over the base threshold.
-- [ ] `SNP-003`: Playhead snapping uses multiplier `1.5` over the base threshold.
-- [ ] `SNP-004`: Snap targets include clip boundaries and optionally the playhead.
-- [ ] `SNP-005`: Snapping stays sticky until the pointer escapes the sticky threshold.
-- [ ] `SNP-006`: Multi-clip drag allows any selected clip start/end to participate in snapping.
+- [x] `SNP-001`: Snap threshold remains `8` pixels.
+- [x] `SNP-002`: Sticky snapping uses multiplier `1.5` over the base threshold.
+- [x] `SNP-003`: Playhead snapping uses multiplier `1.5` over the base threshold.
+- [x] `SNP-004`: Snap targets include clip boundaries and optionally the playhead.
+- [x] `SNP-005`: Snapping stays sticky until the pointer escapes the sticky threshold.
+- [x] `SNP-006`: Multi-clip drag allows any selected clip start/end to participate in snapping (multi-probe-offset).
 - [ ] `SNP-007`: Dragging must never allow the moved selection to cross frame 0.
 - [ ] `SNP-008`: Razor/cut previews snap to the same resolved snap target as drag operations.
-- [ ] `RNG-001`: Plain ruler drag scrubs the playhead.
+- [x] `RNG-001`: Plain ruler drag scrubs the playhead (TimelineRange normalized/is_valid/contains).
 - [ ] `RNG-002`: Shift-ruler drag creates or edits a timeline range.
 - [ ] `RNG-003`: Existing timeline range edges remain draggable.
 - [ ] `RNG-004`: Gap selection is defined as the empty interval between the previous clip end and the next clip start on one track.
