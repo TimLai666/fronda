@@ -1,11 +1,12 @@
 [workspace]
 members = [
+    "crates/agent_contract",
+    "crates/app_shell_gpui",
     "crates/core_model",
     "crates/project_io",
     "crates/render_core",
+    "crates/search_core",
     "crates/timeline_core",
-    "crates/agent_contract",
-    "crates/app_shell_gpui",
 ]
 resolver = "2"
 

@@ -1,0 +1,15 @@
+[package]
+name = "fronda-search-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "search_core"
+path = "src/lib.rs"
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

@@ -58,12 +58,26 @@ pub fn validate_split_clip(input: &Value) -> ValidationResult<SplitClipInput> {
 pub struct SetClipPropertiesInput {
     pub clip_ids: Vec<String>,
     pub properties: Value,
+    /// Text-only fields detected in properties (MUT-010).
+    pub text_only_fields: Vec<String>,
+    /// Whether setting scalar volume/opacity clears existing keyframes (MUT-011).
+    pub clears_keyframes: bool,
+    /// Timing-related properties detected (speed, durationFrames, trimStart, trimEnd) (MUT-012).
+    pub timing_properties: Vec<String>,
 }
 
 /// MUT-009: `set_clip_properties` applies the same property set to every clip.
 /// MUT-010: text-only fields rejected when any target is non-text.
 /// MUT-011: Setting scalar volume/opacity clears existing keyframes.
-pub fn validate_set_clip_properties(input: &Value) -> ValidationResult<SetClipPropertiesInput> {
+/// MUT-012: timing changes propagate to linked partners.
+///
+/// The `clip_types` parameter provides the type of each target clip
+/// (e.g. "video", "text", "audio"). When unavailable (None), text-only
+/// field validation (MUT-010) is skipped.
+pub fn validate_set_clip_properties(
+    input: &Value,
+    clip_types: Option<Vec<String>>,
+) -> ValidationResult<SetClipPropertiesInput> {
     let clip_ids = match input.get("clipIds").and_then(|v| v.as_array()) {
         Some(arr) if !arr.is_empty() => {
             let ids: Vec<String> = arr
@@ -98,9 +112,47 @@ pub fn validate_set_clip_properties(input: &Value) -> ValidationResult<SetClipPr
         }
     };
 
+    let mut text_only_fields: Vec<String> = Vec::new();
+    let mut clears_keyframes = false;
+    let mut timing_properties: Vec<String> = Vec::new();
+
+    if let Some(ref obj) = properties.as_object() {
+        // MUT-010: detect text-only fields and reject if any non-text clip targeted
+        let text_fields = ["text", "fontSize", "fontName", "textAlignment", "textColor"];
+        for field in &text_fields {
+            if obj.contains_key(*field) {
+                text_only_fields.push(field.to_string());
+            }
+        }
+        if let Some(ref types) = clip_types {
+            let has_non_text = types.iter().any(|t| t != "text");
+            if has_non_text && !text_only_fields.is_empty() {
+                return ValidationResult::Error(format!(
+                    "set_clip_properties: text-only fields {:?} rejected for non-text clips",
+                    text_only_fields
+                ));
+            }
+        }
+
+        // MUT-011: scalar volume/opacity (number, not object) clears keyframes
+        clears_keyframes = obj.get("volume").and_then(|v| v.as_f64()).is_some()
+            || obj.get("opacity").and_then(|v| v.as_f64()).is_some();
+
+        // MUT-012: detect timing properties for linked-partner propagation
+        let timing_keys = ["speed", "durationFrames", "trimStart", "trimEnd"];
+        for key in &timing_keys {
+            if obj.contains_key(*key) {
+                timing_properties.push(key.to_string());
+            }
+        }
+    }
+
     ValidationResult::Ok(SetClipPropertiesInput {
         clip_ids,
         properties,
+        text_only_fields,
+        clears_keyframes,
+        timing_properties,
     })
 }
 
@@ -244,6 +296,436 @@ pub fn validate_hex_color(input: &str) -> ValidationResult<String> {
     }
 }
 
+// === MUT-004: insert_clips ================================================
+
+/// Parsed and validated `insert_clips` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InsertClipsInput {
+    pub media_ids: Vec<String>,
+    pub track_index: usize,
+    pub frame: i64,
+}
+
+/// MUT-004: Validate `insert_clips` input.
+pub fn validate_insert_clips(input: &Value) -> ValidationResult<InsertClipsInput> {
+    let track_index = match input.get("trackIndex").and_then(|v| v.as_u64()) {
+        Some(idx) => idx as usize,
+        None => return ValidationResult::Error("insert_clips: missing 'trackIndex'".into()),
+    };
+
+    let media_ids = match input.get("mediaIds").and_then(|v| v.as_array()) {
+        Some(arr) if !arr.is_empty() => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        _ => return ValidationResult::Error("insert_clips: missing or empty 'mediaIds'".into()),
+    };
+
+    let frame = match input.get("frame").and_then(|v| v.as_i64()) {
+        Some(f) if f >= 0 => f,
+        Some(_) => {
+            return ValidationResult::Error("insert_clips: 'frame' must be non-negative".into())
+        }
+        None => return ValidationResult::Error("insert_clips: missing or invalid 'frame'".into()),
+    };
+
+    ValidationResult::Ok(InsertClipsInput {
+        media_ids,
+        track_index,
+        frame,
+    })
+}
+
+// === MUT-006: remove_tracks ===============================================
+
+/// Parsed and validated `remove_tracks` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveTracksInput {
+    pub track_ids: Vec<usize>,
+}
+
+/// MUT-006: Dedup repeated track indexes.
+pub fn validate_remove_tracks(input: &Value) -> ValidationResult<RemoveTracksInput> {
+    let track_ids = match input.get("trackIds").and_then(|v| v.as_array()) {
+        Some(arr) if !arr.is_empty() => {
+            let mut ids: Vec<usize> = arr
+                .iter()
+                .filter_map(|v| v.as_u64().map(|i| i as usize))
+                .collect();
+            if ids.is_empty() {
+                return ValidationResult::Error(
+                    "remove_tracks: 'trackIds' must contain at least one valid index".into(),
+                );
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        }
+        _ => return ValidationResult::Error("remove_tracks: missing or empty 'trackIds'".into()),
+    };
+
+    ValidationResult::Ok(RemoveTracksInput { track_ids })
+}
+
+// === MUT-007: move_clips ==================================================
+
+/// Parsed and validated `move_clips` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoveClipsInput {
+    pub clip_ids: Vec<String>,
+    pub to_track: Option<usize>,
+    pub to_frame: Option<i64>,
+}
+
+/// MUT-007: Requires at least one of `toTrack` or `toFrame`.
+pub fn validate_move_clips(input: &Value) -> ValidationResult<MoveClipsInput> {
+    let clip_ids = match input.get("clipIds").and_then(|v| v.as_array()) {
+        Some(arr) if !arr.is_empty() => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        _ => {
+            return ValidationResult::Error("move_clips: missing or empty 'clipIds'".into());
+        }
+    };
+
+    let to_track = input
+        .get("toTrack")
+        .and_then(|v| v.as_u64())
+        .map(|i| i as usize);
+    let to_frame = input.get("toFrame").and_then(|v| v.as_i64());
+
+    if to_track.is_none() && to_frame.is_none() {
+        return ValidationResult::Error(
+            "move_clips: requires at least one of 'toTrack' or 'toFrame'".into(),
+        );
+    }
+
+    ValidationResult::Ok(MoveClipsInput {
+        clip_ids,
+        to_track,
+        to_frame,
+    })
+}
+
+// === MUT-008: move_clips linked partner ===================================
+
+/// MUT-008: move_clips linked partner behavior.
+///
+/// At runtime, when a clip is moved, its linked partners follow
+/// the same frame delta. This validation-level function only
+/// checks that clip_ids are non-empty. The actual linked-partner
+/// follow behavior requires timeline_core integration.
+pub fn validate_move_clips_linked(clip_ids: &[String]) -> ValidationResult<Vec<String>> {
+    if clip_ids.is_empty() {
+        return ValidationResult::Error("move_clips_linked: 'clipIds' must not be empty".into());
+    }
+    ValidationResult::Ok(clip_ids.to_vec())
+}
+
+// === MUT-017/018: ripple_delete_ranges ====================================
+
+/// Parsed and validated `ripple_delete_ranges` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RippleDeleteRangesInput {
+    pub clip_id: Option<String>,
+    pub track_index: Option<usize>,
+    pub ranges: Vec<(i64, i64)>,
+}
+
+/// MUT-017: Requires exactly one of `clipId` or `trackIndex`.
+/// MUT-018: Accepts optional `seconds` field for clip-scoped mode.
+pub fn validate_ripple_delete_ranges(input: &Value) -> ValidationResult<RippleDeleteRangesInput> {
+    let clip_id = input
+        .get("clipId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let track_index = input
+        .get("trackIndex")
+        .and_then(|v| v.as_u64())
+        .map(|i| i as usize);
+
+    match (&clip_id, &track_index) {
+        (Some(_), Some(_)) => {
+            return ValidationResult::Error(
+                "ripple_delete_ranges: cannot specify both 'clipId' and 'trackIndex'".into(),
+            );
+        }
+        (None, None) => {
+            return ValidationResult::Error(
+                "ripple_delete_ranges: requires either 'clipId' or 'trackIndex'".into(),
+            );
+        }
+        _ => {}
+    }
+
+    // Parse range entries from either `ranges` or `seconds` array.
+    let ranges = if let Some(arr) = input.get("ranges").and_then(|v| v.as_array()) {
+        let pairs: Vec<(i64, i64)> = arr
+            .iter()
+            .filter_map(|item| {
+                let start = item.get("startFrame").and_then(|v| v.as_i64())?;
+                let end = item.get("endFrame").and_then(|v| v.as_i64())?;
+                Some((start, end))
+            })
+            .collect();
+        if pairs.is_empty() {
+            return ValidationResult::Error(
+                "ripple_delete_ranges: 'ranges' must contain at least one valid range".into(),
+            );
+        }
+        pairs
+    } else if let Some(arr) = input.get("seconds").and_then(|v| v.as_array()) {
+        // seconds mode only valid for clip-scoped
+        if track_index.is_some() {
+            return ValidationResult::Error(
+                "ripple_delete_ranges: 'seconds' only valid with 'clipId' (clip-scoped)".into(),
+            );
+        }
+        let pairs: Vec<(i64, i64)> = arr
+            .iter()
+            .filter_map(|item| {
+                let start = item.get("startFrame").and_then(|v| v.as_i64())?;
+                let end = item.get("endFrame").and_then(|v| v.as_i64())?;
+                Some((start, end))
+            })
+            .collect();
+        if pairs.is_empty() {
+            return ValidationResult::Error(
+                "ripple_delete_ranges: 'seconds' must contain at least one valid range".into(),
+            );
+        }
+        pairs
+    } else if clip_id.is_some() {
+        // Clip-scoped: neither ranges nor seconds provided → empty means full clip delete
+        Vec::new()
+    } else {
+        return ValidationResult::Error(
+            "ripple_delete_ranges: requires 'ranges' array for track-scoped delete".into(),
+        );
+    };
+
+    ValidationResult::Ok(RippleDeleteRangesInput {
+        clip_id,
+        track_index,
+        ranges,
+    })
+}
+
+// === MUT-019/020: add_texts ===============================================
+
+/// Parsed and validated text entry for `add_texts`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextInput {
+    pub text: String,
+    pub start_frame: i64,
+    pub duration_frames: i64,
+}
+
+/// Parsed and validated `add_texts` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddTextsInput {
+    pub texts: Vec<TextInput>,
+    pub track_index: Option<usize>,
+}
+
+/// MUT-019: Validate `add_texts` input. Auto-creates visual track when all
+/// entries omit trackIndex.
+/// MUT-020: Rejects audio tracks.
+///
+/// The `track_type` parameter identifies the target track's type
+/// ("audio", "video", "text" etc.). When `track_type` is "audio",
+/// the function returns an error since text cannot be added to
+/// audio tracks. Pass `None` when track type information is
+/// unavailable at validation time.
+pub fn validate_add_texts(
+    input: &Value,
+    track_type: Option<String>,
+) -> ValidationResult<AddTextsInput> {
+    // MUT-020: reject audio tracks
+    if let Some(ref tt) = track_type {
+        if tt == "audio" {
+            return ValidationResult::Error("add_texts: cannot add text to audio track".into());
+        }
+    }
+
+    let texts = match input.get("texts").and_then(|v| v.as_array()) {
+        Some(arr) if !arr.is_empty() => {
+            let parsed: Vec<TextInput> = arr
+                .iter()
+                .filter_map(|entry| {
+                    let text = entry.get("text").and_then(|v| v.as_str())?;
+                    let start_frame = entry.get("startFrame").and_then(|v| v.as_i64())?;
+                    let duration_frames = entry.get("durationFrames").and_then(|v| v.as_i64())?;
+                    Some(TextInput {
+                        text: text.to_string(),
+                        start_frame,
+                        duration_frames,
+                    })
+                })
+                .collect();
+            if parsed.is_empty() {
+                return ValidationResult::Error(
+                    "add_texts: 'texts' entries must contain 'text', 'startFrame', \
+                     and 'durationFrames'"
+                        .into(),
+                );
+            }
+            parsed
+        }
+        _ => {
+            return ValidationResult::Error("add_texts: missing or empty 'texts' array".into());
+        }
+    };
+
+    let track_index = input
+        .get("trackIndex")
+        .and_then(|v| v.as_u64())
+        .map(|i| i as usize);
+
+    ValidationResult::Ok(AddTextsInput { texts, track_index })
+}
+
+// === MUT-021: add_captions ================================================
+
+/// Parsed and validated `add_captions` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddCaptionsInput {
+    pub clip_ids: Option<Vec<String>>,
+}
+
+/// MUT-021: Supports explicit `clipIds` or auto-detect.
+/// When `clipIds` is None, captions are auto-detected from the timeline.
+pub fn validate_add_captions(input: &Value) -> ValidationResult<AddCaptionsInput> {
+    let clip_ids = match input.get("clipIds").and_then(|v| v.as_array()) {
+        Some(arr) => {
+            let ids: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            if ids.is_empty() {
+                return ValidationResult::Error(
+                    "add_captions: 'clipIds' must contain at least one valid string".into(),
+                );
+            }
+            Some(ids)
+        }
+        None => None,
+    };
+
+    ValidationResult::Ok(AddCaptionsInput { clip_ids })
+}
+
+// === MUT-022: folder/media tools ==========================================
+
+/// Parsed and validated `create_folder` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateFolderInput {
+    pub name: String,
+}
+
+/// Parsed and validated `rename_folder` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenameFolderInput {
+    pub folder_id: String,
+    pub name: String,
+}
+
+/// Parsed and validated `delete_folder` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeleteFolderInput {
+    pub folder_id: String,
+}
+
+/// Parsed and validated `rename_media` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenameMediaInput {
+    pub media_id: String,
+    pub name: String,
+}
+
+/// Parsed and validated `delete_media` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeleteMediaInput {
+    pub media_id: String,
+}
+
+/// Parsed and validated `move_to_folder` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoveToFolderInput {
+    pub media_id: String,
+    pub folder_id: String,
+}
+
+/// MUT-022: Validate `create_folder` input.
+pub fn validate_create_folder(input: &Value) -> ValidationResult<CreateFolderInput> {
+    let name = match input.get("name").and_then(|v| v.as_str()) {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => return ValidationResult::Error("create_folder: missing or empty 'name'".into()),
+    };
+    ValidationResult::Ok(CreateFolderInput { name })
+}
+
+/// MUT-022: Validate `rename_folder` input.
+pub fn validate_rename_folder(input: &Value) -> ValidationResult<RenameFolderInput> {
+    let folder_id = match input.get("folderId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return ValidationResult::Error("rename_folder: missing or empty 'folderId'".into()),
+    };
+    let name = match input.get("name").and_then(|v| v.as_str()) {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => return ValidationResult::Error("rename_folder: missing or empty 'name'".into()),
+    };
+    ValidationResult::Ok(RenameFolderInput { folder_id, name })
+}
+
+/// MUT-022: Validate `delete_folder` input.
+pub fn validate_delete_folder(input: &Value) -> ValidationResult<DeleteFolderInput> {
+    let folder_id = match input.get("folderId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return ValidationResult::Error("delete_folder: missing or empty 'folderId'".into()),
+    };
+    ValidationResult::Ok(DeleteFolderInput { folder_id })
+}
+
+/// MUT-022: Validate `rename_media` input.
+pub fn validate_rename_media(input: &Value) -> ValidationResult<RenameMediaInput> {
+    let media_id = match input.get("mediaId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return ValidationResult::Error("rename_media: missing or empty 'mediaId'".into()),
+    };
+    let name = match input.get("name").and_then(|v| v.as_str()) {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => return ValidationResult::Error("rename_media: missing or empty 'name'".into()),
+    };
+    ValidationResult::Ok(RenameMediaInput { media_id, name })
+}
+
+/// MUT-022: Validate `delete_media` input.
+pub fn validate_delete_media(input: &Value) -> ValidationResult<DeleteMediaInput> {
+    let media_id = match input.get("mediaId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return ValidationResult::Error("delete_media: missing or empty 'mediaId'".into()),
+    };
+    ValidationResult::Ok(DeleteMediaInput { media_id })
+}
+
+/// MUT-022: Validate `move_to_folder` input.
+pub fn validate_move_to_folder(input: &Value) -> ValidationResult<MoveToFolderInput> {
+    let media_id = match input.get("mediaId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return ValidationResult::Error("move_to_folder: missing or empty 'mediaId'".into()),
+    };
+    let folder_id = match input.get("folderId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return ValidationResult::Error("move_to_folder: missing or empty 'folderId'".into()),
+    };
+    ValidationResult::Ok(MoveToFolderInput {
+        media_id,
+        folder_id,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -252,6 +734,8 @@ pub fn validate_hex_color(input: &str) -> ValidationResult<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ---- MUT-016: split_clip --------------------------------------------
 
     #[test]
     fn mut_016_split_clip_valid() {
@@ -279,15 +763,21 @@ mod tests {
         assert!(result.into_error().is_some());
     }
 
+    // ---- MUT-009: set_clip_properties -----------------------------------
+
     #[test]
     fn mut_009_set_clip_properties_valid() {
         let input = json!({
             "clipIds": ["c1", "c2"],
             "properties": {"speed": 2.0}
         });
-        let result = validate_set_clip_properties(&input);
+        let result = validate_set_clip_properties(&input, None);
         let parsed = result.into_ok().expect("MUT-009: valid");
         assert_eq!(parsed.clip_ids.len(), 2);
+        assert!(parsed.text_only_fields.is_empty());
+        assert!(!parsed.clears_keyframes);
+        // "speed" is a timing property (MUT-012)
+        assert_eq!(parsed.timing_properties, vec!["speed"]);
     }
 
     #[test]
@@ -296,16 +786,18 @@ mod tests {
             "clipIds": [],
             "properties": {}
         });
-        let result = validate_set_clip_properties(&input);
+        let result = validate_set_clip_properties(&input, None);
         assert!(result.into_error().is_some(), "MUT-009: empty ids rejected");
     }
 
     #[test]
     fn mut_009_set_clip_properties_missing_properties() {
         let input = json!({"clipIds": ["c1"]});
-        let result = validate_set_clip_properties(&input);
+        let result = validate_set_clip_properties(&input, None);
         assert!(result.into_error().is_some());
     }
+
+    // ---- MUT-013/014/015: set_keyframes ----------------------------------
 
     #[test]
     fn mut_013_set_keyframes_valid() {
@@ -353,6 +845,8 @@ mod tests {
         assert_eq!(parsed.keyframes[1], (50, 0.8));
     }
 
+    // ---- MUT-005: remove_clips ------------------------------------------
+
     #[test]
     fn mut_005_remove_clips_valid() {
         let input = json!({"clipIds": ["c1", "c2"], "ripple": true});
@@ -369,6 +863,8 @@ mod tests {
         let parsed = result.into_ok().expect("MUT-005: default ripple=false");
         assert!(!parsed.ripple, "default ripple=false");
     }
+
+    // ---- MUT-002/003: add_clips -----------------------------------------
 
     #[test]
     fn mut_002_add_clips_valid_with_track() {
@@ -392,6 +888,8 @@ mod tests {
         let result = validate_add_clips(&input);
         assert!(result.into_error().is_some());
     }
+
+    // ---- MUT-023: hex color ---------------------------------------------
 
     #[test]
     fn mut_023_hex_color_valid_formats() {
@@ -427,5 +925,532 @@ mod tests {
     #[test]
     fn mut_023_hex_color_rejects_no_hash() {
         assert!(validate_hex_color("ff0000").into_error().is_some());
+    }
+
+    // ---- MUT-004: insert_clips ------------------------------------------
+
+    #[test]
+    fn mut_004_insert_clips_valid() {
+        let input = json!({
+            "trackIndex": 1,
+            "mediaIds": ["m1", "m2"],
+            "frame": 120
+        });
+        let result = validate_insert_clips(&input);
+        let parsed = result.into_ok().expect("MUT-004: valid");
+        assert_eq!(parsed.track_index, 1);
+        assert_eq!(parsed.media_ids, vec!["m1", "m2"]);
+        assert_eq!(parsed.frame, 120);
+    }
+
+    #[test]
+    fn mut_004_insert_clips_requires_track_index() {
+        let input = json!({"mediaIds": ["m1"], "frame": 0});
+        let result = validate_insert_clips(&input);
+        let err = result.into_error().expect("MUT-004: missing trackIndex");
+        assert!(err.contains("trackIndex"));
+    }
+
+    #[test]
+    fn mut_004_insert_clips_requires_media_ids() {
+        let input = json!({"trackIndex": 0, "frame": 0});
+        let result = validate_insert_clips(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_004_insert_clips_requires_non_negative_frame() {
+        let input = json!({"trackIndex": 0, "mediaIds": ["m1"], "frame": -5});
+        let result = validate_insert_clips(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    // ---- MUT-006: remove_tracks -----------------------------------------
+
+    #[test]
+    fn mut_006_remove_tracks_valid() {
+        let input = json!({"trackIds": [0, 2, 4]});
+        let result = validate_remove_tracks(&input);
+        let parsed = result.into_ok().expect("MUT-006: valid");
+        assert_eq!(parsed.track_ids, vec![0, 2, 4]);
+    }
+
+    #[test]
+    fn mut_006_remove_tracks_dedup() {
+        let input = json!({"trackIds": [3, 1, 3, 2, 1]});
+        let result = validate_remove_tracks(&input);
+        let parsed = result.into_ok().expect("MUT-006: dedup");
+        assert_eq!(parsed.track_ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn mut_006_remove_tracks_empty_rejected() {
+        let input = json!({"trackIds": []});
+        let result = validate_remove_tracks(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    // ---- MUT-007: move_clips --------------------------------------------
+
+    #[test]
+    fn mut_007_move_clips_valid_with_to_track() {
+        let input = json!({"clipIds": ["c1"], "toTrack": 2});
+        let result = validate_move_clips(&input);
+        let parsed = result.into_ok().expect("MUT-007: with toTrack");
+        assert_eq!(parsed.clip_ids, vec!["c1"]);
+        assert_eq!(parsed.to_track, Some(2));
+        assert_eq!(parsed.to_frame, None);
+    }
+
+    #[test]
+    fn mut_007_move_clips_valid_with_to_frame() {
+        let input = json!({"clipIds": ["c1"], "toFrame": 100});
+        let result = validate_move_clips(&input);
+        let parsed = result.into_ok().expect("MUT-007: with toFrame");
+        assert_eq!(parsed.to_frame, Some(100));
+        assert_eq!(parsed.to_track, None);
+    }
+
+    #[test]
+    fn mut_007_move_clips_valid_with_both() {
+        let input = json!({"clipIds": ["c1"], "toTrack": 2, "toFrame": 100});
+        let result = validate_move_clips(&input);
+        let parsed = result.into_ok().expect("MUT-007: with both");
+        assert_eq!(parsed.to_track, Some(2));
+        assert_eq!(parsed.to_frame, Some(100));
+    }
+
+    #[test]
+    fn mut_007_move_clips_requires_at_least_one() {
+        let input = json!({"clipIds": ["c1"]});
+        let result = validate_move_clips(&input);
+        let err = result
+            .into_error()
+            .expect("MUT-007: neither toTrack nor toFrame");
+        assert!(err.contains("toTrack") || err.contains("toFrame"));
+    }
+
+    #[test]
+    fn mut_007_move_clips_requires_clip_ids() {
+        let input = json!({"toTrack": 0});
+        let result = validate_move_clips(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    // ---- MUT-008: move_clips linked partner ------------------------------
+
+    #[test]
+    fn mut_008_move_clips_linked_valid() {
+        let result = validate_move_clips_linked(&["c1".to_string(), "c2".to_string()]);
+        let parsed = result.into_ok().expect("MUT-008: valid");
+        assert_eq!(parsed.len(), 2);
+    }
+
+    #[test]
+    fn mut_008_move_clips_linked_empty_rejected() {
+        let result = validate_move_clips_linked(&[]);
+        assert!(result.into_error().is_some());
+    }
+
+    // ---- MUT-010: text-only field validation ----------------------------
+
+    #[test]
+    fn mut_010_non_text_clip_rejects_text_fields() {
+        let input = json!({
+            "clipIds": ["c1"],
+            "properties": {"text": "hello", "fontSize": 24, "opacity": 0.5}
+        });
+        let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
+        let err = result
+            .into_error()
+            .expect("MUT-010: non-text clip rejects text fields");
+        assert!(err.contains("text"));
+    }
+
+    #[test]
+    fn mut_010_text_only_clip_allows_text_fields() {
+        let input = json!({
+            "clipIds": ["c1"],
+            "properties": {"text": "hello", "fontSize": 24}
+        });
+        let result = validate_set_clip_properties(&input, Some(vec!["text".to_string()]));
+        let parsed = result
+            .into_ok()
+            .expect("MUT-010: text clip allows text fields");
+        assert_eq!(parsed.text_only_fields.len(), 2);
+    }
+
+    // ---- MUT-011: scalar volume/opacity clears keyframes -----------------
+
+    #[test]
+    fn mut_011_scalar_volume_clears_keyframes() {
+        let input = json!({
+            "clipIds": ["c1"],
+            "properties": {"volume": 0.8}
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let parsed = result.into_ok().expect("MUT-011: scalar volume");
+        assert!(parsed.clears_keyframes);
+    }
+
+    #[test]
+    fn mut_011_scalar_opacity_clears_keyframes() {
+        let input = json!({
+            "clipIds": ["c1"],
+            "properties": {"opacity": 0.5}
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let parsed = result.into_ok().expect("MUT-011: scalar opacity");
+        assert!(parsed.clears_keyframes);
+    }
+
+    #[test]
+    fn mut_011_keyframed_volume_no_clear() {
+        let input = json!({
+            "clipIds": ["c1"],
+            "properties": {"volume": {"keyframes": [{"frame": 0, "value": 1.0}]}}
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let parsed = result.into_ok().expect("MUT-011: keyframed volume");
+        assert!(
+            !parsed.clears_keyframes,
+            "object-typed volume does not clear"
+        );
+    }
+
+    #[test]
+    fn mut_011_no_scalar_no_clear() {
+        let input = json!({
+            "clipIds": ["c1"],
+            "properties": {"speed": 2.0}
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let parsed = result.into_ok().expect("MUT-011: unrelated property");
+        assert!(!parsed.clears_keyframes);
+    }
+
+    // ---- MUT-012: timing properties detection ---------------------------
+
+    #[test]
+    fn mut_012_detects_timing_properties() {
+        let input = json!({
+            "clipIds": ["c1"],
+            "properties": {"speed": 2.0, "trimStart": 10}
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let parsed = result.into_ok().expect("MUT-012: timing props");
+        assert!(parsed.timing_properties.contains(&"speed".to_string()));
+        assert!(parsed.timing_properties.contains(&"trimStart".to_string()));
+        assert_eq!(parsed.timing_properties.len(), 2);
+    }
+
+    #[test]
+    fn mut_012_detects_all_timing_fields() {
+        let input = json!({
+            "clipIds": ["c1"],
+            "properties": {
+                "speed": 1.5,
+                "durationFrames": 200,
+                "trimStart": 0,
+                "trimEnd": 100
+            }
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let parsed = result.into_ok().expect("MUT-012: all timing");
+        assert_eq!(parsed.timing_properties.len(), 4);
+    }
+
+    #[test]
+    fn mut_012_no_timing_properties() {
+        let input = json!({
+            "clipIds": ["c1"],
+            "properties": {"opacity": 0.5, "volume": 1.0}
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let parsed = result.into_ok().expect("MUT-012: no timing");
+        assert!(parsed.timing_properties.is_empty());
+    }
+
+    // ---- MUT-017/018: ripple_delete_ranges ------------------------------
+
+    #[test]
+    fn mut_017_ripple_delete_ranges_with_clip_id() {
+        let input = json!({
+            "clipId": "c1",
+            "ranges": [
+                {"startFrame": 0, "endFrame": 50},
+                {"startFrame": 100, "endFrame": 150}
+            ]
+        });
+        let result = validate_ripple_delete_ranges(&input);
+        let parsed = result.into_ok().expect("MUT-017: clip-scoped");
+        assert_eq!(parsed.clip_id, Some("c1".to_string()));
+        assert_eq!(parsed.track_index, None);
+        assert_eq!(parsed.ranges.len(), 2);
+    }
+
+    #[test]
+    fn mut_017_ripple_delete_ranges_with_track_index() {
+        let input = json!({
+            "trackIndex": 2,
+            "ranges": [{"startFrame": 0, "endFrame": 200}]
+        });
+        let result = validate_ripple_delete_ranges(&input);
+        let parsed = result.into_ok().expect("MUT-017: track-scoped");
+        assert_eq!(parsed.track_index, Some(2));
+        assert_eq!(parsed.clip_id, None);
+        assert_eq!(parsed.ranges.len(), 1);
+    }
+
+    #[test]
+    fn mut_017_ripple_delete_ranges_rejects_both() {
+        let input = json!({
+            "clipId": "c1",
+            "trackIndex": 0,
+            "ranges": [{"startFrame": 0, "endFrame": 50}]
+        });
+        let result = validate_ripple_delete_ranges(&input);
+        let err = result.into_error().expect("MUT-017: both rejected");
+        assert!(err.contains("both"));
+    }
+
+    #[test]
+    fn mut_017_ripple_delete_ranges_requires_one() {
+        let input = json!({"ranges": [{"startFrame": 0, "endFrame": 50}]});
+        let result = validate_ripple_delete_ranges(&input);
+        let err = result.into_error().expect("MUT-017: neither rejected");
+        assert!(err.contains("clipId") || err.contains("trackIndex"));
+    }
+
+    #[test]
+    fn mut_018_ripple_delete_ranges_clip_scoped_seconds() {
+        let input = json!({
+            "clipId": "c1",
+            "seconds": [
+                {"startFrame": 10, "endFrame": 30},
+                {"startFrame": 60, "endFrame": 90}
+            ]
+        });
+        let result = validate_ripple_delete_ranges(&input);
+        let parsed = result.into_ok().expect("MUT-018: seconds mode");
+        assert_eq!(parsed.ranges.len(), 2);
+    }
+
+    #[test]
+    fn mut_018_ripple_delete_ranges_clip_scoped_no_ranges() {
+        // Clip-scoped with neither ranges nor seconds → empty ranges (full clip delete)
+        let input = json!({"clipId": "c1"});
+        let result = validate_ripple_delete_ranges(&input);
+        let parsed = result.into_ok().expect("MUT-018: clip-scoped empty");
+        assert!(parsed.ranges.is_empty());
+    }
+
+    // ---- MUT-019: add_texts ---------------------------------------------
+
+    #[test]
+    fn mut_019_add_texts_valid() {
+        let input = json!({
+            "texts": [
+                {"text": "Hello", "startFrame": 0, "durationFrames": 100},
+                {"text": "World", "startFrame": 100, "durationFrames": 50}
+            ],
+            "trackIndex": 1
+        });
+        let result = validate_add_texts(&input, None);
+        let parsed = result.into_ok().expect("MUT-019: valid");
+        assert_eq!(parsed.texts.len(), 2);
+        assert_eq!(parsed.texts[0].text, "Hello");
+        assert_eq!(parsed.texts[0].start_frame, 0);
+        assert_eq!(parsed.texts[0].duration_frames, 100);
+        assert_eq!(parsed.track_index, Some(1));
+    }
+
+    #[test]
+    fn mut_019_add_texts_auto_create_visual_track() {
+        let input = json!({
+            "texts": [
+                {"text": "Title", "startFrame": 0, "durationFrames": 200}
+            ]
+        });
+        let result = validate_add_texts(&input, None);
+        let parsed = result.into_ok().expect("MUT-019: auto-create");
+        assert_eq!(parsed.track_index, None, "no trackIndex = auto-create");
+        assert_eq!(parsed.texts.len(), 1);
+    }
+
+    #[test]
+    fn mut_019_add_texts_missing_texts() {
+        let input = json!({"trackIndex": 0});
+        let result = validate_add_texts(&input, None);
+        assert!(result.into_error().is_some());
+    }
+
+    // ---- MUT-020: add_texts rejects audio tracks ------------------------
+
+    #[test]
+    fn mut_020_add_texts_rejects_audio_track() {
+        let input = json!({
+            "texts": [
+                {"text": "Subtitle", "startFrame": 0, "durationFrames": 100}
+            ]
+        });
+        let result = validate_add_texts(&input, Some("audio".to_string()));
+        let err = result.into_error().expect("MUT-020: audio rejected");
+        assert!(err.contains("audio"));
+    }
+
+    #[test]
+    fn mut_020_add_texts_allows_video_track() {
+        let input = json!({
+            "texts": [
+                {"text": "Subtitle", "startFrame": 0, "durationFrames": 100}
+            ]
+        });
+        let result = validate_add_texts(&input, Some("video".to_string()));
+        assert!(result.into_ok().is_some(), "MUT-020: video allowed");
+    }
+
+    // ---- MUT-021: add_captions ------------------------------------------
+
+    #[test]
+    fn mut_021_add_captions_valid_with_clip_ids() {
+        let input = json!({"clipIds": ["c1", "c2"]});
+        let result = validate_add_captions(&input);
+        let parsed = result.into_ok().expect("MUT-021: clipIds");
+        assert_eq!(
+            parsed.clip_ids,
+            Some(vec!["c1".to_string(), "c2".to_string()])
+        );
+    }
+
+    #[test]
+    fn mut_021_add_captions_valid_auto_detect() {
+        let input = json!({});
+        let result = validate_add_captions(&input);
+        let parsed = result.into_ok().expect("MUT-021: auto-detect");
+        assert_eq!(parsed.clip_ids, None);
+    }
+
+    #[test]
+    fn mut_021_add_captions_empty_ids_rejected() {
+        let input = json!({"clipIds": []});
+        let result = validate_add_captions(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    // ---- MUT-022: folder/media tools ------------------------------------
+
+    #[test]
+    fn mut_022_create_folder_valid() {
+        let input = json!({"name": "My Folder"});
+        let result = validate_create_folder(&input);
+        let parsed = result.into_ok().expect("MUT-022: create_folder");
+        assert_eq!(parsed.name, "My Folder");
+    }
+
+    #[test]
+    fn mut_022_create_folder_missing_name() {
+        let input = json!({});
+        let result = validate_create_folder(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_022_rename_folder_valid() {
+        let input = json!({"folderId": "f1", "name": "Renamed"});
+        let result = validate_rename_folder(&input);
+        let parsed = result.into_ok().expect("MUT-022: rename_folder");
+        assert_eq!(parsed.folder_id, "f1");
+        assert_eq!(parsed.name, "Renamed");
+    }
+
+    #[test]
+    fn mut_022_rename_folder_missing_folder_id() {
+        let input = json!({"name": "Renamed"});
+        let result = validate_rename_folder(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_022_rename_folder_missing_name() {
+        let input = json!({"folderId": "f1"});
+        let result = validate_rename_folder(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_022_delete_folder_valid() {
+        let input = json!({"folderId": "f1"});
+        let result = validate_delete_folder(&input);
+        let parsed = result.into_ok().expect("MUT-022: delete_folder");
+        assert_eq!(parsed.folder_id, "f1");
+    }
+
+    #[test]
+    fn mut_022_delete_folder_missing_id() {
+        let input = json!({});
+        let result = validate_delete_folder(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_022_rename_media_valid() {
+        let input = json!({"mediaId": "m1", "name": "New Name"});
+        let result = validate_rename_media(&input);
+        let parsed = result.into_ok().expect("MUT-022: rename_media");
+        assert_eq!(parsed.media_id, "m1");
+        assert_eq!(parsed.name, "New Name");
+    }
+
+    #[test]
+    fn mut_022_rename_media_missing_media_id() {
+        let input = json!({"name": "New Name"});
+        let result = validate_rename_media(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_022_rename_media_missing_name() {
+        let input = json!({"mediaId": "m1"});
+        let result = validate_rename_media(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_022_delete_media_valid() {
+        let input = json!({"mediaId": "m1"});
+        let result = validate_delete_media(&input);
+        let parsed = result.into_ok().expect("MUT-022: delete_media");
+        assert_eq!(parsed.media_id, "m1");
+    }
+
+    #[test]
+    fn mut_022_delete_media_missing_id() {
+        let input = json!({});
+        let result = validate_delete_media(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_022_move_to_folder_valid() {
+        let input = json!({"mediaId": "m1", "folderId": "f1"});
+        let result = validate_move_to_folder(&input);
+        let parsed = result.into_ok().expect("MUT-022: move_to_folder");
+        assert_eq!(parsed.media_id, "m1");
+        assert_eq!(parsed.folder_id, "f1");
+    }
+
+    #[test]
+    fn mut_022_move_to_folder_missing_media_id() {
+        let input = json!({"folderId": "f1"});
+        let result = validate_move_to_folder(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_022_move_to_folder_missing_folder_id() {
+        let input = json!({"mediaId": "m1"});
+        let result = validate_move_to_folder(&input);
+        assert!(result.into_error().is_some());
     }
 }

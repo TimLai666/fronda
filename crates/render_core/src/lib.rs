@@ -4,6 +4,11 @@ use core_model::{ClipType, Interpolation, Timeline};
 use core_model::{Clip, Crop, Transform};
 use serde::{Deserialize, Serialize};
 
+pub mod effects;
+pub use effects::{
+    analyze_clip_effects, pipeline_from_timeline, EffectPipeline, EffectState, PerClipEffectState,
+};
+
 /// Describes how a single clip should be rendered in the composition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompositionClip {
