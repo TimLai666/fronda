@@ -22,7 +22,7 @@ Scope sources:
 - [x] `TIM-005`: `Clip.sourceDurationFrames = sourceFramesConsumed + trimStartFrame + trimEndFrame`.
 - [x] `TIM-006`: `currentFrame` seeks clamp into `[0, totalFrames]`.
 - [x] `TIM-007`: Timeline range selections are valid only when `endFrame > startFrame`.
-- [x] `TIM-008`: Timeline ranges remain half-open intervals throughout editing, preview, and agent operations.
+- [x] `TIM-008`: Timeline ranges remain half-open intervals throughout editing, preview, and agent operations. (Verified via proptest for speed/trim, and via 4 integration tests for split/clear_region/split-then-speed.)
 
 ## B. Track model and track-level operations
 

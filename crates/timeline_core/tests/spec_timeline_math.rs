@@ -120,8 +120,8 @@ fn tim_007_half_open_range_requires_end_after_start() {
 }
 
 #[test]
-fn tim_008_never_violates_half_open_invariant_during_operations() {
-    // Verify that clip and range invariants hold after editing operations
+fn tim_008_half_open_invariant_after_speed_change_and_trim() {
+    // Chain operations that should preserve the half-open invariant
     let mut clip = clip(100, 50);
     assert_eq!(clip.end_frame(), 150);
     assert!(clip.contains_frame(100));
@@ -140,6 +140,85 @@ fn tim_008_never_violates_half_open_invariant_during_operations() {
     assert_eq!(clip.end_frame(), 150);
     assert!(clip.contains_frame(120));
     assert!(!clip.contains_frame(150));
+}
+
+#[test]
+fn tim_008_half_open_invariant_after_split() {
+    use timeline_core::split_clip;
+    let c1 = clip(0, 100);
+    let mut timeline = Timeline {
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        settings_configured: true,
+        selected_clip_ids: std::collections::HashSet::new(),
+        tracks: vec![track(ClipType::Video, vec![c1])],
+    };
+
+    let _right_ids = split_clip(&mut timeline, "clip-1", 40);
+    assert_half_open_invariants(&timeline);
+}
+
+#[test]
+fn tim_008_half_open_invariant_after_clear_region() {
+    use timeline_core::clear_region;
+    let c1 = clip(20, 60);
+    let c2 = clip(100, 40);
+    let mut timeline = Timeline {
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        settings_configured: true,
+        selected_clip_ids: std::collections::HashSet::new(),
+        tracks: vec![track(ClipType::Video, vec![c1, c2])],
+    };
+
+    // Clear region covering c1's end and c2's start
+    clear_region(&mut timeline, 0, 50, 120, false);
+    assert_half_open_invariants(&timeline);
+}
+
+#[test]
+fn tim_008_half_open_invariant_after_split_then_speed() {
+    use timeline_core::{apply_clip_speed, split_clip};
+    let c1 = clip(0, 100);
+    let mut timeline = Timeline {
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        settings_configured: true,
+        selected_clip_ids: std::collections::HashSet::new(),
+        tracks: vec![track(ClipType::Video, vec![c1])],
+    };
+
+    let right_ids = split_clip(&mut timeline, "clip-1", 50);
+    assert_eq!(right_ids.len(), 1);
+    assert_half_open_invariants(&timeline);
+
+    // Speed change the right half
+    assert!(apply_clip_speed(&mut timeline, &right_ids[0], 2.0));
+    assert_half_open_invariants(&timeline);
+}
+
+fn assert_half_open_invariants(timeline: &Timeline) {
+    for (ti, track) in timeline.tracks.iter().enumerate() {
+        for clip in &track.clips {
+            assert_eq!(
+                clip.end_frame(),
+                clip.start_frame + clip.duration_frames,
+                "track {ti} clip {} end_frame mismatch: start={}, duration={}",
+                clip.id,
+                clip.start_frame,
+                clip.duration_frames
+            );
+            assert!(
+                !clip.contains_frame(clip.end_frame()),
+                "track {ti} clip {} contains its own end_frame {}",
+                clip.id,
+                clip.end_frame()
+            );
+        }
+    }
 }
 
 proptest! {
@@ -180,5 +259,35 @@ proptest! {
             clip.source_duration_frames(),
             expected_consumed + trim_start_frame + trim_end_frame,
         );
+    }
+
+    #[test]
+    fn tim_008_half_open_invariant_after_speed_and_trim(
+        start_frame in 0_i64..500_000,
+        duration_frames in 1_i64..10_000,
+        speed_millis in 100_u32..5_000,
+        trim_start in 0_i64..500,
+        trim_end in 0_i64..500,
+        new_start_delta in (-2000_i64..2000),
+    ) {
+        let mut clip = clip(start_frame, duration_frames);
+        clip.trim_start_frame = trim_start;
+        clip.trim_end_frame = trim_end;
+
+        // Set speed (must be > 0)
+        let speed = speed_millis as f64 / 1_000.0;
+        clip.speed = speed;
+
+        // Speed change recomputes duration
+        let source_frames = (duration_frames as f64) * speed;
+        clip.duration_frames = (source_frames / speed).round() as i64;
+        prop_assert_eq!(clip.end_frame(), start_frame + clip.duration_frames);
+        prop_assert!(!clip.contains_frame(clip.end_frame()));
+
+        // Apply start_frame change (simulating trim/move)
+        let new_start = (start_frame as i64 + new_start_delta).max(0);
+        clip.start_frame = new_start;
+        prop_assert_eq!(clip.end_frame(), new_start + clip.duration_frames);
+        prop_assert!(!clip.contains_frame(clip.end_frame()));
     }
 }
