@@ -164,6 +164,7 @@ pub struct CompositionPlan {
     pub tracks: Vec<CompositionTrack>,
     pub offline_media_refs: Vec<String>,
     pub unprocessable_media_refs: Vec<String>,
+    pub effects_pipeline: EffectPipeline,
 }
 
 impl CompositionPlan {
@@ -224,6 +225,8 @@ impl CompositionPlan {
             .max()
             .unwrap_or(0);
 
+        let effects_pipeline = pipeline_from_timeline(timeline);
+
         CompositionPlan {
             resolution,
             fps: timeline.fps,
@@ -231,6 +234,7 @@ impl CompositionPlan {
             tracks,
             offline_media_refs: Vec::new(),
             unprocessable_media_refs: Vec::new(),
+            effects_pipeline,
         }
     }
 

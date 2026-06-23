@@ -1,5 +1,9 @@
 use core_model::{Clip, ClipType, Crop, Interpolation, Timeline, Track, Transform};
-use timeline_core::{display_label_for_track, insert_track_at, remove_track, sort_clips_on_track};
+use timeline_core::{
+    clamp_track_height, display_label_for_track, insert_track_at, remove_track,
+    sort_clips_on_track, toggle_track_hidden, toggle_track_mute, toggle_track_sync_lock,
+    MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT,
+};
 
 fn clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
     Clip {
@@ -222,4 +226,72 @@ fn trk_sort_clips_on_track_sorts_by_start_frame() {
 fn trk_sort_clips_on_track_out_of_range_returns_false() {
     let mut t = timeline(vec![]);
     assert!(!sort_clips_on_track(&mut t, 0));
+}
+
+// ─── TRK-007: Track mute/hidden/sync-lock toggles ───
+
+#[test]
+fn trk_007_toggle_mute_changes_state() {
+    let mut t = timeline(vec![video_track(vec![clip("c1", 0, 30)])]);
+    assert!(!t.tracks[0].muted);
+    assert_eq!(toggle_track_mute(&mut t, 0), Some(true));
+    assert!(t.tracks[0].muted);
+    assert_eq!(toggle_track_mute(&mut t, 0), Some(false));
+    assert!(!t.tracks[0].muted);
+}
+
+#[test]
+fn trk_007_toggle_hidden_changes_state() {
+    let mut t = timeline(vec![video_track(vec![clip("c1", 0, 30)])]);
+    assert!(!t.tracks[0].hidden);
+    assert_eq!(toggle_track_hidden(&mut t, 0), Some(true));
+    assert!(t.tracks[0].hidden);
+}
+
+#[test]
+fn trk_007_toggle_sync_lock_changes_state() {
+    let mut t = timeline(vec![video_track(vec![clip("c1", 0, 30)])]);
+    assert!(t.tracks[0].sync_locked);
+    assert_eq!(toggle_track_sync_lock(&mut t, 0), Some(false));
+    assert!(!t.tracks[0].sync_locked);
+}
+
+#[test]
+fn trk_007_toggle_invalid_index_returns_none() {
+    let mut t = timeline(vec![]);
+    assert!(toggle_track_mute(&mut t, 0).is_none());
+    assert!(toggle_track_hidden(&mut t, 0).is_none());
+    assert!(toggle_track_sync_lock(&mut t, 0).is_none());
+}
+
+// ─── TRK-008: Track display height clamping ───
+
+#[test]
+fn trk_008_clamp_track_height_mid_range() {
+    assert!((clamp_track_height(100.0) - 100.0).abs() < 1e-9);
+}
+
+#[test]
+fn trk_008_clamp_track_height_below_min() {
+    assert!((clamp_track_height(10.0) - MIN_TRACK_HEIGHT).abs() < 1e-9);
+}
+
+#[test]
+fn trk_008_clamp_track_height_above_max() {
+    assert!((clamp_track_height(500.0) - MAX_TRACK_HEIGHT).abs() < 1e-9);
+}
+
+#[test]
+fn trk_008_clamp_track_height_negative() {
+    assert!((clamp_track_height(-50.0) - MIN_TRACK_HEIGHT).abs() < 1e-9);
+}
+
+#[test]
+fn trk_008_clamp_track_height_exact_min() {
+    assert!((clamp_track_height(MIN_TRACK_HEIGHT) - MIN_TRACK_HEIGHT).abs() < 1e-9);
+}
+
+#[test]
+fn trk_008_clamp_track_height_exact_max() {
+    assert!((clamp_track_height(MAX_TRACK_HEIGHT) - MAX_TRACK_HEIGHT).abs() < 1e-9);
 }

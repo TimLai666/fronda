@@ -131,6 +131,76 @@ pub fn find_snap(
     })
 }
 
+/// SNP-007: Validates that dragging a selection to a target start frame
+/// does not push any clip past frame 0.
+/// Returns true if the drag is valid (no clip crosses frame 0).
+pub fn validate_drag_not_past_zero(
+    selected_clip_starts: &[i64],
+    target_start_frame: i64,
+    current_start_frame: i64,
+) -> bool {
+    let delta = target_start_frame - current_start_frame;
+    for &start in selected_clip_starts {
+        let new_start = start + delta;
+        if new_start < 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// SNP-007: Clamp a drag target so no selected clip crosses frame 0.
+/// Returns the clamped target frame.
+pub fn clamp_drag_to_frame_zero(
+    selected_clip_starts: &[i64],
+    target_start_frame: i64,
+    current_start_frame: i64,
+) -> i64 {
+    let delta = target_start_frame - current_start_frame;
+    let min_new_start = selected_clip_starts
+        .iter()
+        .map(|s| s + delta)
+        .min()
+        .unwrap_or(0);
+    if min_new_start < 0 {
+        let earliest_current = selected_clip_starts.iter().min().copied().unwrap_or(0);
+        let clamped_delta = -earliest_current;
+        current_start_frame + clamped_delta
+    } else {
+        target_start_frame
+    }
+}
+
+/// SNP-008: Resolve a snap target for a cut/razor preview.
+/// Uses the same target set and base threshold as drag operations,
+/// but with a single probe offset at position 0 (cursor position).
+/// Returns the snapped frame, if any.
+pub fn resolve_cut_preview_snap(
+    pointer_frame: i64,
+    targets: &[SnapTarget],
+    base_threshold: f64,
+    pixels_per_frame: f64,
+) -> Option<i64> {
+    let frame_threshold = if pixels_per_frame > 0.0 {
+        base_threshold / pixels_per_frame
+    } else {
+        f64::INFINITY
+    };
+
+    let mut best: Option<(i64, f64)> = None;
+    for target in targets {
+        let dist = (pointer_frame as f64 - target.frame as f64).abs();
+        if dist <= frame_threshold
+            && best
+                .as_ref()
+                .map_or(true, |(_, best_dist)| dist < *best_dist)
+        {
+            best = Some((target.frame, dist));
+        }
+    }
+    best.map(|(frame, _)| frame)
+}
+
 // Convenience wrapper w/ default probe_offsets = [0]
 pub fn find_snap_simple(
     position: i64,

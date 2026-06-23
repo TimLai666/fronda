@@ -1,6 +1,7 @@
 use core_model::{Clip, ClipType, Crop, Interpolation, Track, Transform};
 use timeline_core::{
-    collect_targets, find_snap, find_snap_simple, SnapState, SnapTarget, SnapTargetKind,
+    clamp_drag_to_frame_zero, collect_targets, find_snap, find_snap_simple,
+    resolve_cut_preview_snap, validate_drag_not_past_zero, SnapState, SnapTarget, SnapTargetKind,
     PLAYHEAD_MULTIPLIER, STICKY_MULTIPLIER, THRESHOLD_PIXELS,
 };
 
@@ -393,4 +394,80 @@ fn snp_010_find_snap_simple_exact_match() {
     let mut state = SnapState::default();
     let result = find_snap_simple(101, &targets, &mut state, 0.0, 1.0);
     assert!(result.is_none(), "1 away at threshold 0 should not snap");
+}
+
+// ─── SNP-007: Drag must not cross frame 0 ───
+
+#[test]
+fn snp_007_valid_drag_allows_positive_target() {
+    let starts = vec![100, 200, 300];
+    assert!(validate_drag_not_past_zero(&starts, 150, 100));
+}
+
+#[test]
+fn snp_007_invalid_drag_crosses_zero() {
+    let starts = vec![100];
+    assert!(!validate_drag_not_past_zero(&starts, -50, 100));
+}
+
+#[test]
+fn snp_007_clamp_to_frame_zero() {
+    let starts = vec![100];
+    let clamped = clamp_drag_to_frame_zero(&starts, -50, 100);
+    assert_eq!(clamped, 0);
+}
+
+#[test]
+fn snp_007_clamp_multi_clip() {
+    let starts = vec![50, 100, 200];
+    let clamped = clamp_drag_to_frame_zero(&starts, -100, 0);
+    assert_eq!(clamped, -50); // earliest clip (50) goes to 0, delta = -50
+}
+
+// ─── SNP-008: Razor/cut preview snaps to same targets as drag ───
+
+#[test]
+fn snp_008_cut_preview_snaps_to_nearest_edge() {
+    let targets = vec![
+        SnapTarget {
+            frame: 100,
+            kind: SnapTargetKind::ClipEdge,
+        },
+        SnapTarget {
+            frame: 200,
+            kind: SnapTargetKind::ClipEdge,
+        },
+    ];
+    let snapped = resolve_cut_preview_snap(103, &targets, 8.0, 1.0);
+    assert_eq!(snapped, Some(100));
+}
+
+#[test]
+fn snp_008_cut_preview_no_snap_when_far() {
+    let targets = vec![SnapTarget {
+        frame: 100,
+        kind: SnapTargetKind::ClipEdge,
+    }];
+    let snapped = resolve_cut_preview_snap(150, &targets, 8.0, 1.0);
+    assert_eq!(snapped, None);
+}
+
+#[test]
+fn snp_008_cut_preview_snaps_to_playhead() {
+    let targets = vec![SnapTarget {
+        frame: 50,
+        kind: SnapTargetKind::Playhead,
+    }];
+    let snapped = resolve_cut_preview_snap(55, &targets, 8.0, 1.0);
+    assert_eq!(snapped, Some(50));
+}
+
+#[test]
+fn snp_008_cut_preview_zero_pixels_per_frame() {
+    let targets = vec![SnapTarget {
+        frame: 100,
+        kind: SnapTargetKind::ClipEdge,
+    }];
+    let snapped = resolve_cut_preview_snap(999, &targets, 8.0, 0.0);
+    assert_eq!(snapped, Some(100));
 }

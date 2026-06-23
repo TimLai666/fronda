@@ -1,9 +1,10 @@
 use core_model::{Clip, ClipType, Effect, GradeCurve, Timeline};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Pipeline-level summary of effects processing requirements.
 /// Used by the compositor to decide which render passes are needed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EffectPipeline {
     /// Whether any clip in the timeline has effects (enabled or not).
     pub has_effects: bool,
@@ -16,7 +17,7 @@ pub struct EffectPipeline {
 }
 
 /// Per-clip effect analysis state for the compositor.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PerClipEffectState {
     pub clip_id: String,
     /// Ordered list of enabled (resolved) effects for this clip.
@@ -31,7 +32,7 @@ pub struct PerClipEffectState {
 }
 
 /// Resolved state of a single effect at a given frame.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EffectState {
     /// Effect type identifier, e.g. "color.exposure", "color.wheels".
     pub effect_type: String,

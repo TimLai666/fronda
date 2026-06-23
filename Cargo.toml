@@ -2,6 +2,7 @@
 members = [
     "crates/agent_contract",
     "crates/app_shell_gpui",
+    "crates/mcp_server",
     "crates/core_model",
     "crates/project_io",
     "crates/render_core",

@@ -13,14 +13,17 @@ pub use undo::{UndoCommand, UndoError, UndoStack};
 pub use tools::{all_tools, ToolDefinition, SYSTEM_INSTRUCTION};
 
 pub use mutation::{
-    AddCaptionsInput, AddClipsInput, AddTextsInput, CreateFolderInput, DeleteFolderInput,
-    DeleteMediaInput, InsertClipsInput, MoveClipsInput, MoveToFolderInput, RemoveClipsInput,
-    RemoveTracksInput, RenameFolderInput, RenameMediaInput, RippleDeleteRangesInput,
-    SetClipPropertiesInput, SetKeyframesInput, SplitClipInput, TextInput,
     validate_add_captions, validate_add_clips, validate_add_texts, validate_create_folder,
-    validate_delete_folder, validate_delete_media, validate_hex_color, validate_insert_clips,
+    validate_delete_folder, validate_delete_media, validate_duplicate_project,
+    validate_generate_music, validate_hex_color, validate_import_folder, validate_insert_clips,
     validate_move_clips, validate_move_clips_linked, validate_move_to_folder,
     validate_remove_clips, validate_remove_tracks, validate_rename_folder, validate_rename_media,
-    validate_ripple_delete_ranges, validate_set_clip_properties, validate_set_keyframes,
-    validate_split_clip,
+    validate_ripple_delete_ranges, validate_set_blend_mode, validate_set_chroma_key,
+    validate_set_clip_properties, validate_set_color_grade, validate_set_keyframes,
+    validate_split_clip, AddCaptionsInput, AddClipsInput, AddTextsInput, CreateFolderInput,
+    DeleteFolderInput, DeleteMediaInput, DuplicateProjectInput, GenerateMusicInput,
+    ImportFolderInput, InsertClipsInput, MoveClipsInput, MoveToFolderInput, RemoveClipsInput,
+    RemoveTracksInput, RenameFolderInput, RenameMediaInput, RippleDeleteRangesInput,
+    SetBlendModeInput, SetChromaKeyInput, SetClipPropertiesInput, SetColorGradeInput,
+    SetKeyframesInput, SplitClipInput, TextInput,
 };

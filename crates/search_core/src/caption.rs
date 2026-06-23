@@ -260,4 +260,24 @@ mod tests {
         assert_eq!(segs[1].text, "three four");
         assert_eq!(segs[2].text, "five");
     }
+
+    #[test]
+    fn phrases_from_words_no_gap_groups_together() {
+        let words = vec![
+            TranscribedWord {
+                word: "a".into(),
+                start_seconds: 0.0,
+                end_seconds: 0.5,
+            },
+            TranscribedWord {
+                word: "b".into(),
+                start_seconds: 0.5,
+                end_seconds: 1.0,
+            },
+        ];
+        let config = CaptionConfig::default();
+        let phrases = phrases_from_words(&words, &config, 30);
+        assert_eq!(phrases.len(), 1, "no gap → one group");
+        assert_eq!(phrases[0].text, "a b");
+    }
 }

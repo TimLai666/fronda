@@ -1,4 +1,4 @@
-//! All 31 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 37 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -14,9 +14,9 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 31 tools exposed to the agent.
+/// Returns all 37 tools exposed to the agent.
 ///
-/// TDEF-001: exactly these 31 tools.
+/// TDEF-001: exactly these 37 tools.
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
@@ -25,12 +25,15 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         create_folder(),
         delete_folder(),
         delete_media(),
+        duplicate_project(),
         generate_audio(),
         generate_image(),
+        generate_music(),
         generate_video(),
         get_media(),
         get_timeline(),
         get_transcript(),
+        import_folder(),
         import_media(),
         insert_clips(),
         inspect_media(),
@@ -45,7 +48,10 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         rename_media(),
         ripple_delete_ranges(),
         search_media(),
+        set_blend_mode(),
+        set_chroma_key(),
         set_clip_properties(),
+        set_color_grade(),
         set_keyframes(),
         split_clip(),
         undo(),
@@ -372,6 +378,85 @@ fn upscale_media() -> ToolDefinition {
     }
 }
 
+fn import_folder() -> ToolDefinition {
+    ToolDefinition {
+        name: "import_folder",
+        description: "Recursively import all supported media files from a directory.",
+        input_schema: object(&[
+            ("path", string("Directory path to import from")),
+            (
+                "recursive",
+                boolean("If true, recursively scan subdirectories"),
+            ),
+        ]),
+    }
+}
+
+fn set_chroma_key() -> ToolDefinition {
+    ToolDefinition {
+        name: "set_chroma_key",
+        description: "Set chroma key (green screen) parameters on a clip.",
+        input_schema: object(&[
+            ("clipId", string("Clip id to apply chroma key to")),
+            ("enabled", boolean("Enable or disable chroma key")),
+            ("color", string("Key color as hex (#RRGGBB)")),
+            ("threshold", number("Similarity threshold 0-1")),
+            ("smoothness", number("Edge smoothness 0-1")),
+        ]),
+    }
+}
+
+fn set_blend_mode() -> ToolDefinition {
+    ToolDefinition {
+        name: "set_blend_mode",
+        description: "Set the blend mode for a clip's compositing.",
+        input_schema: object(&[
+            ("clipId", string("Clip id")),
+            (
+                "mode",
+                string("Blend mode: normal, multiply, screen, overlay, etc."),
+            ),
+        ]),
+    }
+}
+
+fn set_color_grade() -> ToolDefinition {
+    ToolDefinition {
+        name: "set_color_grade",
+        description: "Set color grade parameters on a clip.",
+        input_schema: object(&[
+            ("clipId", string("Clip id")),
+            ("exposure", number("Exposure adjustment (-4 to 4)")),
+            ("contrast", number("Contrast adjustment (0 to 4)")),
+            ("saturation", number("Saturation (0 to 4)")),
+            ("temperature", number("Temperature adjustment (-1 to 1)")),
+        ]),
+    }
+}
+
+fn generate_music() -> ToolDefinition {
+    ToolDefinition {
+        name: "generate_music",
+        description: "Generate music using the configured model.",
+        input_schema: object(&[
+            ("prompt", string("Description of the music to generate")),
+            ("duration", number("Duration in seconds")),
+            (
+                "style",
+                string("Optional music style (e.g., cinematic, ambient, upbeat)"),
+            ),
+        ]),
+    }
+}
+
+fn duplicate_project() -> ToolDefinition {
+    ToolDefinition {
+        name: "duplicate_project",
+        description: "Duplicate the current project package.",
+        input_schema: object(&[]),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // JSON Schema helpers
 // ---------------------------------------------------------------------------
@@ -461,9 +546,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_31_tools() {
+    fn tdef_001_exactly_37_tools() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 31, "TDEF-001: exactly 31 tools");
+        assert_eq!(tools.len(), 37, "TDEF-001: exactly 37 tools");
     }
 
     #[test]
@@ -491,7 +576,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 31, "all 31 tool names must be unique");
+        assert_eq!(names.len(), 37, "all 37 tool names must be unique");
     }
 
     #[test]

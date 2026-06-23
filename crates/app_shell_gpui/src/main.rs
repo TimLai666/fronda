@@ -1,4 +1,4 @@
-use app_shell_gpui::{launch_status_lines, pane::PaneLayout, window::WindowConfig};
+use app_shell_gpui::{editor_view, pane::PaneLayout, window::WindowConfig};
 use gpui::{div, prelude::*, px, size, App, Bounds, Context, Window, WindowBounds, WindowOptions};
 
 struct FrondaRoot {
@@ -15,29 +15,11 @@ impl FrondaRoot {
 
 impl Render for FrondaRoot {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let [title, headline, status] = launch_status_lines();
-
         div()
             .flex()
             .flex_col()
-            .w_full()
-            .h_full()
-            .justify_center()
-            .items_center()
-            .gap_3()
-            .child(
-                div()
-                    .text_xl()
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child(title),
-            )
-            .child(div().child(headline))
-            .child(div().child(status))
-            .child(div().child(format!(
-                "Panels: {} visible",
-                self.pane_layout.visible_count()
-            )))
-            .child(div().child(format!("Layout: {:?}", self.pane_layout.preset)))
+            .size_full()
+            .child(editor_view::render_pane_layout(&self.pane_layout))
     }
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "fronda-mcp-server"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "mcp_server"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+agent_contract = { package = "fronda-agent-contract", path = "../agent_contract" }

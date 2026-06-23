@@ -34,19 +34,23 @@ pub use linking::{
     partner_moves_for_move_of, unlink_clips, LinkIndex, LinkedPartnerMove,
 };
 pub use overwrite::{compute_overwrite, OverwriteAction};
-pub use range_selection::TimelineRange;
+pub use range_selection::{
+    drag_range_edge, find_all_gaps, find_gap_at_frame, shift_drag_range, RangeEdge, TimelineRange,
+};
 pub use ripple::{
     compute_ripple_push, compute_ripple_shifts, compute_ripple_shifts_for_ranges,
     gap_is_still_empty, merge_ranges, validate_track_shifts, ClipShift, FrameRange, GapSelection,
     RippleValidationError,
 };
 pub use snapping::{
-    collect_targets, find_snap, find_snap_simple, SnapResult, SnapState, SnapTarget,
+    clamp_drag_to_frame_zero, collect_targets, find_snap, find_snap_simple,
+    resolve_cut_preview_snap, validate_drag_not_past_zero, SnapResult, SnapState, SnapTarget,
     SnapTargetKind, PLAYHEAD_MULTIPLIER, STICKY_MULTIPLIER, THRESHOLD_PIXELS,
 };
 pub use track_ops::{
-    display_label_for_track, insert_track_at, remove_track, sort_clips_on_track,
-    TrackInsertionError,
+    clamp_track_height, display_label_for_track, insert_track_at, remove_track,
+    sort_clips_on_track, toggle_track_hidden, toggle_track_mute, toggle_track_sync_lock,
+    TrackInsertionError, MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT,
 };
 pub use workflow::{
     apply_ripple_insert_with_split, compute_ripple_delete, compute_ripple_delete_gap,

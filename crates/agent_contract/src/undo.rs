@@ -43,6 +43,7 @@ pub enum UndoError {
 #[derive(Debug, Clone)]
 pub struct UndoStack {
     commands: Vec<UndoCommand>,
+    redo_commands: Vec<UndoCommand>,
     max_depth: usize,
 }
 
@@ -51,6 +52,7 @@ impl UndoStack {
     pub fn new() -> Self {
         Self {
             commands: Vec::new(),
+            redo_commands: Vec::new(),
             max_depth: 50,
         }
     }
@@ -59,6 +61,7 @@ impl UndoStack {
     pub fn with_max_depth(depth: usize) -> Self {
         Self {
             commands: Vec::new(),
+            redo_commands: Vec::new(),
             max_depth: depth,
         }
     }
@@ -71,6 +74,8 @@ impl UndoStack {
         if self.max_depth == 0 {
             return;
         }
+        // A new edit clears the redo stack (standard undo behavior).
+        self.redo_commands.clear();
         if self.commands.len() >= self.max_depth {
             self.commands.remove(0);
         }
@@ -82,12 +87,27 @@ impl UndoStack {
     /// Returns `UndoError::NoCommands` if the stack is empty (UNDO-004).
     pub fn undo(&mut self) -> Result<Timeline, UndoError> {
         let cmd = self.commands.pop().ok_or(UndoError::NoCommands)?;
+        self.redo_commands.push(cmd.clone());
         Ok(cmd.before)
     }
 
     /// Returns true if the stack is non-empty.
     pub fn can_undo(&self) -> bool {
         !self.commands.is_empty()
+    }
+
+    /// Pops and restores the most recent undone command's `after` snapshot.
+    ///
+    /// Returns `UndoError::NoCommands` if the redo stack is empty.
+    pub fn redo(&mut self) -> Result<Timeline, UndoError> {
+        let cmd = self.redo_commands.pop().ok_or(UndoError::NoCommands)?;
+        self.commands.push(cmd.clone());
+        Ok(cmd.after)
+    }
+
+    /// Returns true if the redo stack is non-empty.
+    pub fn can_redo(&self) -> bool {
+        !self.redo_commands.is_empty()
     }
 
     /// Returns a reference to the most recent command, if any.
@@ -103,9 +123,10 @@ impl UndoStack {
         self.commands.last().map(|cmd| cmd.id.as_str())
     }
 
-    /// Removes all commands from the stack.
+    /// Removes all commands from both stacks.
     pub fn clear(&mut self) {
         self.commands.clear();
+        self.redo_commands.clear();
     }
 
     /// Returns the number of commands on the stack.
@@ -268,5 +289,81 @@ mod tests {
 
         stack.undo().unwrap();
         assert!(stack.latest_command_id().is_none());
+    }
+
+    // ── Redo tests ────────────────────────────────────────────────────────
+
+    /// redo after undo restores the after snapshot.
+    #[test]
+    fn redo_001_after_undo_restores_after() {
+        let mut stack = UndoStack::new();
+        let before = test_timeline(30, 1920, 1080);
+        let mut after = test_timeline(30, 1920, 1080);
+        after.fps = 60;
+
+        stack.push_command(make_cmd("cmd-1", "edit", before, after.clone()));
+        let _undone = stack.undo().unwrap();
+
+        assert!(stack.can_redo());
+        let restored = stack.redo().unwrap();
+        assert_eq!(restored.fps, 60);
+        assert!(!stack.can_redo());
+    }
+
+    /// redo on empty stack returns error.
+    #[test]
+    fn redo_002_empty_stack_refuses() {
+        let mut stack = UndoStack::new();
+        assert_eq!(stack.redo(), Err(UndoError::NoCommands));
+    }
+
+    /// new push after undo clears redo stack.
+    #[test]
+    fn redo_003_new_push_clears_redo() {
+        let mut stack = UndoStack::new();
+        let t = test_timeline(30, 1920, 1080);
+        stack.push_command(make_cmd("cmd-1", "edit", t.clone(), t.clone()));
+        stack.undo().unwrap();
+        assert!(stack.can_redo());
+
+        // New edit clears redo
+        stack.push_command(make_cmd("cmd-2", "edit", t.clone(), t.clone()));
+        assert!(!stack.can_redo());
+    }
+
+    /// push two, undo both, redo restores most recent first.
+    #[test]
+    fn redo_004_most_recent_first() {
+        let mut stack = UndoStack::new();
+        let t1 = test_timeline(30, 1920, 1080);
+        let t2 = test_timeline(60, 1920, 1080);
+        let after2 = test_timeline(60, 1920, 1080);
+
+        stack.push_command(make_cmd("cmd-1", "edit", t1, t2.clone()));
+        stack.push_command(make_cmd("cmd-2", "edit", t2, after2));
+
+        stack.undo().unwrap();
+        stack.undo().unwrap();
+
+        // Redo restores cmd-2 first (most recent undone)
+        let r1 = stack.redo().unwrap();
+        assert_eq!(r1.fps, 60);
+
+        let r2 = stack.redo().unwrap();
+        assert_eq!(r2.fps, 60);
+    }
+
+    /// clear also clears the redo stack.
+    #[test]
+    fn redo_005_clear_also_clears_redo() {
+        let mut stack = UndoStack::new();
+        let t = test_timeline(30, 1920, 1080);
+        stack.push_command(make_cmd("cmd-1", "edit", t.clone(), t));
+        stack.undo().unwrap();
+        assert!(stack.can_redo());
+
+        stack.clear();
+        assert!(!stack.can_redo());
+        assert!(!stack.can_undo());
     }
 }

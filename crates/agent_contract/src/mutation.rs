@@ -726,6 +726,151 @@ pub fn validate_move_to_folder(input: &Value) -> ValidationResult<MoveToFolderIn
     })
 }
 
+// === Upstream #99: set_chroma_key ===========================================
+
+/// Parsed and validated `set_chroma_key` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetChromaKeyInput {
+    pub clip_id: String,
+    pub enabled: Option<bool>,
+    pub color: Option<String>,
+    pub threshold: Option<f64>,
+    pub smoothness: Option<f64>,
+}
+
+/// Validate `set_chroma_key` input.
+pub fn validate_set_chroma_key(input: &Value) -> ValidationResult<SetChromaKeyInput> {
+    let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return ValidationResult::Error("set_chroma_key: missing or empty 'clipId'".into()),
+    };
+    let enabled = input.get("enabled").and_then(|v| v.as_bool());
+    let color = input
+        .get("color")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let threshold = input.get("threshold").and_then(|v| v.as_f64());
+    let smoothness = input.get("smoothness").and_then(|v| v.as_f64());
+    ValidationResult::Ok(SetChromaKeyInput {
+        clip_id,
+        enabled,
+        color,
+        threshold,
+        smoothness,
+    })
+}
+
+// === Upstream #99: set_blend_mode ===========================================
+
+/// Parsed and validated `set_blend_mode` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetBlendModeInput {
+    pub clip_id: String,
+    pub mode: String,
+}
+
+/// Validate `set_blend_mode` input.
+pub fn validate_set_blend_mode(input: &Value) -> ValidationResult<SetBlendModeInput> {
+    let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return ValidationResult::Error("set_blend_mode: missing or empty 'clipId'".into()),
+    };
+    let mode = match input.get("mode").and_then(|v| v.as_str()) {
+        Some(m) => m.to_string(),
+        _ => return ValidationResult::Error("set_blend_mode: missing 'mode'".into()),
+    };
+    ValidationResult::Ok(SetBlendModeInput { clip_id, mode })
+}
+
+// === Upstream #99: set_color_grade ==========================================
+
+/// Parsed and validated `set_color_grade` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetColorGradeInput {
+    pub clip_id: String,
+    pub exposure: Option<f64>,
+    pub contrast: Option<f64>,
+    pub saturation: Option<f64>,
+    pub temperature: Option<f64>,
+}
+
+/// Validate `set_color_grade` input.
+pub fn validate_set_color_grade(input: &Value) -> ValidationResult<SetColorGradeInput> {
+    let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return ValidationResult::Error("set_color_grade: missing or empty 'clipId'".into()),
+    };
+    ValidationResult::Ok(SetColorGradeInput {
+        clip_id,
+        exposure: input.get("exposure").and_then(|v| v.as_f64()),
+        contrast: input.get("contrast").and_then(|v| v.as_f64()),
+        saturation: input.get("saturation").and_then(|v| v.as_f64()),
+        temperature: input.get("temperature").and_then(|v| v.as_f64()),
+    })
+}
+
+// === Upstream #47: import_folder ============================================
+
+/// Parsed and validated `import_folder` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportFolderInput {
+    pub path: String,
+    pub recursive: bool,
+}
+
+/// Validate `import_folder` input.
+pub fn validate_import_folder(input: &Value) -> ValidationResult<ImportFolderInput> {
+    let path = match input.get("path").and_then(|v| v.as_str()) {
+        Some(p) if !p.is_empty() => p.to_string(),
+        _ => return ValidationResult::Error("import_folder: missing or empty 'path'".into()),
+    };
+    let recursive = input
+        .get("recursive")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    ValidationResult::Ok(ImportFolderInput { path, recursive })
+}
+
+// === Upstream #6: generate_music ============================================
+
+/// Parsed and validated `generate_music` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenerateMusicInput {
+    pub prompt: String,
+    pub duration: Option<f64>,
+    pub style: Option<String>,
+}
+
+/// Validate `generate_music` input.
+pub fn validate_generate_music(input: &Value) -> ValidationResult<GenerateMusicInput> {
+    let prompt = match input.get("prompt").and_then(|v| v.as_str()) {
+        Some(p) if !p.is_empty() => p.to_string(),
+        _ => return ValidationResult::Error("generate_music: missing or empty 'prompt'".into()),
+    };
+    let duration = input.get("duration").and_then(|v| v.as_f64());
+    let style = input
+        .get("style")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    ValidationResult::Ok(GenerateMusicInput {
+        prompt,
+        duration,
+        style,
+    })
+}
+
+// === Upstream #67: duplicate_project ========================================
+
+/// Parsed and validated `duplicate_project` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuplicateProjectInput;
+
+/// Validate `duplicate_project` input.
+pub fn validate_duplicate_project(input: &Value) -> ValidationResult<DuplicateProjectInput> {
+    let _ = input;
+    ValidationResult::Ok(DuplicateProjectInput)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1452,5 +1597,204 @@ mod tests {
         let input = json!({"mediaId": "m1"});
         let result = validate_move_to_folder(&input);
         assert!(result.into_error().is_some());
+    }
+
+    // ---- Upstream #99: set_chroma_key ------------------------------------
+
+    #[test]
+    fn upstream_099_set_chroma_key_valid() {
+        let input = json!({
+            "clipId": "clip-001",
+            "enabled": true,
+            "color": "#00ff00",
+            "threshold": 0.5,
+            "smoothness": 0.1
+        });
+        let result = validate_set_chroma_key(&input);
+        let parsed = result.into_ok().expect("set_chroma_key: valid");
+        assert_eq!(parsed.clip_id, "clip-001");
+        assert_eq!(parsed.enabled, Some(true));
+        assert_eq!(parsed.color, Some("#00ff00".to_string()));
+        assert!((parsed.threshold.unwrap() - 0.5).abs() < 1e-10);
+        assert!((parsed.smoothness.unwrap() - 0.1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn upstream_099_set_chroma_key_minimal() {
+        let input = json!({"clipId": "clip-001"});
+        let result = validate_set_chroma_key(&input);
+        let parsed = result.into_ok().expect("set_chroma_key: minimal");
+        assert_eq!(parsed.clip_id, "clip-001");
+        assert!(parsed.enabled.is_none());
+        assert!(parsed.color.is_none());
+        assert!(parsed.threshold.is_none());
+        assert!(parsed.smoothness.is_none());
+    }
+
+    #[test]
+    fn upstream_099_set_chroma_key_missing_clip_id() {
+        let input = json!({"enabled": true});
+        let result = validate_set_chroma_key(&input);
+        let err = result.into_error().expect("set_chroma_key: missing clipId");
+        assert!(err.contains("clipId"));
+    }
+
+    // ---- Upstream #99: set_blend_mode ------------------------------------
+
+    #[test]
+    fn upstream_099_set_blend_mode_valid() {
+        let input = json!({"clipId": "c1", "mode": "multiply"});
+        let result = validate_set_blend_mode(&input);
+        let parsed = result.into_ok().expect("set_blend_mode: valid");
+        assert_eq!(parsed.clip_id, "c1");
+        assert_eq!(parsed.mode, "multiply");
+    }
+
+    #[test]
+    fn upstream_099_set_blend_mode_missing_clip_id() {
+        let input = json!({"mode": "screen"});
+        let result = validate_set_blend_mode(&input);
+        assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn upstream_099_set_blend_mode_missing_mode() {
+        let input = json!({"clipId": "c1"});
+        let result = validate_set_blend_mode(&input);
+        let err = result.into_error().expect("set_blend_mode: missing mode");
+        assert!(err.contains("mode"));
+    }
+
+    // ---- Upstream #99: set_color_grade -----------------------------------
+
+    #[test]
+    fn upstream_099_set_color_grade_valid() {
+        let input = json!({
+            "clipId": "c1",
+            "exposure": 1.5,
+            "contrast": 1.2,
+            "saturation": 1.0,
+            "temperature": 0.3
+        });
+        let result = validate_set_color_grade(&input);
+        let parsed = result.into_ok().expect("set_color_grade: valid");
+        assert_eq!(parsed.clip_id, "c1");
+        assert!((parsed.exposure.unwrap() - 1.5).abs() < 1e-10);
+        assert!((parsed.contrast.unwrap() - 1.2).abs() < 1e-10);
+        assert!((parsed.saturation.unwrap() - 1.0).abs() < 1e-10);
+        assert!((parsed.temperature.unwrap() - 0.3).abs() < 1e-10);
+    }
+
+    #[test]
+    fn upstream_099_set_color_grade_minimal() {
+        let input = json!({"clipId": "c1"});
+        let result = validate_set_color_grade(&input);
+        let parsed = result.into_ok().expect("set_color_grade: minimal");
+        assert_eq!(parsed.clip_id, "c1");
+        assert!(parsed.exposure.is_none());
+        assert!(parsed.contrast.is_none());
+        assert!(parsed.saturation.is_none());
+        assert!(parsed.temperature.is_none());
+    }
+
+    #[test]
+    fn upstream_099_set_color_grade_missing_clip_id() {
+        let input = json!({"exposure": 0.0});
+        let result = validate_set_color_grade(&input);
+        let err = result
+            .into_error()
+            .expect("set_color_grade: missing clipId");
+        assert!(err.contains("clipId"));
+    }
+
+    // ---- Upstream #47: import_folder -------------------------------------
+
+    #[test]
+    fn upstream_047_import_folder_valid() {
+        let input = json!({"path": "/media/videos", "recursive": true});
+        let result = validate_import_folder(&input);
+        let parsed = result.into_ok().expect("import_folder: valid");
+        assert_eq!(parsed.path, "/media/videos");
+        assert!(parsed.recursive);
+    }
+
+    #[test]
+    fn upstream_047_import_folder_default_recursive() {
+        let input = json!({"path": "/media/videos"});
+        let result = validate_import_folder(&input);
+        let parsed = result.into_ok().expect("import_folder: default recursive");
+        assert!(parsed.recursive, "default recursive=true");
+    }
+
+    #[test]
+    fn upstream_047_import_folder_not_recursive() {
+        let input = json!({"path": "/media/videos", "recursive": false});
+        let result = validate_import_folder(&input);
+        let parsed = result.into_ok().expect("import_folder: non-recursive");
+        assert!(!parsed.recursive);
+    }
+
+    #[test]
+    fn upstream_047_import_folder_missing_path() {
+        let input = json!({"recursive": true});
+        let result = validate_import_folder(&input);
+        let err = result.into_error().expect("import_folder: missing path");
+        assert!(err.contains("path"));
+    }
+
+    // ---- Upstream #6: generate_music -------------------------------------
+
+    #[test]
+    fn upstream_006_generate_music_valid() {
+        let input = json!({
+            "prompt": "upbeat electronic",
+            "duration": 30.0,
+            "style": "electronic"
+        });
+        let result = validate_generate_music(&input);
+        let parsed = result.into_ok().expect("generate_music: valid");
+        assert_eq!(parsed.prompt, "upbeat electronic");
+        assert!((parsed.duration.unwrap() - 30.0).abs() < 1e-10);
+        assert_eq!(parsed.style, Some("electronic".to_string()));
+    }
+
+    #[test]
+    fn upstream_006_generate_music_minimal() {
+        let input = json!({"prompt": "ambient pad"});
+        let result = validate_generate_music(&input);
+        let parsed = result.into_ok().expect("generate_music: minimal");
+        assert_eq!(parsed.prompt, "ambient pad");
+        assert!(parsed.duration.is_none());
+        assert!(parsed.style.is_none());
+    }
+
+    #[test]
+    fn upstream_006_generate_music_missing_prompt() {
+        let input = json!({"duration": 30.0});
+        let result = validate_generate_music(&input);
+        let err = result.into_error().expect("generate_music: missing prompt");
+        assert!(err.contains("prompt"));
+    }
+
+    // ---- Upstream #67: duplicate_project ---------------------------------
+
+    #[test]
+    fn upstream_067_duplicate_project_valid() {
+        let input = json!({});
+        let result = validate_duplicate_project(&input);
+        assert!(
+            result.into_ok().is_some(),
+            "duplicate_project: always valid"
+        );
+    }
+
+    #[test]
+    fn upstream_067_duplicate_project_ignores_extra_fields() {
+        let input = json!({"unknown": "value"});
+        let result = validate_duplicate_project(&input);
+        assert!(
+            result.into_ok().is_some(),
+            "duplicate_project: ignores extras"
+        );
     }
 }

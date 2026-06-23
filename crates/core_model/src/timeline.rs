@@ -147,6 +147,23 @@ pub struct Crop {
     pub bottom: f64,
 }
 
+impl Crop {
+    /// Returns true when all insets are zero (no cropping).
+    pub fn is_identity(&self) -> bool {
+        self.left == 0.0 && self.top == 0.0 && self.right == 0.0 && self.bottom == 0.0
+    }
+
+    /// Fraction of original width visible after left/right cropping.
+    pub fn visible_width_fraction(&self) -> f64 {
+        (1.0 - self.left - self.right).max(0.0)
+    }
+
+    /// Fraction of original height visible after top/bottom cropping.
+    pub fn visible_height_fraction(&self) -> f64 {
+        (1.0 - self.top - self.bottom).max(0.0)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Transform {
@@ -157,6 +174,16 @@ pub struct Transform {
     pub rotation: f64,
     pub flip_horizontal: bool,
     pub flip_vertical: bool,
+}
+
+impl Transform {
+    /// Top-left corner in normalized coordinates.
+    pub fn top_left(&self) -> (f64, f64) {
+        (
+            self.center_x - self.width / 2.0,
+            self.center_y - self.height / 2.0,
+        )
+    }
 }
 
 impl Default for Transform {

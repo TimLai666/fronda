@@ -1,3 +1,5 @@
+#[cfg(feature = "desktop-app")]
+pub mod editor_view;
 pub mod menu;
 pub mod pane;
 pub mod platform_adapter;

@@ -99,3 +99,33 @@ pub fn display_label_for_track(timeline: &Timeline, track_index: usize) -> Strin
         ClipType::Video | ClipType::Image | ClipType::Lottie => format!("V{count}"),
     }
 }
+
+/// TRK-007: Toggle track mute. Returns the new state.
+pub fn toggle_track_mute(timeline: &mut Timeline, track_index: usize) -> Option<bool> {
+    let track = timeline.tracks.get_mut(track_index)?;
+    track.muted = !track.muted;
+    Some(track.muted)
+}
+
+/// TRK-007: Toggle track hidden. Returns the new state.
+pub fn toggle_track_hidden(timeline: &mut Timeline, track_index: usize) -> Option<bool> {
+    let track = timeline.tracks.get_mut(track_index)?;
+    track.hidden = !track.hidden;
+    Some(track.hidden)
+}
+
+/// TRK-007: Toggle track sync-lock. Returns the new state.
+pub fn toggle_track_sync_lock(timeline: &mut Timeline, track_index: usize) -> Option<bool> {
+    let track = timeline.tracks.get_mut(track_index)?;
+    track.sync_locked = !track.sync_locked;
+    Some(track.sync_locked)
+}
+
+/// TRK-008: Minimum and maximum track display heights.
+pub const MIN_TRACK_HEIGHT: f64 = 30.0;
+pub const MAX_TRACK_HEIGHT: f64 = 300.0;
+
+/// TRK-008: Clamp a track display height to valid range.
+pub fn clamp_track_height(height: f64) -> f64 {
+    height.clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT)
+}
