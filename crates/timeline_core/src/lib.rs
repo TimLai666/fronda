@@ -38,11 +38,12 @@ pub use track_ops::{
     TrackInsertionError,
 };
 pub use workflow::{
-    compute_ripple_delete, compute_ripple_delete_gap, compute_ripple_insert,
-    compute_ripple_insert_with_split, compute_trim_values, timing_propagation_partners,
-    ClipFragment, RippleDeleteConfig, RippleDeleteOutcome, RippleDeleteReport,
-    RippleInsertClipSpec, RippleInsertConfig, RippleInsertOutcome, RippleInsertReport,
-    RippleInsertWithSplitOutcome, RippleInsertWithSplitPlan, RippleShiftSet, TrimEdge,
+    apply_ripple_insert_with_split, compute_ripple_delete, compute_ripple_delete_gap,
+    compute_ripple_insert, compute_ripple_insert_with_split, compute_trim_values,
+    timing_propagation_partners, ClipFragment, RippleDeleteConfig, RippleDeleteOutcome,
+    RippleDeleteReport, RippleInsertClipSpec, RippleInsertConfig, RippleInsertOutcome,
+    RippleInsertReport, RippleInsertWithSplitOutcome, RippleInsertWithSplitPlan, RippleShiftSet,
+    TrimEdge,
 };
 
 pub trait ClipMathExt {

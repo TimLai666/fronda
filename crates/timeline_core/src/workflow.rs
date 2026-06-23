@@ -6,7 +6,7 @@ use crate::{
     },
     ClipMathExt,
 };
-use core_model::{Clip, Timeline};
+use core_model::{Clip, ClipType, Timeline};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -143,6 +143,12 @@ pub struct RippleInsertReport {
     pub push_track_indices: Vec<usize>,
     pub created_clip_ids: Vec<String>,
     pub shifts_by_track: Vec<Vec<ClipShift>>,
+    /// The frame at which clips were inserted (needed to know where to place them).
+    pub insert_frame: i64,
+    /// The target track index where new clips are placed.
+    pub track_index: usize,
+    /// The clip specs used for insertion (needed to construct actual Clip objects).
+    pub clips: Vec<RippleInsertClipSpec>,
 }
 
 pub fn compute_ripple_insert(
@@ -225,6 +231,9 @@ pub fn compute_ripple_insert(
         push_track_indices: push_track_indices.into_iter().collect(),
         created_clip_ids,
         shifts_by_track,
+        insert_frame: config.insert_frame,
+        track_index: config.track_index,
+        clips: config.clips,
     })
 }
 
@@ -275,6 +284,90 @@ pub fn compute_ripple_insert_with_split(
         insert: insert_report,
         split_actions,
     })
+}
+
+/// Execute a [`RippleInsertWithSplitPlan`] on a timeline, mutating it in place.
+///
+/// 1. Splits any straddling clips at the insertion point.
+/// 2. Shifts all pushed clips with `start_frame >= insert_frame` downstream
+///    by `total_push` on every pushed track.
+/// 3. Inserts the new clips into the gap on the target track.
+///
+/// Note: shifts are applied positionally (not by clip ID) because split
+/// creates new clip IDs that the pre-computed plan cannot reference.
+pub fn apply_ripple_insert_with_split(timeline: &mut Timeline, plan: RippleInsertWithSplitPlan) {
+    let insert_frame = plan.insert.insert_frame;
+    let total_push = plan.insert.total_push;
+    let target_track = plan.insert.track_index;
+    let push_tracks: std::collections::BTreeSet<usize> =
+        plan.insert.push_track_indices.into_iter().collect();
+
+    // 1. Execute split actions (must happen before positional shifts)
+    for (_track_index, clip_id, at_frame) in &plan.split_actions {
+        crate::edit::split_clip(timeline, clip_id, *at_frame);
+    }
+
+    // 2. Positional shift: push every clip with start_frame >= insert_frame
+    //    by total_push on every pushed track.
+    for ti in 0..timeline.tracks.len() {
+        if !push_tracks.contains(&ti) {
+            continue;
+        }
+        for clip in &mut timeline.tracks[ti].clips {
+            if clip.start_frame >= insert_frame {
+                clip.start_frame += total_push;
+            }
+        }
+    }
+
+    // 3. Construct and insert new Clip objects at the gap
+    let clip_specs = plan.insert.clips;
+    let created_ids = plan.insert.created_clip_ids;
+    let mut new_clips: Vec<Clip> = Vec::with_capacity(clip_specs.len());
+    let mut offset: i64 = 0;
+    for (i, spec) in clip_specs.into_iter().enumerate() {
+        let clip_id = created_ids
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        new_clips.push(Clip {
+            id: clip_id,
+            media_ref: spec.asset_id,
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: insert_frame + offset,
+            duration_frames: spec.duration_frames,
+            trim_start_frame: spec.trim_start_frame.unwrap_or(0),
+            trim_end_frame: spec.trim_end_frame.unwrap_or(0),
+            speed: 1.0,
+            volume: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: core_model::Interpolation::Linear,
+            fade_out_interpolation: core_model::Interpolation::Linear,
+            opacity: 1.0,
+            transform: core_model::Transform::default(),
+            crop: core_model::Crop::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+        });
+        offset += spec.duration_frames;
+    }
+
+    if target_track < timeline.tracks.len() {
+        timeline.tracks[target_track].clips.extend(new_clips);
+        timeline.tracks[target_track]
+            .clips
+            .sort_by_key(|c| c.start_frame);
+    }
 }
 
 pub fn timing_propagation_partners(
