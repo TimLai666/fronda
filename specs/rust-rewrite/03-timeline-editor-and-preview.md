@@ -147,6 +147,14 @@ Scope sources:
 - [ ] `EDT-004`: Maximizing a pane collapses ancestor/sibling panes and unmaximizing restores visibility state rather than forcing everything visible.
 - [ ] `EDT-005`: The editor keeps independent playhead state for timeline preview and source-media preview tabs.
 
+## Upstream bug fixes to port
+
+These bugs were fixed in the Swift upstream after the fork. The Rust rewrite must match the corrected behavior.
+
+- `Upstream #115`: `writePosition` (or equivalent commit-position logic) must guard fallback transform writes behind an `else` — when `positionTrack isActive`, only keyframes are updated and `transform.centerX/Y` must be left untouched. Without this guard, clearing position animation leaves stale keyframe values in the static transform.
+- `Upstream #114`: When `set_clip_properties` (or equivalent agent tool) receives a partial transform dict, every field not present in the input (`rotation`, `flipHorizontal`, `flipVertical`, and any future fields) must be carried forward from the clip's current transform. Fields must not silently default to zero.
+- `Upstream #57`: Platform transcription locale matching must strip Unicode extension tags (the `-u-*` suffix) from BCP 47 identifiers before comparing against supported locale lists. The Speech/STT framework binding does not recognise composite tags like `en-US-u-rg-zazzzz`.
+
 ## Migration decisions to record explicitly
 
 - `Decision:` The current Swift app has AppKit-specific split-view and titlebar behavior. The Rust rewrite should preserve pane semantics and layout presets even if exact native window mechanics differ under `gpui-ce`.
