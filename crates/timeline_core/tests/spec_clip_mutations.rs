@@ -2,7 +2,10 @@ use core_model::{
     AnimPair, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, Timeline, Track,
     Transform,
 };
-use timeline_core::{apply_clip_speed, clear_region, move_clips, place_clips, split_clip};
+use timeline_core::{
+    apply_clip_speed, clear_region, link_audio_for_placed_clips, move_clips, place_clips,
+    split_clip,
+};
 
 fn clip(id: &str, media_type: ClipType, start_frame: i64, duration_frames: i64) -> Clip {
     Clip {
@@ -531,4 +534,83 @@ fn clp_003_move_clips_returns_empty_for_unknown_id() {
     let c1 = clip("c1", ClipType::Video, 0, 30);
     let mut t = timeline(vec![video_track(vec![c1])]);
     assert!(move_clips(&mut t, &["ghost".to_string()], 0, 50).is_empty());
+}
+
+// ─── CLP-007/008: auto-linked audio ───
+
+#[test]
+fn clp_007_008_link_audio_creates_linked_audio_on_audio_track() {
+    let video = clip("v1", ClipType::Video, 0, 60);
+    let mut t = timeline(vec![video_track(vec![video]), audio_track(vec![])]);
+
+    let audio_ids = link_audio_for_placed_clips(&mut t, &["v1".to_string()], 1);
+
+    assert_eq!(audio_ids.len(), 1);
+    let audio_id = &audio_ids[0];
+
+    // Audio clip exists on track 1 with same position
+    let audio = t.tracks[1]
+        .clips
+        .iter()
+        .find(|c| c.id == *audio_id)
+        .unwrap();
+    assert_eq!(audio.start_frame, 0);
+    assert_eq!(audio.duration_frames, 60);
+    assert_eq!(audio.media_type, ClipType::Audio);
+
+    // Both clips share a link_group_id
+    let video_clip = &t.tracks[0].clips[0];
+    assert!(video_clip.link_group_id.is_some());
+    assert_eq!(video_clip.link_group_id, audio.link_group_id);
+}
+
+#[test]
+fn clp_007_008_link_audio_returns_empty_for_nonexistent_video() {
+    let mut t = timeline(vec![video_track(vec![]), audio_track(vec![])]);
+    assert!(link_audio_for_placed_clips(&mut t, &["ghost".to_string()], 1).is_empty());
+}
+
+#[test]
+fn clp_007_008_link_audio_returns_empty_for_bad_audio_track() {
+    let video = clip("v1", ClipType::Video, 0, 30);
+    let mut t = timeline(vec![video_track(vec![video])]); // no audio track
+    assert!(link_audio_for_placed_clips(&mut t, &["v1".to_string()], 1).is_empty());
+}
+
+#[test]
+fn clp_007_008_link_audio_returns_empty_if_target_not_audio_type() {
+    let video = clip("v1", ClipType::Video, 0, 30);
+    let mut t = timeline(vec![
+        video_track(vec![video]),
+        video_track(vec![]), // second video track, not audio
+    ]);
+    assert!(link_audio_for_placed_clips(&mut t, &["v1".to_string()], 1).is_empty());
+}
+
+#[test]
+fn clp_007_008_link_audio_overwrite_on_audio_track() {
+    let video = clip("v1", ClipType::Video, 0, 60);
+    let existing_audio = clip("existing", ClipType::Audio, 10, 80);
+    let mut t = timeline(vec![
+        video_track(vec![video]),
+        audio_track(vec![existing_audio]),
+    ]);
+
+    let audio_ids = link_audio_for_placed_clips(&mut t, &["v1".to_string()], 1);
+
+    assert_eq!(audio_ids.len(), 1);
+    let new_audio = t.tracks[1]
+        .clips
+        .iter()
+        .find(|c| c.id == audio_ids[0])
+        .unwrap();
+    assert_eq!(new_audio.start_frame, 0);
+    // existing audio at frame 10-90 should be overwritten (trimmed right to start at 60)
+    let existing = t.tracks[1]
+        .clips
+        .iter()
+        .find(|c| c.id == "existing")
+        .unwrap();
+    assert_eq!(existing.start_frame, 60);
+    assert_eq!(existing.duration_frames, 30);
 }

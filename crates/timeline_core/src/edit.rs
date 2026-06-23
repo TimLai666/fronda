@@ -6,7 +6,7 @@ use crate::{
     compute_overwrite, expand_to_link_group, linked_partner_ids, partner_moves_for_move_of,
     ClipMathExt, OverwriteAction,
 };
-use core_model::{Clip, ClipType, Timeline, Track};
+use core_model::{Clip, ClipType, Crop, Interpolation, Timeline, Track, Transform};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -365,6 +365,124 @@ fn clip_types_compatible(clip_type: &ClipType, track_type: &ClipType) -> bool {
         (_, ClipType::Audio) => false,
         _ => true,
     }
+}
+
+/// Auto-create linked audio clips for placed video clips (CLP-007/008).
+///
+/// For each video clip in `video_clip_ids`, creates an audio clip on
+/// `audio_track_index` with the same position, duration, trims, and speed.
+/// Each video–audio pair shares a new `link_group_id`.
+/// Returns the IDs of the created audio clips.
+pub fn link_audio_for_placed_clips(
+    timeline: &mut Timeline,
+    video_clip_ids: &[String],
+    audio_track_index: usize,
+) -> Vec<String> {
+    if audio_track_index >= timeline.tracks.len() || video_clip_ids.is_empty() {
+        return Vec::new();
+    }
+    if timeline.tracks[audio_track_index].r#type != ClipType::Audio {
+        return Vec::new();
+    }
+
+    // Phase 1: collect immutable data from video clips (clone before mutation)
+    struct VideoInfo {
+        track_index: usize,
+        clip_index: usize,
+        link_group: String,
+        audio_id: String,
+        start_frame: i64,
+        duration_frames: i64,
+        media_ref: String,
+        trim_start_frame: i64,
+        trim_end_frame: i64,
+        speed: f64,
+    }
+
+    let mut video_info_list: Vec<VideoInfo> = Vec::new();
+    let mut audio_ids: Vec<String> = Vec::new();
+    let mut total_duration: i64 = 0;
+
+    for video_id in video_clip_ids {
+        let Some(loc) = find_clip(timeline, video_id) else {
+            continue;
+        };
+        let video = &timeline.tracks[loc.track_index].clips[loc.clip_index];
+        let link_group = Uuid::new_v4().to_string();
+        let audio_id = Uuid::new_v4().to_string();
+
+        audio_ids.push(audio_id.clone());
+        video_info_list.push(VideoInfo {
+            track_index: loc.track_index,
+            clip_index: loc.clip_index,
+            link_group,
+            audio_id,
+            start_frame: video.start_frame,
+            duration_frames: video.duration_frames,
+            media_ref: video.media_ref.clone(),
+            trim_start_frame: video.trim_start_frame,
+            trim_end_frame: video.trim_end_frame,
+            speed: video.speed,
+        });
+        total_duration += video.duration_frames;
+    }
+
+    if video_info_list.is_empty() {
+        return Vec::new();
+    }
+
+    let first_start = video_info_list[0].start_frame;
+
+    // Phase 2: stamp link_group_ids onto video clips (mutable)
+    for info in &video_info_list {
+        timeline.tracks[info.track_index].clips[info.clip_index].link_group_id =
+            Some(info.link_group.clone());
+    }
+
+    // Phase 3: clear destination region on audio track
+    clear_region(
+        timeline,
+        audio_track_index,
+        first_start,
+        first_start + total_duration,
+        false,
+    );
+
+    // Phase 4: create and place audio clips
+    for info in &video_info_list {
+        timeline.tracks[audio_track_index].clips.push(Clip {
+            id: info.audio_id.clone(),
+            media_ref: info.media_ref.clone(),
+            media_type: ClipType::Audio,
+            source_clip_type: ClipType::Audio,
+            start_frame: info.start_frame,
+            duration_frames: info.duration_frames,
+            trim_start_frame: info.trim_start_frame,
+            trim_end_frame: info.trim_end_frame,
+            speed: info.speed,
+            volume: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            opacity: 1.0,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            link_group_id: Some(info.link_group.clone()),
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+        });
+    }
+    sort_clips(&mut timeline.tracks[audio_track_index]);
+
+    audio_ids
 }
 
 pub fn prune_empty_tracks(timeline: &mut Timeline) {

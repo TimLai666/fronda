@@ -43,8 +43,8 @@ Scope sources:
 - [x] `CLP-004`: Moving clips then clears destination conflicts and inserts the moved clips at exact target frames.
 - [x] `CLP-005`: Destination track compatibility is enforced for clip moves.
 - [x] `CLP-006`: `clearRegion` deterministically trims, splits, or removes overlapping clips rather than leaving partial overlap.
-- [ ] `CLP-007`: Placing a video asset with audio may auto-create a linked audio clip on an audio track.
-- [ ] `CLP-008`: Auto-created linked audio uses a shared `linkGroupId` with the visual clip.
+- [x] `CLP-007`: Placing a video asset with audio may auto-create a linked audio clip on an audio track.
+- [x] `CLP-008`: Auto-created linked audio uses a shared `linkGroupId` with the visual clip.
 
 ## D. Split, remove, and speed-change behavior
 
