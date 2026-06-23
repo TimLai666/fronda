@@ -126,3 +126,15 @@ Scope sources:
 - `Decision:` The current project storage root is macOS-specific (`~/Documents/Palmier Pro`). The Rust rewrite should decide whether this stays identical on macOS only, or becomes a per-platform app-data path with migration logic.
 - `Decision:` `MediaAsset.toManifestEntry(projectURL:)` currently treats any path with a `projectURL.path` prefix as project-internal. The Rust rewrite should replace that with a stricter descendant check while preserving existing projects.
 - `Decision:` The current schema must remain backward-compatible with existing `.palmier` files even if the Rust rewrite introduces a cleaner internal model.
+
+## Upstream change tracking
+
+These upstream PRs define behavior the Rust rewrite must eventually match. Spec entries below represent requirements that are not yet implemented in Rust.
+
+- `Upstream #99`: The `Clip` data model must support optional `chromaKey: ChromaKey?`, `colorGrade: ColorGrade?`, and `blendMode: BlendMode` fields. A new `ClipType::Adjustment` variant is needed. The serialized `project.json` / `media.json` schemas must round-trip these fields when present, but remain backward-compatible with projects that lack them. See `03-timeline-editor-and-preview.md` for compositor-level requirements.
+
+- `Upstream #62`: The `Timeline` model must support optional `lut: LUTRef?` and `primaries: PrimaryGrade?` fields for project-level color grading. The serialized project format (`.palmier` / `project.json`) must round-trip these fields. `LUTRef` includes `kind`, `lookID`, `cubeName`, `cubeDimension`, `cubeBase64` (inline base64-encoded .cube file), and `intensity`. `PrimaryGrade` includes `temperature`, `tint`, `exposure`, `contrast`, `saturation`, `vibrance`, `highlights`, `shadows` (all -100..100 range). `GradeCurve` stores `master`, `red`, `green`, `blue` curves as `[(x, y)]` points.
+
+- `Upstream #46`: The `Clip` model should eventually support an optional `shapeStyle: ShapeStyle?` field and `ClipType::Shape` variant for shape annotations. `ShapeStyle` includes `kind`, `stroke`, `fill`, `cornerRadius`, `arrowhead`. This is deferred until the shape-annotation feature is explicitly planned for the rewrite.
+
+- `Upstream #105`: The file-type allowlist for media import must include `.aifc` (AIFF-C) and `.flac` extensions for audio, matching `ClipType::audio` handling. Simple extension mapping, no data-model change.

@@ -212,3 +212,13 @@ Scope sources:
 
 - `Decision:` The current MCP server is loopback-only and IPv4-only. The Rust rewrite should decide whether to preserve this exactly or widen transport options while keeping the default safe.
 - `Decision:` The agent prompt is part of the observable product contract. If the Rust rewrite changes it materially, that should be treated as a product change, not an incidental refactor.
+
+## Upstream change tracking
+
+- `Upstream #114`: When `set_clip_properties` (or equivalent tool) receives a partial transform dict, every field not in the input (`rotation`, `flipHorizontal`, `flipVertical`) must be carried forward from the clip's current transform. Fields must not silently default to zero.
+
+- `Upstream #99`: The agent tool surface must include `set_chroma_key`, `set_blend_mode`, and `set_color_grade` tools for per-clip visual effects. Their tool definitions and schemas must match the Swift upstream's MCP tool surface. See `01-foundation-and-project-model.md` and `03-timeline-editor-and-preview.md` for data-model and compositor requirements.
+
+- `Upstream #46`: (Deferred) When shape annotations are implemented, the tool surface must include `add_shapes` (batch shape creation with enter/exit/loop animations) and `apply_animation` (apply an animation preset to existing clips). Not yet planned for Rust rewrite.
+
+- `Upstream #108`: The preview engine must not pause when timeline is edited via agent/MCP. The `notifyTimelineChanged` equivalent must suppress the pause call when the edit originated from an agent. This is a preview-engine contract, not an agent-tool contract, but the coordination between agent tool execution and preview state is defined here. See `03-timeline-editor-and-preview.md` for preview-engine details.

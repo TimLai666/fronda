@@ -92,3 +92,13 @@ Scope sources:
 
 - `Decision:` The Swift implementation depends on AVFoundation and Core Animation. The Rust rewrite may replace those internals, but must preserve output-level contract: track ordering, trims, timing, overlay behavior, XML structure, and bundle layout.
 - `Decision:` If the Rust rewrite chooses a non-AVFoundation render backend, it should add golden-frame/golden-media comparisons to prove parity with the current exported output semantics.
+
+## Upstream change tracking
+
+- `Upstream #95`: The export pipeline must include a stall watcher / watchdog that cancels an export if progress does not advance for a configurable timeout period (default 120 seconds). The watcher tracks progress samples and determines whether progress has stalled past a progress epsilon threshold. When a stall is detected, the export is cancelled with a user-facing error message. The stall-detection logic is pure state-machine math and should be implemented as a testable Rust module independent of any platform export API.
+
+- `Upstream #94`: The export resolution model must support `Match Timeline (native)` as an export mode alongside standard resolutions. 2K (1440p, 2560×1440) must be included as a standard resolution option. The `renderSize(for:)` logic must: (a) always produce even pixel dimensions, (b) scale by short side for fixed resolutions, (c) preserve timeline dimensions for native mode. Bitrate estimation should use a megapixel-based calculation that is independent of the specific encoder/codec.
+
+- `Upstream #62`: Project-level color grading (LUTs, primaries, curves) applies as a final post-processing pass during export, after the timeline composition is rendered. See `01-foundation-and-project-model.md` for data-model requirements.
+
+- `Upstream #99`: When per-clip effects (chroma key, blend modes, color grade) are active, the export pipeline must use the effect-aware compositor instead of passthrough. Dual-pass export is required when both text overlays and custom compositing are active: first bake color effects, then apply Core Animation-style text overlays. See `03-timeline-editor-and-preview.md` for compositor requirements.
