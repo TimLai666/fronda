@@ -1,4 +1,5 @@
 use crate::effect::Effect;
+use crate::shape_style::ShapeStyle;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -99,6 +100,8 @@ pub enum ClipType {
     Image,
     Text,
     Lottie,
+    /// Shape annotations (rect, oval, arrow, etc.). Upstream PR #46.
+    Shape,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,6 +424,13 @@ pub struct Clip {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effects: Option<Vec<Effect>>,
+
+    /// Shape annotation style. PR #46.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape_style: Option<ShapeStyle>,
+    /// Stroke-draw progress keyframes for draw-on/un-draw animation. PR #46.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_progress_track: Option<KeyframeTrack<f64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -96,7 +96,9 @@ pub fn display_label_for_track(timeline: &Timeline, track_index: usize) -> Strin
     match track_type {
         ClipType::Audio => format!("A{count}"),
         ClipType::Text => format!("T{count}"),
-        ClipType::Video | ClipType::Image | ClipType::Lottie => format!("V{count}"),
+        ClipType::Video | ClipType::Image | ClipType::Lottie | ClipType::Shape => {
+            format!("V{count}")
+        }
     }
 }
 

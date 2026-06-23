@@ -1,4 +1,4 @@
-//! All 37 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 39 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -14,14 +14,16 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 37 tools exposed to the agent.
+/// Returns all 39 tools exposed to the agent.
 ///
-/// TDEF-001: exactly these 37 tools.
+/// TDEF-001: exactly these 39 tools.
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
         add_clips(),
+        add_shapes(),
         add_texts(),
+        apply_animation(),
         create_folder(),
         delete_folder(),
         delete_media(),
@@ -470,6 +472,27 @@ fn duplicate_project() -> ToolDefinition {
     }
 }
 
+fn add_shapes() -> ToolDefinition {
+    ToolDefinition {
+        name: "add_shapes",
+        description: "Add vector shape overlays (rect, oval, circle, arrow, line) to the timeline. PR #46.",
+        input_schema: object(&[("entries", string("Array of shape entries. Each entry has: kind (rect|oval|circle|arrow|line), startFrame, durationFrames, optional trackIndex, optional transform (2D bounding box), optional style (color, width, dashed, arrowheadStyle), optional fill (enabled, color), optional endpoints (start/end Point2d with optional bezier controls), optional enterAnim/exitAnim/loopAnim presets."))]),
+    }
+}
+
+fn apply_animation() -> ToolDefinition {
+    ToolDefinition {
+        name: "apply_animation",
+        description: "Apply an animation preset to an existing clip. PR #46.",
+        input_schema: object(&[
+            ("clipId", string("Clip id to animate")),
+            ("preset", string("Animation preset name: fade-in, pop-in, draw-on, slide-in-up, slide-in-down, slide-in-left, slide-in-right, fade-out, pop-out, un-draw, slide-out-up, slide-out-down, slide-out-left, slide-out-right, shake-subtle, shake-strong, spin")),
+            ("windowFrames", string("Optional frame range for the animation (format: start-end)")),
+            ("intensity", string("Optional animation intensity: subtle, normal, strong")),
+        ]),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // JSON Schema helpers
 // ---------------------------------------------------------------------------
@@ -559,9 +582,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_37_tools() {
+    fn tdef_001_exactly_39_tools() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 37, "TDEF-001: exactly 37 tools");
+        assert_eq!(
+            tools.len(),
+            39,
+            "TDEF-001: exactly 39 tools (37 + add_shapes + apply_animation)"
+        );
     }
 
     #[test]
@@ -589,7 +616,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 37, "all 37 tool names must be unique");
+        assert_eq!(names.len(), 39, "all 39 tool names must be unique");
     }
 
     #[test]

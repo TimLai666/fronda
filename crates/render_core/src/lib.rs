@@ -463,6 +463,8 @@ mod tests {
             crop_track: None,
             volume_track: None,
             effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
         };
         let a1 = Clip {
             id: "a1".into(),
@@ -493,6 +495,8 @@ mod tests {
             crop_track: None,
             volume_track: None,
             effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
         };
         Timeline {
             fps: 30,
@@ -673,6 +677,8 @@ mod tests {
             crop_track: None,
             volume_track: None,
             effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
         }
     }
 
@@ -707,6 +713,8 @@ mod tests {
             crop_track: None,
             volume_track: None,
             effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
         };
         let video = Clip {
             id: "v1".into(),
@@ -799,6 +807,8 @@ mod tests {
             crop_track: None,
             volume_track: None,
             effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
         };
         let v2 = Clip {
             id: "v2".into(),

@@ -634,6 +634,67 @@ pub fn validate_add_captions(input: &Value) -> ValidationResult<AddCaptionsInput
     })
 }
 
+// === AddShapes (PR #46) ==================================================
+
+/// Parsed `add_shapes` input. PR #46.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddShapesInput {
+    pub entries: Vec<Value>,
+}
+
+pub fn validate_add_shapes(input: &Value) -> ValidationResult<AddShapesInput> {
+    let entries = match input.get("entries").and_then(|v| v.as_array()) {
+        Some(arr) if !arr.is_empty() => arr.clone(),
+        _ => {
+            return ValidationResult::Error(
+                "add_shapes: 'entries' must be a non-empty array".into(),
+            );
+        }
+    };
+    ValidationResult::Ok(AddShapesInput { entries })
+}
+
+// === ApplyAnimation (PR #46) ==============================================
+
+/// Parsed `apply_animation` input. PR #46.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApplyAnimationInput {
+    pub clip_id: String,
+    pub preset: String,
+    pub window_frames: Option<String>,
+    pub intensity: Option<String>,
+}
+
+pub fn validate_apply_animation(input: &Value) -> ValidationResult<ApplyAnimationInput> {
+    let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => {
+            return ValidationResult::Error("apply_animation: 'clipId' is required".into());
+        }
+    };
+    let preset = match input.get("preset").and_then(|v| v.as_str()) {
+        Some(p) if !p.is_empty() => p.to_string(),
+        _ => {
+            return ValidationResult::Error("apply_animation: 'preset' is required".into());
+        }
+    };
+    let window_frames = input
+        .get("windowFrames")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let intensity = input
+        .get("intensity")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    ValidationResult::Ok(ApplyAnimationInput {
+        clip_id,
+        preset,
+        window_frames,
+        intensity,
+    })
+}
+
 // === MUT-022: folder/media tools ==========================================
 
 /// Parsed and validated `create_folder` input.
@@ -1856,5 +1917,98 @@ mod tests {
             result.into_ok().is_some(),
             "duplicate_project: ignores extras"
         );
+    }
+
+    // ---- Upstream #46: add_shapes -----------------------------------------
+
+    #[test]
+    fn upstream_046_add_shapes_valid() {
+        let input = json!({
+            "entries": [
+                {"kind": "rect", "startFrame": 0, "durationFrames": 100}
+            ]
+        });
+        let result = validate_add_shapes(&input);
+        let parsed = result.into_ok().expect("add_shapes: valid");
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0]["kind"], "rect");
+    }
+
+    #[test]
+    fn upstream_046_add_shapes_empty_entries() {
+        let input = json!({"entries": []});
+        let result = validate_add_shapes(&input);
+        let err = result.into_error().expect("add_shapes: empty entries");
+        assert!(err.contains("entries"));
+    }
+
+    #[test]
+    fn upstream_046_add_shapes_missing_entries() {
+        let input = json!({});
+        let result = validate_add_shapes(&input);
+        let err = result.into_error().expect("add_shapes: missing entries");
+        assert!(err.contains("entries"));
+    }
+
+    #[test]
+    fn upstream_046_add_shapes_multiple_entries() {
+        let input = json!({
+            "entries": [
+                {"kind": "rect", "startFrame": 0, "durationFrames": 50},
+                {"kind": "arrow", "startFrame": 10, "durationFrames": 30}
+            ]
+        });
+        let result = validate_add_shapes(&input);
+        let parsed = result.into_ok().expect("add_shapes: multiple");
+        assert_eq!(parsed.entries.len(), 2);
+        assert_eq!(parsed.entries[1]["kind"], "arrow");
+    }
+
+    // ---- Upstream #46: apply_animation ------------------------------------
+
+    #[test]
+    fn upstream_046_apply_animation_valid() {
+        let input = json!({
+            "clipId": "c1",
+            "preset": "fade-in"
+        });
+        let result = validate_apply_animation(&input);
+        let parsed = result.into_ok().expect("apply_animation: valid");
+        assert_eq!(parsed.clip_id, "c1");
+        assert_eq!(parsed.preset, "fade-in");
+    }
+
+    #[test]
+    fn upstream_046_apply_animation_with_options() {
+        let input = json!({
+            "clipId": "c1",
+            "preset": "slide-in-left",
+            "windowFrames": "10-60",
+            "intensity": "strong"
+        });
+        let result = validate_apply_animation(&input);
+        let parsed = result.into_ok().expect("apply_animation: with options");
+        assert_eq!(parsed.window_frames, Some("10-60".to_string()));
+        assert_eq!(parsed.intensity, Some("strong".to_string()));
+    }
+
+    #[test]
+    fn upstream_046_apply_animation_missing_clip_id() {
+        let input = json!({"preset": "fade-in"});
+        let result = validate_apply_animation(&input);
+        let err = result
+            .into_error()
+            .expect("apply_animation: missing clipId");
+        assert!(err.contains("clipId"));
+    }
+
+    #[test]
+    fn upstream_046_apply_animation_missing_preset() {
+        let input = json!({"clipId": "c1"});
+        let result = validate_apply_animation(&input);
+        let err = result
+            .into_error()
+            .expect("apply_animation: missing preset");
+        assert!(err.contains("preset"));
     }
 }

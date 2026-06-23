@@ -35,6 +35,8 @@ fn clip(id: &str, media_type: ClipType, start_frame: i64, duration_frames: i64) 
         crop_track: None,
         volume_track: None,
         effects: None,
+        shape_style: None,
+        stroke_progress_track: None,
     }
 }
 

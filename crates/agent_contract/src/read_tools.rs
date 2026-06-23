@@ -148,6 +148,7 @@ fn format_track(track: &Track, index: usize, options: &TimelineFormatOptions) ->
         ClipType::Text => "text",
         ClipType::Image => "image",
         ClipType::Lottie => "lottie",
+        ClipType::Shape => "shape",
     };
 
     let (visible_clips, total_count) = match options.window {
@@ -406,6 +407,8 @@ mod tests {
                             crop_track: None,
                             volume_track: None,
                             effects: None,
+                            shape_style: None,
+                            stroke_progress_track: None,
                         },
                         Clip {
                             id: "clip-002".into(),
@@ -436,6 +439,8 @@ mod tests {
                             crop_track: None,
                             volume_track: None,
                             effects: None,
+                            shape_style: None,
+                            stroke_progress_track: None,
                         },
                     ],
                 },
@@ -474,6 +479,8 @@ mod tests {
                         crop_track: None,
                         volume_track: None,
                         effects: None,
+                        shape_style: None,
+                        stroke_progress_track: None,
                     }],
                 },
             ],

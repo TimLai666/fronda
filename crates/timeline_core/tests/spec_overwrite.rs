@@ -37,6 +37,8 @@ fn clip(
         crop_track: None,
         volume_track: None,
         effects: None,
+        shape_style: None,
+        stroke_progress_track: None,
     }
 }
 

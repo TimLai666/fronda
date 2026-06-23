@@ -3,6 +3,7 @@ pub mod date_serde;
 pub mod effect;
 pub mod generation_log;
 pub mod media_manifest;
+pub mod shape_style;
 pub mod timeline;
 
 pub use agent::{
@@ -14,6 +15,7 @@ pub use generation_log::{GenerationLog, GenerationLogEntry};
 pub use media_manifest::{
     GenerationInput, MediaFolder, MediaManifest, MediaManifestEntry, MediaSource,
 };
+pub use shape_style::{Arrowhead, Endpoints, Fill, Point2d, Rgba, ShapeKind, ShapeStyle, Stroke};
 pub use timeline::{
     AnimPair, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, TextAlignment,
     TextFill, TextRgba, TextShadow, TextStyle, Timeline, Track, Transform,

@@ -31,6 +31,8 @@ fn clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
         crop_track: None,
         volume_track: None,
         effects: None,
+        shape_style: None,
+        stroke_progress_track: None,
     }
 }
 
@@ -319,6 +321,8 @@ fn test_clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
         crop_track: None,
         volume_track: None,
         effects: None,
+        shape_style: None,
+        stroke_progress_track: None,
     }
 }
 

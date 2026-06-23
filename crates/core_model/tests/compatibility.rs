@@ -1,9 +1,9 @@
 use core_model::{
-    AgentContentBlock, ChatSession, ClipType, GenerationLog, Interpolation, MediaManifest,
-    MediaSource, TextStyle, Timeline, ToolResultBlock,
+    AgentContentBlock, ChatSession, Clip, ClipType, GenerationLog, Interpolation, MediaManifest,
+    MediaSource, ShapeKind, ShapeStyle, TextStyle, Timeline, ToolResultBlock,
 };
 use serde::de::DeserializeOwned;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
@@ -165,6 +165,85 @@ fn upstream_040_legacy_missing_transcription_language_defaults_to_none() {
     // PR #40: Legacy projects without transcriptionLanguage → None (backward compat)
     let timeline: Timeline = read_fixture_json("legacy-defaults.palmier", "project.json");
     assert_eq!(timeline.transcription_language, None);
+}
+
+#[test]
+fn upstream_046_shape_style_serde_round_trip() {
+    // PR #46: ShapeStyle serializes and deserializes with camelCase keys.
+    let encoded = json!({
+        "type": "rect",
+        "stroke": {"color": {"r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0}, "width": 3.0},
+        "fill": {"enabled": true, "color": {"r": 1.0, "g": 0.0, "b": 0.0, "a": 0.3}}
+    });
+    let style: ShapeStyle = serde_json::from_value(encoded).unwrap();
+    assert_eq!(style.kind, ShapeKind::Rect);
+    assert_eq!(style.stroke.width, 3.0);
+    assert!(style.fill.enabled);
+
+    // Round-trip
+    let re: Value = serde_json::to_value(&style).unwrap();
+    assert_eq!(re["type"], "rect");
+    assert_eq!(re["stroke"]["width"], 3.0);
+}
+
+#[test]
+fn upstream_046_shape_style_default_stroke_width() {
+    // PR #46: Missing stroke width defaults to 2.0.
+    let encoded = json!({"type": "oval"});
+    let style: ShapeStyle = serde_json::from_value(encoded).unwrap();
+    assert_eq!(style.kind, ShapeKind::Oval);
+    assert_eq!(style.stroke.width, 2.0);
+}
+
+#[test]
+fn upstream_046_clip_type_shape_decodes() {
+    // PR #46: Clips can have media_type = "shape" in JSON.
+    let encoded = json!({
+        "id": "s1",
+        "mediaRef": "",
+        "mediaType": "shape",
+        "sourceClipType": "shape",
+        "startFrame": 0,
+        "durationFrames": 100
+    });
+    let clip: Clip = serde_json::from_value(encoded).unwrap();
+    assert_eq!(clip.media_type, ClipType::Shape);
+    assert_eq!(clip.source_clip_type, ClipType::Shape);
+}
+
+#[test]
+fn upstream_046_clip_with_shape_style_decodes() {
+    // PR #46: Clip with embedded shape_style.
+    let encoded = json!({
+        "id": "s1",
+        "mediaRef": "",
+        "mediaType": "shape",
+        "sourceClipType": "shape",
+        "startFrame": 0,
+        "durationFrames": 100,
+        "shapeStyle": {
+            "type": "arrow",
+            "endpoints": {
+                "start": {"x": 0.1, "y": 0.5},
+                "end": {"x": 0.9, "y": 0.5}
+            }
+        }
+    });
+    let clip: Clip = serde_json::from_value(encoded).unwrap();
+    assert_eq!(clip.media_type, ClipType::Shape);
+    let style = clip.shape_style.unwrap();
+    assert_eq!(style.kind, ShapeKind::Arrow);
+    let endpoints = style.endpoints.unwrap();
+    assert_eq!(endpoints.start.x, 0.1);
+}
+
+#[test]
+fn upstream_046_legacy_clip_missing_shape_style_defaults_to_none() {
+    // PR #46: Legacy clips without shape_style → None.
+    let timeline: Timeline = read_fixture_json("legacy-defaults.palmier", "project.json");
+    let clip = &timeline.tracks[0].clips[0];
+    assert!(clip.shape_style.is_none());
+    assert!(clip.stroke_progress_track.is_none());
 }
 
 #[test]

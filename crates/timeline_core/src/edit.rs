@@ -479,6 +479,8 @@ pub fn link_audio_for_placed_clips(
             crop_track: None,
             volume_track: None,
             effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
         });
     }
     sort_clips(&mut timeline.tracks[audio_track_index]);
