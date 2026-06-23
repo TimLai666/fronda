@@ -1,3 +1,4 @@
+use crate::effect::{CurvePoint, Effect, EffectParam, GradeCurve};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -382,6 +383,9 @@ pub struct Clip {
     pub rotation_track: Option<KeyframeTrack<f64>>,
     pub crop_track: Option<KeyframeTrack<Crop>>,
     pub volume_track: Option<KeyframeTrack<f64>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<Vec<Effect>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

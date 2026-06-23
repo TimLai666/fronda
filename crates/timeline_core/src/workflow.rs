@@ -358,6 +358,7 @@ pub fn apply_ripple_insert_with_split(timeline: &mut Timeline, plan: RippleInser
             rotation_track: None,
             crop_track: None,
             volume_track: None,
+            effects: None,
         });
         offset += spec.duration_frames;
     }

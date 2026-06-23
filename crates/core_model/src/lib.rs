@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod date_serde;
+pub mod effect;
 pub mod generation_log;
 pub mod media_manifest;
 pub mod timeline;
@@ -8,6 +9,7 @@ pub use agent::{
     AgentContentBlock, AgentMention, AgentMessage, AgentMessageRole, AgentTimelineRangeMention,
     ChatSession, ToolResultBlock,
 };
+pub use effect::{CurvePoint, Effect, EffectParam, GradeCurve};
 pub use generation_log::{GenerationLog, GenerationLogEntry};
 pub use media_manifest::{
     GenerationInput, MediaFolder, MediaManifest, MediaManifestEntry, MediaSource,

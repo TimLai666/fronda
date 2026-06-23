@@ -36,6 +36,7 @@ fn clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
         rotation_track: None,
         crop_track: None,
         volume_track: None,
+        effects: None,
     }
 }
 
@@ -68,6 +69,7 @@ fn audio_clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
         rotation_track: None,
         crop_track: None,
         volume_track: None,
+        effects: None,
     }
 }
 

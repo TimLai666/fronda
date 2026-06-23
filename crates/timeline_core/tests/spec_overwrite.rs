@@ -36,6 +36,7 @@ fn clip(
         rotation_track: None,
         crop_track: None,
         volume_track: None,
+        effects: None,
     }
 }
 

@@ -450,6 +450,7 @@ mod tests {
             rotation_track: None,
             crop_track: None,
             volume_track: None,
+            effects: None,
         };
         let a1 = Clip {
             id: "a1".into(),
@@ -479,6 +480,7 @@ mod tests {
             rotation_track: None,
             crop_track: None,
             volume_track: None,
+            effects: None,
         };
         Timeline {
             fps: 30,
@@ -657,6 +659,7 @@ mod tests {
             rotation_track: None,
             crop_track: None,
             volume_track: None,
+            effects: None,
         }
     }
 
@@ -690,6 +693,7 @@ mod tests {
             rotation_track: None,
             crop_track: None,
             volume_track: None,
+            effects: None,
         };
         let video = Clip {
             id: "v1".into(),
@@ -780,6 +784,7 @@ mod tests {
             rotation_track: None,
             crop_track: None,
             volume_track: None,
+            effects: None,
         };
         let v2 = Clip {
             id: "v2".into(),

@@ -31,6 +31,7 @@ fn clip(start_frame: i64, duration_frames: i64) -> Clip {
         rotation_track: None,
         crop_track: None,
         volume_track: None,
+        effects: None,
     }
 }
 
