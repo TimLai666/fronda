@@ -1,4 +1,4 @@
-use core_model::{ClipType, Interpolation, Timeline};
+use core_model::{Clip, ClipType, Crop, Interpolation, Timeline, Transform};
 use serde::{Deserialize, Serialize};
 
 /// Describes how a single clip should be rendered in the composition.
@@ -240,6 +240,182 @@ impl CompositionPlan {
     }
 }
 
+/// Validation result for a composition plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompositionValidation {
+    pub is_valid: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+impl CompositionPlan {
+    /// Validate the composition plan against rendering rules.
+    /// Pure validation — no platform APIs.
+    pub fn validate(&self) -> CompositionValidation {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+
+        if self.fps <= 0 {
+            errors.push(format!("Invalid fps: {}", self.fps));
+        }
+        if self.resolution.width < 2 || self.resolution.height < 2 {
+            errors.push(format!(
+                "Resolution too small: {}x{}",
+                self.resolution.width, self.resolution.height
+            ));
+        }
+
+        for track in &self.tracks {
+            // RND-010: Same-track visual clips must be sorted and non-overlapping
+            if track.is_visual && !track.is_hidden {
+                let mut sorted = track.clips.clone();
+                sorted.sort_by_key(|c| c.composition_start);
+                for (i, clip) in track.clips.iter().enumerate() {
+                    let clip_end = clip.composition_start + clip.duration_frames;
+                    if let Some(next) = track.clips.get(i + 1) {
+                        if clip_end > next.composition_start {
+                            warnings.push(format!(
+                                "Overlapping visual clips on track {}: {} ends at {}, {} starts at {}",
+                                track.timeline_track_index,
+                                clip.clip_id, clip_end,
+                                next.clip_id, next.composition_start,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        CompositionValidation {
+            is_valid: errors.is_empty(),
+            errors,
+            warnings,
+        }
+    }
+}
+
+/// Describes how audio clips are allocated to composition audio tracks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioCompositionTrack {
+    pub timeline_track_index: usize,
+    pub clips: Vec<CompositionClip>,
+}
+
+/// Allocates audio clips from a timeline track into one or more composition tracks.
+/// RND-008: Audio at 1.0x may share a composition track.
+/// RND-009: Audio not at 1.0x uses a dedicated track.
+pub fn allocate_audio_composition_tracks(track: &CompositionTrack) -> Vec<AudioCompositionTrack> {
+    let mut normal_clips = Vec::new();
+    let mut variable_speed_tracks: Vec<AudioCompositionTrack> = Vec::new();
+
+    for clip in &track.clips {
+        if (clip.speed - 1.0).abs() < f64::EPSILON {
+            normal_clips.push(clip.clone());
+        } else {
+            variable_speed_tracks.push(AudioCompositionTrack {
+                timeline_track_index: track.timeline_track_index,
+                clips: vec![clip.clone()],
+            });
+        }
+    }
+
+    let mut result = variable_speed_tracks;
+    if !normal_clips.is_empty() {
+        let mut shared = AudioCompositionTrack {
+            timeline_track_index: track.timeline_track_index,
+            clips: normal_clips,
+        };
+        // Sort shared track clips by composition_start
+        shared.clips.sort_by_key(|c| c.composition_start);
+        result.insert(0, shared);
+    }
+    result
+}
+
+/// Extended composition plan that includes audio allocation and validation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DetailedCompositionPlan {
+    pub plan: CompositionPlan,
+    pub audio_tracks: Vec<AudioCompositionTrack>,
+    pub validation: CompositionValidation,
+    /// Text overlay clips that must be rendered via overlay path (RND-005)
+    pub text_overlay_clips: Vec<CompositionClip>,
+    /// Image clips that need synthetic video generation (RND-011)
+    pub image_clips: Vec<CompositionClip>,
+    /// Lottie clips that need Lottie rendering (RND-012)
+    pub lottie_clips: Vec<CompositionClip>,
+    /// Black background duration (RND-007): if no visual clips cover frame 0,
+    /// we need a full-duration opaque black background
+    pub black_background_duration: i64,
+    /// Whether a black background is needed
+    pub needs_black_background: bool,
+}
+
+impl DetailedCompositionPlan {
+    pub fn from_timeline(timeline: &Timeline, resolution: RenderResolution) -> Self {
+        let plan = CompositionPlan::from_timeline(timeline, resolution);
+        let validation = plan.validate();
+
+        // Separate special clip types
+        let text_overlay_clips: Vec<CompositionClip> = plan
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| c.is_text_overlay)
+            .cloned()
+            .collect();
+        let image_clips: Vec<CompositionClip> = plan
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| c.is_image)
+            .cloned()
+            .collect();
+        let lottie_clips: Vec<CompositionClip> = plan
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| c.is_lottie)
+            .cloned()
+            .collect();
+
+        // Determine if black background is needed (RND-007)
+        let first_visual_frame = plan
+            .tracks
+            .iter()
+            .filter(|t| t.is_visual && !t.is_hidden)
+            .flat_map(|t| t.clips.iter())
+            .map(|c| c.composition_start)
+            .min()
+            .unwrap_or(i64::MAX);
+        let needs_black_background = first_visual_frame > 0;
+        let black_background_duration = if needs_black_background {
+            plan.total_frames
+        } else {
+            0
+        };
+
+        // Allocate audio tracks
+        let audio_tracks: Vec<AudioCompositionTrack> = plan
+            .tracks
+            .iter()
+            .filter(|t| !t.is_visual)
+            .flat_map(|t| allocate_audio_composition_tracks(t))
+            .collect();
+
+        DetailedCompositionPlan {
+            plan,
+            audio_tracks,
+            validation,
+            text_overlay_clips,
+            image_clips,
+            lottie_clips,
+            black_background_duration,
+            needs_black_background,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,5 +625,324 @@ mod tests {
     fn export_format_extension() {
         assert_eq!(ExportFormat::H264.file_extension(), "mp4");
         assert_eq!(ExportFormat::ProRes.file_extension(), "mov");
+    }
+
+    fn make_base_clip() -> Clip {
+        use core_model::{Clip, Crop, Transform};
+        Clip {
+            id: String::new(),
+            media_ref: String::new(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: 0,
+            duration_frames: 1,
+            trim_start_frame: 0,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            opacity: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+        }
+    }
+
+    fn make_timeline_with_text() -> Timeline {
+        use core_model::{Clip, Crop, Track, Transform};
+        let text = Clip {
+            id: "txt1".into(),
+            media_ref: String::new(),
+            media_type: ClipType::Text,
+            source_clip_type: ClipType::Text,
+            start_frame: 10,
+            duration_frames: 50,
+            trim_start_frame: 0,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            opacity: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: Some("Hello".into()),
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+        };
+        let video = Clip {
+            id: "v1".into(),
+            media_ref: "asset-v".into(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: 0,
+            duration_frames: 100,
+            ..make_base_clip()
+        };
+        Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: std::collections::HashSet::new(),
+            tracks: vec![
+                Track {
+                    id: "v-track".into(),
+                    r#type: ClipType::Video,
+                    muted: false,
+                    hidden: false,
+                    sync_locked: true,
+                    clips: vec![video],
+                },
+                Track {
+                    id: "t-track".into(),
+                    r#type: ClipType::Text,
+                    muted: false,
+                    hidden: false,
+                    sync_locked: true,
+                    clips: vec![text],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn composition_validation_rejects_zero_fps() {
+        let mut timeline = make_timeline();
+        timeline.fps = 0;
+        let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        let validation = plan.validate();
+        assert!(!validation.is_valid);
+        assert!(validation.errors.iter().any(|e| e.contains("fps")));
+    }
+
+    #[test]
+    fn composition_validation_rejects_tiny_resolution() {
+        let timeline = make_timeline();
+        let tiny = RenderResolution {
+            width: 1,
+            height: 1,
+        };
+        let plan = CompositionPlan::from_timeline(&timeline, tiny);
+        let validation = plan.validate();
+        assert!(!validation.is_valid);
+    }
+
+    #[test]
+    fn composition_validation_warns_on_overlapping_visual_clips() {
+        use core_model::{Clip, Track};
+        let v1 = Clip {
+            id: "v1".into(),
+            media_ref: "a".into(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: 0,
+            duration_frames: 60,
+            trim_start_frame: 0,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            opacity: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+        };
+        let v2 = Clip {
+            id: "v2".into(),
+            media_ref: "b".into(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: 30,
+            duration_frames: 60,
+            ..v1.clone()
+        };
+        let timeline = Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: std::collections::HashSet::new(),
+            tracks: vec![Track {
+                id: "v".into(),
+                r#type: ClipType::Video,
+                muted: false,
+                hidden: false,
+                sync_locked: true,
+                clips: vec![v1, v2],
+            }],
+        };
+        let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        let validation = plan.validate();
+        assert!(validation.is_valid, "valid timeline should still be valid");
+        assert!(
+            !validation.warnings.is_empty(),
+            "should warn about overlapping clips"
+        );
+    }
+
+    #[test]
+    fn audio_allocation_shared_at_normal_speed() {
+        use core_model::{Clip, Track};
+        let a1 = Clip {
+            id: "a1".into(),
+            media_ref: "a".into(),
+            media_type: ClipType::Audio,
+            source_clip_type: ClipType::Audio,
+            start_frame: 0,
+            duration_frames: 100,
+            speed: 1.0,
+            volume: 1.0,
+            ..make_base_clip()
+        };
+        let a2 = Clip {
+            id: "a2".into(),
+            media_ref: "b".into(),
+            media_type: ClipType::Audio,
+            source_clip_type: ClipType::Audio,
+            start_frame: 100,
+            duration_frames: 50,
+            speed: 1.0,
+            volume: 0.8,
+            ..make_base_clip()
+        };
+        let timeline = Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: std::collections::HashSet::new(),
+            tracks: vec![Track {
+                id: "a".into(),
+                r#type: ClipType::Audio,
+                muted: false,
+                hidden: false,
+                sync_locked: true,
+                clips: vec![a1, a2],
+            }],
+        };
+        let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        let audio_tracks = allocate_audio_composition_tracks(&plan.tracks[0]);
+        assert_eq!(
+            audio_tracks.len(),
+            1,
+            "both 1.0x clips should share one track"
+        );
+        assert_eq!(audio_tracks[0].clips.len(), 2);
+    }
+
+    #[test]
+    fn audio_allocation_variable_speed_gets_dedicated_track() {
+        use core_model::{Clip, Track};
+        let a1 = Clip {
+            id: "a1".into(),
+            media_ref: "a".into(),
+            media_type: ClipType::Audio,
+            source_clip_type: ClipType::Audio,
+            start_frame: 0,
+            duration_frames: 100,
+            speed: 2.0,
+            volume: 1.0,
+            ..make_base_clip()
+        };
+        let a2 = Clip {
+            id: "a2".into(),
+            media_ref: "b".into(),
+            media_type: ClipType::Audio,
+            source_clip_type: ClipType::Audio,
+            start_frame: 100,
+            duration_frames: 50,
+            speed: 1.0,
+            volume: 0.8,
+            ..make_base_clip()
+        };
+        let timeline = Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: std::collections::HashSet::new(),
+            tracks: vec![Track {
+                id: "a".into(),
+                r#type: ClipType::Audio,
+                muted: false,
+                hidden: false,
+                sync_locked: true,
+                clips: vec![a1, a2],
+            }],
+        };
+        let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        let audio_tracks = allocate_audio_composition_tracks(&plan.tracks[0]);
+        // a1 at 2.0x gets dedicated track, a2 at 1.0x stays in shared
+        assert_eq!(
+            audio_tracks.len(),
+            2,
+            "variable-speed and normal clips separate"
+        );
+    }
+
+    #[test]
+    fn detailed_plan_identifies_text_overlays() {
+        let timeline = make_timeline_with_text();
+        let resolution = RenderResolution::native(&timeline);
+        let detailed = DetailedCompositionPlan::from_timeline(&timeline, resolution);
+        assert!(
+            !detailed.text_overlay_clips.is_empty(),
+            "should identify text clips"
+        );
+    }
+
+    #[test]
+    fn detailed_plan_detects_black_background_need() {
+        let mut timeline = make_timeline();
+        // Clips start at frame 0 in make_timeline, so no black bg needed
+        let resolution = RenderResolution::native(&timeline);
+        let detailed = DetailedCompositionPlan::from_timeline(&timeline, resolution);
+        assert!(!detailed.needs_black_background);
+
+        // Make all visual clips start after frame 0
+        for track in &mut timeline.tracks {
+            if track.r#type != ClipType::Audio {
+                for clip in &mut track.clips {
+                    clip.start_frame = 50;
+                }
+            }
+        }
+        let detailed2 = DetailedCompositionPlan::from_timeline(&timeline, resolution);
+        assert!(detailed2.needs_black_background);
+        assert!(detailed2.black_background_duration > 0);
     }
 }

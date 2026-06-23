@@ -68,6 +68,7 @@ pub fn collect_targets(
             });
         }
     }
+    targets.sort_by_key(|t| t.frame);
     targets
 }
 

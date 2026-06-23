@@ -1,7 +1,7 @@
 use core_model::{Clip, ClipType, Crop, Interpolation, Track, Transform};
 use timeline_core::{
-    collect_targets, find_snap, find_snap_simple, SnapState, SnapTargetKind, PLAYHEAD_MULTIPLIER,
-    STICKY_MULTIPLIER, THRESHOLD_PIXELS,
+    collect_targets, find_snap, find_snap_simple, SnapState, SnapTarget, SnapTargetKind,
+    PLAYHEAD_MULTIPLIER, STICKY_MULTIPLIER, THRESHOLD_PIXELS,
 };
 
 fn clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
@@ -278,4 +278,118 @@ fn snp_snap_result_includes_x_position() {
     assert_eq!(r.frame, 100);
     assert_eq!(r.probe_offset, 0);
     assert_eq!(r.x, 400.0); // 100 frames * 4 px/frame
+}
+
+fn snap_targets(frames: &[i64]) -> Vec<SnapTarget> {
+    frames
+        .iter()
+        .map(|&f| SnapTarget {
+            frame: f,
+            kind: SnapTargetKind::ClipEdge,
+        })
+        .collect()
+}
+
+// ─── SNP-009: collect_targets properties ───
+
+#[test]
+fn snp_009_collect_targets_returns_sorted_frames() {
+    // Clips with varied start frames should produce sorted snap targets
+    let c1 = clip("c1", 50, 30);
+    let c2 = clip("c2", 10, 20);
+    let c3 = clip("c3", 100, 60);
+    let mut tracks = vec![video_track(vec![c1, c2, c3])];
+    tracks[0].clips[0].link_group_id = Some("g1".to_string());
+    tracks[0].clips[1].link_group_id = Some("g1".to_string());
+
+    let targets = collect_targets(&tracks, 0, &[], false);
+    let frames: Vec<i64> = targets.iter().map(|t| t.frame).collect();
+
+    for pair in frames.windows(2) {
+        assert!(pair[0] <= pair[1], "target frames not sorted: {:?}", frames);
+    }
+
+    assert!(frames.contains(&50), "missing start of c1");
+    assert!(frames.contains(&80), "missing end of c1 (50+30)");
+    assert!(frames.contains(&10), "missing start of c2");
+    assert!(frames.contains(&30), "missing end of c2 (10+20)");
+}
+
+#[test]
+fn snp_009_collect_targets_deterministic() {
+    let c1 = clip("c1", 0, 100);
+    let c2 = clip("c2", 150, 50);
+    let tracks = vec![video_track(vec![c1, c2])];
+
+    let first = collect_targets(&tracks, 0, &[], false);
+    let second = collect_targets(&tracks, 0, &[], false);
+    assert_eq!(first, second, "collect_targets should be deterministic");
+}
+
+// ─── SNP-010: find_snap_simple threshold behavior ───
+
+#[test]
+fn snp_010_find_snap_simple_within_threshold_returns_some() {
+    // At pixels_per_frame = 1.0, base frame threshold = 8 / 1 = 8 frames
+    let targets = snap_targets(&[100, 200, 300]);
+
+    let mut state = SnapState::default();
+    let result = find_snap_simple(105, &targets, &mut state, 8.0, 1.0);
+    assert_eq!(
+        result.unwrap().frame,
+        100,
+        "frame 100 is 5 away, within threshold 8"
+    );
+
+    let mut state = SnapState::default();
+    let result = find_snap_simple(95, &targets, &mut state, 8.0, 1.0);
+    assert_eq!(
+        result.unwrap().frame,
+        100,
+        "frame 100 is 5 away on the left"
+    );
+
+    // 107 - 100 = 7 <= 8, so within threshold
+    let mut state = SnapState::default();
+    let result = find_snap_simple(107, &targets, &mut state, 8.0, 1.0);
+    assert_eq!(
+        result.unwrap().frame,
+        100,
+        "frame 100 is 7 away, still within threshold 8"
+    );
+}
+
+#[test]
+fn snp_010_find_snap_simple_outside_threshold_returns_none() {
+    let targets = snap_targets(&[100, 200, 300]);
+
+    let mut state = SnapState::default();
+    let result = find_snap_simple(50, &targets, &mut state, 8.0, 1.0);
+    assert!(result.is_none(), "50 is 50 away from nearest target 100");
+
+    let targets2 = snap_targets(&[100]);
+    let mut state = SnapState::default();
+    let result = find_snap_simple(200, &targets2, &mut state, 8.0, 1.0);
+    assert!(result.is_none(), "200 is 100 away from 100");
+}
+
+#[test]
+fn snp_010_find_snap_simple_empty_targets_returns_none() {
+    let targets: Vec<SnapTarget> = vec![];
+    let mut state = SnapState::default();
+    let result = find_snap_simple(50, &targets, &mut state, 8.0, 1.0);
+    assert!(result.is_none(), "empty targets should return None");
+}
+
+#[test]
+fn snp_010_find_snap_simple_exact_match() {
+    let targets = snap_targets(&[100, 200]);
+
+    let mut state = SnapState::default();
+    let result = find_snap_simple(100, &targets, &mut state, 0.0, 1.0);
+    assert_eq!(result.unwrap().frame, 100, "exact match at threshold 0");
+
+    let mut state = SnapState::default();
+    let result = find_snap_simple(101, &targets, &mut state, 0.0, 1.0);
+    assert!(result.is_none(), "1 away at threshold 0 should not snap");
 }
