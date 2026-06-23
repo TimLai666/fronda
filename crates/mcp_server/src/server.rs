@@ -296,8 +296,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            39,
-            "MCP-003: exactly 39 tools (base + 6 upstream + 2 PR #46)"
+            42,
+            "MCP-003: exactly 42 tools (base + 11 upstream PRs)"
         );
     }
 

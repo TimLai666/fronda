@@ -1,4 +1,4 @@
-//! All 39 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 42 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -14,9 +14,9 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 39 tools exposed to the agent.
+/// Returns all 42 tools exposed to the agent.
 ///
-/// TDEF-001: exactly these 39 tools.
+/// TDEF-001: exactly these 42 tools.
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
@@ -24,6 +24,8 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         add_shapes(),
         add_texts(),
         apply_animation(),
+        apply_color(),
+        apply_effect(),
         create_folder(),
         delete_folder(),
         delete_media(),
@@ -38,6 +40,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         import_folder(),
         import_media(),
         insert_clips(),
+        inspect_color(),
         inspect_media(),
         inspect_timeline(),
         list_folders(),
@@ -493,6 +496,53 @@ fn apply_animation() -> ToolDefinition {
     }
 }
 
+fn apply_color() -> ToolDefinition {
+    ToolDefinition {
+        name: "apply_color",
+        description: "Apply color grading parameters to a clip. MERGE semantics — only passed params change. PR #8.",
+        input_schema: object(&[
+            ("clipId", string("Clip id to grade")),
+            ("exposure", number("Exposure adjustment (-4 to 4)")),
+            ("contrast", number("Contrast adjustment (0 to 4)")),
+            ("saturation", number("Saturation (0 to 4)")),
+            ("vibrance", number("Vibrance adjustment (0 to 2)")),
+            ("temperature", number("Temperature adjustment (-1 to 1)")),
+            ("tint", number("Tint adjustment (-1 to 1)")),
+            ("highlights", number("Highlight adjustment (-1 to 1)")),
+            ("shadows", number("Shadow adjustment (-1 to 1)")),
+            ("blacks", number("Black point adjustment (-1 to 1)")),
+            ("whites", number("White point adjustment (-1 to 1)")),
+            ("reset", boolean("If true, reset all color params to neutral before applying")),
+        ]),
+    }
+}
+
+fn apply_effect() -> ToolDefinition {
+    ToolDefinition {
+        name: "apply_effect",
+        description: "Apply non-color effects (blur, sharpen, glow, grain, vignette) to a clip. PR #8.",
+        input_schema: object(&[
+            ("clipId", string("Clip id")),
+            ("type", string("Effect type ID (e.g. 'blur.gaussian', 'stylize.glow', 'detail.sharpen', 'stylize.grain', 'stylize.vignette')")),
+            ("enabled", boolean("Enable or disable the effect")),
+            ("remove", array("Optional list of effect type IDs to remove from the clip")),
+            ("intensity", number("Effect intensity (0 to 1)")),
+        ]),
+    }
+}
+
+fn inspect_color() -> ToolDefinition {
+    ToolDefinition {
+        name: "inspect_color",
+        description: "Inspect color scopes (luma, RGB zones, hue histogram, saturation) of a graded clip or raw asset. PR #8.",
+        input_schema: object(&[
+            ("clipId", string("Optional clip id to inspect (must specify clipId or mediaRef)")),
+            ("mediaRef", string("Optional media asset ref to inspect raw")),
+            ("reference", string("Optional reference mediaRef for side-by-side comparison")),
+        ]),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // JSON Schema helpers
 // ---------------------------------------------------------------------------
@@ -582,12 +632,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_39_tools() {
+    fn tdef_001_exactly_42_tools() {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            39,
-            "TDEF-001: exactly 39 tools (37 + add_shapes + apply_animation)"
+            42,
+            "TDEF-001: exactly 42 tools (39 + apply_color + apply_effect + inspect_color)"
         );
     }
 
@@ -616,7 +666,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 39, "all 39 tool names must be unique");
+        assert_eq!(names.len(), 42, "all 42 tool names must be unique");
     }
 
     #[test]

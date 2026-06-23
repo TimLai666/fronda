@@ -695,6 +695,115 @@ pub fn validate_apply_animation(input: &Value) -> ValidationResult<ApplyAnimatio
     })
 }
 
+// === ApplyColor (PR #8) ===================================================
+
+/// Parsed `apply_color` input. PR #8.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApplyColorInput {
+    pub clip_id: String,
+    pub exposure: Option<f64>,
+    pub contrast: Option<f64>,
+    pub saturation: Option<f64>,
+    pub vibrance: Option<f64>,
+    pub temperature: Option<f64>,
+    pub tint: Option<f64>,
+    pub highlights: Option<f64>,
+    pub shadows: Option<f64>,
+    pub blacks: Option<f64>,
+    pub whites: Option<f64>,
+    pub reset: Option<bool>,
+}
+
+pub fn validate_apply_color(input: &Value) -> ValidationResult<ApplyColorInput> {
+    let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => {
+            return ValidationResult::Error("apply_color: 'clipId' is required".into());
+        }
+    };
+    ValidationResult::Ok(ApplyColorInput {
+        clip_id,
+        exposure: input.get("exposure").and_then(|v| v.as_f64()),
+        contrast: input.get("contrast").and_then(|v| v.as_f64()),
+        saturation: input.get("saturation").and_then(|v| v.as_f64()),
+        vibrance: input.get("vibrance").and_then(|v| v.as_f64()),
+        temperature: input.get("temperature").and_then(|v| v.as_f64()),
+        tint: input.get("tint").and_then(|v| v.as_f64()),
+        highlights: input.get("highlights").and_then(|v| v.as_f64()),
+        shadows: input.get("shadows").and_then(|v| v.as_f64()),
+        blacks: input.get("blacks").and_then(|v| v.as_f64()),
+        whites: input.get("whites").and_then(|v| v.as_f64()),
+        reset: input.get("reset").and_then(|v| v.as_bool()),
+    })
+}
+
+// === ApplyEffect (PR #8) ===================================================
+
+/// Parsed `apply_effect` input. PR #8.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApplyEffectInput {
+    pub clip_id: String,
+    pub effect_type: Option<String>,
+    pub enabled: Option<bool>,
+    pub remove: Option<Vec<String>>,
+    pub intensity: Option<f64>,
+}
+
+pub fn validate_apply_effect(input: &Value) -> ValidationResult<ApplyEffectInput> {
+    let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => {
+            return ValidationResult::Error("apply_effect: 'clipId' is required".into());
+        }
+    };
+    let remove = input
+        .get("remove")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .filter(|v: &Vec<String>| !v.is_empty());
+    ValidationResult::Ok(ApplyEffectInput {
+        clip_id,
+        effect_type: input.get("type").and_then(|v| v.as_str()).map(String::from),
+        enabled: input.get("enabled").and_then(|v| v.as_bool()),
+        remove,
+        intensity: input.get("intensity").and_then(|v| v.as_f64()),
+    })
+}
+
+// === InspectColor (PR #8) ==================================================
+
+/// Parsed `inspect_color` input. PR #8.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectColorInput {
+    pub clip_id: Option<String>,
+    pub media_ref: Option<String>,
+    pub reference: Option<String>,
+}
+
+pub fn validate_inspect_color(input: &Value) -> ValidationResult<InspectColorInput> {
+    let clip_id = input
+        .get("clipId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let media_ref = input
+        .get("mediaRef")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let reference = input
+        .get("reference")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    ValidationResult::Ok(InspectColorInput {
+        clip_id,
+        media_ref,
+        reference,
+    })
+}
+
 // === MUT-022: folder/media tools ==========================================
 
 /// Parsed and validated `create_folder` input.
@@ -2010,5 +2119,93 @@ mod tests {
             .into_error()
             .expect("apply_animation: missing preset");
         assert!(err.contains("preset"));
+    }
+
+    // ---- Upstream #8: apply_color -----------------------------------------
+
+    #[test]
+    fn upstream_008_apply_color_valid() {
+        let input = json!({"clipId": "c1", "exposure": 0.5, "contrast": 1.2});
+        let result = validate_apply_color(&input);
+        let parsed = result.into_ok().expect("apply_color: valid");
+        assert_eq!(parsed.clip_id, "c1");
+        assert!((parsed.exposure.unwrap() - 0.5).abs() < 1e-10);
+        assert!((parsed.contrast.unwrap() - 1.2).abs() < 1e-10);
+        assert!(parsed.saturation.is_none());
+    }
+
+    #[test]
+    fn upstream_008_apply_color_missing_clip_id() {
+        let input = json!({"exposure": 0.5});
+        let result = validate_apply_color(&input);
+        assert!(result.into_error().unwrap().contains("clipId"));
+    }
+
+    #[test]
+    fn upstream_008_apply_color_with_reset() {
+        let input = json!({"clipId": "c1", "reset": true});
+        let result = validate_apply_color(&input);
+        let parsed = result.into_ok().expect("apply_color: reset");
+        assert!(parsed.reset == Some(true));
+    }
+
+    // ---- Upstream #8: apply_effect ----------------------------------------
+
+    #[test]
+    fn upstream_008_apply_effect_valid() {
+        let input = json!({
+            "clipId": "c1",
+            "type": "blur.gaussian",
+            "intensity": 0.5
+        });
+        let result = validate_apply_effect(&input);
+        let parsed = result.into_ok().expect("apply_effect: valid");
+        assert_eq!(parsed.clip_id, "c1");
+        assert_eq!(parsed.effect_type.unwrap(), "blur.gaussian");
+        assert!((parsed.intensity.unwrap() - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn upstream_008_apply_effect_with_remove() {
+        let input = json!({
+            "clipId": "c1",
+            "remove": ["blur.gaussian", "stylize.glow"]
+        });
+        let result = validate_apply_effect(&input);
+        let parsed = result.into_ok().expect("apply_effect: remove");
+        assert_eq!(parsed.remove.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn upstream_008_apply_effect_missing_clip_id() {
+        let input = json!({"type": "blur.gaussian"});
+        let result = validate_apply_effect(&input);
+        assert!(result.into_error().unwrap().contains("clipId"));
+    }
+
+    // ---- Upstream #8: inspect_color ---------------------------------------
+
+    #[test]
+    fn upstream_008_inspect_color_with_clip_id() {
+        let input = json!({"clipId": "c1"});
+        let result = validate_inspect_color(&input);
+        let parsed = result.into_ok().expect("inspect_color: clipId");
+        assert_eq!(parsed.clip_id.unwrap(), "c1");
+    }
+
+    #[test]
+    fn upstream_008_inspect_color_with_media_ref() {
+        let input = json!({"mediaRef": "asset-vid-1"});
+        let result = validate_inspect_color(&input);
+        let parsed = result.into_ok().expect("inspect_color: mediaRef");
+        assert_eq!(parsed.media_ref.unwrap(), "asset-vid-1");
+    }
+
+    #[test]
+    fn upstream_008_inspect_color_with_reference() {
+        let input = json!({"clipId": "c1", "reference": "asset-ref"});
+        let result = validate_inspect_color(&input);
+        let parsed = result.into_ok().expect("inspect_color: reference");
+        assert_eq!(parsed.reference.unwrap(), "asset-ref");
     }
 }
