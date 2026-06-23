@@ -163,6 +163,26 @@ These upstream PRs define behavior the Rust rewrite must eventually match. Bug f
 
 - `Upstream #46`: (Deferred) Shape annotations require a `ClipType::Shape` variant, `Clip.shapeStyle: Option<ShapeStyle>`, and 17 animation presets (fade, pop, draw-on, shake, spin, slide-in/out, etc.) compilable to keyframe sequences. See `01-foundation-and-project-model.md` for data-model requirements. Not yet planned for Rust rewrite.
 
+- `Upstream #119`: The Rust timeline engine must support audio waveform alignment for multi-camera syncing. An `AudioSyncCorrelator` should compute RMS-based cross-correlation between two audio clips and report a frame-level sync offset. The correlation algorithm (RMS envelope extraction → correlation → peak detection) is pure math and belongs in `timeline_core` or a new `audio_core` crate.
+
+- `Upstream #8` (effects engine): The visual compositor must support a per-clip ordered `effects: Vec<Effect>` stack that replaces the stock passthrough compositor when any clip has active effects. The `Effect` model includes: `exposure`, `contrast`, `brightness`, `saturation`, `hue`, `temperature`, `tint`, `highlights`, `shadows`, `whites`, `blacks`, `vibrance`, `sharpness`, `blur`, `vignette`, and `colorWheels` (shadows/midtones/highlights each with `hue`/`saturation`/`brightness`). `Effect` must support enable/disable toggle. The compositor must handle dual-pass rendering when both text overlays and effects are active: first bake color effects, then apply text overlays. This is the single most impactful upstream feature for the Rust rewrite — the entire composition pipeline architecture must accommodate it. The `render_core` crate's `CompositionPlan` should eventually include an `effects_pipeline` field that describes the ordered effect chain.
+
+- `Upstream #35`: The compositor must handle rotation metadata correctly. Clips with non-zero rotation must not render as black frames. The Render engine must transform source frames by the clip's cumulative rotation before compositing.
+
+- `Upstream #52`: The timeline editing engine must handle these crash-prevention edge cases: empty tracks should not cause out-of-bounds access, missing media during CompositionBuilder must be handled gracefully, and caption operations on empty timelines must not panic. Rust equivalents of these guards should be tested.
+
+- `Upstream #54`: Core clip mutation tools (`add_clips`, `insert_clips`, `split_clips`) define the agent-facing editing surface. These correspond to existing Rust functions (`clearRegion`, `splitClip`, etc.) but must also be exposed through the agent tool interface with matching validation semantics. See agent spec (05-agent-mcp-and-chat.md) for tool-level contract.
+
+- `Upstream #66`: The preview engine must reset playback position to frame 0 when play is requested while the playhead is at or past the end of the timeline. PRV-014 formally captures this.
+
+- `Upstream #72`: The hex color parser for text/caption `color` and `backgroundColor` fields must accept `#RGB`, `#RRGGBB`, and `#RRGGBBAA` formats, trim leading/trailing whitespace and newlines, and reject embedded whitespace. This applies to `set_clip_properties`, `add_texts`, and `add_captions` tool input validation.
+
+- `Upstream #74`: Video-backed source trim starts and durations inserted into the composition must be converted through the source track's `naturalTimeScale` rather than blindly using project fps timescale. PRV-015 formally captures this.
+
+- `Upstream #100`: The CompositionBuilder timing math contract is documented by the Swift upstream tests. Rust `render_core` composition math should reference these tests for clip layout timing behavior, especially for edge cases around frame boundaries, speed changes, and trim combinations.
+
+- `Upstream #65`: `TextStyle` must support a `fontWeight: Option<f32>` field representing the variable font `wght` axis value. When present, the text renderer must apply the weight axis, enabling thin-to-black weight variation within a single variable font. The serialized format must round-trip this field.
+
 ## Migration decisions to record explicitly
 
 - `Decision:` The current Swift app has AppKit-specific split-view and titlebar behavior. The Rust rewrite should preserve pane semantics and layout presets even if exact native window mechanics differ under `gpui-ce`.

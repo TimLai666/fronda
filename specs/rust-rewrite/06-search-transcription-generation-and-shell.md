@@ -153,6 +153,30 @@ Scope sources:
 - [ ] `TEL-008`: `Telemetry.trace` preserves current success/failure wrapping semantics.
 - [ ] `TEL-009`: Uncaught exceptions and fatal signals are also written to the local crash log path.
 
+## Upstream change tracking
+
+- `Upstream #7`: The search pipeline must support CLIP-style visual search: frame sampling → SIGLIP embedding → text tokenization → FAISS-style index → query. The search model lifecycle (SRCH-001–028) defines the behavior contract. For the Rust rewrite, the search/indexing implementation may use different on-device models or APIs, but must preserve the cache identity rules (path + mtime + file size), result grouping (Moments/Spoken/Files), and observable failure states.
+
+- `Upstream #26`: The chat/agent system should implement conversation prefix caching for Anthropic API requests to reduce cost and latency. The Rust chat system should cache the system prompt + conversation prefix.
+
+- `Upstream #27`: The import pipeline must support WebP still images. The image decoder in the generation/search pipeline must handle WebP format.
+
+- `Upstream #34`: The generation pipeline must report clear errors for unprocessable media files during upload/reference workflows. `isMediaUnprocessable` must be checked before attempting upload.
+
+- `Upstream #40`: The transcription system must support project-level spoken language setting with per-call language override. Locale matching must prefer exact language+region matches, fall back to same-language matches, and strip Unicode extension tags (TRN-012–015).
+
+- `Upstream #51`: Agent tools must support transcription-based editing: `get_transcript` with `language` param, trim-by-transcript, and delete-by-transcript operations.
+
+- `Upstream #61`: The generation pipeline should support HDR output for video generation when the model and user preferences allow HDR content. This affects the export/generation path, not the search pipeline.
+
+- `Upstream #65`: Text rendering in the search/transcription/generation pipeline must respect variable font weight (`wght`) axis when rendering captions and text overlays.
+
+- `Upstream #67`: The app shell must support project duplication through the Home screen context menu or agent tool.
+
+- `Upstream #96`: The preview/composition pipeline must distinguish between offline media and unplayable media. Generation placeholders that resolve to unplayable output must be reported clearly rather than silently failing.
+
+- `Upstream #81` / `Upstream #82`: The app startup sequence must handle slow or inaccessible project storage without hanging. The Rust app shell (APP-001) should use async startup with timeouts for project registry enumeration.
+
 ## Migration decisions to record explicitly
 
 - `Decision:` Search/indexing and transcription are currently tightly coupled to the existing on-device model/toolchain. The Rust rewrite may swap implementations, but should preserve cache identity rules, result grouping, and observable failure states.

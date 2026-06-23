@@ -222,3 +222,27 @@ Scope sources:
 - `Upstream #46`: (Deferred) When shape annotations are implemented, the tool surface must include `add_shapes` (batch shape creation with enter/exit/loop animations) and `apply_animation` (apply an animation preset to existing clips). Not yet planned for Rust rewrite.
 
 - `Upstream #108`: The preview engine must not pause when timeline is edited via agent/MCP. The `notifyTimelineChanged` equivalent must suppress the pause call when the edit originated from an agent. This is a preview-engine contract, not an agent-tool contract, but the coordination between agent tool execution and preview state is defined here. See `03-timeline-editor-and-preview.md` for preview-engine details.
+
+- `Upstream #28`: The MCP HTTP server must bind to loopback (`127.0.0.1`) only. The Rust MCP server must enforce the same security boundary: no external network access, origin validation for HTTP requests, and no automatic forwarding to other hosts. MCP-005 formally captures this.
+
+- `Upstream #26`: The agent system should implement conversation prefix caching for Anthropic API requests to reduce cost and latency. The Rust agent should cache the system prompt + conversation prefix in a prompt-cache-compatible format and attach cache-control breakpoints at the appropriate boundaries.
+
+- `Upstream #32`: The agent client layer must support a provider abstraction that can serve both Anthropic and OpenRouter endpoints. The `AgentProvider` trait should define a common interface (`chat_completion`, `stream_chat_completion`, `list_models`) with per-provider implementations for API URL, auth header format, and model mapping. The provider config schema must include `provider: "anthropic" | "openrouter"` and optional `baseURL` override.
+
+- `Upstream #36`: The agent configuration must support a custom `baseURL` for the Anthropic provider. This is needed for proxy/relay setups and compatible API gateways. The `AgentConfig` struct must include an optional `anthropicBaseURL: Option<String>` field.
+
+- `Upstream #38`: The `ripple_delete_ranges` tool (MUT-017–018) and `get_transcript` tool (READ-017–021) define core agent editing operations. The Rust agent must implement these with matching schemas, validation, and output format. See `03-timeline-editor-and-preview.md` for the ripple editing math.
+
+- `Upstream #51`: The tool surface must support transcription-based editing: `get_transcript` (READ-017–021), and tools that operate on transcript ranges (trim by transcript, delete by transcript). The Rust agent must preserve the same tool names and output structures.
+
+- `Upstream #43`: The agent system instruction / prompt must incorporate the improved image and video generation guidance from the upstream. The Rust rewrite should port these prompt improvements into the agent instruction snapshot (TDEF-004).
+
+- `Upstream #47`: The tool surface must include `import_folder` that recursively imports all supported media files from a directory into the media library, mirroring directory structure into logical folders.
+
+- `Upstream #54`: Core clip mutation tools (`add_clips`, `insert_clips`, `split_clips`) define the primary editing surface. The Rust agent tool schemas and validation must match the upstream. See MUT-001–016 for the detailed contract.
+
+- `Upstream #6`: The tool surface must include `generate_music` for Suno-style music generation. Tool definition, parameters, and output format must match the upstream MCP schema.
+
+- `Upstream #40`: The tool surface should support spoken-language configuration for transcription. The `get_transcript` tool may optionally accept a `language` override. See `06-search-transcription-generation-and-shell.md` for locale behavior.
+
+- `Upstream #67`: The agent tool surface should include `duplicate_project` that duplicates the current project package. The duplicate should be opened as the current project after completion.

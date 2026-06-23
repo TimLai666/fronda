@@ -102,3 +102,15 @@ Scope sources:
 - `Upstream #62`: Project-level color grading (LUTs, primaries, curves) applies as a final post-processing pass during export, after the timeline composition is rendered. See `01-foundation-and-project-model.md` for data-model requirements.
 
 - `Upstream #99`: When per-clip effects (chroma key, blend modes, color grade) are active, the export pipeline must use the effect-aware compositor instead of passthrough. Dual-pass export is required when both text overlays and custom compositing are active: first bake color effects, then apply Core Animation-style text overlays. See `03-timeline-editor-and-preview.md` for compositor requirements.
+
+- `Upstream #8` (effects engine): The export pipeline must support dual-pass rendering when both per-clip color effects and text overlays are active. First pass: render the composition with per-clip effects (chroma key, blend modes, color grade, exposure/contrast/etc.) using the effect-aware compositor. Second pass: bake text overlays onto the effect-rendered output. When no per-clip effects are active, the single-pass passthrough compositor is sufficient. The Rust `CompositionPlan` in `render_core` should model the required render passes.
+
+- `Upstream #61`: The export format model must support H.265/HEVC with 10-bit depth and BT.2020 + HLG color space / transfer function. The export pipeline must distinguish between SDR (8-bit, Rec.709/BT.601) and HDR (10-bit, BT.2020+HLG) encoding profiles. EXP-001 should add an HDR variant: `H.265/HEVC (HDR) → .mp4`. EXP-002 should note that HDR export requires matching HDR-compatible render backend capabilities. Bitrate estimation for HDR must account for 10-bit encoding overhead.
+
+- `Upstream #73`: Export presets must include 720p (1280×720) HEVC configuration matching the upstream preset. The `ExportResolution` model must support all standard resolutions (720p, 1080p, 2K, 4K) with appropriate encoder configuration per resolution tier.
+
+- `Upstream #4` (XML export): The XMEML 4 export format must follow the upstream XML schema exactly: track order reversed for FCP compatibility (XML-010), self-closing `<file>` references for repeated media (XML-011), and standard attribute naming for timecode. The Rust XML generation should be pure string/data generation in `render_core` or a dedicated `export_core` crate, testable via snapshot/approval tests against golden XML.
+
+- `Upstream #119`: Audio sync offset must be respected during export. When linked audio clips carry a `syncOffsetFrames`, the export composition must shift the audio track by that offset relative to the video track to maintain sync in the rendered output.
+
+- `Upstream #5`: The export pipeline must handle empty tracks gracefully — they contribute no output but must not cause pipeline failure. The `CompositionPlan` must tolerate tracks with zero clips.

@@ -166,6 +166,20 @@ Scope sources:
 - [ ] `SMP-004`: Partial sample packages are cleaned up on failure.
 - [ ] `SMP-005`: Opening a cached sample does not register it in Recents.
 
+## Upstream change tracking
+
+- `Upstream #27`: WebP image import must be supported for still images. The media import pipeline must decode WebP via the Rust `image` crate's webp feature or equivalent cross-platform decoder. No data-model change needed — WebP is mapped to `ClipType::image` like other still-image formats.
+
+- `Upstream #30`: The Rust media resolver must implement offline detection and manual relink. `isMissing(for:)` (RES-004) must check actual file existence. Relink must support both single-asset (RLK-001–003) and batch folder-relink (RLK-004–008) workflows. Batch relink recursively indexes candidates under a chosen folder and matches by lowercased filename. The relink UI/API must report `(relinked, totalOffline)` counts.
+
+- `Upstream #34`: The import pipeline must distinguish between unprocessable media (file exists but cannot be decoded/imported) and missing media (file not found). `isMediaUnprocessable` (MED-014) must remain a separate state from `isMediaOffline`. Import errors for unprocessable media must surface clear error messages and not cause infinite retry.
+
+- `Upstream #84`: Directory import must be async to avoid hanging the UI. The Rust media import pipeline should use async channel-based scanning with cancellation support. Import scanning must skip hidden files (MED-016) and sort entries by localized standard filename ordering (MED-018). Media discovery should stream results incrementally rather than blocking until the full scan completes.
+
+- `Upstream #47`: The agent tool surface must include `import_folder` that recursively imports all supported media from a directory path into the media library, creating a logical folder tree that mirrors the source directory structure.
+
+- `Upstream #96`: The preview/composition pipeline must detect and flag unplayable media separately from offline media. `offlineMediaRefs` (RND-002) must track missing files; a separate collection or status flag must track files that exist but cannot be played/decoded. The composition build must not fail silently for unplayable media.
+
 ## Migration decisions to record explicitly
 
 - `Decision:` The current app keeps normal imported files external instead of ingesting them into the project. The Rust rewrite should preserve this unless there is an explicit ingest/import-mode product change.
