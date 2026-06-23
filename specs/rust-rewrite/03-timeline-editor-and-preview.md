@@ -104,17 +104,17 @@ Scope sources:
 
 ## H. Inspector, transform, crop, fades, and keyframes
 
-- [ ] `INS-001`: Clip transforms remain normalized canvas-space values.
-- [ ] `INS-002`: Active motion keyframes override static transform values.
-- [ ] `INS-003`: `position` keyframes use normalized top-left coordinates, not center coordinates.
-- [ ] `INS-004`: `scale` keyframes store normalized width/height, not multiplicative scale factors.
-- [ ] `INS-005`: Crop remains normalized source-space insets (`top`, `right`, `bottom`, `left`).
-- [ ] `INS-006`: Crop interaction remains correct under clip rotation by transforming pointer deltas back into clip space.
-- [ ] `INS-007`: Crop supports free/original/preset aspect constraints.
-- [ ] `INS-008`: Crop enforces a minimum visible fraction and never collapses the visible rect to zero.
-- [ ] `INS-009`: Resizing non-text clips preserves source aspect ratio when source aspect is known.
-- [ ] `INS-010`: Resizing text changes font scaling and then refits the text box to content.
-- [ ] `INS-011`: `fitTextClipToContent` updates both text-box size and horizontal anchoring according to text alignment.
+- [x] `INS-001`: Clip transforms remain normalized canvas-space values.
+- [x] `INS-002`: Active motion keyframes override static transform values.
+- [x] `INS-003`: `position` keyframes use normalized top-left coordinates, not center coordinates.
+- [x] `INS-004`: `scale` keyframes store normalized width/height, not multiplicative scale factors.
+- [x] `INS-005`: Crop remains normalized source-space insets (`top`, `right`, `bottom`, `left`).
+- [x] `INS-006`: Crop interaction remains correct under clip rotation by transforming pointer deltas back into clip space.
+- [x] `INS-007`: Crop supports free/original/preset aspect constraints.
+- [x] `INS-008`: Crop enforces a minimum visible fraction and never collapses the visible rect to zero.
+- [x] `INS-009`: Resizing non-text clips preserves source aspect ratio when source aspect is known.
+- [x] `INS-010`: Resizing text changes font scaling and then refits the text box to content.
+- [x] `INS-011`: `fitTextClipToContent` updates both text-box size and horizontal anchoring according to text alignment.
 - [x] `INS-012`: Keyframes remain clip-relative in storage.
 - [x] `INS-013`: Keyframe interpolation modes remain `linear`, `hold`, and `smooth`.
 - [x] `INS-014`: Duplicate keyframes at the same frame collapse deterministically with last-value-wins behavior.

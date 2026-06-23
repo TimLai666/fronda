@@ -1,4 +1,5 @@
 mod edit;
+mod inspector;
 pub use keyframes::{
     clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, sample_keyframe_track,
     set_clip_duration, split_all_clip_keyframe_tracks, split_keyframe_track,
@@ -18,6 +19,11 @@ use core_model::{Clip, Timeline};
 pub use edit::{
     apply_clip_speed, clear_region, find_clip, link_audio_for_placed_clips, move_clips,
     place_clips, prune_empty_tracks, remove_clips, split_clip, ClipLocation,
+};
+pub use inspector::{
+    clamp_crop_visibility, constrain_crop_aspect, fit_text_clip_to_content,
+    resize_preserving_aspect, resize_text_font, resolved_crop_at, resolved_transform_at,
+    unrotate_crop_delta, AspectConstraint,
 };
 pub use linking::{
     build_link_index, expand_to_link_group, link_clips, link_group_offsets, linked_partner_ids,
