@@ -1,4 +1,4 @@
-use crate::effect::{CurvePoint, Effect, EffectParam, GradeCurve};
+use crate::effect::Effect;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;

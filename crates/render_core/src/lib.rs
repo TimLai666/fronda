@@ -1,4 +1,7 @@
-use core_model::{Clip, ClipType, Crop, Interpolation, Timeline, Transform};
+use core_model::{ClipType, Interpolation, Timeline};
+
+#[cfg(test)]
+use core_model::{Clip, Crop, Transform};
 use serde::{Deserialize, Serialize};
 
 /// Describes how a single clip should be rendered in the composition.

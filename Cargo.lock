@@ -1799,6 +1799,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fronda-agent-contract"
+version = "0.1.0"
+dependencies = [
+ "fronda-core-model",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "fronda-app-shell-gpui"
 version = "0.1.0"
 dependencies = [
