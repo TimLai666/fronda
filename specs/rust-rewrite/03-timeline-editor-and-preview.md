@@ -37,11 +37,11 @@ Scope sources:
 
 ## C. Clip placement, overwrite, and move behavior
 
-- [ ] `CLP-001`: Adding clips to a track uses overwrite semantics, not ripple semantics.
-- [ ] `CLP-002`: Overwrite placement clears conflicting destination regions before inserting new clips.
-- [ ] `CLP-003`: Moving clips removes the moved clips from their source tracks before clearing destination overlaps.
-- [ ] `CLP-004`: Moving clips then clears destination conflicts and inserts the moved clips at exact target frames.
-- [ ] `CLP-005`: Destination track compatibility is enforced for clip moves.
+- [x] `CLP-001`: Adding clips to a track uses overwrite semantics, not ripple semantics.
+- [x] `CLP-002`: Overwrite placement clears conflicting destination regions before inserting new clips.
+- [x] `CLP-003`: Moving clips removes the moved clips from their source tracks before clearing destination overlaps.
+- [x] `CLP-004`: Moving clips then clears destination conflicts and inserts the moved clips at exact target frames.
+- [x] `CLP-005`: Destination track compatibility is enforced for clip moves.
 - [x] `CLP-006`: `clearRegion` deterministically trims, splits, or removes overlapping clips rather than leaving partial overlap.
 - [ ] `CLP-007`: Placing a video asset with audio may auto-create a linked audio clip on an audio track.
 - [ ] `CLP-008`: Auto-created linked audio uses a shared `linkGroupId` with the visual clip.

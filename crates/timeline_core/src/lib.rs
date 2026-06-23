@@ -16,7 +16,8 @@ mod workflow;
 use core_model::{Clip, Timeline};
 
 pub use edit::{
-    apply_clip_speed, clear_region, find_clip, prune_empty_tracks, split_clip, ClipLocation,
+    apply_clip_speed, clear_region, find_clip, move_clips, place_clips, prune_empty_tracks,
+    remove_clips, split_clip, ClipLocation,
 };
 pub use linking::{
     build_link_index, expand_to_link_group, link_clips, link_group_offsets, linked_partner_ids,

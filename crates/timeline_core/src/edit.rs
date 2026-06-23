@@ -2,8 +2,11 @@ use crate::keyframes::{
     clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, set_clip_duration,
     split_all_clip_keyframe_tracks,
 };
-use crate::{compute_overwrite, linked_partner_ids, ClipMathExt, OverwriteAction};
-use core_model::{Timeline, Track};
+use crate::{
+    compute_overwrite, expand_to_link_group, linked_partner_ids, partner_moves_for_move_of,
+    ClipMathExt, OverwriteAction,
+};
+use core_model::{Clip, ClipType, Timeline, Track};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -208,11 +211,167 @@ fn sort_clips(track: &mut Track) {
     track.clips.sort_by_key(|clip| clip.start_frame);
 }
 
+pub fn place_clips(
+    timeline: &mut Timeline,
+    track_index: usize,
+    start_frame: i64,
+    clips: &[Clip],
+) -> Vec<String> {
+    if track_index >= timeline.tracks.len() || clips.is_empty() {
+        return Vec::new();
+    }
+    let total_duration: i64 = clips.iter().map(|c| c.duration_frames).sum();
+    if total_duration <= 0 {
+        return Vec::new();
+    }
+    // CLP-002: Overwrite placement clears conflicting destination regions before inserting
+    clear_region(
+        timeline,
+        track_index,
+        start_frame,
+        start_frame + total_duration,
+        false,
+    );
+    // Place clips sequentially at the target
+    let mut offset = 0i64;
+    let mut placed_ids = Vec::new();
+    for clip in clips {
+        let mut new_clip = clip.clone();
+        new_clip.id = Uuid::new_v4().to_string();
+        new_clip.start_frame = start_frame + offset;
+        timeline.tracks[track_index].clips.push(new_clip.clone());
+        placed_ids.push(new_clip.id);
+        offset += clip.duration_frames;
+    }
+    sort_clips(&mut timeline.tracks[track_index]);
+    placed_ids
+}
+
+pub fn move_clips(
+    timeline: &mut Timeline,
+    clip_ids: &[String],
+    dest_track_index: usize,
+    dest_start_frame: i64,
+) -> Vec<String> {
+    if clip_ids.is_empty() || dest_track_index >= timeline.tracks.len() {
+        return Vec::new();
+    }
+
+    let id_set: BTreeSet<String> = clip_ids.iter().cloned().collect();
+    let expanded = expand_to_link_group(timeline, &id_set);
+    let dest_type = timeline.tracks[dest_track_index].r#type;
+
+    // Phase 1: Collect all data before any mutation
+    let mut primary_clips: Vec<Clip> = Vec::new();
+    for clip_id in clip_ids {
+        let Some(loc) = find_clip(timeline, clip_id) else {
+            return Vec::new();
+        };
+        let clip = timeline.tracks[loc.track_index].clips[loc.clip_index].clone();
+        // CLP-005: destination track compatibility
+        if !clip_types_compatible(&clip.media_type, &dest_type) {
+            return Vec::new();
+        }
+        primary_clips.push(clip);
+    }
+
+    if primary_clips.is_empty() {
+        return Vec::new();
+    }
+
+    // Compute each primary clip's new frame for linked-partner delta propagation
+    let mut primary_new_frames: Vec<(String, i64)> = Vec::new();
+    {
+        let mut offset = 0i64;
+        for clip in &primary_clips {
+            primary_new_frames.push((clip.id.clone(), dest_start_frame + offset));
+            offset += clip.duration_frames;
+        }
+    }
+
+    // Collect linked partner data (partners NOT in original selection)
+    let mut linked_partner_clips: Vec<(Clip, usize, i64)> = Vec::new();
+    for (clip_id, new_frame) in &primary_new_frames {
+        for pm in partner_moves_for_move_of(timeline, clip_id, *new_frame) {
+            if id_set.contains(&pm.clip_id) {
+                continue;
+            }
+            // Avoid duplicates (partner linked to multiple selected clips)
+            if linked_partner_clips
+                .iter()
+                .any(|(c, _, _)| c.id == pm.clip_id)
+            {
+                continue;
+            }
+            let Some(loc) = find_clip(timeline, &pm.clip_id) else {
+                continue;
+            };
+            let partner = timeline.tracks[loc.track_index].clips[loc.clip_index].clone();
+            linked_partner_clips.push((partner, pm.track_index, pm.to_frame));
+        }
+    }
+
+    let total_duration: i64 = primary_clips.iter().map(|c| c.duration_frames).sum();
+
+    // Phase 2: CLP-003 — remove moved clips from source BEFORE clearing destination
+    let remove_ids: Vec<String> = expanded.into_iter().collect();
+    remove_clips(timeline, remove_ids, false);
+
+    // Phase 3: CLP-004 — clear destination conflicts
+    if total_duration > 0 {
+        clear_region(
+            timeline,
+            dest_track_index,
+            dest_start_frame,
+            dest_start_frame + total_duration,
+            false,
+        );
+    }
+
+    // Phase 4: insert primary clips at target
+    let mut offset = 0i64;
+    let mut placed_ids = Vec::new();
+    for mut clip in primary_clips {
+        let new_id = Uuid::new_v4().to_string();
+        clip.id = new_id.clone();
+        clip.start_frame = dest_start_frame + offset;
+        let duration = clip.duration_frames;
+        timeline.tracks[dest_track_index].clips.push(clip);
+        placed_ids.push(new_id);
+        offset += duration;
+    }
+    sort_clips(&mut timeline.tracks[dest_track_index]);
+
+    // Phase 5: place linked partners at their delta positions
+    let mut partner_tracks: BTreeSet<usize> = BTreeSet::new();
+    for (mut clip, track_index, new_start_frame) in linked_partner_clips {
+        clip.start_frame = new_start_frame.max(0);
+        timeline.tracks[track_index].clips.push(clip);
+        partner_tracks.insert(track_index);
+    }
+    for ti in partner_tracks {
+        if ti < timeline.tracks.len() {
+            sort_clips(&mut timeline.tracks[ti]);
+        }
+    }
+
+    placed_ids
+}
+
+fn clip_types_compatible(clip_type: &ClipType, track_type: &ClipType) -> bool {
+    match (clip_type, track_type) {
+        (ClipType::Audio, ClipType::Audio) => true,
+        (ClipType::Audio, _) => false,
+        (_, ClipType::Audio) => false,
+        _ => true,
+    }
+}
+
 pub fn prune_empty_tracks(timeline: &mut Timeline) {
     timeline.tracks.retain(|track| !track.clips.is_empty());
 }
 
-fn remove_clips<I>(timeline: &mut Timeline, ids: I, prune: bool)
+pub fn remove_clips<I>(timeline: &mut Timeline, ids: I, prune: bool)
 where
     I: IntoIterator<Item = String>,
 {

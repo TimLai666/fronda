@@ -2,7 +2,7 @@ use core_model::{
     AnimPair, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, Timeline, Track,
     Transform,
 };
-use timeline_core::{apply_clip_speed, clear_region, split_clip};
+use timeline_core::{apply_clip_speed, clear_region, move_clips, place_clips, split_clip};
 
 fn clip(id: &str, media_type: ClipType, start_frame: i64, duration_frames: i64) -> Clip {
     Clip {
@@ -335,4 +335,200 @@ fn clp_014_remove_clips_keeps_unrelated_selected_ids() {
         "unrelated id should remain"
     );
     assert_eq!(t.selected_clip_ids.len(), 2);
+}
+
+// ─── CLP-001/002: place_clips overwrite semantics ───
+
+#[test]
+fn clp_001_place_clips_uses_overwrite_semantics() {
+    let existing = clip("existing", ClipType::Video, 10, 30);
+    let new_clip = clip("new", ClipType::Video, 0, 20);
+    let mut t = timeline(vec![video_track(vec![existing])]);
+
+    let placed = place_clips(&mut t, 0, 0, &[new_clip]);
+
+    assert_eq!(placed.len(), 1);
+    assert_eq!(
+        t.tracks[0]
+            .clips
+            .iter()
+            .find(|c| c.id == placed[0])
+            .map(|c| c.start_frame),
+        Some(0)
+    );
+    let existing_after = t.tracks[0]
+        .clips
+        .iter()
+        .find(|c| c.id == "existing")
+        .unwrap();
+    assert_eq!(existing_after.start_frame, 20);
+    assert_eq!(existing_after.duration_frames, 20);
+}
+
+#[test]
+fn clp_002_place_clips_clears_destination() {
+    let c1 = clip("c1", ClipType::Video, 0, 50);
+    let c2 = clip("c2", ClipType::Video, 50, 50);
+    let new_clip = clip("new", ClipType::Video, 0, 100);
+    let mut t = timeline(vec![video_track(vec![c1, c2])]);
+
+    let placed = place_clips(&mut t, 0, 0, &[new_clip]);
+
+    assert_eq!(placed.len(), 1);
+    assert!(t.tracks[0].clips.iter().all(|c| c.id == placed[0]));
+}
+
+#[test]
+fn clp_001_place_clips_returns_empty_for_bad_track() {
+    let c = clip("c1", ClipType::Video, 0, 30);
+    let mut t = timeline(vec![video_track(vec![])]);
+    assert!(place_clips(&mut t, 99, 0, &[c]).is_empty());
+}
+
+#[test]
+fn clp_001_place_clips_returns_empty_for_empty_slice() {
+    let mut t = timeline(vec![video_track(vec![])]);
+    assert!(place_clips(&mut t, 0, 0, &[]).is_empty());
+}
+
+// ─── CLP-003/004/005: move_clips ───
+
+#[test]
+fn clp_003_move_clips_removes_from_source() {
+    let c1 = clip("c1", ClipType::Video, 0, 30);
+    let c2 = clip("c2", ClipType::Video, 30, 30);
+    let mut t = timeline(vec![video_track(vec![c1, c2])]);
+
+    let placed = move_clips(&mut t, &["c1".to_string()], 0, 100);
+
+    assert_eq!(placed.len(), 1);
+    assert!(t.tracks[0].clips.iter().all(|c| c.id != "c1"));
+    assert!(t.tracks[0]
+        .clips
+        .iter()
+        .any(|c| c.id == "c2" && c.start_frame == 30));
+}
+
+#[test]
+fn clp_004_move_clips_inserts_at_target() {
+    let c1 = clip("c1", ClipType::Video, 0, 30);
+    let c2 = clip("c2", ClipType::Video, 30, 30);
+    let mut t = timeline(vec![video_track(vec![c1, c2])]);
+
+    let placed = move_clips(&mut t, &["c1".to_string()], 0, 50);
+
+    assert_eq!(placed.len(), 1);
+    let moved = t.tracks[0]
+        .clips
+        .iter()
+        .find(|c| c.id == placed[0])
+        .unwrap();
+    assert_eq!(moved.start_frame, 50);
+    assert_eq!(moved.duration_frames, 30);
+    assert!(t.tracks[0].clips.iter().any(|c| c.id == "c2"));
+}
+
+#[test]
+fn clp_004_move_clips_multiple_with_spacing() {
+    let c1 = clip("c1", ClipType::Video, 0, 30);
+    let c2 = clip("c2", ClipType::Video, 30, 20);
+    let mut t = timeline(vec![video_track(vec![c1, c2])]);
+
+    let placed = move_clips(&mut t, &["c1".to_string(), "c2".to_string()], 0, 100);
+
+    assert_eq!(placed.len(), 2);
+    let p1 = t.tracks[0]
+        .clips
+        .iter()
+        .find(|c| c.id == placed[0])
+        .unwrap();
+    let p2 = t.tracks[0]
+        .clips
+        .iter()
+        .find(|c| c.id == placed[1])
+        .unwrap();
+    assert_eq!(p1.start_frame, 100);
+    assert_eq!(p1.duration_frames, 30);
+    assert_eq!(p2.start_frame, 130);
+    assert_eq!(p2.duration_frames, 20);
+}
+
+#[test]
+fn clp_005_move_clips_enforces_track_compatibility() {
+    let audio = clip("a1", ClipType::Audio, 0, 30);
+    let mut t = timeline(vec![video_track(vec![]), audio_track(vec![audio])]);
+
+    let result = move_clips(&mut t, &["a1".to_string()], 0, 0);
+    assert!(result.is_empty(), "audio to video should be refused");
+}
+
+#[test]
+fn clp_005_move_clips_allows_video_to_video() {
+    let video = clip("v1", ClipType::Video, 0, 30);
+    let mut t = timeline(vec![video_track(vec![video]), audio_track(vec![])]);
+
+    let result = move_clips(&mut t, &["v1".to_string()], 0, 50);
+    assert!(!result.is_empty());
+}
+
+#[test]
+fn clp_005_move_clips_allows_audio_to_audio() {
+    let audio = clip("a1", ClipType::Audio, 0, 30);
+    let mut t = timeline(vec![video_track(vec![]), audio_track(vec![audio])]);
+
+    let result = move_clips(&mut t, &["a1".to_string()], 1, 50);
+    assert!(!result.is_empty());
+}
+
+#[test]
+fn clp_004_move_clips_cross_track() {
+    let v1 = clip("v1", ClipType::Video, 0, 30);
+    let mut t = timeline(vec![video_track(vec![v1]), video_track(vec![])]);
+
+    let placed = move_clips(&mut t, &["v1".to_string()], 1, 10);
+    assert!(!placed.is_empty());
+    assert!(!t.tracks[0].clips.iter().any(|c| c.id == "v1"));
+    assert!(t.tracks[1].clips.iter().any(|c| c.id == placed[0]));
+}
+
+#[test]
+fn clp_004_move_clips_overwrite_at_target() {
+    let c1 = clip("c1", ClipType::Video, 0, 30);
+    let c2 = clip("c2", ClipType::Video, 20, 30);
+    let c3 = clip("c3", ClipType::Video, 100, 30);
+    let mut t = timeline(vec![video_track(vec![c1, c2, c3])]);
+
+    let placed = move_clips(&mut t, &["c1".to_string()], 0, 20);
+    assert_eq!(placed.len(), 1);
+    let moved = t.tracks[0]
+        .clips
+        .iter()
+        .find(|c| c.id == placed[0])
+        .unwrap();
+    assert_eq!(moved.start_frame, 20);
+    assert!(t.tracks[0].clips.iter().all(|c| c.id != "c2"));
+}
+
+#[test]
+fn clp_003_move_clips_same_track_no_duplicate() {
+    let c1 = clip("c1", ClipType::Video, 0, 30);
+    let c2 = clip("c2", ClipType::Video, 30, 30);
+    let mut t = timeline(vec![video_track(vec![c1, c2])]);
+
+    let placed = move_clips(&mut t, &["c1".to_string()], 0, 50);
+    assert_eq!(placed.len(), 1);
+    let moved = t.tracks[0]
+        .clips
+        .iter()
+        .find(|c| c.id == placed[0])
+        .unwrap();
+    assert_eq!(moved.start_frame, 50);
+    assert_eq!(t.tracks[0].clips.len(), 2);
+}
+
+#[test]
+fn clp_003_move_clips_returns_empty_for_unknown_id() {
+    let c1 = clip("c1", ClipType::Video, 0, 30);
+    let mut t = timeline(vec![video_track(vec![c1])]);
+    assert!(move_clips(&mut t, &["ghost".to_string()], 0, 50).is_empty());
 }
