@@ -1,3 +1,4 @@
+mod clip_properties;
 mod edit;
 mod inspector;
 pub use keyframes::{
@@ -16,6 +17,9 @@ mod workflow;
 
 use core_model::{Clip, Timeline};
 
+pub use clip_properties::{
+    set_clip_properties, write_position, write_scale, PartialTransform, PropertyChanges,
+};
 pub use edit::{
     apply_clip_speed, clear_region, find_clip, link_audio_for_placed_clips, move_clips,
     place_clips, prune_empty_tracks, remove_clips, split_clip, ClipLocation,

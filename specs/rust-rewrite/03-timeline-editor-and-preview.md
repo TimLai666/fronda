@@ -152,7 +152,9 @@ Scope sources:
 These upstream PRs define behavior the Rust rewrite must eventually match. Bug fixes (must-fix) are listed first, followed by feature additions.
 
 - `Upstream #115`: `writePosition` (or equivalent commit-position logic) must guard fallback transform writes behind an `else` — when `positionTrack isActive`, only keyframes are updated and `transform.centerX/Y` must be left untouched. Without this guard, clearing position animation leaves stale keyframe values in the static transform.
+  \- Implemented in `write_position()` with `#[test] write_position_with_active_keyframe_writes_keyframe_only` verifying static transform is unchanged.
 - `Upstream #114`: When `set_clip_properties` (or equivalent agent tool) receives a partial transform dict, every field not present in the input (`rotation`, `flipHorizontal`, `flipVertical`, and any future fields) must be carried forward from the clip's current transform. Fields must not silently default to zero.
+  \- Implemented via `PartialTransform::merge_into()` with `#[test] partial_transform_empty_returns_base` and `partial_transform_merges_selected_fields` verifying rotation/flip preservation.
 - `Upstream #57`: Platform transcription locale matching must strip Unicode extension tags (the `-u-*` suffix) from BCP 47 identifiers before comparing against supported locale lists. The Speech/STT framework binding does not recognise composite tags like `en-US-u-rg-zazzzz`.
 
 - `Upstream #99`: The compositor / render pipeline must support per-clip chroma key, blend modes, and color grading via a custom `VideoCompositor` (equivalent to `ColorVideoCompositor.swift` + `AVVideoCompositing`). When any clip uses effects, the compositor switches to effect-aware mode; otherwise it falls back to a passthrough compositor. See `01-foundation-and-project-model.md` for data-model requirements.
