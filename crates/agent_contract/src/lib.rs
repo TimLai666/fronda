@@ -2,6 +2,7 @@
 
 pub mod id_short;
 pub mod mention;
+pub mod mutation;
 pub mod read_tools;
 pub mod session;
 pub mod tools;
