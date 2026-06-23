@@ -2,6 +2,7 @@
 members = [
     "crates/core_model",
     "crates/project_io",
+    "crates/render_core",
     "crates/timeline_core",
     "crates/app_shell_gpui",
 ]

@@ -606,3 +606,125 @@ fn refuses_empty_ranges() {
     );
     assert!(matches!(result, RippleDeleteOutcome::Refused(_)));
 }
+
+// ─── RPL-012: Ripple insert with split splits straddling clips ───
+
+#[test]
+fn rpl_012_ripple_insert_with_split_splits_straddling_clip() {
+    // Track has a clip spanning [20, 80), insert at frame 40
+    let c1 = clip("c1", 20, 60);
+    let mut t = timeline(vec![video_track(vec![c1])]);
+    t.tracks[0].sync_locked = false; // only target track
+
+    let config = timeline_core::RippleInsertConfig {
+        track_index: 0,
+        insert_frame: 40,
+        clips: vec![timeline_core::RippleInsertClipSpec {
+            asset_id: "new-asset".to_string(),
+            duration_frames: 30,
+            trim_start_frame: None,
+            trim_end_frame: None,
+        }],
+        linked_audio_track_index: None,
+    };
+
+    let result = timeline_core::compute_ripple_insert_with_split(&t, config);
+    match result {
+        timeline_core::RippleInsertWithSplitOutcome::Ok(plan) => {
+            assert_eq!(plan.split_actions.len(), 1, "should have one split action");
+            assert_eq!(plan.split_actions[0].0, 0); // track 0
+            assert_eq!(plan.split_actions[0].1, "c1"); // clip id
+            assert_eq!(plan.split_actions[0].2, 40); // split at frame 40
+            assert_eq!(plan.insert.total_push, 30);
+        }
+        other => panic!("expected Ok, got {:?}", other),
+    }
+}
+
+#[test]
+fn rpl_012_ripple_insert_with_split_multiple_tracks() {
+    // Two sync-locked tracks, both straddling insert at frame 40
+    let v1 = clip("v1", 20, 80); // straddles frame 40: [20, 100)
+    let a1 = clip("a1", 10, 50); // straddles frame 40: [10, 60)
+    let t = timeline(vec![video_track(vec![v1]), audio_track(vec![a1])]);
+
+    let config = timeline_core::RippleInsertConfig {
+        track_index: 0,
+        insert_frame: 40,
+        clips: vec![timeline_core::RippleInsertClipSpec {
+            asset_id: "new".to_string(),
+            duration_frames: 20,
+            trim_start_frame: None,
+            trim_end_frame: None,
+        }],
+        linked_audio_track_index: None,
+    };
+
+    let result = timeline_core::compute_ripple_insert_with_split(&t, config);
+    match result {
+        timeline_core::RippleInsertWithSplitOutcome::Ok(plan) => {
+            // Both tracks have sync_locked=true (our helper sets it)
+            // Track 0 has straddler v1 at [20,100), insert at 40
+            // Track 1 has a1 at [10,60), insert at 40 — also straddles
+            assert_eq!(plan.split_actions.len(), 2, "should have two split actions");
+            assert_eq!(plan.insert.total_push, 20);
+        }
+        other => panic!("expected Ok, got {:?}", other),
+    }
+}
+
+#[test]
+fn rpl_012_ripple_insert_with_split_no_straddle_delegates_to_regular_insert() {
+    let c1 = clip("c1", 0, 30);
+    let c2 = clip("c2", 50, 30);
+    let mut t = timeline(vec![video_track(vec![c1, c2])]);
+    t.tracks[0].sync_locked = false;
+
+    let config = timeline_core::RippleInsertConfig {
+        track_index: 0,
+        insert_frame: 30, // between clips, no straddle
+        clips: vec![timeline_core::RippleInsertClipSpec {
+            asset_id: "new".to_string(),
+            duration_frames: 10,
+            trim_start_frame: None,
+            trim_end_frame: None,
+        }],
+        linked_audio_track_index: None,
+    };
+
+    match timeline_core::compute_ripple_insert_with_split(&t, config) {
+        timeline_core::RippleInsertWithSplitOutcome::Ok(plan) => {
+            assert!(plan.split_actions.is_empty(), "no straddle = no splits");
+            assert_eq!(plan.insert.total_push, 10);
+        }
+        other => panic!("expected Ok, got {:?}", other),
+    }
+}
+
+#[test]
+fn rpl_012_ripple_insert_with_split_at_boundary_no_straddle() {
+    // Insert at clip end_frame — no straddle, no split needed
+    let c1 = clip("c1", 0, 40);
+    let mut t = timeline(vec![video_track(vec![c1])]);
+    t.tracks[0].sync_locked = false;
+
+    let config = timeline_core::RippleInsertConfig {
+        track_index: 0,
+        insert_frame: 40, // at clip end — boundary, not a straddle
+        clips: vec![timeline_core::RippleInsertClipSpec {
+            asset_id: "new".to_string(),
+            duration_frames: 10,
+            trim_start_frame: None,
+            trim_end_frame: None,
+        }],
+        linked_audio_track_index: None,
+    };
+
+    match timeline_core::compute_ripple_insert_with_split(&t, config) {
+        timeline_core::RippleInsertWithSplitOutcome::Ok(plan) => {
+            assert!(plan.split_actions.is_empty(), "end boundary = no straddle");
+            assert_eq!(plan.insert.total_push, 10);
+        }
+        other => panic!("expected Ok, got {:?}", other),
+    }
+}

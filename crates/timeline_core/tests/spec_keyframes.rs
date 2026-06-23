@@ -287,3 +287,169 @@ fn ins_015_set_duration_clamps_fades() {
     assert_eq!(clip.fade_in_frames, 40);
     assert_eq!(clip.fade_out_frames, 10);
 }
+
+fn test_clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
+    Clip {
+        id: id.to_string(),
+        media_ref: format!("asset-{id}"),
+        media_type: ClipType::Video,
+        source_clip_type: ClipType::Video,
+        start_frame,
+        duration_frames,
+        trim_start_frame: 0,
+        trim_end_frame: 0,
+        speed: 1.0,
+        volume: 1.0,
+        fade_in_frames: 0,
+        fade_out_frames: 0,
+        fade_in_interpolation: Interpolation::Linear,
+        fade_out_interpolation: Interpolation::Linear,
+        opacity: 1.0,
+        transform: Transform::default(),
+        crop: Crop::default(),
+        link_group_id: None,
+        caption_group_id: None,
+        text_content: None,
+        text_style: None,
+        opacity_track: None,
+        position_track: None,
+        scale_track: None,
+        rotation_track: None,
+        crop_track: None,
+        volume_track: None,
+    }
+}
+
+// INS-016: Audio volume keyframes support direct editing in time and dB/value space
+// while respecting neighboring keyframe ordering.
+#[test]
+fn ins_016_volume_keyframes_sample_linear() {
+    let mut clip = test_clip("c1", 0, 100);
+    clip.volume_track = Some(KeyframeTrack {
+        keyframes: vec![
+            Keyframe {
+                frame: 0,
+                value: 0.0,
+                interpolation_out: Interpolation::Linear,
+            },
+            Keyframe {
+                frame: 100,
+                value: 1.0,
+                interpolation_out: Interpolation::Linear,
+            },
+        ],
+    });
+    assert!(
+        (sample_keyframe_track(clip.volume_track.as_ref().unwrap(), 0, 999.0) - 0.0).abs() < 0.001
+    );
+    assert!(
+        (sample_keyframe_track(clip.volume_track.as_ref().unwrap(), 50, 999.0) - 0.5).abs() < 0.001
+    );
+    assert!(
+        (sample_keyframe_track(clip.volume_track.as_ref().unwrap(), 100, 999.0) - 1.0).abs()
+            < 0.001
+    );
+}
+
+#[test]
+fn ins_016_volume_keyframes_clamp_on_duration_change() {
+    let mut clip = test_clip("c1", 0, 100);
+    clip.volume_track = Some(KeyframeTrack {
+        keyframes: vec![
+            Keyframe {
+                frame: 0,
+                value: 0.0,
+                interpolation_out: Interpolation::Linear,
+            },
+            Keyframe {
+                frame: 100,
+                value: 1.0,
+                interpolation_out: Interpolation::Smooth,
+            },
+        ],
+    });
+    // Shrink duration — keyframe at 100 should be removed
+    set_clip_duration(&mut clip, 50);
+    assert_eq!(clip.volume_track.as_ref().unwrap().keyframes.len(), 1);
+    assert_eq!(clip.volume_track.as_ref().unwrap().keyframes[0].frame, 0);
+}
+
+#[test]
+fn ins_016_volume_keyframes_upsert_last_value_wins() {
+    let track = KeyframeTrack {
+        keyframes: vec![
+            Keyframe {
+                frame: 10,
+                value: 0.5,
+                interpolation_out: Interpolation::Linear,
+            },
+            Keyframe {
+                frame: 10,
+                value: 0.8,
+                interpolation_out: Interpolation::Hold,
+            },
+        ],
+    };
+    let mut clip = test_clip("c1", 0, 100);
+    clip.volume_track = Some(track);
+    set_clip_duration(&mut clip, 100);
+    let kf = clip
+        .volume_track
+        .as_ref()
+        .unwrap()
+        .keyframes
+        .iter()
+        .find(|k| k.frame == 10)
+        .unwrap();
+    assert!(
+        (kf.value - 0.8).abs() < 0.001,
+        "last-value-wins: expected 0.8, got {}",
+        kf.value
+    );
+    assert_eq!(kf.interpolation_out, Interpolation::Hold);
+}
+
+#[test]
+fn ins_016_volume_keyframes_interpolation_modes() {
+    let mut clip = test_clip("c1", 0, 100);
+    clip.volume_track = Some(KeyframeTrack {
+        keyframes: vec![
+            Keyframe {
+                frame: 0,
+                value: 0.0,
+                interpolation_out: Interpolation::Linear,
+            },
+            Keyframe {
+                frame: 50,
+                value: 0.5,
+                interpolation_out: Interpolation::Hold,
+            },
+            Keyframe {
+                frame: 100,
+                value: 1.0,
+                interpolation_out: Interpolation::Linear,
+            },
+        ],
+    });
+    // Before hold keyframe: linear from 0 to 0.5
+    let v25 = sample_keyframe_track(clip.volume_track.as_ref().unwrap(), 25, 999.0);
+    assert!(
+        (v25 - 0.25).abs() < 0.001,
+        "linear before hold: expected 0.25, got {}",
+        v25
+    );
+    // At hold keyframe frame: value is 0.5
+    let v50 = sample_keyframe_track(clip.volume_track.as_ref().unwrap(), 50, 999.0);
+    assert!(
+        (v50 - 0.5).abs() < 0.001,
+        "hold at frame: expected 0.5, got {}",
+        v50
+    );
+    // After hold keyframe with hold interpolation: stays at 0.5
+    let v75 = sample_keyframe_track(clip.volume_track.as_ref().unwrap(), 75, 999.0);
+    assert!(
+        (v75 - 0.5).abs() < 0.001,
+        "hold after frame: expected 0.5, got {}",
+        v75
+    );
+}

@@ -1,0 +1,14 @@
+[package]
+name = "render_core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "render_core"
+path = "src/lib.rs"
+
+[dependencies]
+core_model = { package = "fronda-core-model", path = "../core_model" }
+serde.workspace = true
+serde_json.workspace = true

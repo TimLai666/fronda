@@ -84,7 +84,7 @@ Scope sources:
 - [x] `RPL-009`: Ripple insert opens a gap on the target track and every sync-locked track.
 - [x] `RPL-010`: Ripple insert also opens the gap on the linked-audio destination track when auto-linked audio will be created.
 - [x] `RPL-011`: If a pushed track contains a straddling clip at the insertion point, that clip is split first so its right half rides the ripple.
-- [x] `RPL-012`: Ripple insert places new clips sequentially inside the opened gap.
+- [x] `RPL-012`: Ripple insert places new clips sequentially inside the opened gap. (Straddle-split workflow verified via `compute_ripple_insert_with_split`.)
 - [x] `RPL-013`: A gap selected earlier but later filled by an out-of-band edit becomes invalid and is cleared instead of being ripple-deleted incorrectly.
 
 ## G. Snapping, drag, and range-selection behavior
@@ -119,7 +119,7 @@ Scope sources:
 - [x] `INS-013`: Keyframe interpolation modes remain `linear`, `hold`, and `smooth`.
 - [x] `INS-014`: Duplicate keyframes at the same frame collapse deterministically with last-value-wins behavior.
 - [x] `INS-015`: Fade lengths are clamped so `fadeInFrames + fadeOutFrames <= durationFrames`.
-- [ ] `INS-016`: Audio volume keyframes support direct editing in time and dB/value space while respecting neighboring keyframe ordering.
+- [x] `INS-016`: Audio volume keyframes support direct editing in time and dB/value space while respecting neighboring keyframe ordering.
 
 ## I. Preview and render-pipeline behavior
 

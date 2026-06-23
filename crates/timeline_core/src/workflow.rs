@@ -228,6 +228,55 @@ pub fn compute_ripple_insert(
     })
 }
 
+// ─── Ripple insert with split ───
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RippleInsertWithSplitOutcome {
+    Ok(RippleInsertWithSplitPlan),
+    Refused(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RippleInsertWithSplitPlan {
+    /// The regular insert report
+    pub insert: RippleInsertReport,
+    /// Split actions to execute before the insert.
+    /// Each entry: (track_index, clip_id, split_at_frame).
+    pub split_actions: Vec<(usize, String, i64)>,
+}
+
+/// Like [`compute_ripple_insert`] but also detects straddling clips at the
+/// insertion point and generates split actions so the editor can split them
+/// before pushing. The push shifts already account for the right half of any
+/// straddled clip starting at `insert_frame` after the split.
+pub fn compute_ripple_insert_with_split(
+    timeline: &Timeline,
+    config: RippleInsertConfig,
+) -> RippleInsertWithSplitOutcome {
+    let insert_report = match compute_ripple_insert(timeline, config.clone()) {
+        RippleInsertOutcome::Ok(report) => report,
+        RippleInsertOutcome::Refused(msg) => {
+            return RippleInsertWithSplitOutcome::Refused(msg);
+        }
+    };
+
+    let mut split_actions: Vec<(usize, String, i64)> = Vec::new();
+    for ti in &insert_report.push_track_indices {
+        if let Some(straddler) = timeline.tracks[*ti]
+            .clips
+            .iter()
+            .find(|c| c.start_frame < config.insert_frame && config.insert_frame < c.end_frame())
+        {
+            split_actions.push((*ti, straddler.id.clone(), config.insert_frame));
+        }
+    }
+
+    RippleInsertWithSplitOutcome::Ok(RippleInsertWithSplitPlan {
+        insert: insert_report,
+        split_actions,
+    })
+}
+
 pub fn timing_propagation_partners(
     timeline: &Timeline,
     clip_ids: &BTreeSet<String>,
