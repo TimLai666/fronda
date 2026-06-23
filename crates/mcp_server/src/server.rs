@@ -294,7 +294,11 @@ mod tests {
         let resp = handle_json_rpc(&req);
         let result = resp.result.unwrap();
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
-        assert_eq!(tools.len(), 31, "MCP-003: exactly 31 tools");
+        assert_eq!(
+            tools.len(),
+            37,
+            "MCP-003: exactly 37 tools (base + 6 upstream PRs)"
+        );
     }
 
     #[test]

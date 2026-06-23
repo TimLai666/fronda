@@ -368,6 +368,7 @@ mod tests {
             height: 1080,
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
             tracks: vec![
                 Track {
                     id: "track-v".into(),

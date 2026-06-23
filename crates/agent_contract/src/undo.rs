@@ -159,6 +159,7 @@ mod tests {
             settings_configured: false,
             selected_clip_ids: Default::default(),
             tracks: vec![],
+            transcription_language: None,
         }
     }
 

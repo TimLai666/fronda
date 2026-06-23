@@ -1,6 +1,6 @@
 use core_model::{
     AgentContentBlock, ChatSession, ClipType, GenerationLog, Interpolation, MediaManifest,
-    MediaSource, Timeline, ToolResultBlock,
+    MediaSource, TextStyle, Timeline, ToolResultBlock,
 };
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -90,6 +90,81 @@ fn legacy_text_style_missing_font_scale_defaults_to_one() {
     let style = timeline.tracks[0].clips[1].text_style.as_ref().unwrap();
 
     assert_eq!(style.font_scale, 1.0);
+}
+
+#[test]
+fn upstream_065_font_weight_defaults_and_round_trips() {
+    // Upstream PR #65: font_weight defaults to 400, round-trips through JSON.
+    let encoded = json!({
+        "fontName": "Helvetica",
+        "fontWeight": 700
+    });
+    let style: TextStyle = serde_json::from_value(encoded).unwrap();
+    approx_eq(style.font_weight, 700.0);
+    assert_eq!(style.font_name, "Helvetica");
+
+    // Missing font_weight defaults to 400
+    let encoded_no_weight = json!({
+        "fontName": "Helvetica"
+    });
+    let style2: TextStyle = serde_json::from_value(encoded_no_weight).unwrap();
+    approx_eq(style2.font_weight, 400.0);
+
+    // Round-trip
+    let reencoded = serde_json::to_value(&style).unwrap();
+    assert_eq!(reencoded["fontWeight"], json!(700.0));
+}
+
+#[test]
+fn upstream_065_font_weight_legacy_missing_defaults_to_400() {
+    // Legacy fixture has no fontWeight → should decode as 400
+    let timeline: Timeline = read_fixture_json("legacy-defaults.palmier", "project.json");
+    let style = timeline.tracks[0].clips[1].text_style.as_ref().unwrap();
+    assert!(
+        (style.font_weight - 400.0).abs() < 1e-9,
+        "expected 400, got {}",
+        style.font_weight
+    );
+}
+
+#[test]
+fn upstream_040_timeline_defaults_to_auto() {
+    // PR #40: New timeline has transcription_language == None (Auto/system default)
+    let timeline = Timeline::default();
+    assert_eq!(timeline.transcription_language, None);
+}
+
+#[test]
+fn upstream_040_timeline_round_trips_language() {
+    // PR #40: Setting transcription_language persists through encode/decode.
+    let mut timeline = Timeline::default();
+    timeline.transcription_language = Some("fr-FR".to_string());
+    let json = serde_json::to_value(&timeline).unwrap();
+    assert_eq!(json["transcriptionLanguage"], json!("fr-FR"));
+
+    let decoded: Timeline = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded.transcription_language, Some("fr-FR".to_string()));
+}
+
+#[test]
+fn upstream_040_auto_is_omitted_from_encoding() {
+    // PR #40: When transcription_language is None, it's omitted from JSON output.
+    let timeline = Timeline::default();
+    let json = serde_json::to_value(&timeline).unwrap();
+    assert!(
+        !json
+            .as_object()
+            .unwrap()
+            .contains_key("transcriptionLanguage"),
+        "None transcriptionLanguage should be omitted from JSON"
+    );
+}
+
+#[test]
+fn upstream_040_legacy_missing_transcription_language_defaults_to_none() {
+    // PR #40: Legacy projects without transcriptionLanguage → None (backward compat)
+    let timeline: Timeline = read_fixture_json("legacy-defaults.palmier", "project.json");
+    assert_eq!(timeline.transcription_language, None);
 }
 
 #[test]

@@ -592,6 +592,10 @@ pub fn validate_add_texts(
 #[derive(Debug, Clone, PartialEq)]
 pub struct AddCaptionsInput {
     pub clip_ids: Option<Vec<String>>,
+    /// Optional BCP-47 language tag. PR #40.
+    pub language: Option<String>,
+    /// Optional max words per caption group (1-12). PR #92.
+    pub words_per_caption: Option<u32>,
 }
 
 /// MUT-021: Supports explicit `clipIds` or auto-detect.
@@ -613,7 +617,21 @@ pub fn validate_add_captions(input: &Value) -> ValidationResult<AddCaptionsInput
         None => None,
     };
 
-    ValidationResult::Ok(AddCaptionsInput { clip_ids })
+    let language = input
+        .get("language")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let words_per_caption = input
+        .get("wordsPerCaption")
+        .and_then(|v| v.as_u64())
+        .map(|n| n.min(12).max(1) as u32);
+
+    ValidationResult::Ok(AddCaptionsInput {
+        clip_ids,
+        language,
+        words_per_caption,
+    })
 }
 
 // === MUT-022: folder/media tools ==========================================
@@ -1481,6 +1499,48 @@ mod tests {
         let input = json!({"clipIds": []});
         let result = validate_add_captions(&input);
         assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn upstream_040_add_captions_with_language() {
+        // PR #40: add_captions accepts optional language parameter
+        let input = json!({"clipIds": ["c1"], "language": "fr-FR"});
+        let result = validate_add_captions(&input);
+        let parsed = result.into_ok().expect("language");
+        assert_eq!(parsed.language, Some("fr-FR".to_string()));
+        assert_eq!(parsed.clip_ids, Some(vec!["c1".to_string()]));
+    }
+
+    #[test]
+    fn upstream_092_add_captions_with_words_per_caption() {
+        // PR #92: add_captions accepts optional wordsPerCaption (clamped 1-12)
+        let input = json!({"wordsPerCaption": 3});
+        let result = validate_add_captions(&input);
+        let parsed = result.into_ok().expect("wordsPerCaption");
+        assert_eq!(parsed.words_per_caption, Some(3));
+    }
+
+    #[test]
+    fn upstream_092_words_per_caption_clamped_to_range() {
+        // PR #92: wordsPerCaption is clamped to 1-12
+        let input = json!({"wordsPerCaption": 99});
+        let result = validate_add_captions(&input);
+        let parsed = result.into_ok().expect("wordsPerCaption clamped");
+        assert_eq!(parsed.words_per_caption, Some(12));
+
+        let input = json!({"wordsPerCaption": 0});
+        let result = validate_add_captions(&input);
+        let parsed = result.into_ok().expect("wordsPerCaption min");
+        assert_eq!(parsed.words_per_caption, Some(1));
+    }
+
+    #[test]
+    fn upstream_040_add_captions_language_optional() {
+        // PR #40: language is optional, defaults to None
+        let input = json!({"clipIds": ["c1"]});
+        let result = validate_add_captions(&input);
+        let parsed = result.into_ok().expect("no language");
+        assert_eq!(parsed.language, None);
     }
 
     // ---- MUT-022: folder/media tools ------------------------------------

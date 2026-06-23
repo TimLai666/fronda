@@ -87,6 +87,10 @@ fn default_text_border() -> TextFill {
     }
 }
 
+fn default_font_weight() -> f64 {
+    400.0
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ClipType {
@@ -349,6 +353,9 @@ pub struct TextStyle {
     pub background: TextFill,
     #[serde(default = "default_text_border")]
     pub border: TextFill,
+    /// Font weight (400 = normal, 700 = bold). Upstream PR #65.
+    #[serde(default = "default_font_weight")]
+    pub font_weight: f64,
 }
 
 impl Default for TextStyle {
@@ -362,6 +369,7 @@ impl Default for TextStyle {
             shadow: TextShadow::default(),
             background: default_text_background(),
             border: default_text_border(),
+            font_weight: 400.0,
         }
     }
 }
@@ -447,6 +455,12 @@ pub struct Timeline {
     pub selected_clip_ids: HashSet<String>,
     #[serde(default)]
     pub tracks: Vec<Track>,
+    /// Spoken language for transcription, as BCP-47 tag.
+    /// When None, the system/engine default language is used.
+    /// Serialized only when set (skip_serializing_if = Option::is_none).
+    /// Upstream PR #40.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcription_language: Option<String>,
 }
 
 impl Default for Timeline {
@@ -458,6 +472,7 @@ impl Default for Timeline {
             settings_configured: false,
             selected_clip_ids: HashSet::new(),
             tracks: Vec::new(),
+            transcription_language: None,
         }
     }
 }

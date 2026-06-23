@@ -500,6 +500,7 @@ mod tests {
             height: 1080,
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
             tracks: vec![
                 Track {
                     id: "v-track".into(),
@@ -722,6 +723,7 @@ mod tests {
             height: 1080,
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
             tracks: vec![
                 Track {
                     id: "v-track".into(),
@@ -813,6 +815,7 @@ mod tests {
             height: 1080,
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
             tracks: vec![Track {
                 id: "v".into(),
                 r#type: ClipType::Video,
@@ -862,6 +865,7 @@ mod tests {
             height: 1080,
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
             tracks: vec![Track {
                 id: "a".into(),
                 r#type: ClipType::Audio,
@@ -912,6 +916,7 @@ mod tests {
             height: 1080,
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
             tracks: vec![Track {
                 id: "a".into(),
                 r#type: ClipType::Audio,

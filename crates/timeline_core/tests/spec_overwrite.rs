@@ -55,6 +55,7 @@ fn timeline(clips: Vec<Clip>) -> Timeline {
             sync_locked: true,
             clips,
         }],
+        transcription_language: None,
     }
 }
 

@@ -79,7 +79,12 @@ fn add_captions() -> ToolDefinition {
     ToolDefinition {
         name: "add_captions",
         description: "Generate captions for clips in the timeline.",
-        input_schema: object(&[("trackId", string("Target track id"))]),
+        input_schema: object(&[
+            ("trackId", string("Target track id")),
+            ("clipIds", string("Optional specific clip ids to caption (comma-separated)")),
+            ("language", string("Optional BCP-47 spoken language. Overrides project transcriptionLanguage for this call; falls back to system language if neither is set.")),
+            ("wordsPerCaption", string("Optional max words per caption group (1-12, default 6). Upstream PR #92.")),
+        ]),
     }
 }
 
@@ -175,7 +180,7 @@ fn get_media() -> ToolDefinition {
 fn get_timeline() -> ToolDefinition {
     ToolDefinition {
         name: "get_timeline",
-        description: "Return the current timeline state as JSON.",
+        description: "Return project settings (fps, resolution, totalFrames, transcriptionLanguage) and timeline tracks as JSON.",
         input_schema: object(&[]),
     }
 }
@@ -183,8 +188,13 @@ fn get_timeline() -> ToolDefinition {
 fn get_transcript() -> ToolDefinition {
     ToolDefinition {
         name: "get_transcript",
-        description: "Return the transcript for a media asset.",
-        input_schema: object(&[("mediaId", string("Media asset id"))]),
+        description: "Return the transcript for a media asset. Transcription runs on-device and defaults to the system language — pass language when the audio is in another language.",
+        input_schema: object(&[
+            ("mediaId", string("Media asset id")),
+            ("startFrame", string("Optional start frame for range-limited transcript")),
+            ("endFrame", string("Optional end frame for range-limited transcript")),
+            ("language", string("Optional BCP-47 spoken language (e.g. 'fr', 'ja', 'en-GB'). Overrides project transcriptionLanguage for this call; falls back to system language if neither is set.")),
+        ]),
     }
 }
 
@@ -210,8 +220,11 @@ fn insert_clips() -> ToolDefinition {
 fn inspect_media() -> ToolDefinition {
     ToolDefinition {
         name: "inspect_media",
-        description: "Inspect a media asset and return details.",
-        input_schema: object(&[("mediaId", string("Media asset id to inspect"))]),
+        description: "Inspect a media asset and return details. Transcription defaults to system language — pass language when the audio is in another language.",
+        input_schema: object(&[
+            ("mediaId", string("Media asset id to inspect")),
+            ("language", string("Optional BCP-47 spoken language (e.g. 'fr', 'ja', 'en-GB'). Overrides project transcriptionLanguage for this call; falls back to system language if neither is set.")),
+        ]),
     }
 }
 

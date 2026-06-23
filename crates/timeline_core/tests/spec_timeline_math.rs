@@ -58,6 +58,7 @@ fn tim_001_total_frames_is_max_clip_end_across_tracks() {
             track(ClipType::Video, vec![clip(100, 50), clip(220, 25)]),
             track(ClipType::Audio, vec![clip(0, 400)]),
         ],
+        transcription_language: None,
     };
 
     assert_eq!(timeline.total_frames(), 400);
@@ -106,6 +107,7 @@ fn tim_006_seek_clamps_into_zero_to_total_frames() {
         settings_configured: false,
         selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![track(ClipType::Video, vec![clip(100, 50)])],
+        transcription_language: None,
     };
 
     assert_eq!(timeline.clamp_seek_frame(-20), 0);
@@ -154,6 +156,7 @@ fn tim_008_half_open_invariant_after_split() {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![track(ClipType::Video, vec![c1])],
+        transcription_language: None,
     };
 
     let _right_ids = split_clip(&mut timeline, "clip-1", 40);
@@ -172,6 +175,7 @@ fn tim_008_half_open_invariant_after_clear_region() {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![track(ClipType::Video, vec![c1, c2])],
+        transcription_language: None,
     };
 
     // Clear region covering c1's end and c2's start
@@ -190,6 +194,7 @@ fn tim_008_half_open_invariant_after_split_then_speed() {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![track(ClipType::Video, vec![c1])],
+        transcription_language: None,
     };
 
     let right_ids = split_clip(&mut timeline, "clip-1", 50);
