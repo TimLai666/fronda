@@ -429,4 +429,72 @@ mod tests {
         let result = resp.result.unwrap();
         assert!(result.get("isError") == Some(&json!(true)));
     }
+
+    // ── MCP-007: resources/read ───────────────────────────────────────
+
+    #[test]
+    fn mcp_007_resources_read_video_models() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: json!(1),
+            method: "resources/read".into(),
+            params: json!({"uri": "palmier://models/video"}),
+        };
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
+        assert!(
+            resp.error.is_none(),
+            "MCP-007: video models resource should be readable"
+        );
+        let result = resp.result.unwrap();
+        let contents = result.get("contents").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(contents.len(), 1);
+        let c = &contents[0];
+        assert_eq!(
+            c.get("uri").and_then(|v| v.as_str()).unwrap(),
+            "palmier://models/video"
+        );
+        assert_eq!(
+            c.get("mimeType").and_then(|v| v.as_str()).unwrap(),
+            "application/json"
+        );
+    }
+
+    #[test]
+    fn mcp_008_resources_read_image_models() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: json!(1),
+            method: "resources/read".into(),
+            params: json!({"uri": "palmier://models/image"}),
+        };
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
+        assert!(
+            resp.error.is_none(),
+            "MCP-008: image models resource should be readable"
+        );
+        let result = resp.result.unwrap();
+        let contents = result.get("contents").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(contents.len(), 1);
+        let c = &contents[0];
+        assert_eq!(
+            c.get("uri").and_then(|v| v.as_str()).unwrap(),
+            "palmier://models/image"
+        );
+    }
+
+    #[test]
+    fn mcp_009_resources_read_unknown_uri_returns_error() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: json!(1),
+            method: "resources/read".into(),
+            params: json!({"uri": "palmier://unknown"}),
+        };
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
+        assert!(resp.error.is_some(), "unknown URI should return error");
+        assert_eq!(resp.error.unwrap().code, -32602); // InvalidParams
+    }
 }

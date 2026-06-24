@@ -1,6 +1,7 @@
 mod clip_properties;
 mod edit;
 mod inspector;
+mod project_settings;
 pub use keyframes::{
     clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, sample_keyframe_track,
     set_clip_duration, split_all_clip_keyframe_tracks, split_keyframe_track,
@@ -34,6 +35,7 @@ pub use linking::{
     partner_moves_for_move_of, unlink_clips, LinkIndex, LinkedPartnerMove,
 };
 pub use overwrite::{compute_overwrite, OverwriteAction};
+pub use project_settings::{apply_fps, apply_settings, refit_transforms, FpsChangeReport};
 pub use range_selection::{
     drag_range_edge, find_all_gaps, find_gap_at_frame, shift_drag_range, RangeEdge, TimelineRange,
 };
