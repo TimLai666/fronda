@@ -151,6 +151,83 @@ impl ReadyAccount {
     }
 }
 
+// ── Top-Up validation (ACC-003) ──
+
+/// ACC-003: Top-off amount validation keeps current minimum and maximum bounds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TopUpConfig {
+    pub min_amount: i64,
+    pub max_amount: i64,
+}
+
+impl Default for TopUpConfig {
+    fn default() -> Self {
+        Self {
+            min_amount: 10,
+            max_amount: 500,
+        }
+    }
+}
+
+impl TopUpConfig {
+    /// Validate that a top-off amount is within current min/max bounds.
+    pub fn validate_amount(&self, amount: i64) -> Result<(), String> {
+        if amount < self.min_amount {
+            return Err(format!(
+                "Amount {amount} is below minimum of {}",
+                self.min_amount
+            ));
+        }
+        if amount > self.max_amount {
+            return Err(format!(
+                "Amount {amount} exceeds maximum of {}",
+                self.max_amount
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The default top-up configuration.
+pub static DEFAULT_TOPUP_CONFIG: TopUpConfig = TopUpConfig {
+    min_amount: 10,
+    max_amount: 500,
+};
+
+// ── Billing URL validation (ACC-004) ──
+
+/// ACC-004: Billing/checkout URLs remain host-whitelisted and reject untrusted destinations.
+pub struct BillingUrlValidator;
+
+impl BillingUrlValidator {
+    /// Trusted hosts for billing/checkout URLs.
+    const TRUSTED_HOSTS: &'static [&'static str] = &[
+        "checkout.stripe.com",
+        "buy.stripe.com",
+        "api.stripe.com",
+        "billing.anthropic.com",
+    ];
+
+    /// Validate that a URL is a trusted billing/checkout destination.
+    pub fn validate(url: &str) -> Result<(), String> {
+        let url = url.trim();
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(format!("Invalid URL scheme: {url}"));
+        }
+        let after_scheme = url
+            .strip_prefix("http://")
+            .or_else(|| url.strip_prefix("https://"))
+            .unwrap_or(url);
+        let host = after_scheme.split('/').next().unwrap_or(after_scheme);
+        let host = host.split(':').next().unwrap_or(host); // strip port
+        if Self::TRUSTED_HOSTS.contains(&host) {
+            Ok(())
+        } else {
+            Err(format!("Untrusted billing URL host: {host}"))
+        }
+    }
+}
+
 // ── Generation machine ──────────────────────────────────────────
 
 /// Pure state-machine transitions for the generation workflow.
@@ -1058,5 +1135,304 @@ mod tests {
             modality: GenerationModality::Video,
             created_at: chrono::Utc::now(),
         }
+    }
+
+    // ── GEN-004: Placeholder IDs created before job settles ──
+
+    #[test]
+    fn gen_004_placeholder_ids_created() {
+        let state = make_preparing_state();
+        let acct = ReadyAccount {
+            monthly_budget: 1000,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        let gen_state = GenerationMachine::start_uploading(state, &acct, vec![], vec![]).unwrap();
+        let upload_state = match gen_state {
+            GenerationState::Uploading(s) => s,
+            _ => panic!("expected Uploading"),
+        };
+        // Placeholder IDs are created before backend job settles
+        let placeholder_ids: Vec<String> = (0..upload_state.snapshot.num_images)
+            .map(|i| format!("ph-{i}"))
+            .collect();
+        let job =
+            GenerationMachine::submit_job(upload_state, "job-99".into(), placeholder_ids.clone());
+        match job {
+            GenerationState::AwaitingJob(s) => {
+                assert_eq!(s.job_id, "job-99");
+                assert_eq!(s.placeholder_ids, placeholder_ids);
+            }
+            _ => panic!("expected AwaitingJob"),
+        }
+    }
+
+    // ── GEN-005: Placeholder count reflects modality ──
+
+    #[test]
+    fn gen_005_placeholder_count_modality() {
+        // Video modality with multiple images produces multiple placeholders
+        assert_eq!(
+            GenerationMachine::placeholder_count(3, &GenerationModality::Video),
+            3
+        );
+        // Audio/music always produce 1
+        assert_eq!(
+            GenerationMachine::placeholder_count(5, &GenerationModality::Audio),
+            1
+        );
+        assert_eq!(
+            GenerationMachine::placeholder_count(2, &GenerationModality::Music),
+            1
+        );
+        // Image count is pre-clamped
+        assert_eq!(
+            GenerationMachine::placeholder_count(1, &GenerationModality::Image),
+            1
+        );
+    }
+
+    // ── GEN-007: Upload order preserved by target_index ──
+
+    #[test]
+    fn gen_007_upload_order_preserved() {
+        let state = make_preparing_state();
+        let acct = ReadyAccount {
+            monthly_budget: 1000,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        // Feed paths out of order: index 2 first, then 0, then 1
+        let local_paths = vec![
+            (2usize, "/tmp/ref2.mp4".into()),
+            (0usize, "/tmp/ref0.mp4".into()),
+            (1usize, "/tmp/ref1.mp4".into()),
+        ];
+        let gen_state =
+            GenerationMachine::start_uploading(state, &acct, local_paths, vec![]).unwrap();
+        let upload_state = match gen_state {
+            GenerationState::Uploading(s) => s,
+            _ => panic!("expected Uploading"),
+        };
+        // Must be sorted by target_index: 0, 1, 2
+        let indices: Vec<usize> = upload_state
+            .pending_uploads
+            .iter()
+            .map(|u| u.target_index)
+            .collect();
+        assert_eq!(indices, vec![0, 1, 2]);
+        // Paths must match the sorted order
+        let paths: Vec<&str> = upload_state
+            .pending_uploads
+            .iter()
+            .map(|u| u.local_path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["/tmp/ref0.mp4", "/tmp/ref1.mp4", "/tmp/ref2.mp4"]
+        );
+    }
+
+    // ── GEN-008: Pre-uploaded URLs skip re-upload ──
+
+    #[test]
+    fn gen_008_pre_uploaded_skip_reupload() {
+        let state = make_preparing_state();
+        let acct = ReadyAccount {
+            monthly_budget: 1000,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        // Mix: one local path (needs upload) + one pre-uploaded
+        let local_paths = vec![(0usize, "/tmp/raw.mp4".into())];
+        let pre_uploaded = vec![(1usize, "https://cdn.example.com/pre.mp4".into())];
+        let gen_state =
+            GenerationMachine::start_uploading(state, &acct, local_paths, pre_uploaded).unwrap();
+        let upload_state = match gen_state {
+            GenerationState::Uploading(s) => s,
+            _ => panic!("expected Uploading"),
+        };
+        assert_eq!(upload_state.pending_uploads.len(), 2);
+        // Item 0: local path, no pre-uploaded URL
+        assert_eq!(upload_state.pending_uploads[0].local_path, "/tmp/raw.mp4");
+        assert!(upload_state.pending_uploads[0].pre_uploaded_url.is_none());
+        // Item 1: pre-uploaded, empty local path
+        assert_eq!(upload_state.pending_uploads[1].local_path, "");
+        assert_eq!(
+            upload_state.pending_uploads[1].pre_uploaded_url.as_deref(),
+            Some("https://cdn.example.com/pre.mp4")
+        );
+    }
+
+    // ── GEN-009: Local paths are for pristine upload (not pre-uploaded) ──
+
+    #[test]
+    fn gen_009_local_paths_need_upload_trimmed_do_not() {
+        let state = make_preparing_state();
+        let acct = ReadyAccount {
+            monthly_budget: 1000,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        // Items going through local_paths need upload (pristine or trimmed)
+        let local_paths = vec![
+            (0usize, "/tmp/pristine.mp4".into()),
+            (1usize, "/tmp/trimmed.mp4".into()),
+        ];
+        // Items from pre_uploaded skip upload entirely
+        let pre_uploaded = vec![(2usize, "https://cdn.example.com/cached.mp4".into())];
+        let gen_state =
+            GenerationMachine::start_uploading(state, &acct, local_paths, pre_uploaded).unwrap();
+        let upload_state = match gen_state {
+            GenerationState::Uploading(s) => s,
+            _ => panic!("expected Uploading"),
+        };
+        // local_paths items need upload: no pre_uploaded_url
+        for item in &upload_state.pending_uploads {
+            if item.target_index < 2 {
+                assert!(
+                    item.pre_uploaded_url.is_none(),
+                    "item {} should need upload",
+                    item.target_index
+                );
+            } else {
+                // pre-uploaded item has the URL
+                assert_eq!(
+                    item.pre_uploaded_url.as_deref(),
+                    Some("https://cdn.example.com/cached.mp4")
+                );
+            }
+        }
+    }
+
+    // ── GEN-010: Trimmed reference paths pass through local_paths ──
+
+    #[test]
+    fn gen_010_trimmed_reference_local_path() {
+        let state = make_preparing_state();
+        let acct = ReadyAccount {
+            monthly_budget: 1000,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        // Simulate trimmed first-source video reference exported to temp
+        let local_paths = vec![(0usize, "/tmp/fronda-trim-XXXXX.mp4".into())];
+        let gen_state =
+            GenerationMachine::start_uploading(state, &acct, local_paths, vec![]).unwrap();
+        let upload_state = match gen_state {
+            GenerationState::Uploading(s) => s,
+            _ => panic!("expected Uploading"),
+        };
+        assert_eq!(upload_state.pending_uploads.len(), 1);
+        assert!(
+            upload_state.pending_uploads[0]
+                .local_path
+                .starts_with("/tmp/fronda-trim-"),
+            "trimmed references land in temp: {}",
+            upload_state.pending_uploads[0].local_path
+        );
+        assert!(upload_state.pending_uploads[0].pre_uploaded_url.is_none());
+    }
+
+    // ── GEN-023: Prompt mention reference slots preserved ──
+
+    #[test]
+    fn gen_023_reference_slots_preserved() {
+        let acct = ReadyAccount {
+            monthly_budget: 1000,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        // Reference URLs come from prompt mention / reference-slot processing
+        let ref_urls = vec![
+            "https://cdn.example.com/ref1.mp4".into(),
+            "https://cdn.example.com/ref2.jpg".into(),
+        ];
+        let prep = GenerationMachine::start_prepare(
+            &AccountState::Ready(acct),
+            "generate with @ref1 and @ref2".into(),
+            "m1".into(),
+            10.0,
+            "16:9".into(),
+            None,
+            None,
+            50,
+            1,
+            ref_urls.clone(),
+            GenerationModality::Video,
+        )
+        .unwrap();
+        match prep {
+            GenerationState::Preparing(s) => {
+                // Reference URLs from prompt mention tags pass through to state
+                assert_eq!(s.reference_urls.len(), 2);
+                assert!(s.reference_urls[0].contains("ref1"));
+                assert!(s.reference_urls[1].contains("ref2"));
+            }
+            _ => panic!("expected Preparing"),
+        }
+    }
+
+    // ── ACC-003: Top-off amount validation ──
+
+    #[test]
+    fn acc_003_top_off_amount_validation() {
+        let cfg = TopUpConfig::default();
+        assert_eq!(cfg.min_amount, 10);
+        assert_eq!(cfg.max_amount, 500);
+
+        // Valid amounts
+        assert!(cfg.validate_amount(10).is_ok());
+        assert!(cfg.validate_amount(250).is_ok());
+        assert!(cfg.validate_amount(500).is_ok());
+
+        // Below minimum
+        let err = cfg.validate_amount(5).unwrap_err();
+        assert!(err.contains("below minimum"));
+
+        // Above maximum
+        let err = cfg.validate_amount(501).unwrap_err();
+        assert!(err.contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn acc_003_top_off_default_constant() {
+        // The static default matches the Default impl
+        assert_eq!(DEFAULT_TOPUP_CONFIG.min_amount, 10);
+        assert_eq!(DEFAULT_TOPUP_CONFIG.max_amount, 500);
+        assert!(DEFAULT_TOPUP_CONFIG.validate_amount(50).is_ok());
+    }
+
+    // ── ACC-004: Billing URL whitelist validation ──
+
+    #[test]
+    fn acc_004_billing_url_trusted_hosts() {
+        // Trusted Stripe checkout URLs
+        assert!(
+            BillingUrlValidator::validate("https://checkout.stripe.com/c/pay/csid_abc").is_ok()
+        );
+        assert!(BillingUrlValidator::validate("https://buy.stripe.com/test_123").is_ok());
+        assert!(BillingUrlValidator::validate("https://api.stripe.com/v1/charges").is_ok());
+        // Trusted billing provider URL
+        assert!(
+            BillingUrlValidator::validate("https://billing.anthropic.com/subscribe?plan=pro")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn acc_004_billing_url_rejects_untrusted() {
+        // Untrusted host
+        let err = BillingUrlValidator::validate("https://evil.example.com/billing").unwrap_err();
+        assert!(err.contains("Untrusted"));
+        assert!(err.contains("evil.example.com"));
+
+        // No scheme
+        let err = BillingUrlValidator::validate("ftp://files.example.com").unwrap_err();
+        assert!(err.contains("Invalid URL scheme"));
+
+        // Empty string
+        let err = BillingUrlValidator::validate("").unwrap_err();
+        assert!(err.contains("Invalid URL scheme"));
     }
 }

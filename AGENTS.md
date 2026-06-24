@@ -79,6 +79,15 @@ This repo is being rewritten into a cross-platform Rust app. The current Swift c
 - `MediaManifest::missing_entry_ids(callback)` returns IDs of entries whose local files are missing. Entries with `cached_remote_url` set are never considered missing (upstream PR #135).
 - `ToolExecutor` has `media_offline_ids()`, `is_media_offline()`, and `is_media_unprocessable()` helpers that delegate to `missing_entry_ids()`.
 
+## Upstream PR management
+
+- Upstream PRs were audited once on 2026-06-25 (upstream HEAD `b9b4ad9`).
+  Results are in `specs/rust-rewrite/97-upstream-pr-audit.md`.
+- Do NOT re-fetch upstream or re-audit PRs unless there are new commits on
+  the upstream `main` branch. Check with `git fetch upstream && git --no-pager log upstream/main --oneline | head -5` first.
+- Only port upstream PRs that are explicitly requested or contain Rust-relevant
+  bug fixes. Swift/AVFoundation/Metal-only PRs are automatically skipped.
+
 ## Upstream PR porting status
 
 | PR   | Description                             | Status      | Rust Crate                                   |
