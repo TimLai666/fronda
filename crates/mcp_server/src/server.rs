@@ -1,8 +1,10 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use agent_contract::tools::all_tools;
+use agent_contract::ToolExecutor;
 use serde_json::{json, Value};
 
 use crate::json_rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
@@ -27,11 +29,15 @@ impl Default for McpConfig {
 
 pub struct McpServer {
     config: McpConfig,
+    executor: Arc<Mutex<ToolExecutor>>,
 }
 
 impl McpServer {
-    pub fn new(config: McpConfig) -> Self {
-        Self { config }
+    pub fn new(config: McpConfig, executor: ToolExecutor) -> Self {
+        Self {
+            config,
+            executor: Arc::new(Mutex::new(executor)),
+        }
     }
 
     /// Start the server (blocking). Call in a background thread.
@@ -45,8 +51,9 @@ impl McpServer {
                 Ok(stream) => {
                     let config = self.config.server_name.clone();
                     let version = self.config.server_version.clone();
+                    let executor = Arc::clone(&self.executor);
                     thread::spawn(move || {
-                        handle_connection(stream, &config, &version);
+                        handle_connection(stream, &config, &version, &executor);
                     });
                 }
                 Err(e) => {
@@ -58,7 +65,12 @@ impl McpServer {
     }
 }
 
-fn handle_connection(mut stream: TcpStream, server_name: &str, server_version: &str) {
+fn handle_connection(
+    mut stream: TcpStream,
+    server_name: &str,
+    server_version: &str,
+    executor: &Arc<Mutex<ToolExecutor>>,
+) {
     let mut buf = [0u8; 8192];
     let n = match stream.read(&mut buf) {
         Ok(n) if n > 0 => n,
@@ -74,7 +86,6 @@ fn handle_connection(mut stream: TcpStream, server_name: &str, server_version: &
     };
 
     let response = if body.is_empty() {
-        // No body — return MCP info
         let info = json!({
             "server": server_name,
             "version": server_version,
@@ -86,10 +97,9 @@ fn handle_connection(mut stream: TcpStream, server_name: &str, server_version: &
             &serde_json::to_string(&info).unwrap(),
         )
     } else {
-        // Parse JSON-RPC request
         match serde_json::from_str::<JsonRpcRequest>(body) {
             Ok(req) => {
-                let resp = handle_json_rpc(&req);
+                let resp = handle_json_rpc(&req, executor);
                 let body = serde_json::to_string(&resp).unwrap();
                 build_http_response(200, "application/json", &body)
             }
@@ -105,12 +115,11 @@ fn handle_connection(mut stream: TcpStream, server_name: &str, server_version: &
     let _ = stream.flush();
 }
 
-fn handle_json_rpc(req: &JsonRpcRequest) -> JsonRpcResponse {
+fn handle_json_rpc(req: &JsonRpcRequest, executor: &Arc<Mutex<ToolExecutor>>) -> JsonRpcResponse {
     let id = req.id.clone();
 
     match req.method.as_str() {
         "tools/list" => {
-            // MCP-003: expose same tool set as in-app agent
             let tools: Vec<Value> = all_tools()
                 .into_iter()
                 .map(|t| {
@@ -136,54 +145,60 @@ fn handle_json_rpc(req: &JsonRpcRequest) -> JsonRpcResponse {
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let _arguments = req.params.get("arguments").cloned().unwrap_or(json!({}));
+            let arguments = req.params.get("arguments").cloned().unwrap_or(json!({}));
 
-            // Find the tool
             let tools = all_tools();
             let tool = tools.iter().find(|t| t.name == name);
 
             match tool {
                 Some(_) => {
-                    // Tool found — for now, return "not implemented" since the
-                    // timeline engine is not wired to the MCP server yet.
-                    // In the future, this will dispatch to the actual tool executor.
-                    JsonRpcResponse::success(
-                        id,
-                        json!({
-                            "content": [{
-                                "type": "text",
-                                "text": format!("Tool '{}' received but timeline engine not connected", name)
-                            }],
-                            "isError": true,
-                        }),
-                    )
+                    let mut exec = match executor.lock() {
+                        Ok(e) => e,
+                        Err(_) => {
+                            return JsonRpcResponse::error(
+                                id,
+                                JsonRpcError::ToolError("Executor lock poisoned".into()),
+                            );
+                        }
+                    };
+
+                    match exec.execute(name, &arguments) {
+                        Ok(content) => JsonRpcResponse::success(id, content),
+                        Err(msg) => JsonRpcResponse::success(
+                            id,
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": msg,
+                                }],
+                                "isError": true,
+                            }),
+                        ),
+                    }
                 }
                 None => JsonRpcResponse::error(id, JsonRpcError::MethodNotFound),
             }
         }
 
-        "resources/list" => {
-            // MCP-004: resources
-            JsonRpcResponse::success(
-                id,
-                json!({
-                    "resources": [
-                        {
-                            "uri": "palmier://models/video",
-                            "name": "Video Generation Models",
-                            "description": "Available video generation models and their status",
-                            "mimeType": "application/json",
-                        },
-                        {
-                            "uri": "palmier://models/image",
-                            "name": "Image Generation Models",
-                            "description": "Available image generation models and their status",
-                            "mimeType": "application/json",
-                        },
-                    ]
-                }),
-            )
-        }
+        "resources/list" => JsonRpcResponse::success(
+            id,
+            json!({
+                "resources": [
+                    {
+                        "uri": "palmier://models/video",
+                        "name": "Video Generation Models",
+                        "description": "Available video generation models and their status",
+                        "mimeType": "application/json",
+                    },
+                    {
+                        "uri": "palmier://models/image",
+                        "name": "Image Generation Models",
+                        "description": "Available image generation models and their status",
+                        "mimeType": "application/json",
+                    },
+                ]
+            }),
+        ),
 
         "resources/read" => {
             let uri = req.params.get("uri").and_then(|v| v.as_str()).unwrap_or("");
@@ -228,6 +243,12 @@ fn build_http_response(status: u16, content_type: &str, body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_contract::ToolExecutor;
+    use core_model::Timeline;
+
+    fn make_executor() -> Arc<Mutex<ToolExecutor>> {
+        Arc::new(Mutex::new(ToolExecutor::new(Timeline::default())))
+    }
 
     #[test]
     fn mcp_001_server_name() {
@@ -284,20 +305,21 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_31_tools() {
+    fn tools_list_returns_42_tools() {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: json!(1),
             method: "tools/list".into(),
             params: json!({}),
         };
-        let resp = handle_json_rpc(&req);
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
         let result = resp.result.unwrap();
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
             42,
-            "MCP-003: exactly 42 tools (base + 11 upstream PRs)"
+            "MCP-003: exactly 42 tools (base + upstream PRs)"
         );
     }
 
@@ -309,7 +331,8 @@ mod tests {
             method: "resources/list".into(),
             params: json!({}),
         };
-        let resp = handle_json_rpc(&req);
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
         let result = resp.result.unwrap();
         let resources = result.get("resources").and_then(|v| v.as_array()).unwrap();
         assert_eq!(resources.len(), 2, "MCP-004: exactly 2 resources");
@@ -323,8 +346,84 @@ mod tests {
             method: "unknown_method".into(),
             params: json!({}),
         };
-        let resp = handle_json_rpc(&req);
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    #[test]
+    fn tools_call_get_timeline_returns_timeline() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: json!(1),
+            method: "tools/call".into(),
+            params: json!({
+                "name": "get_timeline",
+                "arguments": {},
+            }),
+        };
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
+        assert!(resp.result.is_some());
+        let result = resp.result.unwrap();
+        let content = result.get("content").and_then(|v| v.as_array()).unwrap();
+        let text = content[0].get("text").and_then(|v| v.as_str()).unwrap();
+        assert!(text.contains("fps"));
+    }
+
+    #[test]
+    fn tools_call_unknown_tool_returns_method_not_found() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: json!(1),
+            method: "tools/call".into(),
+            params: json!({
+                "name": "nonexistent_tool",
+                "arguments": {},
+            }),
+        };
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    #[test]
+    fn tools_call_split_clip_with_missing_args() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: json!(1),
+            method: "tools/call".into(),
+            params: json!({
+                "name": "split_clip",
+                "arguments": {},
+            }),
+        };
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
+        assert!(resp.result.is_some());
+        let result = resp.result.unwrap();
+        let content = result.get("content").and_then(|v| v.as_array()).unwrap();
+        let text = content[0].get("text").and_then(|v| v.as_str()).unwrap();
+        assert!(text.contains("Missing clipId") || text.contains("error"));
+    }
+
+    #[test]
+    fn tools_call_generate_video_returns_notice() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: json!(1),
+            method: "tools/call".into(),
+            params: json!({
+                "name": "generate_video",
+                "arguments": {},
+            }),
+        };
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, &exec);
+        assert!(resp.result.is_some());
+        let result = resp.result.unwrap();
+        assert!(result.get("isError") == Some(&json!(true)));
     }
 }

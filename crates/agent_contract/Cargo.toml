@@ -13,4 +13,5 @@ chrono.workspace = true
 core_model = { package = "fronda-core-model", path = "../core_model" }
 serde.workspace = true
 serde_json.workspace = true
+timeline_core = { package = "fronda-timeline-core", path = "../timeline_core" }
 uuid.workspace = true

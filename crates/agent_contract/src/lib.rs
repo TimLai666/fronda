@@ -5,9 +5,11 @@ pub mod mention;
 pub mod mutation;
 pub mod read_tools;
 pub mod session;
+pub mod tool_exec;
 pub mod tools;
 pub mod undo;
 
+pub use tool_exec::ToolExecutor;
 pub use undo::{UndoCommand, UndoError, UndoStack};
 
 pub use tools::{all_tools, ToolDefinition, SYSTEM_INSTRUCTION};
