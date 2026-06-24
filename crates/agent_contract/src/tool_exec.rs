@@ -7,7 +7,7 @@ use crate::read_tools::format_timeline_json;
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
     Clip, ClipType, Effect, GenerationInput, Interpolation, Keyframe, KeyframeTrack, MediaManifest,
-    MediaSource, TextStyle, Timeline, Transform,
+    MediaManifestEntry, MediaSource, TextStyle, Timeline, Transform,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -50,6 +50,45 @@ impl ToolExecutor {
 
     pub fn undo_stack_mut(&mut self) -> &mut UndoStack {
         &mut self.undo_stack
+    }
+
+    /// Returns IDs of media entries that are offline (missing local file, no cached URL).
+    ///
+    /// The `is_missing` callback is called for each entry without `cached_remote_url`
+    /// and returns `true` if the underlying file does not exist on disk.
+    pub fn media_offline_ids(
+        &self,
+        is_missing: impl Fn(&MediaManifestEntry) -> bool,
+    ) -> Vec<String> {
+        self.media_manifest.missing_entry_ids(is_missing)
+    }
+
+    /// Returns true if the given media ref is offline.
+    pub fn is_media_offline(
+        &self,
+        media_ref: &str,
+        is_missing: impl Fn(&MediaManifestEntry) -> bool,
+    ) -> bool {
+        let offline_ids = self.media_offline_ids(is_missing);
+        offline_ids.iter().any(|id| id == media_ref)
+    }
+
+    /// Returns true if the given media ref is unprocessable (present but failed to decode).
+    ///
+    /// Uses the `is_missing` callback to exclude entries whose files are simply missing
+    /// (those are "offline", not "unprocessable").
+    pub fn is_media_unprocessable(
+        &self,
+        media_ref: &str,
+        is_missing: impl Fn(&MediaManifestEntry) -> bool,
+        is_unprocessable: impl Fn(&MediaManifestEntry) -> bool,
+    ) -> bool {
+        self.media_manifest.entries.iter().any(|e| {
+            e.id == media_ref
+                && e.cached_remote_url.is_none()
+                && !is_missing(e)
+                && is_unprocessable(e)
+        })
     }
 
     /// Execute a tool by name with validated JSON arguments.
@@ -2808,5 +2847,89 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Removed"));
+    }
+
+    // ── Missing-media helpers (#135) ────────────────────────────────
+
+    #[test]
+    fn exec_058_missing_entry_ids_none_missing() {
+        let exec = make_executor_with_media();
+        let offline = exec.media_offline_ids(|_| false);
+        assert!(offline.is_empty(), "no entries should be missing");
+    }
+
+    #[test]
+    fn exec_059_missing_entry_ids_all_missing() {
+        let exec = make_executor_with_media();
+        // The helper adds one entry with no cached_remote_url.
+        let offline = exec.media_offline_ids(|_| true);
+        assert_eq!(offline.len(), 1, "the one entry should be missing");
+    }
+
+    #[test]
+    fn exec_060_is_media_offline_true() {
+        let mut exec = make_executor_with_media();
+        let id = exec.media_manifest.entries[0].id.clone();
+        assert!(exec.is_media_offline(&id, |_| true));
+    }
+
+    #[test]
+    fn exec_061_is_media_offline_false() {
+        let mut exec = make_executor_with_media();
+        let id = exec.media_manifest.entries[0].id.clone();
+        assert!(!exec.is_media_offline(&id, |_| false));
+    }
+
+    #[test]
+    fn exec_062_is_media_offline_unknown_ref() {
+        let exec = make_executor_with_media();
+        assert!(!exec.is_media_offline("unknown", |_| true));
+    }
+
+    #[test]
+    fn exec_063_is_media_offline_cached_excluded() {
+        let mut exec = make_executor();
+        exec.media_manifest
+            .entries
+            .push(core_model::MediaManifestEntry {
+                id: "cached".into(),
+                name: "cached".into(),
+                r#type: core_model::ClipType::Video,
+                source: core_model::MediaSource::External {
+                    absolute_path: "/tmp/cached.mp4".into(),
+                },
+                duration: 10.0,
+                generation_input: None,
+                source_width: None,
+                source_height: None,
+                source_fps: None,
+                has_audio: None,
+                folder_id: None,
+                cached_remote_url: Some("https://c".into()),
+                cached_remote_url_expires_at: None,
+                source_timecode_frame: None,
+                source_timecode_quanta: None,
+                source_timecode_drop_frame: None,
+            });
+        assert!(
+            !exec.is_media_offline("cached", |_| true),
+            "cached entries should not be offline"
+        );
+    }
+
+    #[test]
+    fn exec_064_is_media_unprocessable_true() {
+        let mut exec = make_executor_with_media();
+        let id = exec.media_manifest.entries[0].id.clone();
+        // File exists (not missing) but is unprocessable.
+        assert!(exec.is_media_unprocessable(&id, |_| false, |_| true));
+    }
+
+    #[test]
+    fn exec_065_is_media_unprocessable_missing_not_unprocessable() {
+        let mut exec = make_executor_with_media();
+        let id = exec.media_manifest.entries[0].id.clone();
+        // If file is missing, it's offline, not unprocessable.
+        assert!(!exec.is_media_unprocessable(&id, |_| true, |_| true));
     }
 }

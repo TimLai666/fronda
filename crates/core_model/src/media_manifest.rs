@@ -31,6 +31,24 @@ impl Default for MediaManifest {
     }
 }
 
+impl MediaManifest {
+    /// Returns IDs of entries whose local files are missing.
+    ///
+    /// Entries with `cached_remote_url` populated are never considered missing
+    /// (they can be re-downloaded). The `is_missing` callback receives each
+    /// entry and returns `true` if the underlying file does not exist on disk.
+    pub fn missing_entry_ids(
+        &self,
+        is_missing: impl Fn(&MediaManifestEntry) -> bool,
+    ) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|e| e.cached_remote_url.is_none() && is_missing(e))
+            .map(|e| e.id.clone())
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaFolder {
     pub id: String,
@@ -203,5 +221,92 @@ impl<'de> Deserialize<'de> for MediaSource {
             Repr::FlatExternal { absolute_path } => Ok(Self::External { absolute_path }),
             Repr::FlatProject { relative_path } => Ok(Self::Project { relative_path }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, cached_url: Option<&str>) -> MediaManifestEntry {
+        MediaManifestEntry {
+            id: id.to_string(),
+            name: format!("entry-{id}"),
+            r#type: crate::timeline::ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: format!("/tmp/{id}.mp4"),
+            },
+            duration: 10.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: cached_url.map(String::from),
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        }
+    }
+
+    #[test]
+    fn med_001_missing_entry_ids_all_exist() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries = vec![entry("a", None), entry("b", None)];
+        let missing = manifest.missing_entry_ids(|_| false);
+        assert!(missing.is_empty(), "no entries should be missing");
+    }
+
+    #[test]
+    fn med_002_missing_entry_ids_returns_missing() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries = vec![entry("a", None), entry("b", None)];
+        let missing = manifest.missing_entry_ids(|e| e.id == "a");
+        assert_eq!(missing, vec!["a"]);
+    }
+
+    #[test]
+    fn med_003_missing_entry_ids_cached_url_excludes() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries = vec![
+            entry("a", Some("https://cache.example.com/a.mp4")),
+            entry("b", None),
+        ];
+        // Both are "missing" per callback, but "a" has cached_remote_url so excluded.
+        let missing = manifest.missing_entry_ids(|_| true);
+        assert_eq!(missing, vec!["b"]);
+    }
+
+    #[test]
+    fn med_004_missing_entry_ids_all_cached_not_missing() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries = vec![
+            entry("a", Some("https://cache.example.com/a.mp4")),
+            entry("b", Some("https://cache.example.com/b.mp4")),
+        ];
+        let missing = manifest.missing_entry_ids(|_| true);
+        assert!(missing.is_empty(), "cached entries should not be missing");
+    }
+
+    #[test]
+    fn med_005_missing_entry_ids_empty_manifest() {
+        let manifest = MediaManifest::default();
+        let missing = manifest.missing_entry_ids(|_| true);
+        assert!(missing.is_empty(), "empty manifest has no missing entries");
+    }
+
+    #[test]
+    fn med_006_missing_entry_ids_mixed() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries = vec![
+            entry("online", None),              // exists -> not missing
+            entry("offline", None),             // missing
+            entry("cached", Some("https://c")), // cached -> not missing
+            entry("also_offline", None),        // missing
+        ];
+        let missing = manifest.missing_entry_ids(|e| e.id != "online");
+        assert_eq!(missing, vec!["offline", "also_offline"]);
     }
 }

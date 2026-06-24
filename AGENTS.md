@@ -76,6 +76,8 @@ This repo is being rewritten into a cross-platform Rust app. The current Swift c
 - XML export supports source timecode (`SourceTimecode` struct + `format_timecode`/`timecode_tags` functions) in `render_core/src/xml_export.rs`.
 - `MediaManifestEntry` has optional `source_timecode_frame`, `source_timecode_quanta`, `source_timecode_drop_frame` fields (upstream PR #136).
 - `GenerationInput` implements `Default`.
+- `MediaManifest::missing_entry_ids(callback)` returns IDs of entries whose local files are missing. Entries with `cached_remote_url` set are never considered missing (upstream PR #135).
+- `ToolExecutor` has `media_offline_ids()`, `is_media_offline()`, and `is_media_unprocessable()` helpers that delegate to `missing_entry_ids()`.
 
 ## Upstream PR porting status
 
@@ -93,7 +95,7 @@ This repo is being rewritten into a cross-platform Rust app. The current Swift c
 | #136 | XMEML source timecode                   | DONE        | render_core (xml_export.rs), core_model      |
 | #144 | Validate speed/volume/opacity/trim      | DONE        | agent_contract (mutation.rs)                 |
 | #94  | Export resolutions (2K, Match Timeline) | DONE        | render_core (ExportResolution)               |
-| #135 | Missing-media cache pattern             | NOT_STARTED | core_model                                   |
+| #135 | Missing-media cache pattern             | DONE        | core_model, agent_contract                   |
 | #74  | naturalTimeScale for clip inserts       | DEFERRED    | AVFoundation-specific                        |
 | #119 | Audio syncing multiple tracks           | NOT_STARTED | Swift-only, large feature                    |
 | #133 | Project thumbnail main-thread hang      | DEFERRED    | Swift-specific pattern                       |
