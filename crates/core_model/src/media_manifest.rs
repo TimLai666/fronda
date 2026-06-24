@@ -66,6 +66,34 @@ pub struct GenerationInput {
     pub created_at: Option<DateTime<Utc>>,
 }
 
+impl Default for GenerationInput {
+    fn default() -> Self {
+        Self {
+            prompt: String::new(),
+            model: String::new(),
+            duration: 0,
+            aspect_ratio: "16:9".to_string(),
+            resolution: None,
+            quality: None,
+            image_urls: None,
+            num_images: None,
+            voice: None,
+            lyrics: None,
+            style_instructions: None,
+            instrumental: None,
+            generate_audio: None,
+            reference_image_urls: None,
+            reference_video_urls: None,
+            reference_audio_urls: None,
+            image_url_asset_ids: None,
+            reference_image_asset_ids: None,
+            reference_video_asset_ids: None,
+            reference_audio_asset_ids: None,
+            created_at: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaManifestEntry {
@@ -84,6 +112,15 @@ pub struct MediaManifestEntry {
     pub cached_remote_url: Option<String>,
     #[serde(default, with = "crate::date_serde::option_foundation_date")]
     pub cached_remote_url_expires_at: Option<DateTime<Utc>>,
+    /// Source timecode frame from QuickTime `tmcd` track. Upstream PR #136.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_timecode_frame: Option<i64>,
+    /// Frame quanta of the `tmcd` track (its own rate, often 30 DF even on 60p).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_timecode_quanta: Option<i64>,
+    /// Drop-frame flag of the `tmcd` track.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_timecode_drop_frame: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

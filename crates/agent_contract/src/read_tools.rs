@@ -637,6 +637,9 @@ mod tests {
                 folder_id: None,
                 cached_remote_url: None,
                 cached_remote_url_expires_at: None,
+                source_timecode_frame: None,
+                source_timecode_quanta: None,
+                source_timecode_drop_frame: None,
             }],
             folders: vec![],
         };
@@ -681,6 +684,9 @@ mod tests {
                 folder_id: None,
                 cached_remote_url: None,
                 cached_remote_url_expires_at: None,
+                source_timecode_frame: None,
+                source_timecode_quanta: None,
+                source_timecode_drop_frame: None,
             }],
             folders: vec![],
         };

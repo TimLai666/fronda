@@ -8,6 +8,7 @@ members = [
     "crates/render_core",
     "crates/search_core",
     "crates/timeline_core",
+    "crates/generation_core",
 ]
 resolver = "2"
 

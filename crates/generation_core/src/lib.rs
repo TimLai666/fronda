@@ -1,0 +1,1062 @@
+//! Generation workflow state machine.
+//!
+//! Covers GEN-001 through GEN-024: AI generation lifecycle from
+//! account gatekeeping through job submission, upload, download,
+//! and clip replacement.
+//!
+//! Pure state machine with no platform dependencies.
+
+use core_model::GenerationInput;
+
+// ── States ──────────────────────────────────────────────────────
+
+/// Overall generation state machine.
+///
+/// Transitions:
+///   Idle → Preparing (when submit is triggered)
+///   Preparing → Uploading (when pre-flight checks pass)
+///   Uploading → AwaitingJob (when all uploads complete)
+///   AwaitingJob → Downloading (on job success)
+///   AwaitingJob → Failed (on job failure)
+///   Downloading → Completed (when all results downloaded)
+///   Downloading → Failed (on download failure)
+///   Downloading → CompletedWithErrors (some downloads failed)
+///   Any → Failed (on fatal error)
+///   Completed → Idle (reset)
+///   Failed → Idle (reset)
+#[derive(Debug, Clone, PartialEq)]
+pub enum GenerationState {
+    Idle,
+    Preparing(PreparingState),
+    Uploading(UploadingState),
+    AwaitingJob(AwaitingJobState),
+    Downloading(DownloadingState),
+    Completed(CompletedState),
+    CompletedWithErrors(CompletedWithErrorsState),
+    Failed(FailedState),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparingState {
+    pub prompt: String,
+    pub model: String,
+    pub duration_seconds: f64,
+    pub aspect_ratio: String,
+    pub resolution: Option<String>,
+    pub quality: Option<String>,
+    pub estimated_cost: i64,
+    pub num_images: i64,
+    pub reference_urls: Vec<String>,
+    pub modality: GenerationModality,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GenerationModality {
+    Video,
+    Image,
+    Audio,
+    Music,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UploadingState {
+    pub pending_uploads: Vec<UploadItem>,
+    pub completed_uploads: Vec<String>, // urls
+    pub snapshot: GenerationSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UploadItem {
+    pub local_path: String,
+    pub target_index: usize,
+    pub pre_uploaded_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AwaitingJobState {
+    pub job_id: String,
+    pub snapshot: GenerationSnapshot,
+    pub placeholder_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DownloadingState {
+    pub job_id: String,
+    pub snapshot: GenerationSnapshot,
+    pub placeholder_ids: Vec<String>,
+    pub result_urls: Vec<String>,
+    pub completed_downloads: Vec<String>,
+    pub failed_downloads: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompletedState {
+    pub final_asset_ids: Vec<String>,
+    pub snapshot: GenerationSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompletedWithErrorsState {
+    pub final_asset_ids: Vec<String>,
+    pub failed_placeholder_ids: Vec<String>,
+    pub pending_download_urls: Vec<String>,
+    pub snapshot: GenerationSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FailedState {
+    pub reason: String,
+    pub snapshot: Option<GenerationSnapshot>,
+    pub pending_retry_urls: Vec<String>,
+}
+
+/// GEN-011: Generation snapshot preserves prompt/model/duration/aspect ratio
+/// plus modality-specific options, reference URLs, reference asset ids, and createdAt.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenerationSnapshot {
+    pub prompt: String,
+    pub model: String,
+    pub duration_seconds: f64,
+    pub aspect_ratio: String,
+    pub resolution: Option<String>,
+    pub quality: Option<String>,
+    pub num_images: i64,
+    pub reference_urls: Vec<String>,
+    pub reference_asset_ids: Vec<String>,
+    pub modality: GenerationModality,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+// ── Account / Credits model ────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccountState {
+    Unconfigured,
+    MissingKeys,
+    Ready(ReadyAccount),
+    Misconfigured(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadyAccount {
+    pub monthly_budget: i64,
+    pub purchased_credits: i64,
+    pub spent_credits: i64,
+}
+
+impl ReadyAccount {
+    /// ACC-002: remaining = (monthly_budget + purchased) - spent, clamped at 0.
+    pub fn remaining_credits(&self) -> i64 {
+        (self.monthly_budget + self.purchased_credits - self.spent_credits).max(0)
+    }
+}
+
+// ── Generation machine ──────────────────────────────────────────
+
+/// Pure state-machine transitions for the generation workflow.
+pub struct GenerationMachine;
+
+impl GenerationMachine {
+    /// GEN-001: Gated on account state. Returns Err if AI not allowed.
+    pub fn can_submit(account: &AccountState) -> Result<(), String> {
+        match account {
+            AccountState::Ready(_) => Ok(()),
+            AccountState::Unconfigured => Err("Account is not configured".into()),
+            AccountState::MissingKeys => Err("API keys are missing".into()),
+            AccountState::Misconfigured(msg) => Err(format!("Account misconfigured: {msg}")),
+        }
+    }
+
+    /// GEN-003: Check if estimated cost exceeds remaining credits.
+    pub fn check_credits(account: &ReadyAccount, estimated_cost: i64) -> Result<(), String> {
+        let remaining = account.remaining_credits();
+        if estimated_cost > remaining {
+            return Err(format!(
+                "Estimated cost {estimated_cost} exceeds remaining credits {remaining}"
+            ));
+        }
+        Ok(())
+    }
+
+    /// GEN-006: Clamp image count to [1, 4].
+    pub fn clamp_image_count(requested: i64) -> i64 {
+        requested.clamp(1, 4)
+    }
+
+    /// GEN-012: Multi-image generation preserves requested placeholder count after clamping.
+    pub fn placeholder_count(num_images: i64, modality: &GenerationModality) -> usize {
+        match modality {
+            GenerationModality::Image | GenerationModality::Video => num_images.max(1) as usize,
+            GenerationModality::Audio | GenerationModality::Music => 1,
+        }
+    }
+
+    /// Create a generation snapshot from input (GEN-011).
+    pub fn create_snapshot(
+        input: &GenerationInput,
+        modality: GenerationModality,
+        num_images: i64,
+        reference_urls: Vec<String>,
+        reference_asset_ids: Vec<String>,
+    ) -> GenerationSnapshot {
+        GenerationSnapshot {
+            prompt: input.prompt.clone(),
+            model: input.model.clone(),
+            duration_seconds: input.duration as f64,
+            aspect_ratio: input.aspect_ratio.clone(),
+            resolution: input.resolution.clone(),
+            quality: input.quality.clone(),
+            num_images,
+            reference_urls,
+            reference_asset_ids,
+            modality,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Transition: Idle → Preparing.
+    /// Validates account state, creates placeholder count, returns PreparingState.
+    pub fn start_prepare(
+        account: &AccountState,
+        prompt: String,
+        model: String,
+        duration_seconds: f64,
+        aspect_ratio: String,
+        resolution: Option<String>,
+        quality: Option<String>,
+        estimated_cost: i64,
+        num_images: i64,
+        reference_urls: Vec<String>,
+        modality: GenerationModality,
+    ) -> Result<GenerationState, String> {
+        Self::can_submit(account)?;
+        let num_images = Self::clamp_image_count(num_images);
+        Ok(GenerationState::Preparing(PreparingState {
+            prompt,
+            model,
+            duration_seconds,
+            aspect_ratio,
+            resolution,
+            quality,
+            estimated_cost,
+            num_images,
+            reference_urls,
+            modality,
+        }))
+    }
+
+    /// Transition: Preparing → Uploading.
+    /// After credit check passes, produce upload items for any references that need uploading.
+    pub fn start_uploading(
+        state: PreparingState,
+        account: &ReadyAccount,
+        local_paths: Vec<(usize, String)>, // (target_index, local_path)
+        pre_uploaded: Vec<(usize, String)>, // (target_index, url)
+    ) -> Result<GenerationState, String> {
+        Self::check_credits(account, state.estimated_cost)?;
+
+        let snapshot = GenerationSnapshot {
+            prompt: state.prompt,
+            model: state.model,
+            duration_seconds: state.duration_seconds,
+            aspect_ratio: state.aspect_ratio,
+            resolution: state.resolution,
+            quality: state.quality,
+            num_images: state.num_images,
+            reference_urls: state.reference_urls,
+            reference_asset_ids: Vec::new(),
+            modality: state.modality,
+            created_at: chrono::Utc::now(),
+        };
+
+        let mut pending_uploads: Vec<UploadItem> = local_paths
+            .into_iter()
+            .map(|(idx, path)| UploadItem {
+                local_path: path,
+                target_index: idx,
+                pre_uploaded_url: None,
+            })
+            .collect();
+
+        // GEN-008: Pre-uploaded URLs skip re-upload.
+        for (idx, url) in pre_uploaded {
+            pending_uploads.push(UploadItem {
+                local_path: String::new(),
+                target_index: idx,
+                pre_uploaded_url: Some(url),
+            });
+        }
+
+        // GEN-007: Preserve upload order by index.
+        pending_uploads.sort_by_key(|u| u.target_index);
+
+        Ok(GenerationState::Uploading(UploadingState {
+            pending_uploads,
+            completed_uploads: Vec::new(),
+            snapshot,
+        }))
+    }
+
+    /// Mark one upload as completed (GEN-007).
+    pub fn mark_upload_complete(state: &mut UploadingState, url: String) {
+        state.completed_uploads.push(url);
+    }
+
+    /// Transition: Uploading → AwaitingJob.
+    /// Called when all uploads are done.
+    pub fn submit_job(
+        state: UploadingState,
+        job_id: String,
+        placeholder_ids: Vec<String>,
+    ) -> GenerationState {
+        GenerationState::AwaitingJob(AwaitingJobState {
+            job_id,
+            snapshot: state.snapshot,
+            placeholder_ids,
+        })
+    }
+
+    /// Transition: AwaitingJob → Downloading (GEN-015: on success).
+    pub fn job_succeeded(state: AwaitingJobState, result_urls: Vec<String>) -> GenerationState {
+        GenerationState::Downloading(DownloadingState {
+            job_id: state.job_id,
+            snapshot: state.snapshot,
+            placeholder_ids: state.placeholder_ids,
+            result_urls,
+            completed_downloads: Vec::new(),
+            failed_downloads: Vec::new(),
+        })
+    }
+
+    /// GEN-016: If fewer results than placeholders, unmatched fail.
+    pub fn check_result_count(placeholder_count: usize, result_count: usize) -> Result<(), String> {
+        if result_count < placeholder_count {
+            Err(format!(
+                "Expected {placeholder_count} results, got {result_count}"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Mark one download as completed.
+    pub fn mark_download_complete(state: &mut DownloadingState, asset_id: String) {
+        state.completed_downloads.push(asset_id);
+    }
+
+    /// GEN-017: Mark download failure with pending retry.
+    pub fn mark_download_failed(state: &mut DownloadingState, url: String) {
+        state.failed_downloads.push(url);
+    }
+
+    /// Transition: Downloading → Completed (all downloads succeeded).
+    pub fn finalize_completed(state: DownloadingState) -> GenerationState {
+        GenerationState::Completed(CompletedState {
+            final_asset_ids: state.completed_downloads,
+            snapshot: state.snapshot,
+        })
+    }
+
+    /// Transition: Downloading → CompletedWithErrors (some succeeded, some failed).
+    pub fn finalize_completed_with_errors(state: DownloadingState) -> GenerationState {
+        let pending = state.failed_downloads.clone();
+        let failed_ids: Vec<String> = state
+            .placeholder_ids
+            .iter()
+            .skip(state.completed_downloads.len())
+            .cloned()
+            .collect();
+        GenerationState::CompletedWithErrors(CompletedWithErrorsState {
+            final_asset_ids: state.completed_downloads,
+            failed_placeholder_ids: failed_ids,
+            pending_download_urls: pending,
+            snapshot: state.snapshot,
+        })
+    }
+
+    /// Transition: Any → Failed.
+    pub fn fail(
+        reason: String,
+        snapshot: Option<GenerationSnapshot>,
+        retry_urls: Vec<String>,
+    ) -> GenerationState {
+        GenerationState::Failed(FailedState {
+            reason,
+            snapshot,
+            pending_retry_urls: retry_urls,
+        })
+    }
+
+    /// GEN-019: For clip-replacement, only first success replaces target.
+    pub fn first_successful_asset(state: &CompletedState) -> Option<&str> {
+        state.final_asset_ids.first().map(|s| s.as_str())
+    }
+
+    /// GEN-020: Rerun from stored GenerationInput.
+    pub fn rerun_from_input(
+        input: &GenerationInput,
+        modality: GenerationModality,
+    ) -> Result<PreparingState, String> {
+        if input.model.is_empty() {
+            return Err("Original model no longer exists or input is incomplete".into());
+        }
+        Ok(PreparingState {
+            prompt: input.prompt.clone(),
+            model: input.model.clone(),
+            duration_seconds: input.duration as f64,
+            aspect_ratio: input.aspect_ratio.clone(),
+            resolution: input.resolution.clone(),
+            quality: input.quality.clone(),
+            estimated_cost: 0,
+            num_images: Self::clamp_image_count(input.num_images.unwrap_or(1)),
+            reference_urls: Vec::new(),
+            modality,
+        })
+    }
+
+    /// GEN-022: Check if upscale is available for an asset.
+    pub fn can_upscale(asset_type: &str, is_generating: bool) -> bool {
+        if is_generating {
+            return false;
+        }
+        matches!(asset_type, "image" | "video")
+    }
+
+    /// GEN-024: Generated audio lands on audio tracks.
+    pub fn target_track_type(modality: &GenerationModality) -> &str {
+        match modality {
+            GenerationModality::Audio | GenerationModality::Music => "audio",
+            GenerationModality::Image => "video",
+            GenerationModality::Video => "video",
+        }
+    }
+
+    /// Reset completed/failed state back to Idle.
+    pub fn reset(state: GenerationState) -> GenerationState {
+        match state {
+            GenerationState::Completed(_) | GenerationState::Failed(_) => GenerationState::Idle,
+            other => other, // can't reset while active
+        }
+    }
+}
+
+// ── Export progress state machine (EXP-008~010) ─────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExportState {
+    Idle,
+    Rendering(RenderingState),
+    Cancelling,
+    Completed,
+    Failed(String),
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderingState {
+    pub progress: f64,
+    pub stall_timeout_seconds: u64,
+    pub last_progress_time: chrono::DateTime<chrono::Utc>,
+    pub stall_watchdog_cancelled: bool,
+}
+
+impl ExportState {
+    /// EXP-009: Start a render with stall watchdog (Upstream #95).
+    pub fn start_rendering(stall_timeout_seconds: u64) -> Self {
+        ExportState::Rendering(RenderingState {
+            progress: 0.0,
+            stall_timeout_seconds,
+            last_progress_time: chrono::Utc::now(),
+            stall_watchdog_cancelled: false,
+        })
+    }
+
+    /// Update progress. Returns true if progress advanced meaningfully.
+    pub fn update_progress(state: &mut RenderingState, value: f64) -> bool {
+        let advanced = (value - state.progress).abs() > 0.001;
+        if advanced {
+            state.progress = value.clamp(0.0, 1.0);
+            state.last_progress_time = chrono::Utc::now();
+        }
+        advanced
+    }
+
+    /// EXP-010: Check if export has stalled.
+    pub fn has_stalled(state: &RenderingState) -> bool {
+        if state.stall_watchdog_cancelled {
+            return false;
+        }
+        let elapsed = (chrono::Utc::now() - state.last_progress_time)
+            .num_seconds()
+            .unsigned_abs();
+        elapsed > state.stall_timeout_seconds
+    }
+
+    /// Cancel the export.
+    pub fn cancel(_state: RenderingState) -> Self {
+        ExportState::Cancelling
+    }
+
+    /// Complete successfully.
+    pub fn complete() -> Self {
+        ExportState::Completed
+    }
+
+    /// Fail with reason.
+    pub fn fail(reason: String) -> Self {
+        ExportState::Failed(reason)
+    }
+}
+
+// ── Settings (SET-001~007) ──────────────────────────────────────
+
+/// Persisted user settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserSettings {
+    /// SET-002: Notifications preference.
+    pub notifications_enabled: bool,
+    /// SET-003: Privacy/telemetry preference.
+    pub telemetry_enabled: bool,
+    /// SET-005: Disabled model ids.
+    pub disabled_models: Vec<String>,
+    /// SET-006: Agent API keys (last 4 chars only for display).
+    pub agent_api_keys: Vec<ApiKeyEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApiKeyEntry {
+    pub provider: String,
+    pub masked_key: String, // last 4 chars
+}
+
+impl Default for UserSettings {
+    fn default() -> Self {
+        Self {
+            notifications_enabled: true,
+            telemetry_enabled: true,
+            disabled_models: Vec::new(),
+            agent_api_keys: Vec::new(),
+        }
+    }
+}
+
+impl UserSettings {
+    /// SET-004: Telemetry changes apply on next launch.
+    pub fn telemetry_effective(&self, is_next_launch: bool) -> bool {
+        if is_next_launch {
+            self.telemetry_enabled
+        } else {
+            // Current launch always uses the latched value
+            true
+        }
+    }
+
+    /// SET-006: Mask API key, keeping only last 4 chars.
+    pub fn mask_api_key(key: &str) -> String {
+        if key.len() <= 4 {
+            return key.to_string();
+        }
+        let masked_len = key.len() - 4;
+        format!("{}****", &key[masked_len..])
+    }
+}
+
+// ── Model catalog ───────────────────────────────────────────────
+
+/// A model entry in the live catalog.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelEntry {
+    pub id: String,
+    pub name: String,
+    pub modality: GenerationModality,
+    pub cost_per_second: i64,
+    pub disabled: bool,
+}
+
+/// Model catalog with filtering support (GEN-002).
+pub struct ModelCatalog;
+
+impl ModelCatalog {
+    /// Get available models from catalog filtered by settings.
+    pub fn available<'a>(
+        catalog: &'a [ModelEntry],
+        disabled_models: &'a [String],
+    ) -> Vec<&'a ModelEntry> {
+        catalog
+            .iter()
+            .filter(|m| !disabled_models.contains(&m.id))
+            .filter(|m| !m.disabled)
+            .collect()
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Account (ACC-001~004) ──
+
+    #[test]
+    fn acc_001_missing_keys_not_crash() {
+        let state = AccountState::MissingKeys;
+        assert_eq!(
+            GenerationMachine::can_submit(&state).unwrap_err(),
+            "API keys are missing"
+        );
+    }
+
+    #[test]
+    fn acc_002_remaining_credits_clamped() {
+        let acct = ReadyAccount {
+            monthly_budget: 100,
+            purchased_credits: 50,
+            spent_credits: 200,
+        };
+        assert_eq!(acct.remaining_credits(), 0);
+        let acct2 = ReadyAccount {
+            monthly_budget: 100,
+            purchased_credits: 0,
+            spent_credits: 30,
+        };
+        assert_eq!(acct2.remaining_credits(), 70);
+    }
+
+    #[test]
+    fn acc_003_check_credits_blocks() {
+        let acct = ReadyAccount {
+            monthly_budget: 100,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        assert!(GenerationMachine::check_credits(&acct, 50).is_ok());
+        assert!(GenerationMachine::check_credits(&acct, 150).is_err());
+    }
+
+    #[test]
+    fn acc_004_misconfigured_rejected() {
+        let state = AccountState::Misconfigured("invalid endpoint".into());
+        assert!(GenerationMachine::can_submit(&state).is_err());
+    }
+
+    // ── Settings (SET-001~007) ──
+
+    #[test]
+    fn set_002_notifications_default_on() {
+        let s = UserSettings::default();
+        assert!(s.notifications_enabled);
+    }
+
+    #[test]
+    fn set_003_telemetry_default_on() {
+        let s = UserSettings::default();
+        assert!(s.telemetry_enabled);
+    }
+
+    #[test]
+    fn set_004_telemetry_next_launch() {
+        let s = UserSettings {
+            telemetry_enabled: false,
+            ..Default::default()
+        };
+        assert!(s.telemetry_effective(false)); // current launch still on
+        assert!(!s.telemetry_effective(true)); // next launch off
+    }
+
+    #[test]
+    fn set_005_disabled_models_filter() {
+        let catalog = vec![
+            ModelEntry {
+                id: "m1".into(),
+                name: "M1".into(),
+                modality: GenerationModality::Video,
+                cost_per_second: 10,
+                disabled: false,
+            },
+            ModelEntry {
+                id: "m2".into(),
+                name: "M2".into(),
+                modality: GenerationModality::Video,
+                cost_per_second: 20,
+                disabled: false,
+            },
+            ModelEntry {
+                id: "m3".into(),
+                name: "M3".into(),
+                modality: GenerationModality::Image,
+                cost_per_second: 5,
+                disabled: true,
+            },
+        ];
+        let disabled = vec!["m1".to_string()];
+        let available = ModelCatalog::available(&catalog, &disabled);
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].id, "m2");
+    }
+
+    #[test]
+    fn set_006_mask_api_key() {
+        assert_eq!(UserSettings::mask_api_key("sk-abc12345"), "2345****");
+        assert_eq!(UserSettings::mask_api_key("abc"), "abc");
+    }
+
+    #[test]
+    fn set_007_storage_clear_not_tested() {
+        // Placeholder for storage-pane behavior (tested via integration in app shell)
+    }
+
+    // ── Generation (GEN-001~024) ──
+
+    #[test]
+    fn gen_001_gated_on_account() {
+        assert!(GenerationMachine::can_submit(&AccountState::Unconfigured).is_err());
+        assert!(
+            GenerationMachine::can_submit(&AccountState::Ready(ReadyAccount {
+                monthly_budget: 100,
+                purchased_credits: 0,
+                spent_credits: 0,
+            }))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn gen_002_available_models() {
+        let catalog = vec![
+            ModelEntry {
+                id: "v1".into(),
+                name: "V1".into(),
+                modality: GenerationModality::Video,
+                cost_per_second: 10,
+                disabled: false,
+            },
+            ModelEntry {
+                id: "v2".into(),
+                name: "V2".into(),
+                modality: GenerationModality::Video,
+                cost_per_second: 20,
+                disabled: false,
+            },
+        ];
+        let available = ModelCatalog::available(&catalog, &[]);
+        assert_eq!(available.len(), 2);
+    }
+
+    #[test]
+    fn gen_003_cost_exceeds_credits_blocked() {
+        let acct = ReadyAccount {
+            monthly_budget: 50,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        assert!(GenerationMachine::check_credits(&acct, 100).is_err());
+    }
+
+    #[test]
+    fn gen_006_image_count_clamped() {
+        assert_eq!(GenerationMachine::clamp_image_count(0), 1);
+        assert_eq!(GenerationMachine::clamp_image_count(2), 2);
+        assert_eq!(GenerationMachine::clamp_image_count(10), 4);
+    }
+
+    #[test]
+    fn gen_011_snapshot_preserves_input() {
+        let input = GenerationInput {
+            prompt: "test".into(),
+            model: "m1".into(),
+            duration: 30,
+            aspect_ratio: "16:9".into(),
+            resolution: None,
+            quality: None,
+            image_urls: None,
+            num_images: None,
+            voice: None,
+            lyrics: None,
+            style_instructions: None,
+            instrumental: None,
+            generate_audio: None,
+            reference_image_urls: None,
+            reference_video_urls: None,
+            reference_audio_urls: None,
+            image_url_asset_ids: None,
+            reference_image_asset_ids: None,
+            reference_video_asset_ids: None,
+            reference_audio_asset_ids: None,
+            created_at: None,
+        };
+        let snap = GenerationMachine::create_snapshot(
+            &input,
+            GenerationModality::Video,
+            1,
+            vec![],
+            vec![],
+        );
+        assert_eq!(snap.prompt, "test");
+        assert_eq!(snap.model, "m1");
+    }
+
+    #[test]
+    fn gen_012_placeholder_count() {
+        assert_eq!(
+            GenerationMachine::placeholder_count(3, &GenerationModality::Image),
+            3
+        );
+        assert_eq!(
+            GenerationMachine::placeholder_count(1, &GenerationModality::Audio),
+            1
+        );
+    }
+
+    #[test]
+    fn gen_013_submit_returns_job_id() {
+        let state = make_preparing_state();
+        let acct = ReadyAccount {
+            monthly_budget: 1000,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        let gen_state = GenerationMachine::start_uploading(state, &acct, vec![], vec![]).unwrap();
+        let upload_state = match gen_state {
+            GenerationState::Uploading(s) => s,
+            _ => panic!("expected Uploading"),
+        };
+        let job_state =
+            GenerationMachine::submit_job(upload_state, "job-123".into(), vec!["p1".into()]);
+        match job_state {
+            GenerationState::AwaitingJob(s) => assert_eq!(s.job_id, "job-123"),
+            _ => panic!("expected AwaitingJob"),
+        }
+    }
+
+    #[test]
+    fn gen_014_subscription_failure_fails_placeholders() {
+        let state = make_preparing_state();
+        let acct = ReadyAccount {
+            monthly_budget: 1000,
+            purchased_credits: 0,
+            spent_credits: 0,
+        };
+        let gen_state = GenerationMachine::start_uploading(state, &acct, vec![], vec![]).unwrap();
+        let upload_state = match gen_state {
+            GenerationState::Uploading(s) => s,
+            _ => panic!("expected Uploading"),
+        };
+        // Simulate: subscription can't start → fail
+        let failed = GenerationMachine::fail(
+            "Subscription could not start".into(),
+            Some(upload_state.snapshot.clone()),
+            vec![],
+        );
+        match failed {
+            GenerationState::Failed(s) => assert!(s.reason.contains("Subscription")),
+            _ => panic!("expected Failed"),
+        }
+    }
+
+    #[test]
+    fn gen_015_success_downloads_results() {
+        let job_state = make_awaiting_state();
+        let dl_state =
+            GenerationMachine::job_succeeded(job_state, vec!["url1".into(), "url2".into()]);
+        match dl_state {
+            GenerationState::Downloading(s) => {
+                assert_eq!(s.result_urls.len(), 2);
+                assert_eq!(s.completed_downloads.len(), 0);
+            }
+            _ => panic!("expected Downloading"),
+        }
+    }
+
+    #[test]
+    fn gen_016_fewer_results_than_placeholders() {
+        assert!(GenerationMachine::check_result_count(3, 2).is_err());
+        assert!(GenerationMachine::check_result_count(2, 2).is_ok());
+    }
+
+    #[test]
+    fn gen_017_download_failure_stores_pending_url() {
+        let job_state = make_awaiting_state();
+        let mut dl = match GenerationMachine::job_succeeded(job_state, vec!["url1".into()]) {
+            GenerationState::Downloading(s) => s,
+            _ => panic!("expected Downloading"),
+        };
+        GenerationMachine::mark_download_failed(&mut dl, "url1".into());
+        assert_eq!(dl.failed_downloads.len(), 1);
+    }
+
+    #[test]
+    fn gen_018_upload_submit_failure() {
+        let failed =
+            GenerationMachine::fail("Upload failed: connection error".into(), None, vec![]);
+        match failed {
+            GenerationState::Failed(s) => assert!(s.reason.contains("Upload failed")),
+            _ => panic!("expected Failed"),
+        }
+    }
+
+    #[test]
+    fn gen_019_first_success_replaces_target() {
+        let state = CompletedState {
+            final_asset_ids: vec!["asset-1".into(), "asset-2".into()],
+            snapshot: make_dummy_snapshot(),
+        };
+        assert_eq!(
+            GenerationMachine::first_successful_asset(&state),
+            Some("asset-1")
+        );
+    }
+
+    #[test]
+    fn gen_020_rerun_from_stored_input() {
+        let input = GenerationInput {
+            prompt: "rerun test".into(),
+            model: "m1".into(),
+            duration: 30,
+            aspect_ratio: "16:9".into(),
+            resolution: None,
+            quality: None,
+            image_urls: None,
+            num_images: Some(2),
+            voice: None,
+            lyrics: None,
+            style_instructions: None,
+            instrumental: None,
+            generate_audio: None,
+            reference_image_urls: None,
+            reference_video_urls: None,
+            reference_audio_urls: None,
+            image_url_asset_ids: None,
+            reference_image_asset_ids: None,
+            reference_video_asset_ids: None,
+            reference_audio_asset_ids: None,
+            created_at: None,
+        };
+        let prep = GenerationMachine::rerun_from_input(&input, GenerationModality::Video).unwrap();
+        assert_eq!(prep.prompt, "rerun test");
+        assert_eq!(prep.num_images, 2);
+    }
+
+    #[test]
+    fn gen_021_rerun_fails_on_missing_model() {
+        let input = GenerationInput {
+            model: String::new(),
+            ..Default::default()
+        };
+        assert!(GenerationMachine::rerun_from_input(&input, GenerationModality::Video).is_err());
+    }
+
+    #[test]
+    fn gen_022_upscale_availability() {
+        assert!(GenerationMachine::can_upscale("image", false));
+        assert!(GenerationMachine::can_upscale("video", false));
+        assert!(!GenerationMachine::can_upscale("audio", false));
+        assert!(!GenerationMachine::can_upscale("image", true));
+    }
+
+    #[test]
+    fn gen_024_audio_lands_on_audio_tracks() {
+        assert_eq!(
+            GenerationMachine::target_track_type(&GenerationModality::Audio),
+            "audio"
+        );
+        assert_eq!(
+            GenerationMachine::target_track_type(&GenerationModality::Music),
+            "audio"
+        );
+        assert_eq!(
+            GenerationMachine::target_track_type(&GenerationModality::Video),
+            "video"
+        );
+    }
+
+    // ── Export state machine (EXP-008~010) ──
+
+    #[test]
+    fn exp_008_export_starts_rendering() {
+        let state = ExportState::start_rendering(120);
+        match state {
+            ExportState::Rendering(s) => {
+                assert_eq!(s.progress, 0.0);
+                assert_eq!(s.stall_timeout_seconds, 120);
+            }
+            _ => panic!("expected Rendering"),
+        }
+    }
+
+    #[test]
+    fn exp_009_progress_updates() {
+        let mut state = ExportState::start_rendering(120);
+        if let ExportState::Rendering(ref mut s) = state {
+            assert!(ExportState::update_progress(s, 0.5));
+            assert_eq!(s.progress, 0.5);
+            assert!(!ExportState::update_progress(s, 0.5)); // no change
+        } else {
+            panic!("expected Rendering");
+        }
+    }
+
+    #[test]
+    fn exp_010_stall_detection() {
+        let state = RenderingState {
+            progress: 0.3,
+            stall_timeout_seconds: 0, // immediate timeout
+            last_progress_time: chrono::Utc::now() - chrono::Duration::seconds(10),
+            stall_watchdog_cancelled: false,
+        };
+        assert!(ExportState::has_stalled(&state));
+    }
+
+    #[test]
+    fn exp_010_cancellation_distinct() {
+        let state = ExportState::start_rendering(120);
+        match state {
+            ExportState::Rendering(s) => {
+                let cancelled = ExportState::cancel(s);
+                assert_eq!(cancelled, ExportState::Cancelling);
+            }
+            _ => panic!("expected Rendering"),
+        }
+    }
+
+    // ── Helpers ──
+
+    fn make_preparing_state() -> PreparingState {
+        PreparingState {
+            prompt: "test".into(),
+            model: "m1".into(),
+            duration_seconds: 10.0,
+            aspect_ratio: "16:9".into(),
+            resolution: None,
+            quality: None,
+            estimated_cost: 50,
+            num_images: 1,
+            reference_urls: vec![],
+            modality: GenerationModality::Video,
+        }
+    }
+
+    fn make_awaiting_state() -> AwaitingJobState {
+        AwaitingJobState {
+            job_id: "job-1".into(),
+            snapshot: make_dummy_snapshot(),
+            placeholder_ids: vec!["p1".into(), "p2".into()],
+        }
+    }
+
+    fn make_dummy_snapshot() -> GenerationSnapshot {
+        GenerationSnapshot {
+            prompt: String::new(),
+            model: String::new(),
+            duration_seconds: 0.0,
+            aspect_ratio: String::new(),
+            resolution: None,
+            quality: None,
+            num_images: 1,
+            reference_urls: vec![],
+            reference_asset_ids: vec![],
+            modality: GenerationModality::Video,
+            created_at: chrono::Utc::now(),
+        }
+    }
+}

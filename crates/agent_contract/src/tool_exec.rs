@@ -1123,6 +1123,9 @@ impl ToolExecutor {
             folder_id: folder_id.map(String::from),
             cached_remote_url: None,
             cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
         };
         let entry_id = entry.id.clone();
         self.media_manifest.entries.push(entry);
@@ -1926,6 +1929,9 @@ impl ToolExecutor {
             folder_id: None,
             cached_remote_url: None,
             cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -1987,6 +1993,9 @@ impl ToolExecutor {
             folder_id: None,
             cached_remote_url: None,
             cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -2029,6 +2038,9 @@ impl ToolExecutor {
             folder_id: None,
             cached_remote_url: None,
             cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -2094,6 +2106,9 @@ impl ToolExecutor {
             folder_id: None,
             cached_remote_url: None,
             cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -2162,6 +2177,9 @@ mod tests {
             folder_id: None,
             cached_remote_url: None,
             cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
         });
         manifest.folders.push(core_model::MediaFolder {
             id: "folder-001".to_string(),

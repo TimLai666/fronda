@@ -1,5 +1,56 @@
 use core_model::{Clip, ClipType, Timeline, Track};
+use std::collections::HashMap;
 use std::fmt::Write;
+
+/// A source's start timecode: frame number in the timecode track's own quanta rate,
+/// plus its drop-frame flag. Upstream PR #136.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SourceTimecode {
+    pub frame: i64,
+    pub quanta: i64,
+    pub drop_frame: bool,
+}
+
+/// Frame count → SMPTE string; drop-frame (29.97/59.94) uses `;` separators.
+pub fn format_timecode(frame: i64, fps: i64, drop_frame: bool) -> String {
+    if fps <= 0 {
+        return "00:00:00:00".to_string();
+    }
+    let mut f = frame;
+    if drop_frame {
+        let drop = ((fps as f64) * 0.066666).round() as i64; // 2 @ 30, 4 @ 60
+        let d = f / (fps * 600);
+        let m = f % (fps * 600);
+        f += drop * 9 * d
+            + if m > drop {
+                drop * ((m - drop) / (fps * 60))
+            } else {
+                0
+            };
+    }
+    let sep = if drop_frame { ";" } else { ":" };
+    let ff = f % fps;
+    let ss = (f / fps) % 60;
+    let mm = (f / (fps * 60)) % 60;
+    let hh = f / (fps * 3600);
+    format!("{:02}{}{:02}{}{:02}{}{:02}", hh, sep, mm, sep, ss, sep, ff)
+}
+
+/// Compute timecode values for a file's `<timecode>` block.
+/// When `source` is provided, uses the tmcd track's own quanta and drop-frame flag;
+/// otherwise falls back to video rate with NTSC-based drop-frame guess.
+pub fn timecode_tags(
+    source: Option<SourceTimecode>,
+    video_timebase: i64,
+    video_ntsc: bool,
+) -> (i64, bool, i64, bool, String) {
+    let base = source.map_or(video_timebase, |s| s.quanta);
+    let drop_frame = source.map_or(video_ntsc && video_timebase % 30 == 0, |s| s.drop_frame);
+    let ntsc = if drop_frame { true } else { video_ntsc };
+    let frame = source.map_or(0, |s| s.frame);
+    let string = format_timecode(frame, base, drop_frame);
+    (base, ntsc, frame, drop_frame, string)
+}
 
 /// XMEML 4 / Final Cut Pro 7 XML export (XML-001).
 /// Pure string generation with no platform dependencies.
@@ -7,12 +58,20 @@ pub struct XmlExport;
 
 impl XmlExport {
     /// Generate XMEML 4 XML for a given timeline.
+    /// `media_timecodes` maps media_ref → SourceTimecode for files with a tmcd track.
     /// XML-001: XMEML 4, not FCPXML.
     /// XML-010: Visual track order is reversed.
     /// XML-013: Text overlays are not preserved.
     /// XML-014: Flip state is not preserved.
     /// XML-015: Keyframe easing curves not preserved.
     pub fn export(timeline: &Timeline) -> String {
+        Self::export_with_timecodes(timeline, None)
+    }
+
+    fn export_with_timecodes(
+        timeline: &Timeline,
+        media_timecodes: Option<&HashMap<String, SourceTimecode>>,
+    ) -> String {
         let mut xml = String::new();
         write!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n").ok();
         write!(xml, "<!DOCTYPE xmeml>\n").ok();
@@ -55,7 +114,8 @@ impl XmlExport {
                     // XML-013: Text/shape overlays not preserved
                     continue;
                 }
-                write_clip(&mut xml, clip, timeline.fps);
+                let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
+                write_clip(&mut xml, clip, timeline.fps, tc);
             }
             write!(xml, "          </videotrack>\n").ok();
             write!(xml, "        </track>\n").ok();
@@ -81,7 +141,8 @@ impl XmlExport {
             .ok();
             write!(xml, "            <locked>FALSE</locked>\n").ok();
             for clip in &track.clips {
-                write_clip(&mut xml, clip, timeline.fps);
+                let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
+                write_clip(&mut xml, clip, timeline.fps, tc);
             }
             write!(xml, "          </audiotrack>\n").ok();
             write!(xml, "        </track>\n").ok();
@@ -110,7 +171,8 @@ fn timeline_total_frames(timeline: &Timeline) -> i64 {
 /// XML-011: emits one full <file> element per clip (simplified — no dedup since
 ///          we don't have media manifest here).
 /// XML-012: clips without media_ref are skipped.
-fn write_clip(xml: &mut String, clip: &Clip, fps: i64) {
+/// `timecode` is the optional SourceTimecode from the tmcd track. Upstream PR #136.
+fn write_clip(xml: &mut String, clip: &Clip, fps: i64, timecode: Option<SourceTimecode>) {
     if clip.media_ref.is_empty() {
         // XML-012: skip unresolved media
         return;
@@ -260,6 +322,28 @@ fn write_clip(xml: &mut String, clip: &Clip, fps: i64) {
     write!(xml, "                <rate>\n").ok();
     write!(xml, "                  <timebase>{}</timebase>\n", fps).ok();
     write!(xml, "                </rate>\n").ok();
+    // XML-009: source timecode (PR #136)
+    let ntsc = fps % 30 == 0 && fps <= 60;
+    let tc = timecode_tags(timecode, fps, ntsc);
+    write!(xml, "                <timecode>\n").ok();
+    write!(xml, "                  <rate>\n").ok();
+    write!(xml, "                    <timebase>{}</timebase>\n", tc.0).ok();
+    write!(
+        xml,
+        "                    <ntsc>{}</ntsc>\n",
+        if tc.1 { "TRUE" } else { "FALSE" }
+    )
+    .ok();
+    write!(xml, "                  </rate>\n").ok();
+    write!(xml, "                  <string>{}</string>\n", tc.4).ok();
+    write!(xml, "                  <frame>{}</frame>\n", tc.2).ok();
+    write!(
+        xml,
+        "                  <displayformat>{}</displayformat>\n",
+        if tc.3 { "DF" } else { "NDF" }
+    )
+    .ok();
+    write!(xml, "                </timecode>\n").ok();
     write!(xml, "              </file>\n").ok();
 
     write!(xml, "            </clipitem>\n").ok();
@@ -520,5 +604,114 @@ mod tests {
         let xml = XmlExport::export(&timeline);
         assert!(xml.contains("<link>"));
         assert!(xml.contains("<linkclipref>link-1</linkclipref>"));
+    }
+
+    // MARK: - timecode functions (PR #136)
+
+    #[test]
+    fn format_timecode_non_drop_zero() {
+        assert_eq!(format_timecode(0, 30, false), "00:00:00:00");
+    }
+
+    #[test]
+    fn format_timecode_non_drop_basic() {
+        assert_eq!(format_timecode(1968620, 30, false), "18:13:40:20");
+    }
+
+    #[test]
+    fn format_timecode_drop_frame_basic() {
+        // 42966 frames at 30 DF = 00;23;53;18
+        assert_eq!(format_timecode(42966, 30, true), "00;23;53;18");
+    }
+
+    #[test]
+    fn format_timecode_drop_frame_separator() {
+        let s = format_timecode(100, 30, true);
+        assert!(s.contains(';'), "drop-frame should use semicolons");
+    }
+
+    #[test]
+    fn format_timecode_zero_fps_protection() {
+        assert_eq!(format_timecode(100, 0, false), "00:00:00:00");
+    }
+
+    #[test]
+    fn format_timecode_drop_frame_30_vs_60() {
+        // 30 DF and 60 DF have different drop counts
+        let s30 = format_timecode(100, 30, true);
+        let s60 = format_timecode(100, 60, true);
+        assert_ne!(s30, s60);
+    }
+
+    #[test]
+    fn timecode_tags_non_drop_source() {
+        let tc = timecode_tags(
+            Some(SourceTimecode {
+                frame: 1968620,
+                quanta: 30,
+                drop_frame: false,
+            }),
+            30,
+            true,
+        );
+        assert_eq!(tc.0, 30); // base
+        assert_eq!(tc.1, true); // ntsc (still NTSC even though NDF)
+        assert_eq!(tc.2, 1968620); // frame
+        assert_eq!(tc.3, false); // drop_frame
+        assert_eq!(tc.4, "18:13:40:20");
+        assert!(!tc.4.contains(';'));
+    }
+
+    #[test]
+    fn timecode_tags_drop_frame_source_on_60p() {
+        // Fuji 59.94p: tmcd at 30 DF, not 60
+        let tc = timecode_tags(
+            Some(SourceTimecode {
+                frame: 42966,
+                quanta: 30,
+                drop_frame: true,
+            }),
+            60,
+            true,
+        );
+        assert_eq!(tc.0, 30); // track quanta, not video rate
+        assert_eq!(tc.3, true); // drop frame
+        assert_eq!(tc.4, "00;23;53;18");
+    }
+
+    #[test]
+    fn timecode_tags_no_source_falls_back() {
+        let tc = timecode_tags(None, 30, true);
+        assert_eq!(tc.0, 30);
+        assert_eq!(tc.2, 0);
+        assert_eq!(tc.3, true); // NTSC 30 → drop frame guess
+        assert_eq!(tc.4, "00;00;00;00");
+    }
+
+    #[test]
+    fn timecode_tags_no_source_non_ntsc() {
+        let tc = timecode_tags(None, 30, false);
+        assert_eq!(tc.3, false);
+        assert_eq!(tc.4, "00:00:00:00");
+    }
+
+    #[test]
+    fn xml_timecode_emitted_in_file_element() {
+        let mut timeline = sample_timeline();
+        timeline.tracks[0].clips[0].media_ref = "test.mp4".into();
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "test.mp4".into(),
+            SourceTimecode {
+                frame: 100,
+                quanta: 30,
+                drop_frame: false,
+            },
+        );
+        // Access via private method through XmlExport
+        let xml = XmlExport::export_with_timecodes(&timeline, Some(&map));
+        assert!(xml.contains("<timecode>"));
+        assert!(xml.contains("<string>00:00:03:10</string>")); // frame 100 at 30fps
+        assert!(xml.contains("<displayformat>NDF</displayformat>"));
     }
 }

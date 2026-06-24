@@ -104,6 +104,20 @@ pub enum ClipType {
     Shape,
 }
 
+impl ClipType {
+    /// Classify a file extension into a ClipType.
+    /// Upstream PR #105: added .aifc and .flac.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "mov" | "mp4" | "m4v" => Some(Self::Video),
+            "mp3" | "wav" | "aac" | "m4a" | "aiff" | "aif" | "aifc" | "flac" => Some(Self::Audio),
+            "png" | "jpg" | "jpeg" | "tiff" | "heic" | "webp" => Some(Self::Image),
+            "json" | "lottie" => Some(Self::Lottie),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Interpolation {
@@ -484,5 +498,45 @@ impl Default for Timeline {
             tracks: Vec::new(),
             transcription_language: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clip_type_from_extension_video() {
+        for ext in &["mov", "mp4", "m4v", "MOV", "Mp4"] {
+            assert_eq!(ClipType::from_extension(ext), Some(ClipType::Video));
+        }
+    }
+
+    #[test]
+    fn clip_type_from_extension_audio() {
+        for ext in &["mp3", "wav", "aac", "m4a", "aiff", "aif", "aifc", "flac"] {
+            assert_eq!(ClipType::from_extension(ext), Some(ClipType::Audio));
+        }
+    }
+
+    #[test]
+    fn clip_type_from_extension_image() {
+        for ext in &["png", "jpg", "jpeg", "tiff", "heic", "webp"] {
+            assert_eq!(ClipType::from_extension(ext), Some(ClipType::Image));
+        }
+    }
+
+    #[test]
+    fn clip_type_from_extension_lottie() {
+        for ext in &["json", "lottie"] {
+            assert_eq!(ClipType::from_extension(ext), Some(ClipType::Lottie));
+        }
+    }
+
+    #[test]
+    fn clip_type_from_extension_unknown() {
+        assert_eq!(ClipType::from_extension("txt"), None);
+        assert_eq!(ClipType::from_extension(""), None);
+        assert_eq!(ClipType::from_extension("exe"), None);
     }
 }

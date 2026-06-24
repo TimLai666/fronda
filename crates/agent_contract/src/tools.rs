@@ -206,7 +206,7 @@ fn get_transcript() -> ToolDefinition {
 fn import_media() -> ToolDefinition {
     ToolDefinition {
         name: "import_media",
-        description: "Import a media file into the project.",
+        description: "Import a media file into the project. Supported extensions: .mov .mp4 .m4v (video), .mp3 .wav .aac .m4a .aiff .aif .aifc .flac (audio), .png .jpg .jpeg .tiff .heic .webp (image), .json .lottie (animation).",
         input_schema: object(&[("path", string("File path to import"))]),
     }
 }

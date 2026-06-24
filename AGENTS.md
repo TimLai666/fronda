@@ -71,3 +71,29 @@ This repo is being rewritten into a cross-platform Rust app. The current Swift c
   3. fixture-based integration tests for import/export/search/transcription/generation flows
   4. `gpui-ce` interaction tests only for behavior that is inherently UI-driven
 - Keep Rust modules deterministic and explicit. Prefer small pure functions, explicit data flow, and stable serialized structures over hidden globals or view-owned business logic.
+- Generation, account, and export state machines live in `crates/generation_core/` (crate name `generation_core`, package `fronda-generation-core`). Pure state machine logic with no platform dependencies.
+- `ClipType::from_extension(ext)` in `core_model` classifies file extensions into clip types (covers aiff, aifc, flac).
+- XML export supports source timecode (`SourceTimecode` struct + `format_timecode`/`timecode_tags` functions) in `render_core/src/xml_export.rs`.
+- `MediaManifestEntry` has optional `source_timecode_frame`, `source_timecode_quanta`, `source_timecode_drop_frame` fields (upstream PR #136).
+- `GenerationInput` implements `Default`.
+
+## Upstream PR porting status
+
+| PR   | Description                             | Status      | Rust Crate                                   |
+| ---- | --------------------------------------- | ----------- | -------------------------------------------- |
+| #8   | Colors + Effects via Metal              | DONE        | agent_contract (effects pipeline)            |
+| #46  | Shape annotations + animation tools     | DONE        | core_model, agent_contract                   |
+| #40  | Transcription language setting          | DONE        | core_model (Timeline.transcription_language) |
+| #65  | Font weight in TextStyle                | DONE        | core_model (TextStyle.font_weight)           |
+| #92  | Words-per-caption setting               | DONE        | search_core (CaptionConfig)                  |
+| #105 | .aifc/.flac import support              | DONE        | core_model (ClipType::from_extension)        |
+| #114 | Fix set_clip_properties rotation        | DONE        | timeline_core                                |
+| #115 | Fix writePosition keyframe corruption   | DONE        | timeline_core                                |
+| #129 | Fix keyframe loss on speed change       | DONE        | timeline_core (keyframes.rs)                 |
+| #136 | XMEML source timecode                   | DONE        | render_core (xml_export.rs), core_model      |
+| #144 | Validate speed/volume/opacity/trim      | DONE        | agent_contract (mutation.rs)                 |
+| #94  | Export resolutions (2K, Match Timeline) | DONE        | render_core (ExportResolution)               |
+| #135 | Missing-media cache pattern             | NOT_STARTED | core_model                                   |
+| #74  | naturalTimeScale for clip inserts       | DEFERRED    | AVFoundation-specific                        |
+| #119 | Audio syncing multiple tracks           | NOT_STARTED | Swift-only, large feature                    |
+| #133 | Project thumbnail main-thread hang      | DEFERRED    | Swift-specific pattern                       |
