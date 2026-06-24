@@ -134,6 +134,10 @@ They do **not** specify private backend implementation details.
   - generation
   - account/settings/help/app shell
   - telemetry
+- `97-upstream-pr-audit.md`
+  - audit of all upstream Swift PRs and their Rust porting status
+  - Swift test coverage gaps vs Rust
+  - recommended next actions
 - `98-verification-plan.md`
   - execution waves for converting spec families into Rust tests
   - fixture / snapshot layout guidance
