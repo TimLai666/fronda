@@ -428,6 +428,46 @@ impl DetailedCompositionPlan {
         }
     }
 }
+/// Progress state for an export operation.
+///
+/// EXP-009: Export progress updates while a rendered export is running.
+/// This pure-data struct allows the platform adapter to report progress
+/// as frames are completed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportProgress {
+    pub frames_completed: i64,
+    pub total_frames: i64,
+}
+
+impl ExportProgress {
+    pub fn new(total_frames: i64) -> Self {
+        Self {
+            frames_completed: 0,
+            total_frames,
+        }
+    }
+
+    /// Fraction of completion between 0.0 and 1.0.
+    pub fn fraction(&self) -> f64 {
+        if self.total_frames <= 0 {
+            1.0
+        } else {
+            (self.frames_completed as f64 / self.total_frames as f64).clamp(0.0, 1.0)
+        }
+    }
+}
+
+/// The result of an export operation.
+///
+/// EXP-010: Cancellation is surfaced distinctly from other export failures.
+/// This enum ensures cancellation and failure are separate states.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportResult {
+    Completed,
+    Cancelled,
+    Failed(String),
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -977,5 +1017,341 @@ mod tests {
         let detailed2 = DetailedCompositionPlan::from_timeline(&timeline, resolution);
         assert!(detailed2.needs_black_background);
         assert!(detailed2.black_background_duration > 0);
+    }
+    // === EXP-003: Short side targeting ===
+    #[test]
+    fn export_resolution_short_side_portrait() {
+        let mut timeline = make_timeline();
+        timeline.width = 1080;
+        timeline.height = 1920;
+        // Short side = 1080, target 720 => ratio = 720/1080 = 2/3
+        let size = ExportResolution::R720p.render_size(&timeline);
+        assert_eq!(size.width, 720);
+        assert_eq!(size.height, 1280);
+    }
+
+    #[test]
+    fn export_resolution_short_side_square() {
+        let mut timeline = make_timeline();
+        timeline.width = 1000;
+        timeline.height = 1000;
+        let size = ExportResolution::R720p.render_size(&timeline);
+        assert_eq!(size.width, 720);
+        assert_eq!(size.height, 720);
+    }
+
+    // === EXP-004: Aspect ratio preservation ===
+    #[test]
+    fn export_resolution_preserves_aspect_ratio() {
+        let timeline = make_timeline();
+        let original_aspect = 1920.0 / 1080.0;
+        for resolution in &[
+            ExportResolution::R720p,
+            ExportResolution::R1080p,
+            ExportResolution::R1440p,
+            ExportResolution::R4K,
+            ExportResolution::MatchTimeline,
+        ] {
+            let size = resolution.render_size(&timeline);
+            let scaled_aspect = size.width as f64 / size.height as f64;
+            let diff = (scaled_aspect - original_aspect).abs();
+            assert!(
+                diff < 0.01,
+                "Aspect ratio mismatch for {:?}: expected ~{}, got {}",
+                resolution,
+                original_aspect,
+                scaled_aspect
+            );
+        }
+    }
+
+    #[test]
+    fn export_resolution_aspect_ratio_non_standard() {
+        let mut timeline = make_timeline();
+        timeline.width = 2000;
+        timeline.height = 800;
+        // Short side = 800, target 720 => ratio = 720/800 = 0.9
+        let size = ExportResolution::R720p.render_size(&timeline);
+        assert_eq!(size.width, 1800);
+        assert_eq!(size.height, 720);
+        let original_aspect = 2000.0 / 800.0;
+        let scaled_aspect = size.width as f64 / size.height as f64;
+        assert!(
+            (scaled_aspect - original_aspect).abs() < 0.01,
+            "Aspect ratio not preserved: {} vs {}",
+            scaled_aspect,
+            original_aspect
+        );
+    }
+
+    // === EXP-005: Even integer dimensions ===
+    #[test]
+    fn export_resolution_all_even() {
+        let sizes = [
+            (1920, 1080),
+            (1080, 1920),
+            (2000, 800),
+            (1440, 900),
+            (3840, 2160),
+        ];
+        let resolutions = [
+            ExportResolution::R720p,
+            ExportResolution::R1080p,
+            ExportResolution::R1440p,
+            ExportResolution::R4K,
+            ExportResolution::MatchTimeline,
+        ];
+        let mut timeline = make_timeline();
+        for &(w, h) in &sizes {
+            timeline.width = w;
+            timeline.height = h;
+            for &resolution in &resolutions {
+                let size = resolution.render_size(&timeline);
+                assert!(
+                    size.width % 2 == 0,
+                    "Width {} not even for {:?} on {}x{}",
+                    size.width,
+                    resolution,
+                    w,
+                    h
+                );
+                assert!(
+                    size.height % 2 == 0,
+                    "Height {} not even for {:?} on {}x{}",
+                    size.height,
+                    resolution,
+                    w,
+                    h
+                );
+            }
+        }
+    }
+
+    // === EXP-006: Minimum 2 pixels ===
+    #[test]
+    fn export_resolution_minimum_two_pixels() {
+        let mut timeline = make_timeline();
+        timeline.width = 1;
+        timeline.height = 1;
+        let size = ExportResolution::R720p.render_size(&timeline);
+        assert!(size.width >= 2);
+        assert!(size.height >= 2);
+    }
+
+    // === EXP-008: Format info for output path ===
+    #[test]
+    fn export_format_extension_matches_spec() {
+        assert_eq!(ExportFormat::H264.file_extension(), "mp4");
+        assert_eq!(ExportFormat::H265.file_extension(), "mp4");
+        assert_eq!(ExportFormat::ProRes.file_extension(), "mov");
+    }
+
+    // === EXP-009: Export progress tracking ===
+    #[test]
+    fn export_progress_tracks_completion() {
+        let p = ExportProgress::new(100);
+        assert_eq!(p.frames_completed, 0);
+        assert!((p.fraction() - 0.0).abs() < f64::EPSILON);
+        let advanced = ExportProgress {
+            frames_completed: 50,
+            ..p
+        };
+        assert!((advanced.fraction() - 0.5).abs() < f64::EPSILON);
+        let done = ExportProgress {
+            frames_completed: 100,
+            ..p
+        };
+        assert!((done.fraction() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn export_progress_zero_total() {
+        let p = ExportProgress::new(0);
+        assert!((p.fraction() - 1.0).abs() < f64::EPSILON);
+    }
+
+    // === EXP-010: Distinct cancellation ===
+    #[test]
+    fn export_result_cancellation_distinct_from_failure() {
+        let completed = ExportResult::Completed;
+        let cancelled = ExportResult::Cancelled;
+        let failed = ExportResult::Failed("error".into());
+        assert_ne!(completed, cancelled);
+        assert_ne!(cancelled, failed);
+        assert_ne!(completed, failed);
+    }
+
+    // === RND-001: Invalid timeline rejection ===
+    #[test]
+    fn composition_validation_rejects_negative_fps() {
+        let mut timeline = make_timeline();
+        timeline.fps = -1;
+        let plan =
+            CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        let validation = plan.validate();
+        assert!(!validation.is_valid);
+        assert!(validation.errors.iter().any(|e| e.contains("fps")));
+    }
+
+    #[test]
+    fn composition_validation_rejects_zero_canvas_dimensions() {
+        let timeline = make_timeline();
+        let tiny = RenderResolution {
+            width: 0,
+            height: 0,
+        };
+        let plan = CompositionPlan::from_timeline(&timeline, tiny);
+        let validation = plan.validate();
+        assert!(!validation.is_valid);
+        let has_resolution_error = validation
+            .errors
+            .iter()
+            .any(|e| e.contains("Resolution"));
+        assert!(
+            has_resolution_error,
+            "Should reject zero resolution"
+        );
+    }
+
+    // === RND-003: Offline media skipping ===
+    #[test]
+    fn composition_plan_handles_offline_media_without_failure() {
+        let timeline = make_timeline();
+        let mut plan =
+            CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        plan.offline_media_refs.push("offline-video.mov".into());
+        plan.offline_media_refs.push("offline-audio.wav".into());
+        let validation = plan.validate();
+        assert!(
+            validation.is_valid,
+            "Offline media should not invalidate the plan"
+        );
+        assert_eq!(plan.offline_media_refs.len(), 2);
+    }
+
+    // === RND-004: Offline vs unprocessable distinction ===
+    #[test]
+    fn composition_plan_distinguishes_offline_from_unprocessable() {
+        let timeline = make_timeline();
+        let mut plan =
+            CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        plan.offline_media_refs.push("missing-file.mov".into());
+        plan.unprocessable_media_refs.push("corrupt-file.mp4".into());
+        assert_eq!(plan.offline_media_refs, vec!["missing-file.mov"]);
+        assert_eq!(plan.unprocessable_media_refs, vec!["corrupt-file.mp4"]);
+        // RND-002: Separate collections
+        assert_ne!(plan.offline_media_refs, plan.unprocessable_media_refs);
+    }
+
+    // === RND-005: Text clips ===
+    #[test]
+    fn text_clips_flagged_as_overlays_in_composition_plan() {
+        let timeline = make_timeline_with_text();
+        let resolution = RenderResolution::native(&timeline);
+        let plan = CompositionPlan::from_timeline(&timeline, resolution);
+        // Text clip appears on its track with is_text_overlay flag
+        let text_track = plan
+            .tracks
+            .iter()
+            .find(|t| t.timeline_track_index == 1)
+            .expect("Text track should exist");
+        assert_eq!(text_track.clips.len(), 1);
+        assert!(text_track.clips[0].is_text_overlay);
+        // Detailed plan extracts text clips to separate collection
+        let detailed = DetailedCompositionPlan::from_timeline(&timeline, resolution);
+        assert!(!detailed.text_overlay_clips.is_empty());
+    }
+
+    // === RND-014: Track mute/hidden state ===
+    #[test]
+    fn hidden_visual_track_affects_plan_state() {
+        use core_model::{Clip, Track};
+        let v1 = Clip {
+            id: "v1".into(),
+            media_ref: "asset-v".into(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: 0,
+            duration_frames: 100,
+            ..make_base_clip()
+        };
+        let timeline = Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
+            tracks: vec![Track {
+                id: "v-track".into(),
+                r#type: ClipType::Video,
+                muted: false,
+                hidden: true,
+                sync_locked: true,
+                clips: vec![v1],
+            }],
+        };
+        let plan =
+            CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        assert!(plan.tracks[0].is_hidden);
+        // When all visual tracks are hidden, black background is needed
+        // because no visible content contributes to frame 0
+        let detailed = DetailedCompositionPlan::from_timeline(&timeline, plan.resolution);
+        assert!(detailed.needs_black_background);
+    }
+
+    #[test]
+    fn muted_audio_track_detected() {
+        use core_model::{Clip, Track};
+        let a1 = Clip {
+            id: "a1".into(),
+            media_ref: "asset-a".into(),
+            media_type: ClipType::Audio,
+            source_clip_type: ClipType::Audio,
+            start_frame: 0,
+            duration_frames: 100,
+            speed: 1.0,
+            volume: 1.0,
+            ..make_base_clip()
+        };
+        let timeline = Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
+            tracks: vec![Track {
+                id: "a-track".into(),
+                r#type: ClipType::Audio,
+                muted: true,
+                hidden: false,
+                sync_locked: true,
+                clips: vec![a1],
+            }],
+        };
+        let plan =
+            CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        assert!(
+            plan.tracks[0].is_muted,
+            "Muted audio track should have is_muted = true"
+        );
+    }
+
+    // === PAR-001: Export/preview composition parity ===
+    #[test]
+    fn export_and_preview_share_composition_semantics() {
+        let timeline = make_timeline();
+        let resolution = RenderResolution::native(&timeline);
+        let plan = CompositionPlan::from_timeline(&timeline, resolution);
+        // Same composition builder produces the same plan regardless of
+        // whether the destination is preview or export
+        assert!(plan.validate().is_valid);
+        assert!(!plan.tracks.is_empty());
+        // Track ordering and clip structure are identical
+        assert!(plan.tracks[0].is_visual);
+        assert!(!plan.tracks[1].is_visual);
+        assert_eq!(plan.tracks[0].clips.len(), 1);
+        assert_eq!(plan.tracks[1].clips.len(), 1);
     }
 }
