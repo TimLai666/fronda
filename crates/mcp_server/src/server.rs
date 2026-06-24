@@ -244,10 +244,13 @@ fn build_http_response(status: u16, content_type: &str, body: &str) -> String {
 mod tests {
     use super::*;
     use agent_contract::ToolExecutor;
-    use core_model::Timeline;
+    use core_model::{MediaManifest, Timeline};
 
     fn make_executor() -> Arc<Mutex<ToolExecutor>> {
-        Arc::new(Mutex::new(ToolExecutor::new(Timeline::default())))
+        Arc::new(Mutex::new(ToolExecutor::new(
+            Timeline::default(),
+            MediaManifest::default(),
+        )))
     }
 
     #[test]
