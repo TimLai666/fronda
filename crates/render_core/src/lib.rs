@@ -5,6 +5,7 @@ use core_model::{Clip, Crop, Transform};
 use serde::{Deserialize, Serialize};
 
 pub mod effects;
+pub mod xml_export;
 pub use effects::{
     analyze_clip_effects, pipeline_from_timeline, EffectPipeline, EffectState, PerClipEffectState,
 };
