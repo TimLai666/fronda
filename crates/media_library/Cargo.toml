@@ -1,0 +1,12 @@
+[package]
+name = "fronda-media-library"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+fronda-core-model = { path = "../core_model" }

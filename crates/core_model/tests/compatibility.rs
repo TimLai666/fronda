@@ -1,6 +1,8 @@
 use core_model::{
-    AgentContentBlock, ChatSession, Clip, ClipType, GenerationLog, Interpolation, MediaManifest,
-    MediaSource, ShapeKind, ShapeStyle, TextStyle, Timeline, ToolResultBlock,
+    AgentContentBlock, AnimPair, ChatSession, Clip, ClipType, Crop, Effect, Fill, GenerationLog,
+    GenerationLogEntry, Interpolation, Keyframe, KeyframeTrack, MediaManifest, MediaSource, Rgba,
+    ShapeKind, ShapeStyle, Stroke, TextAlignment, TextFill, TextRgba, TextShadow, TextStyle,
+    Timeline, ToolResultBlock, Track, Transform,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -331,4 +333,567 @@ fn media_manifest_missing_version_decodes_as_v1() {
 
     assert_eq!(manifest.version, 1);
     assert_eq!(manifest.entries.len(), 2);
+}
+
+// ── FMT round-trip tests ──────────────────────────────────────────────────
+
+#[test]
+fn fmt_007_missing_track_flags_decode_to_defaults() {
+    let encoded = json!({
+        "type": "video",
+        "clips": []
+    });
+    let track: Track = serde_json::from_value(encoded).unwrap();
+    assert!(!track.muted, "muted should default to false");
+    assert!(!track.hidden, "hidden should default to false");
+    assert!(track.sync_locked, "syncLocked should default to true");
+    assert!(track.clips.is_empty());
+}
+
+#[test]
+fn fmt_008_minimal_clip_decodes_with_correct_defaults() {
+    let encoded = json!({
+        "mediaRef": "test",
+        "startFrame": 0,
+        "durationFrames": 30
+    });
+    let clip: Clip = serde_json::from_value(encoded).unwrap();
+
+    // Numeric defaults
+    approx_eq(clip.speed, 1.0);
+    approx_eq(clip.volume, 1.0);
+    approx_eq(clip.opacity, 1.0);
+    assert_eq!(clip.fade_in_frames, 0);
+    assert_eq!(clip.fade_out_frames, 0);
+    assert_eq!(clip.fade_in_interpolation, Interpolation::Linear);
+    assert_eq!(clip.fade_out_interpolation, Interpolation::Linear);
+    assert_eq!(clip.trim_start_frame, 0);
+    assert_eq!(clip.trim_end_frame, 0);
+
+    // Transform default (center 0.5, width 1.0, height 1.0)
+    approx_eq(clip.transform.center_x, 0.5);
+    approx_eq(clip.transform.center_y, 0.5);
+    approx_eq(clip.transform.width, 1.0);
+    approx_eq(clip.transform.height, 1.0);
+    approx_eq(clip.transform.rotation, 0.0);
+    assert!(!clip.transform.flip_horizontal);
+    assert!(!clip.transform.flip_vertical);
+
+    // Crop default (all zero)
+    approx_eq(clip.crop.left, 0.0);
+    approx_eq(clip.crop.top, 0.0);
+    approx_eq(clip.crop.right, 0.0);
+    approx_eq(clip.crop.bottom, 0.0);
+
+    // media_type and source_clip_type default to Video
+    assert_eq!(clip.media_type, ClipType::Video);
+    assert_eq!(clip.source_clip_type, ClipType::Video);
+
+    // Optional fields default to None
+    assert!(clip.link_group_id.is_none());
+    assert!(clip.caption_group_id.is_none());
+    assert!(clip.text_content.is_none());
+    assert!(clip.text_style.is_none());
+    assert!(clip.shape_style.is_none());
+    assert!(clip.effects.is_none());
+
+    // Keyframe tracks default to None
+    assert!(clip.opacity_track.is_none());
+    assert!(clip.position_track.is_none());
+    assert!(clip.scale_track.is_none());
+    assert!(clip.rotation_track.is_none());
+    assert!(clip.crop_track.is_none());
+    assert!(clip.volume_track.is_none());
+    assert!(clip.stroke_progress_track.is_none());
+}
+
+#[test]
+fn fmt_009_timeline_round_trip_preserves_all_fields() {
+    let mut selected = std::collections::HashSet::new();
+    selected.insert("clip-1".to_string());
+
+    let timeline = Timeline {
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        settings_configured: true,
+        selected_clip_ids: selected,
+        tracks: vec![
+            Track {
+                id: "track-video".to_string(),
+                r#type: ClipType::Video,
+                muted: false,
+                hidden: true,
+                sync_locked: false,
+                clips: vec![Clip {
+                    id: "clip-1".to_string(),
+                    media_ref: "media-1".to_string(),
+                    media_type: ClipType::Video,
+                    source_clip_type: ClipType::Video,
+                    start_frame: 10,
+                    duration_frames: 100,
+                    trim_start_frame: 5,
+                    trim_end_frame: 3,
+                    speed: 1.5,
+                    volume: 0.8,
+                    fade_in_frames: 2,
+                    fade_out_frames: 4,
+                    fade_in_interpolation: Interpolation::Smooth,
+                    fade_out_interpolation: Interpolation::Hold,
+                    opacity: 0.9,
+                    transform: Transform {
+                        center_x: 0.3,
+                        center_y: 0.4,
+                        width: 0.5,
+                        height: 0.6,
+                        rotation: 0.1,
+                        flip_horizontal: true,
+                        flip_vertical: false,
+                    },
+                    crop: Crop {
+                        left: 0.05,
+                        top: 0.06,
+                        right: 0.07,
+                        bottom: 0.08,
+                    },
+                    link_group_id: Some("group-1".to_string()),
+                    caption_group_id: Some("caption-group-1".to_string()),
+                    text_content: Some("Hello".to_string()),
+                    text_style: Some(TextStyle {
+                        font_name: "Helvetica".to_string(),
+                        font_size: 48.0,
+                        font_scale: 1.2,
+                        color: TextRgba {
+                            r: 1.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        },
+                        alignment: TextAlignment::Left,
+                        shadow: TextShadow {
+                            enabled: false,
+                            color: TextRgba {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 0.5,
+                            },
+                            offset_x: 2.0,
+                            offset_y: 3.0,
+                            blur: 4.0,
+                        },
+                        background: TextFill {
+                            enabled: true,
+                            color: TextRgba {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 0.3,
+                            },
+                        },
+                        border: TextFill {
+                            enabled: true,
+                            color: TextRgba {
+                                r: 1.0,
+                                g: 1.0,
+                                b: 1.0,
+                                a: 1.0,
+                            },
+                        },
+                        font_weight: 700.0,
+                    }),
+                    opacity_track: Some(KeyframeTrack {
+                        keyframes: vec![
+                            Keyframe {
+                                frame: 0,
+                                value: 1.0,
+                                interpolation_out: Interpolation::Smooth,
+                            },
+                            Keyframe {
+                                frame: 30,
+                                value: 0.5,
+                                interpolation_out: Interpolation::Hold,
+                            },
+                        ],
+                    }),
+                    position_track: Some(KeyframeTrack {
+                        keyframes: vec![
+                            Keyframe {
+                                frame: 0,
+                                value: AnimPair { a: 0.0, b: 0.0 },
+                                interpolation_out: Interpolation::Smooth,
+                            },
+                            Keyframe {
+                                frame: 60,
+                                value: AnimPair { a: 0.5, b: 0.5 },
+                                interpolation_out: Interpolation::Linear,
+                            },
+                        ],
+                    }),
+                    scale_track: Some(KeyframeTrack {
+                        keyframes: vec![Keyframe {
+                            frame: 0,
+                            value: AnimPair { a: 1.0, b: 1.0 },
+                            interpolation_out: Interpolation::Smooth,
+                        }],
+                    }),
+                    rotation_track: Some(KeyframeTrack {
+                        keyframes: vec![
+                            Keyframe {
+                                frame: 0,
+                                value: 0.0,
+                                interpolation_out: Interpolation::Smooth,
+                            },
+                            Keyframe {
+                                frame: 100,
+                                value: 360.0,
+                                interpolation_out: Interpolation::Smooth,
+                            },
+                        ],
+                    }),
+                    crop_track: Some(KeyframeTrack {
+                        keyframes: vec![Keyframe {
+                            frame: 0,
+                            value: Crop {
+                                left: 0.0,
+                                top: 0.0,
+                                right: 0.0,
+                                bottom: 0.0,
+                            },
+                            interpolation_out: Interpolation::Smooth,
+                        }],
+                    }),
+                    volume_track: Some(KeyframeTrack {
+                        keyframes: vec![
+                            Keyframe {
+                                frame: 0,
+                                value: 1.0,
+                                interpolation_out: Interpolation::Smooth,
+                            },
+                            Keyframe {
+                                frame: 50,
+                                value: 0.0,
+                                interpolation_out: Interpolation::Linear,
+                            },
+                        ],
+                    }),
+                    effects: Some(vec![Effect::new("color.exposure", vec![("ev", 0.5)])]),
+                    shape_style: Some(ShapeStyle {
+                        kind: ShapeKind::Rect,
+                        stroke: Stroke {
+                            color: Rgba {
+                                r: 1.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 1.0,
+                            },
+                            width: 3.0,
+                            dashed: false,
+                            arrowhead_style: None,
+                        },
+                        fill: Fill {
+                            enabled: true,
+                            color: Rgba {
+                                r: 1.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 0.3,
+                            },
+                        },
+                        arrowhead: None,
+                        endpoints: None,
+                    }),
+                    stroke_progress_track: Some(KeyframeTrack {
+                        keyframes: vec![
+                            Keyframe {
+                                frame: 0,
+                                value: 0.0,
+                                interpolation_out: Interpolation::Smooth,
+                            },
+                            Keyframe {
+                                frame: 60,
+                                value: 1.0,
+                                interpolation_out: Interpolation::Smooth,
+                            },
+                        ],
+                    }),
+                }],
+            },
+            Track {
+                id: "track-audio".to_string(),
+                r#type: ClipType::Audio,
+                muted: true,
+                hidden: false,
+                sync_locked: true,
+                clips: vec![Clip {
+                    id: "clip-audio-1".to_string(),
+                    media_ref: "media-audio-1".to_string(),
+                    media_type: ClipType::Audio,
+                    source_clip_type: ClipType::Audio,
+                    start_frame: 0,
+                    duration_frames: 200,
+                    trim_start_frame: 10,
+                    trim_end_frame: 5,
+                    speed: 1.0,
+                    volume: 0.7,
+                    fade_in_frames: 0,
+                    fade_out_frames: 0,
+                    fade_in_interpolation: Interpolation::Linear,
+                    fade_out_interpolation: Interpolation::Linear,
+                    opacity: 1.0,
+                    transform: Transform::default(),
+                    crop: Crop::default(),
+                    link_group_id: None,
+                    caption_group_id: None,
+                    text_content: None,
+                    text_style: None,
+                    opacity_track: None,
+                    position_track: None,
+                    scale_track: None,
+                    rotation_track: None,
+                    crop_track: None,
+                    volume_track: Some(KeyframeTrack {
+                        keyframes: vec![
+                            Keyframe {
+                                frame: 0,
+                                value: 0.7,
+                                interpolation_out: Interpolation::Smooth,
+                            },
+                            Keyframe {
+                                frame: 100,
+                                value: 1.0,
+                                interpolation_out: Interpolation::Smooth,
+                            },
+                        ],
+                    }),
+                    effects: None,
+                    shape_style: None,
+                    stroke_progress_track: None,
+                }],
+            },
+        ],
+        transcription_language: Some("en-US".to_string()),
+    };
+
+    // Round-trip through JSON
+    let json = serde_json::to_value(&timeline).unwrap();
+    let decoded: Timeline = serde_json::from_value(json).unwrap();
+
+    // Top-level
+    assert_eq!(decoded.fps, 30);
+    assert_eq!(decoded.width, 1920);
+    assert_eq!(decoded.height, 1080);
+    assert!(decoded.settings_configured);
+    assert!(decoded.selected_clip_ids.contains("clip-1"));
+    assert_eq!(decoded.transcription_language.as_deref(), Some("en-US"));
+    assert_eq!(decoded.tracks.len(), 2);
+
+    // Video track flags
+    let vt = &decoded.tracks[0];
+    assert_eq!(vt.r#type, ClipType::Video);
+    assert!(!vt.muted);
+    assert!(vt.hidden);
+    assert!(!vt.sync_locked);
+
+    // Audio track flags
+    let at = &decoded.tracks[1];
+    assert_eq!(at.r#type, ClipType::Audio);
+    assert!(at.muted);
+    assert!(!at.hidden);
+    assert!(at.sync_locked);
+
+    // ── Clip 1 (video) ──────────────────────────────────────────────────────
+    let clip = &vt.clips[0];
+    assert_eq!(clip.id, "clip-1");
+    assert_eq!(clip.media_ref, "media-1");
+
+    // Timing
+    assert_eq!(clip.start_frame, 10);
+    assert_eq!(clip.duration_frames, 100);
+    assert_eq!(clip.trim_start_frame, 5);
+    assert_eq!(clip.trim_end_frame, 3);
+
+    // Numeric clip fields
+    approx_eq(clip.speed, 1.5);
+    approx_eq(clip.volume, 0.8);
+    approx_eq(clip.opacity, 0.9);
+    assert_eq!(clip.fade_in_frames, 2);
+    assert_eq!(clip.fade_out_frames, 4);
+    assert_eq!(clip.fade_in_interpolation, Interpolation::Smooth);
+    assert_eq!(clip.fade_out_interpolation, Interpolation::Hold);
+
+    // Transform
+    approx_eq(clip.transform.center_x, 0.3);
+    approx_eq(clip.transform.center_y, 0.4);
+    approx_eq(clip.transform.width, 0.5);
+    approx_eq(clip.transform.height, 0.6);
+    approx_eq(clip.transform.rotation, 0.1);
+    assert!(clip.transform.flip_horizontal);
+    assert!(!clip.transform.flip_vertical);
+
+    // Crop
+    approx_eq(clip.crop.left, 0.05);
+    approx_eq(clip.crop.top, 0.06);
+    approx_eq(clip.crop.right, 0.07);
+    approx_eq(clip.crop.bottom, 0.08);
+
+    // Link groups
+    assert_eq!(clip.link_group_id.as_deref(), Some("group-1"));
+    assert_eq!(clip.caption_group_id.as_deref(), Some("caption-group-1"));
+
+    // Text content
+    assert_eq!(clip.text_content.as_deref(), Some("Hello"));
+    let ts = clip.text_style.as_ref().unwrap();
+    assert_eq!(ts.font_name, "Helvetica");
+    approx_eq(ts.font_size, 48.0);
+    approx_eq(ts.font_scale, 1.2);
+    assert_eq!(ts.alignment, TextAlignment::Left);
+    approx_eq(ts.font_weight, 700.0);
+
+    // Keyframes — opacity
+    let ot = clip.opacity_track.as_ref().unwrap();
+    assert_eq!(ot.keyframes.len(), 2);
+    approx_eq(ot.keyframes[0].value, 1.0);
+    approx_eq(ot.keyframes[1].value, 0.5);
+    assert_eq!(ot.keyframes[1].interpolation_out, Interpolation::Hold);
+
+    // Keyframes — position
+    let pt = clip.position_track.as_ref().unwrap();
+    assert_eq!(pt.keyframes[0].value.a, 0.0);
+    assert_eq!(pt.keyframes[1].frame, 60);
+    approx_eq(pt.keyframes[1].value.a, 0.5);
+
+    // Keyframes — scale
+    let st = clip.scale_track.as_ref().unwrap();
+    assert_eq!(st.keyframes.len(), 1);
+
+    // Keyframes — rotation
+    let rt = clip.rotation_track.as_ref().unwrap();
+    assert_eq!(rt.keyframes.len(), 2);
+    approx_eq(rt.keyframes[1].value, 360.0);
+
+    // Keyframes — crop
+    let ct = clip.crop_track.as_ref().unwrap();
+    assert_eq!(ct.keyframes.len(), 1);
+    approx_eq(ct.keyframes[0].value.left, 0.0);
+
+    // Keyframes — volume
+    let cl_vt = clip.volume_track.as_ref().unwrap();
+    assert_eq!(cl_vt.keyframes.len(), 2);
+    approx_eq(cl_vt.keyframes[0].value, 1.0);
+    approx_eq(cl_vt.keyframes[1].value, 0.0);
+
+    // Effects
+    let effects = clip.effects.as_ref().unwrap();
+    assert_eq!(effects.len(), 1);
+    assert_eq!(effects[0].r#type, "color.exposure");
+
+    // ShapeStyle
+    let ss = clip.shape_style.as_ref().unwrap();
+    assert_eq!(ss.kind, ShapeKind::Rect);
+    approx_eq(ss.stroke.color.r, 1.0);
+    approx_eq(ss.stroke.width, 3.0);
+    assert!(ss.fill.enabled);
+
+    // Stroke progress
+    let sp = clip.stroke_progress_track.as_ref().unwrap();
+    assert_eq!(sp.keyframes.len(), 2);
+    approx_eq(sp.keyframes[0].value, 0.0);
+    approx_eq(sp.keyframes[1].value, 1.0);
+
+    // ── Clip 2 (audio) ──────────────────────────────────────────────────────
+    let audio_clip = &at.clips[0];
+    assert_eq!(audio_clip.media_ref, "media-audio-1");
+    assert_eq!(audio_clip.start_frame, 0);
+    assert_eq!(audio_clip.duration_frames, 200);
+    assert!(audio_clip.link_group_id.is_none());
+    assert!(audio_clip.text_content.is_none());
+    assert!(audio_clip.effects.is_none());
+}
+
+#[test]
+fn fmt_010_generation_log_entry_with_cost_migrates_to_credits() {
+    // 0.07 * 100.0 = ~7.000000000000001 due to IEEE 754, so ceil yields 8
+    let encoded = json!({
+        "model": "test-model",
+        "cost": 0.07
+    });
+    let entry: GenerationLogEntry = serde_json::from_value(encoded).unwrap();
+    assert_eq!(entry.cost_credits, Some(8));
+    assert!(!entry.id.is_empty());
+}
+
+#[test]
+fn fmt_011_generation_log_entry_missing_id_auto_generates() {
+    let encoded = json!({
+        "model": "test-model",
+        "costCredits": 50
+    });
+    let entry: GenerationLogEntry = serde_json::from_value(encoded).unwrap();
+    assert!(!entry.id.is_empty());
+    assert_eq!(entry.cost_credits, Some(50));
+}
+
+#[test]
+fn fmt_012_generation_log_entry_cost_credits_directly() {
+    let encoded = json!({
+        "id": "test-log-1",
+        "model": "test-model",
+        "costCredits": 42
+    });
+    let entry: GenerationLogEntry = serde_json::from_value(encoded).unwrap();
+    assert_eq!(entry.id, "test-log-1");
+    assert_eq!(entry.cost_credits, Some(42));
+}
+
+#[test]
+fn fmt_013_generation_log_entry_with_created_at_round_trips() {
+    let encoded = json!({
+        "id": "test-log-1",
+        "model": "test-model",
+        "costCredits": 10,
+        "createdAt": 700000000.0
+    });
+    let entry: GenerationLogEntry = serde_json::from_value(encoded).unwrap();
+    assert!(entry.created_at.is_some());
+    assert_eq!(entry.cost_credits, Some(10));
+
+    // Round-trip
+    let reencoded = serde_json::to_value(&entry).unwrap();
+    let decoded: GenerationLogEntry = serde_json::from_value(reencoded).unwrap();
+    assert!(decoded.created_at.is_some());
+    assert_eq!(decoded.model, "test-model");
+    assert_eq!(decoded.cost_credits, Some(10));
+}
+
+#[test]
+fn fmt_014_generation_log_round_trip_preserves_all_fields() {
+    let log = GenerationLog {
+        version: 1,
+        entries: vec![
+            GenerationLogEntry {
+                id: "entry-1".to_string(),
+                model: "model-a".to_string(),
+                cost_credits: Some(100),
+                created_at: None,
+            },
+            GenerationLogEntry {
+                id: "entry-2".to_string(),
+                model: "model-b".to_string(),
+                cost_credits: None,
+                created_at: None,
+            },
+        ],
+    };
+
+    let json = serde_json::to_value(&log).unwrap();
+    let decoded: GenerationLog = serde_json::from_value(json).unwrap();
+
+    assert_eq!(decoded.version, 1);
+    assert_eq!(decoded.entries.len(), 2);
+    assert_eq!(decoded.entries[0].id, "entry-1");
+    assert_eq!(decoded.entries[0].cost_credits, Some(100));
+    assert_eq!(decoded.entries[0].model, "model-a");
+    assert_eq!(decoded.entries[1].model, "model-b");
+    assert!(decoded.entries[1].cost_credits.is_none());
 }

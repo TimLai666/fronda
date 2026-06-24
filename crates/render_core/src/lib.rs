@@ -468,6 +468,57 @@ pub enum ExportResult {
     Failed(String),
 }
 
+/// Computed export pixel dimensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportSize {
+    pub width: i64,
+    pub height: i64,
+}
+
+/// Compute export size from timeline canvas dimensions and target resolution.
+///
+/// Rules (EXP-003 through EXP-006):
+/// - Resolution presets target the SHORT side of the canvas
+/// - Export preserves canvas aspect ratio after scaling
+/// - Width and height are rounded to even integers
+/// - Never less than 2 pixels
+/// - Match Timeline returns the native dimensions
+pub fn compute_export_size(
+    canvas_width: i64,
+    canvas_height: i64,
+    resolution: ExportResolution,
+) -> ExportSize {
+    match resolution {
+        ExportResolution::MatchTimeline => ExportSize {
+            width: canvas_width.max(2),
+            height: canvas_height.max(2),
+        },
+        _ => {
+            let target = match resolution {
+                ExportResolution::R720p => 720,
+                ExportResolution::R1080p => 1080,
+                ExportResolution::R1440p => 1440,
+                ExportResolution::R4K => 2160,
+                _ => unreachable!(),
+            };
+            let cw = if canvas_width > 0 {
+                canvas_width as u64
+            } else {
+                0
+            };
+            let ch = if canvas_height > 0 {
+                canvas_height as u64
+            } else {
+                0
+            };
+            let rr = RenderResolution::scale_to_short_side(cw, ch, target);
+            ExportSize {
+                width: rr.width as i64,
+                height: rr.height as i64,
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -668,6 +719,16 @@ mod tests {
         let size = ExportResolution::MatchTimeline.render_size(&timeline);
         assert_eq!(size.width, 1920);
         assert_eq!(size.height, 1080);
+    }
+
+    // === Upstream #94: 2K (1440p) resolution ===
+    #[test]
+    fn export_resolution_1440p() {
+        let timeline = make_timeline();
+        // 1920x1080 with short side=1080, target 1440 => ratio=1440/1080=4/3
+        let size = ExportResolution::R1440p.render_size(&timeline);
+        assert_eq!(size.width, 2560);
+        assert_eq!(size.height, 1440);
     }
 
     #[test]
@@ -1138,6 +1199,148 @@ mod tests {
         assert!(size.height >= 2);
     }
 
+    // === compute_export_size / ExportSize tests ===
+
+    // EXP-002: Standard resolution values
+    #[test]
+    fn compute_export_size_720p() {
+        let size = compute_export_size(1920, 1080, ExportResolution::R720p);
+        assert_eq!(size.width, 1280);
+        assert_eq!(size.height, 720);
+    }
+
+    #[test]
+    fn compute_export_size_1080p() {
+        let size = compute_export_size(1920, 1080, ExportResolution::R1080p);
+        assert_eq!(size.width, 1920);
+        assert_eq!(size.height, 1080);
+    }
+
+    // Upstream #94: 2K (1440p) resolution
+    #[test]
+    fn compute_export_size_1440p() {
+        let size = compute_export_size(1920, 1080, ExportResolution::R1440p);
+        assert_eq!(size.width, 2560);
+        assert_eq!(size.height, 1440);
+    }
+
+    #[test]
+    fn compute_export_size_4k() {
+        let size = compute_export_size(1920, 1080, ExportResolution::R4K);
+        assert_eq!(size.width, 3840);
+        assert_eq!(size.height, 2160);
+    }
+
+    // Upstream #94: Match Timeline (native) mode
+    #[test]
+    fn compute_export_size_match_timeline() {
+        let size = compute_export_size(1920, 1080, ExportResolution::MatchTimeline);
+        assert_eq!(size.width, 1920);
+        assert_eq!(size.height, 1080);
+    }
+
+    // EXP-003: Short-side targeting (portrait)
+    #[test]
+    fn compute_export_size_short_side_portrait() {
+        let size = compute_export_size(1080, 1920, ExportResolution::R720p);
+        assert_eq!(size.width, 720);
+        assert_eq!(size.height, 1280);
+    }
+
+    // EXP-003: Short-side targeting (square)
+    #[test]
+    fn compute_export_size_short_side_square() {
+        let size = compute_export_size(1000, 1000, ExportResolution::R720p);
+        assert_eq!(size.width, 720);
+        assert_eq!(size.height, 720);
+    }
+
+    // EXP-004: Aspect ratio preservation
+    #[test]
+    fn compute_export_size_preserves_aspect_ratio() {
+        let original_aspect = 1920.0 / 1080.0;
+        for resolution in &[
+            ExportResolution::R720p,
+            ExportResolution::R1080p,
+            ExportResolution::R1440p,
+            ExportResolution::R4K,
+            ExportResolution::MatchTimeline,
+        ] {
+            let size = compute_export_size(1920, 1080, *resolution);
+            let scaled_aspect = size.width as f64 / size.height as f64;
+            let diff = (scaled_aspect - original_aspect).abs();
+            assert!(
+                diff < 0.01,
+                "Aspect ratio mismatch for {:?}: expected ~{}, got {}",
+                resolution,
+                original_aspect,
+                scaled_aspect
+            );
+        }
+    }
+
+    // EXP-005: Even integer rounding
+    #[test]
+    fn compute_export_size_all_even() {
+        let sizes = [
+            (1920, 1080),
+            (1080, 1920),
+            (2000, 800),
+            (1440, 900),
+            (3840, 2160),
+        ];
+        let resolutions = [
+            ExportResolution::R720p,
+            ExportResolution::R1080p,
+            ExportResolution::R1440p,
+            ExportResolution::R4K,
+            ExportResolution::MatchTimeline,
+        ];
+        for &(w, h) in &sizes {
+            for &resolution in &resolutions {
+                let size = compute_export_size(w, h, resolution);
+                assert!(
+                    size.width % 2 == 0,
+                    "Width {} not even for {:?} on {}x{}",
+                    size.width,
+                    resolution,
+                    w,
+                    h
+                );
+                assert!(
+                    size.height % 2 == 0,
+                    "Height {} not even for {:?} on {}x{}",
+                    size.height,
+                    resolution,
+                    w,
+                    h
+                );
+            }
+        }
+    }
+
+    // EXP-006: Minimum 2 pixels
+    #[test]
+    fn compute_export_size_minimum_two_pixels() {
+        let size = compute_export_size(1, 1, ExportResolution::R720p);
+        assert!(size.width >= 2);
+        assert!(size.height >= 2);
+    }
+
+    #[test]
+    fn compute_export_size_zero_dimensions() {
+        let size = compute_export_size(0, 0, ExportResolution::R720p);
+        assert!(size.width >= 2);
+        assert!(size.height >= 2);
+    }
+
+    #[test]
+    fn compute_export_size_negative_dimensions() {
+        let size = compute_export_size(-10, -10, ExportResolution::R720p);
+        assert!(size.width >= 2);
+        assert!(size.height >= 2);
+    }
+
     // === EXP-008: Format info for output path ===
     #[test]
     fn export_format_extension_matches_spec() {
@@ -1186,8 +1389,7 @@ mod tests {
     fn composition_validation_rejects_negative_fps() {
         let mut timeline = make_timeline();
         timeline.fps = -1;
-        let plan =
-            CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
         let validation = plan.validate();
         assert!(!validation.is_valid);
         assert!(validation.errors.iter().any(|e| e.contains("fps")));
@@ -1203,14 +1405,8 @@ mod tests {
         let plan = CompositionPlan::from_timeline(&timeline, tiny);
         let validation = plan.validate();
         assert!(!validation.is_valid);
-        let has_resolution_error = validation
-            .errors
-            .iter()
-            .any(|e| e.contains("Resolution"));
-        assert!(
-            has_resolution_error,
-            "Should reject zero resolution"
-        );
+        let has_resolution_error = validation.errors.iter().any(|e| e.contains("Resolution"));
+        assert!(has_resolution_error, "Should reject zero resolution");
     }
 
     // === RND-003: Offline media skipping ===
@@ -1236,7 +1432,8 @@ mod tests {
         let mut plan =
             CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
         plan.offline_media_refs.push("missing-file.mov".into());
-        plan.unprocessable_media_refs.push("corrupt-file.mp4".into());
+        plan.unprocessable_media_refs
+            .push("corrupt-file.mp4".into());
         assert_eq!(plan.offline_media_refs, vec!["missing-file.mov"]);
         assert_eq!(plan.unprocessable_media_refs, vec!["corrupt-file.mp4"]);
         // RND-002: Separate collections
@@ -1291,8 +1488,7 @@ mod tests {
                 clips: vec![v1],
             }],
         };
-        let plan =
-            CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
         assert!(plan.tracks[0].is_hidden);
         // When all visual tracks are hidden, black background is needed
         // because no visible content contributes to frame 0
@@ -1330,8 +1526,7 @@ mod tests {
                 clips: vec![a1],
             }],
         };
-        let plan =
-            CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+        let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
         assert!(
             plan.tracks[0].is_muted,
             "Muted audio track should have is_muted = true"

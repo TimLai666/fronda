@@ -7,6 +7,7 @@
 //! Pure state machine with no platform dependencies.
 
 use core_model::GenerationInput;
+use std::collections::HashMap;
 
 // ── States ──────────────────────────────────────────────────────
 
@@ -665,6 +666,259 @@ impl ModelCatalog {
             .filter(|m| !m.disabled)
             .collect()
     }
+}
+
+// ── New Model Catalog types (CAT-001~CAT-012) ────────────────────
+
+/// Catalog entry kind.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelKind {
+    Video,
+    Image,
+    Audio,
+    Upscale,
+}
+
+/// Response shape of a model's output.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResponseShape {
+    Video,
+    Images,
+    Audio,
+    UpscaledImage,
+}
+
+/// Video-specific generation capabilities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoCapabilities {
+    pub durations: Vec<f64>,
+    pub resolutions: Option<Vec<String>>,
+    pub aspect_ratios: Vec<String>,
+    pub max_reference_images: Option<i64>,
+    pub max_reference_videos: Option<i64>,
+    pub max_reference_audios: Option<i64>,
+    pub max_total_references: Option<i64>,
+    pub max_reference_video_seconds: Option<f64>,
+    pub max_reference_audio_seconds: Option<f64>,
+    pub requires_source_video: Option<bool>,
+    pub requires_reference_image: Option<bool>,
+    pub supports_generate_audio: Option<bool>,
+}
+
+/// Image-specific generation capabilities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageCapabilities {
+    pub resolutions: Option<Vec<String>>,
+    pub aspect_ratios: Option<Vec<String>>,
+    pub qualities: Option<Vec<String>>,
+    pub max_images: Option<i64>,
+}
+
+/// Audio-specific generation capabilities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioCapabilities {
+    pub category: Option<String>,
+    pub voices: Vec<String>,
+    pub default_voice: Option<String>,
+    pub lyrics: Option<bool>,
+    pub style_instructions: Option<bool>,
+    pub instrumental: Option<bool>,
+    pub durations: Option<Vec<f64>>,
+    pub min_prompt_length: Option<i64>,
+    pub supported_inputs: Option<Vec<String>>,
+    pub min_seconds: Option<f64>,
+    pub max_seconds: Option<f64>,
+}
+
+/// Upscale-specific capabilities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpscaleCapabilities {
+    pub supported_clip_types: Vec<String>,
+}
+
+/// A catalog entry for a generation model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogEntry {
+    pub id: String,
+    pub kind: ModelKind,
+    pub display_name: String,
+    pub allowed_endpoints: Vec<String>,
+    pub response_shape: ResponseShape,
+    pub ui_capabilities: serde_json::Value,
+    pub pricing: Option<Pricing>,
+    pub qualities: Option<Vec<String>>,
+}
+
+impl CatalogEntry {
+    /// Return display name, falling back to id if empty.
+    pub fn display_name_or_id(&self) -> &str {
+        if self.display_name.is_empty() {
+            &self.id
+        } else {
+            &self.display_name
+        }
+    }
+}
+
+impl std::fmt::Display for CatalogEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display_name_or_id())
+    }
+}
+
+// ── Pricing and Cost estimation (COST-001~COST-009) ────────────
+
+/// Audio pricing mode variants.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AudioPricingMode {
+    PerCharacter { rate_per_thousand: f64 },
+    PerSecond { rate: f64 },
+    Flat { price: f64 },
+}
+
+/// Pricing configuration for a model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pricing {
+    pub credits_per_second: Option<f64>,
+    pub resolution_pricing: Option<HashMap<String, f64>>,
+    pub quality_pricing: Option<HashMap<String, f64>>,
+    pub audio_discount: Option<HashMap<String, f64>>,
+    pub audio_pricing: Option<(String, serde_json::Value)>,
+}
+
+/// Cost calculator for generation operations.
+pub struct CostCalculator;
+
+impl CostCalculator {
+    /// Calculate video generation cost.
+    pub fn video_cost(
+        pricing: &Pricing,
+        duration_seconds: f64,
+        resolution: Option<&str>,
+        no_audio: bool,
+    ) -> Option<i64> {
+        let base_rate = pricing.credits_per_second?;
+        if duration_seconds <= 0.0 {
+            return None;
+        }
+        let mut rate = base_rate;
+        if let Some(res) = resolution {
+            if let Some(ref rp) = pricing.resolution_pricing {
+                if let Some(mult) = rp.get(res) {
+                    rate = base_rate * mult;
+                }
+            }
+        }
+        let mut cost = duration_seconds * rate;
+        if no_audio {
+            if let Some(ref ad) = pricing.audio_discount {
+                if let Some(discount) = ad.get("no_audio") {
+                    cost *= discount;
+                }
+            }
+        }
+        Some(cost.ceil() as i64)
+    }
+
+    /// Calculate image generation cost.
+    pub fn image_cost(
+        pricing: &Pricing,
+        num_images: i64,
+        resolution: Option<&str>,
+        quality: Option<&str>,
+    ) -> Option<i64> {
+        let base_rate = pricing.credits_per_second?;
+        if num_images <= 0 {
+            return None;
+        }
+        let mut cost_per_image = base_rate;
+        if let Some(res) = resolution {
+            if let Some(ref rp) = pricing.resolution_pricing {
+                if let Some(mult) = rp.get(res) {
+                    cost_per_image = base_rate * mult;
+                }
+            }
+        }
+        if let Some(qual) = quality {
+            if let Some(ref qp) = pricing.quality_pricing {
+                if let Some(mult) = qp.get(qual) {
+                    cost_per_image = base_rate * mult;
+                }
+            }
+        }
+        let total = cost_per_image * num_images as f64;
+        Some(total.ceil() as i64)
+    }
+
+    /// Calculate audio generation cost.
+    pub fn audio_cost(pricing: &Pricing, prompt: &str, duration_seconds: f64) -> Option<i64> {
+        let (mode, config) = pricing.audio_pricing.as_ref()?;
+        match mode.as_str() {
+            "per_character" => {
+                let rate = config.get("rate_per_thousand")?.as_f64()?;
+                let chars = prompt.len() as f64;
+                let cost = (chars / 1000.0) * rate;
+                Some(cost.ceil() as i64)
+            }
+            "per_second" => {
+                let rate = config.get("rate")?.as_f64()?;
+                let cost = duration_seconds * rate;
+                Some(cost.ceil() as i64)
+            }
+            "flat" => {
+                let price = config.get("price")?.as_f64()?;
+                Some(price.ceil() as i64)
+            }
+            _ => None,
+        }
+    }
+
+    /// Calculate upscale cost.
+    pub fn upscale_cost(pricing: &Pricing, duration_seconds: f64) -> Option<i64> {
+        let rate = pricing.credits_per_second?;
+        if duration_seconds <= 0.0 {
+            return None;
+        }
+        let cost = duration_seconds * rate;
+        Some(cost.ceil() as i64)
+    }
+
+    /// Format credits into a human-readable string.
+    pub fn format_cost(credits: Option<i64>) -> String {
+        match credits {
+            None => "--".to_string(),
+            Some(0) => "0 credits".to_string(),
+            Some(1) => "1 credit".to_string(),
+            Some(n) => format!("{n} credits"),
+        }
+    }
+}
+
+// ── Resolution helpers (GPAY-009~GPAY-010) ─────────────────────
+
+/// Parse a resolution label like "1920x1080" into (width, height).
+pub fn parse_resolution_label(label: &str) -> Option<(i64, i64)> {
+    let parts: Vec<&str> = label.split('x').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let w = parts[0].parse::<i64>().ok()?;
+    let h = parts[1].parse::<i64>().ok()?;
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    Some((w, h))
+}
+
+/// Format a resolution pair into a display label.
+pub fn resolution_display_label(width: i64, height: i64) -> String {
+    format!("{}x{}", width, height)
+}
+
+/// Clamp image count to a maximum, defaulting to 4.
+pub fn clamp_image_count(count: i64, max_images: Option<i64>) -> i64 {
+    let max = max_images.unwrap_or(4);
+    count.clamp(1, max)
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -1434,5 +1688,307 @@ mod tests {
         // Empty string
         let err = BillingUrlValidator::validate("").unwrap_err();
         assert!(err.contains("Invalid URL scheme"));
+    }
+
+    // ── Catalog types (CAT-004~006, CAT-011) ──
+
+    #[test]
+    fn cat_004_kind_values() {
+        assert_eq!(ModelKind::Video as u8, 0);
+        assert_eq!(ModelKind::Image as u8, 1);
+        assert_eq!(ModelKind::Audio as u8, 2);
+        assert_eq!(ModelKind::Upscale as u8, 3);
+    }
+
+    #[test]
+    fn cat_005_response_shape_values() {
+        assert_eq!(ResponseShape::Video as u8, 0);
+        assert_eq!(ResponseShape::Images as u8, 1);
+        assert_eq!(ResponseShape::Audio as u8, 2);
+        assert_eq!(ResponseShape::UpscaledImage as u8, 3);
+    }
+
+    #[test]
+    fn cat_006_video_capabilities_defaults() {
+        let caps = VideoCapabilities {
+            durations: vec![5.0, 10.0],
+            resolutions: None,
+            aspect_ratios: vec!["16:9".into()],
+            max_reference_images: None,
+            max_reference_videos: None,
+            max_reference_audios: None,
+            max_total_references: None,
+            max_reference_video_seconds: None,
+            max_reference_audio_seconds: None,
+            requires_source_video: None,
+            requires_reference_image: None,
+            supports_generate_audio: None,
+        };
+        assert_eq!(caps.durations, vec![5.0, 10.0]);
+        assert!(caps.resolutions.is_none());
+        assert_eq!(caps.aspect_ratios, vec!["16:9"]);
+    }
+
+    #[test]
+    fn cat_011_display_name_fallback() {
+        let entry = CatalogEntry {
+            id: "model-x".into(),
+            kind: ModelKind::Video,
+            display_name: String::new(),
+            allowed_endpoints: vec![],
+            response_shape: ResponseShape::Video,
+            ui_capabilities: serde_json::Value::Null,
+            pricing: None,
+            qualities: None,
+        };
+        assert_eq!(entry.display_name_or_id(), "model-x");
+        assert_eq!(format!("{entry}"), "model-x");
+
+        let entry2 = CatalogEntry {
+            display_name: "Model X".into(),
+            ..entry
+        };
+        assert_eq!(entry2.display_name_or_id(), "Model X");
+        assert_eq!(format!("{entry2}"), "Model X");
+    }
+
+    // ── Cost estimation (COST-001~008) ──
+
+    #[test]
+    fn cost_001_video_cost_nil_when_no_rates() {
+        let pricing = Pricing {
+            credits_per_second: None,
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: None,
+        };
+        assert!(CostCalculator::video_cost(&pricing, 10.0, None, false).is_none());
+    }
+
+    #[test]
+    fn cost_001_video_cost_nil_non_positive_duration() {
+        let pricing = Pricing {
+            credits_per_second: Some(10.0),
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: None,
+        };
+        assert!(CostCalculator::video_cost(&pricing, 0.0, None, false).is_none());
+        assert!(CostCalculator::video_cost(&pricing, -1.0, None, false).is_none());
+    }
+
+    #[test]
+    fn cost_001_video_cost_with_resolution_pricing() {
+        let pricing = Pricing {
+            credits_per_second: Some(10.0),
+            resolution_pricing: Some([("1080p".into(), 2.0)].into()),
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: None,
+        };
+        // 10 seconds * 10 base * 2x resolution = 200
+        assert_eq!(
+            CostCalculator::video_cost(&pricing, 10.0, Some("1080p"), false),
+            Some(200)
+        );
+        // No resolution match = base
+        assert_eq!(
+            CostCalculator::video_cost(&pricing, 10.0, Some("720p"), false),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn cost_001_video_cost_with_audio_discount() {
+        let pricing = Pricing {
+            credits_per_second: Some(10.0),
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: Some([("no_audio".into(), 0.5)].into()),
+            audio_pricing: None,
+        };
+        // 10 seconds * 10 base = 100, with 0.5 discount = 50
+        assert_eq!(
+            CostCalculator::video_cost(&pricing, 10.0, None, true),
+            Some(50)
+        );
+        // Without discount = 100
+        assert_eq!(
+            CostCalculator::video_cost(&pricing, 10.0, None, false),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn cost_002_image_cost_with_quality_pricing() {
+        let pricing = Pricing {
+            credits_per_second: Some(5.0),
+            resolution_pricing: None,
+            quality_pricing: Some([("hd".into(), 2.0)].into()),
+            audio_discount: None,
+            audio_pricing: None,
+        };
+        // 5 base * 2x quality = 10 per image, 2 images = 20
+        assert_eq!(
+            CostCalculator::image_cost(&pricing, 2, None, Some("hd")),
+            Some(20)
+        );
+        // No quality match = base rate
+        assert_eq!(
+            CostCalculator::image_cost(&pricing, 2, None, Some("standard")),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn cost_002_image_cost_with_resolution_pricing() {
+        let pricing = Pricing {
+            credits_per_second: Some(5.0),
+            resolution_pricing: Some([("4k".into(), 3.0)].into()),
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: None,
+        };
+        // 5 base * 3x resolution = 15, 2 images = 30
+        assert_eq!(
+            CostCalculator::image_cost(&pricing, 2, Some("4k"), None),
+            Some(30)
+        );
+    }
+
+    #[test]
+    fn cost_002_image_cost_nil_when_no_rates() {
+        let pricing = Pricing {
+            credits_per_second: None,
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: None,
+        };
+        assert!(CostCalculator::image_cost(&pricing, 1, None, None).is_none());
+    }
+
+    #[test]
+    fn cost_003_audio_per_thousand_char_cost() {
+        let pricing = Pricing {
+            credits_per_second: None,
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: Some((
+                "per_character".into(),
+                serde_json::json!({"rate_per_thousand": 10.0}),
+            )),
+        };
+        // 500 chars / 1000 * 10 = 5
+        assert_eq!(
+            CostCalculator::audio_cost(&pricing, &"a".repeat(500), 0.0),
+            Some(5)
+        );
+        // 1500 chars / 1000 * 10 = 15
+        assert_eq!(
+            CostCalculator::audio_cost(&pricing, &"a".repeat(1500), 0.0),
+            Some(15)
+        );
+    }
+
+    #[test]
+    fn cost_004_audio_per_second_cost() {
+        let pricing = Pricing {
+            credits_per_second: None,
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: Some(("per_second".into(), serde_json::json!({"rate": 2.5}))),
+        };
+        // 30 seconds * 2.5 = 75
+        assert_eq!(CostCalculator::audio_cost(&pricing, "", 30.0), Some(75));
+    }
+
+    #[test]
+    fn cost_005_audio_flat_cost() {
+        let pricing = Pricing {
+            credits_per_second: None,
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: Some(("flat".into(), serde_json::json!({"price": 50.0}))),
+        };
+        assert_eq!(
+            CostCalculator::audio_cost(&pricing, "anything", 0.0),
+            Some(50)
+        );
+    }
+
+    #[test]
+    fn cost_006_unknown_audio_pricing_returns_nil() {
+        let pricing = Pricing {
+            credits_per_second: None,
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: Some(("unknown_mode".into(), serde_json::Value::Null)),
+        };
+        assert!(CostCalculator::audio_cost(&pricing, "test", 1.0).is_none());
+    }
+
+    #[test]
+    fn cost_007_upscale_cost() {
+        let pricing = Pricing {
+            credits_per_second: Some(3.0),
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: None,
+        };
+        // 10 seconds * 3 = 30
+        assert_eq!(CostCalculator::upscale_cost(&pricing, 10.0), Some(30));
+        // Non-positive returns nil
+        assert!(CostCalculator::upscale_cost(&pricing, 0.0).is_none());
+    }
+
+    #[test]
+    fn cost_008_cost_formatting() {
+        assert_eq!(CostCalculator::format_cost(None), "--");
+        assert_eq!(CostCalculator::format_cost(Some(0)), "0 credits");
+        assert_eq!(CostCalculator::format_cost(Some(1)), "1 credit");
+        assert_eq!(CostCalculator::format_cost(Some(50)), "50 credits");
+    }
+
+    // ── Resolution helpers (GPAY-007, 009-010) ──
+
+    #[test]
+    fn gpay_007_image_maximages_clamping() {
+        // Default max (4)
+        assert_eq!(clamp_image_count(0, None), 1);
+        assert_eq!(clamp_image_count(2, None), 2);
+        assert_eq!(clamp_image_count(10, None), 4);
+        // Custom max from capabilities
+        assert_eq!(clamp_image_count(0, Some(8)), 1);
+        assert_eq!(clamp_image_count(10, Some(8)), 8);
+    }
+
+    #[test]
+    fn gpay_009_resolution_label_parsing() {
+        assert_eq!(parse_resolution_label("1920x1080"), Some((1920, 1080)));
+        assert_eq!(parse_resolution_label("3840x2160"), Some((3840, 2160)));
+    }
+
+    #[test]
+    fn gpay_009_invalid_resolution_labels() {
+        assert!(parse_resolution_label("").is_none());
+        assert!(parse_resolution_label("abc").is_none());
+        assert!(parse_resolution_label("1920xabc").is_none());
+        assert!(parse_resolution_label("1920x1080x720").is_none());
+        assert!(parse_resolution_label("-1920x1080").is_none());
+    }
+
+    #[test]
+    fn gpay_010_resolution_display_labels() {
+        assert_eq!(resolution_display_label(1920, 1080), "1920x1080");
+        assert_eq!(resolution_display_label(3840, 2160), "3840x2160");
+        assert_eq!(resolution_display_label(640, 480), "640x480");
     }
 }
