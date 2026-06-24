@@ -1843,6 +1843,7 @@ name = "fronda-project-io"
 version = "0.1.0"
 dependencies = [
  "fronda-core-model",
+ "fronda-search-core",
  "serde",
  "serde_json",
  "tempfile",

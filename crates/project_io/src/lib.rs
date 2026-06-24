@@ -1,9 +1,12 @@
 use core_model::{
     ChatSession, GenerationLog, MediaManifest, Timeline, CHAT_DIRECTORY_NAME,
     GENERATION_LOG_FILENAME, MANIFEST_FILENAME, MEDIA_DIRECTORY_NAME, THUMBNAIL_FILENAME,
-    TIMELINE_FILENAME,
+    TIMELINE_FILENAME, TRANSCRIPTS_DIRECTORY_NAME, VISUAL_INDEXES_DIRECTORY_NAME,
 };
+use search_core::search_index::VisualIndex;
+use search_core::transcript::Transcript;
 use serde::{de::DeserializeOwned, Serialize};
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -71,9 +74,13 @@ pub struct ProjectBundle {
     pub manifest: Option<MediaManifest>,
     pub generation_log: Option<GenerationLog>,
     pub chat_sessions: Vec<ChatSession>,
+    pub transcripts: HashMap<String, Transcript>,
+    pub visual_indexes: HashMap<String, VisualIndex>,
     pub thumbnail_path: Option<PathBuf>,
     pub media_dir: Option<PathBuf>,
     pub chat_dir: Option<PathBuf>,
+    pub transcripts_dir: Option<PathBuf>,
+    pub visual_indexes_dir: Option<PathBuf>,
 }
 
 impl ProjectBundle {
@@ -91,6 +98,14 @@ impl ProjectBundle {
         let media_dir = root.join(MEDIA_DIRECTORY_NAME);
         let media_dir = media_dir.is_dir().then_some(media_dir);
 
+        let transcripts_dir = root.join(TRANSCRIPTS_DIRECTORY_NAME);
+        let transcripts = load_json_map::<Transcript>(&transcripts_dir)?;
+        let transcripts_dir = transcripts_dir.is_dir().then_some(transcripts_dir);
+
+        let visual_indexes_dir = root.join(VISUAL_INDEXES_DIRECTORY_NAME);
+        let visual_indexes = load_json_map::<VisualIndex>(&visual_indexes_dir)?;
+        let visual_indexes_dir = visual_indexes_dir.is_dir().then_some(visual_indexes_dir);
+
         let thumbnail_path = root.join(THUMBNAIL_FILENAME);
         let thumbnail_path = thumbnail_path.is_file().then_some(thumbnail_path);
 
@@ -100,9 +115,13 @@ impl ProjectBundle {
             manifest,
             generation_log,
             chat_sessions,
+            transcripts,
+            visual_indexes,
             thumbnail_path,
             media_dir,
             chat_dir,
+            transcripts_dir,
+            visual_indexes_dir,
         })
     }
 
@@ -121,6 +140,11 @@ impl ProjectBundle {
             self.generation_log.as_ref(),
         )?;
         write_chat_sessions(&root.join(CHAT_DIRECTORY_NAME), &self.chat_sessions)?;
+        write_json_map(&root.join(TRANSCRIPTS_DIRECTORY_NAME), &self.transcripts)?;
+        write_json_map(
+            &root.join(VISUAL_INDEXES_DIRECTORY_NAME),
+            &self.visual_indexes,
+        )?;
         sync_optional_file(
             self.thumbnail_path.as_deref(),
             &root.join(THUMBNAIL_FILENAME),
@@ -245,6 +269,56 @@ fn load_chat_sessions(path: &Path) -> Result<Vec<ChatSession>, BundleError> {
             serde_json::from_slice::<ChatSession>(&bytes).ok()
         })
         .collect())
+}
+
+fn load_json_map<T>(path: &Path) -> Result<HashMap<String, T>, BundleError>
+where
+    T: DeserializeOwned,
+{
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let mut map = HashMap::new();
+    for entry in fs::read_dir(path).map_err(|source| BundleError::ReadDirectory {
+        path: path.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| BundleError::ReadDirectory {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let entry_path = entry.path();
+        if entry_path.extension() == Some(OsStr::new("json")) {
+            if let Some(stem) = entry_path.file_stem().and_then(|s| s.to_str()) {
+                if let Ok(value) = read_json::<T>(&entry_path) {
+                    map.insert(stem.to_string(), value);
+                }
+            }
+        }
+    }
+    Ok(map)
+}
+
+fn write_json_map<T>(path: &Path, map: &HashMap<String, T>) -> Result<(), BundleError>
+where
+    T: Serialize,
+{
+    if map.is_empty() {
+        return remove_path_if_exists(path);
+    }
+
+    remove_path_if_exists(path)?;
+    ensure_directory(path)?;
+
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort();
+    for key in keys {
+        if let Some(value) = map.get(key) {
+            write_json(&path.join(format!("{key}.json")), value)?;
+        }
+    }
+    Ok(())
 }
 
 fn write_chat_sessions(path: &Path, sessions: &[ChatSession]) -> Result<(), BundleError> {

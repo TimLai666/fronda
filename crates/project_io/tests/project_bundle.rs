@@ -1,6 +1,7 @@
 use core_model::{
     ClipType, CHAT_DIRECTORY_NAME, GENERATION_LOG_FILENAME, MANIFEST_FILENAME,
-    MEDIA_DIRECTORY_NAME, THUMBNAIL_FILENAME, TIMELINE_FILENAME,
+    MEDIA_DIRECTORY_NAME, THUMBNAIL_FILENAME, TIMELINE_FILENAME, TRANSCRIPTS_DIRECTORY_NAME,
+    VISUAL_INDEXES_DIRECTORY_NAME,
 };
 use project_io::{BundleError, ProjectBundle};
 use std::fs;
@@ -202,4 +203,138 @@ fn save_removes_stale_optional_files_and_directories_when_absent() {
     assert!(reopened.thumbnail_path.is_none());
     assert!(reopened.media_dir.is_none());
     assert!(reopened.chat_dir.is_none());
+}
+
+#[test]
+fn saves_and_loads_transcripts() {
+    let temp = tempdir().unwrap();
+    let source = ProjectBundle::open(fixture_bundle_path("modern-rich.palmier")).unwrap();
+    let destination = temp.path().join("with-transcripts.palmier");
+
+    let mut bundle = source.clone();
+    use search_core::search_index::CacheIdentity;
+    use search_core::transcript::{TranscribedWord, Transcript, TranscriptSegment};
+
+    bundle.transcripts.insert(
+        "media-001".into(),
+        Transcript {
+            identity: CacheIdentity {
+                path: "/videos/clip1.mp4".into(),
+                modification_time: 1_700_000_000,
+                file_size: 42_000,
+            },
+            segments: vec![TranscriptSegment {
+                start_seconds: 0.0,
+                end_seconds: 2.0,
+                text: "hello world".into(),
+                words: vec![TranscribedWord {
+                    word: "hello".into(),
+                    start_seconds: 0.0,
+                    end_seconds: 0.5,
+                }],
+            }],
+            language: Some("en".into()),
+        },
+    );
+
+    bundle.save_to(&destination).unwrap();
+    assert!(destination.join(TRANSCRIPTS_DIRECTORY_NAME).is_dir());
+    assert!(destination
+        .join(TRANSCRIPTS_DIRECTORY_NAME)
+        .join("media-001.json")
+        .is_file());
+
+    let reopened = ProjectBundle::open(&destination).unwrap();
+    assert_eq!(reopened.transcripts.len(), 1);
+    assert_eq!(
+        reopened
+            .transcripts
+            .get("media-001")
+            .unwrap()
+            .language
+            .as_deref(),
+        Some("en")
+    );
+    assert_eq!(reopened.transcripts_dir.is_some(), true);
+}
+
+#[test]
+fn saves_and_loads_visual_indexes() {
+    let temp = tempdir().unwrap();
+    let source = ProjectBundle::open(fixture_bundle_path("modern-rich.palmier")).unwrap();
+    let destination = temp.path().join("with-vindex.palmier");
+
+    let mut bundle = source.clone();
+    use search_core::search_index::{CacheIdentity, EmbeddingRow, VisualIndex};
+
+    bundle.visual_indexes.insert(
+        "media-002".into(),
+        VisualIndex {
+            identity: CacheIdentity {
+                path: "/videos/clip2.mp4".into(),
+                modification_time: 1_700_000_001,
+                file_size: 99_000,
+            },
+            rows: vec![EmbeddingRow {
+                frame: 0,
+                embedding: vec![0.1, 0.2, 0.3],
+            }],
+        },
+    );
+
+    bundle.save_to(&destination).unwrap();
+    assert!(destination.join(VISUAL_INDEXES_DIRECTORY_NAME).is_dir());
+
+    let reopened = ProjectBundle::open(&destination).unwrap();
+    assert_eq!(reopened.visual_indexes.len(), 1);
+    let loaded = reopened.visual_indexes.get("media-002").unwrap();
+    assert_eq!(loaded.rows[0].embedding, vec![0.1, 0.2, 0.3]);
+}
+
+#[test]
+fn transcripts_empty_when_directory_missing() {
+    let bundle = ProjectBundle::open(fixture_bundle_path("modern-rich.palmier")).unwrap();
+    assert!(bundle.transcripts.is_empty());
+    assert!(bundle.visual_indexes.is_empty());
+    assert!(bundle.transcripts_dir.is_none());
+    assert!(bundle.visual_indexes_dir.is_none());
+}
+
+#[test]
+fn save_removes_stale_transcripts_and_visual_indexes_when_empty() {
+    let temp = tempdir().unwrap();
+    let source = ProjectBundle::open(fixture_bundle_path("modern-rich.palmier")).unwrap();
+    let destination = temp.path().join("stale-cache.palmier");
+
+    let mut bundle = source.clone();
+    use search_core::search_index::{CacheIdentity, EmbeddingRow, VisualIndex};
+
+    // Save with data first
+    bundle.visual_indexes.insert(
+        "tmp".into(),
+        VisualIndex {
+            identity: CacheIdentity {
+                path: "/tmp/v.mp4".into(),
+                modification_time: 0,
+                file_size: 0,
+            },
+            rows: vec![EmbeddingRow {
+                frame: 0,
+                embedding: vec![0.5],
+            }],
+        },
+    );
+    bundle.save_to(&destination).unwrap();
+    assert!(destination.join(VISUAL_INDEXES_DIRECTORY_NAME).is_dir());
+
+    // Clear and save again — should remove the directory
+    let mut bundle2 = ProjectBundle::open(&destination).unwrap();
+    bundle2.visual_indexes.clear();
+    bundle2.save().unwrap();
+
+    assert!(!destination.join(VISUAL_INDEXES_DIRECTORY_NAME).exists());
+
+    let reopened = ProjectBundle::open(&destination).unwrap();
+    assert!(reopened.visual_indexes.is_empty());
+    assert!(reopened.visual_indexes_dir.is_none());
 }

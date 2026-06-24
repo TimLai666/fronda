@@ -28,3 +28,5 @@ pub const GENERATION_LOG_FILENAME: &str = "generation-log.json";
 pub const THUMBNAIL_FILENAME: &str = "thumbnail.jpg";
 pub const MEDIA_DIRECTORY_NAME: &str = "media";
 pub const CHAT_DIRECTORY_NAME: &str = "chat";
+pub const TRANSCRIPTS_DIRECTORY_NAME: &str = "transcripts";
+pub const VISUAL_INDEXES_DIRECTORY_NAME: &str = "visual_indexes";
