@@ -1,6 +1,6 @@
 use crate::keyframes::{
-    clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, set_clip_duration,
-    split_all_clip_keyframe_tracks,
+    clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, rescale_clip_keyframes,
+    set_clip_duration, split_all_clip_keyframe_tracks,
 };
 use crate::{
     compute_overwrite, expand_to_link_group, linked_partner_ids, partner_moves_for_move_of,
@@ -85,6 +85,13 @@ pub fn apply_clip_speed(timeline: &mut Timeline, clip_id: &str, new_speed: f64) 
 
     timeline.tracks[track_index].clips[location.clip_index].speed = new_speed;
     timeline.tracks[track_index].clips[location.clip_index].duration_frames = new_duration;
+    // PR #129: rescale keyframes before clamp to preserve keyframe positions
+    let old_duration = basis.duration_frames.max(1) as f64;
+    let rescale_ratio = new_duration as f64 / old_duration;
+    rescale_clip_keyframes(
+        &mut timeline.tracks[track_index].clips[location.clip_index],
+        rescale_ratio,
+    );
     clamp_clip_keyframes_to_duration(&mut timeline.tracks[track_index].clips[location.clip_index]);
     clamp_clip_fades_to_duration(&mut timeline.tracks[track_index].clips[location.clip_index]);
 

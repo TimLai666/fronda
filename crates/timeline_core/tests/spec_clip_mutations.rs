@@ -153,16 +153,20 @@ fn clp_017_apply_clip_speed_clamps_fades_and_keyframes_to_new_duration() {
     assert_eq!(updated.duration_frames, 30);
     assert_eq!(updated.fade_in_frames, 20);
     assert_eq!(updated.fade_out_frames, 10);
+    // PR #129: keyframes are rescaled proportionally before clamp
+    // ratio = 30/60 = 0.5, so 15→8, 45→23
+    let frames: Vec<i64> = updated
+        .opacity_track
+        .as_ref()
+        .unwrap()
+        .keyframes
+        .iter()
+        .map(|keyframe| keyframe.frame)
+        .collect();
     assert_eq!(
-        updated
-            .opacity_track
-            .as_ref()
-            .unwrap()
-            .keyframes
-            .iter()
-            .map(|keyframe| keyframe.frame)
-            .collect::<Vec<_>>(),
-        vec![15]
+        frames,
+        vec![8, 23],
+        "keyframes should be rescaled, not dropped"
     );
 }
 

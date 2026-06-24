@@ -46,6 +46,47 @@ pub fn clamp_clip_fades_to_duration(clip: &mut Clip) {
         .clamp(0, clip.duration_frames - clip.fade_in_frames);
 }
 
+/// Rescale all keyframe positions by a ratio, then clamp to duration.
+/// PR #129: call this before clamp when the clip duration changes due to speed change.
+pub fn rescale_clip_keyframes(clip: &mut Clip, ratio: f64) {
+    if ratio <= 0.0 || !ratio.is_finite() || (ratio - 1.0).abs() < f64::EPSILON {
+        return;
+    }
+    rescale_keyframe_track(&mut clip.opacity_track, ratio, clip.duration_frames);
+    rescale_keyframe_track(&mut clip.position_track, ratio, clip.duration_frames);
+    rescale_keyframe_track(&mut clip.scale_track, ratio, clip.duration_frames);
+    rescale_keyframe_track(&mut clip.rotation_track, ratio, clip.duration_frames);
+    rescale_keyframe_track(&mut clip.crop_track, ratio, clip.duration_frames);
+    rescale_keyframe_track(&mut clip.volume_track, ratio, clip.duration_frames);
+}
+
+fn rescale_keyframe_track<V: Clone + PartialEq>(
+    track: &mut Option<KeyframeTrack<V>>,
+    ratio: f64,
+    cap: i64,
+) {
+    let Some(existing) = track.take() else {
+        return;
+    };
+    let mut rescaled = KeyframeTrack::default();
+    for keyframe in existing.keyframes {
+        let new_frame = ((keyframe.frame as f64 * ratio).round() as i64).min(cap);
+        upsert_keyframe(
+            &mut rescaled,
+            Keyframe {
+                frame: new_frame,
+                value: keyframe.value,
+                interpolation_out: keyframe.interpolation_out,
+            },
+        );
+    }
+    *track = if rescaled.keyframes.is_empty() {
+        None
+    } else {
+        Some(rescaled)
+    };
+}
+
 pub fn set_clip_duration(clip: &mut Clip, new_duration: i64) {
     clip.duration_frames = new_duration;
     clamp_clip_keyframes_to_duration(clip);

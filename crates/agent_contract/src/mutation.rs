@@ -145,6 +145,43 @@ pub fn validate_set_clip_properties(
                 timing_properties.push(key.to_string());
             }
         }
+
+        // PR #144: validate numeric ranges for speed, volume, opacity, trim
+        if let Some(speed) = obj.get("speed").and_then(|v| v.as_f64()) {
+            if speed <= 0.0 {
+                return ValidationResult::Error(format!(
+                    "set_clip_properties: 'speed' must be positive, got {speed}"
+                ));
+            }
+        }
+        if let Some(vol) = obj.get("volume").and_then(|v| v.as_f64()) {
+            if !(0.0..=1.0).contains(&vol) {
+                return ValidationResult::Error(format!(
+                    "set_clip_properties: 'volume' must be between 0 and 1, got {vol}"
+                ));
+            }
+        }
+        if let Some(opacity) = obj.get("opacity").and_then(|v| v.as_f64()) {
+            if !(0.0..=1.0).contains(&opacity) {
+                return ValidationResult::Error(format!(
+                    "set_clip_properties: 'opacity' must be between 0 and 1, got {opacity}"
+                ));
+            }
+        }
+        if let Some(trim) = obj.get("trimStart").and_then(|v| v.as_f64()) {
+            if trim < 0.0 {
+                return ValidationResult::Error(format!(
+                    "set_clip_properties: 'trimStart' must be >= 0, got {trim}"
+                ));
+            }
+        }
+        if let Some(trim) = obj.get("trimEnd").and_then(|v| v.as_f64()) {
+            if trim < 0.0 {
+                return ValidationResult::Error(format!(
+                    "set_clip_properties: 'trimEnd' must be >= 0, got {trim}"
+                ));
+            }
+        }
     }
 
     ValidationResult::Ok(SetClipPropertiesInput {
