@@ -484,6 +484,40 @@ pub fn derive_folder_mirror(plan: &DirectoryImportPlan) -> Vec<FolderMirrorEntry
 }
 
 // ---------------------------------------------------------------------------
+// Pasted image bytes and project-internal media (MED-019..021)
+// ---------------------------------------------------------------------------
+
+/// MED-019: Generate a filename for pasted image bytes.
+///
+/// Creates a project-internal file named `pasted-<id>.<ext>`.
+pub fn pasted_image_filename(id: &str, ext: &str) -> String {
+    format!("pasted-{}.{}", id, ext.trim_start_matches('.'))
+}
+
+/// MED-020: Resolve the target path for pasted image bytes.
+///
+/// When a project is open, writes into the project `media/` directory.
+/// Otherwise writes into a system temp directory.
+pub fn resolve_pasted_image_path(id: &str, ext: &str, project_media_dir: Option<&str>) -> String {
+    let filename = pasted_image_filename(id, ext);
+    match project_media_dir {
+        Some(dir) => format!("{}/{}", dir.trim_end_matches('/'), filename),
+        None => format!("{}/{}", std::env::temp_dir().to_string_lossy(), filename),
+    }
+}
+
+/// MED-021: Resolve a project-internal path for generated/saved media.
+///
+/// Generated media and save-as-media outputs are project-internal when
+/// a project is open, using the `media/` directory.
+pub fn resolve_project_internal_path(filename: &str, project_media_dir: Option<&str>) -> String {
+    match project_media_dir {
+        Some(dir) => format!("{}/{}", dir.trim_end_matches('/'), filename),
+        None => format!("{}/{}", std::env::temp_dir().to_string_lossy(), filename),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
@@ -1120,5 +1154,65 @@ mod tests {
             |_| false,
         );
         assert!(result.is_ok());
+    }
+
+    // ── MED-019: Pasted image filename format ──
+    #[test]
+    fn med_019_pasted_image_filename_basic() {
+        let name = pasted_image_filename("abc123", "png");
+        assert_eq!(name, "pasted-abc123.png");
+    }
+
+    #[test]
+    fn med_019_pasted_image_filename_dot_ext() {
+        let name = pasted_image_filename("abc123", ".png");
+        assert_eq!(name, "pasted-abc123.png");
+    }
+
+    #[test]
+    fn med_019_pasted_image_filename_tiff() {
+        let name = pasted_image_filename("img-1", "tiff");
+        assert_eq!(name, "pasted-img-1.tiff");
+    }
+
+    // ── MED-020: Path resolution for pasted images ──
+    #[test]
+    fn med_020_resolve_with_project_dir() {
+        let path = resolve_pasted_image_path("id1", "png", Some("/project/media"));
+        assert_eq!(path, "/project/media/pasted-id1.png");
+    }
+
+    #[test]
+    fn med_020_resolve_with_project_dir_trailing_slash() {
+        let path = resolve_pasted_image_path("id2", "png", Some("/project/media/"));
+        assert_eq!(path, "/project/media/pasted-id2.png");
+    }
+
+    #[test]
+    fn med_020_resolve_without_project_dir_is_temp() {
+        let path = resolve_pasted_image_path("id3", ".jpg", None);
+        // Should include temp_dir path and the pasted filename
+        assert!(path.contains("pasted-id3.jpg"));
+        assert!(path.contains(std::env::temp_dir().to_string_lossy().as_ref()));
+    }
+
+    // ── MED-021: Project-internal path resolution ──
+    #[test]
+    fn med_021_project_internal_with_media_dir() {
+        let path = resolve_project_internal_path("clip-video.mp4", Some("/p/media"));
+        assert_eq!(path, "/p/media/clip-video.mp4");
+    }
+
+    #[test]
+    fn med_021_project_internal_without_media_dir() {
+        let path = resolve_project_internal_path("generated.mp4", None);
+        assert!(path.contains("generated.mp4"));
+        assert!(path.contains(std::env::temp_dir().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn med_021_project_internal_trailing_slash() {
+        let path = resolve_project_internal_path("clip.m4a", Some("/p/media/"));
+        assert_eq!(path, "/p/media/clip.m4a");
     }
 }
