@@ -63,10 +63,10 @@ Scope sources:
 
 ## C. Transcription and locale behavior
 
-- [ ] `TRN-012`: Locale matching prefers exact language+region matches first.
-- [ ] `TRN-013`: If no exact region exists, locale matching falls back to any supported locale with the same language.
-- [ ] `TRN-014`: Region override suffixes and Unicode extension tags such as `@rg=...` and `-u-rg-...` do not block language matching.
-- [ ] `TRN-015`: If no supported language matches, locale selection returns `nil`.
+- [x] `TRN-012`: Locale matching prefers exact language+region matches first.
+- [x] `TRN-013`: If no exact region exists, locale matching falls back to any supported locale with the same language.
+- [x] `TRN-014`: Region override suffixes and Unicode extension tags such as `@rg=...` and `-u-rg-...` do not block language matching.
+- [x] `TRN-015`: If no supported language matches, locale selection returns `nil`.
 - [ ] `TRN-016`: Video transcription first extracts audio to a temp PCM `.caf` file using the current sample-rate/channel/bit-depth contract.
 - [ ] `TRN-017`: If a video has no audio track, video transcription fails cleanly.
 - [ ] `TRN-018`: Range-limited transcription offsets timestamps back into original source time after extracting/transcribing the narrowed source span.
