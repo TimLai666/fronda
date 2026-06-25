@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod bundle_export;
 pub mod effects;
+pub mod export_stall_watchdog;
 pub mod xml_export;
 pub use effects::{
     analyze_clip_effects, pipeline_from_timeline, EffectPipeline, EffectState, PerClipEffectState,

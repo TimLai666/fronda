@@ -736,6 +736,8 @@ pub struct AudioCapabilities {
 /// Upscale-specific capabilities.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UpscaleCapabilities {
+    pub speed_label: Option<String>,
+    pub p75_duration_seconds: Option<f64>,
     pub supported_clip_types: Vec<String>,
 }
 
@@ -1993,5 +1995,159 @@ mod tests {
         assert_eq!(resolution_display_label(1920, 1080), "1920x1080");
         assert_eq!(resolution_display_label(3840, 2160), "3840x2160");
         assert_eq!(resolution_display_label(640, 480), "640x480");
+    }
+
+    // ── Catalog entry fields (CAT-003, 007-010) ──
+
+    #[test]
+    fn cat_003_core_fields() {
+        let entry = CatalogEntry {
+            id: "model-1".into(),
+            kind: ModelKind::Video,
+            display_name: "Model One".into(),
+            allowed_endpoints: vec!["generate".into()],
+            response_shape: ResponseShape::Video,
+            ui_capabilities: serde_json::json!({"referenceImages": true}),
+            pricing: Some(Pricing {
+                credits_per_second: Some(10.0),
+                resolution_pricing: None,
+                quality_pricing: None,
+                audio_discount: None,
+                audio_pricing: None,
+            }),
+            qualities: Some(vec!["hd".into(), "sd".into()]),
+        };
+        assert_eq!(entry.id, "model-1");
+        assert_eq!(entry.kind, ModelKind::Video);
+        assert_eq!(entry.display_name, "Model One");
+        assert_eq!(entry.allowed_endpoints, vec!["generate"]);
+        assert_eq!(entry.response_shape, ResponseShape::Video);
+        assert_eq!(
+            entry.ui_capabilities,
+            serde_json::json!({"referenceImages": true})
+        );
+        assert!(entry.pricing.is_some());
+        assert_eq!(entry.qualities, Some(vec!["hd".into(), "sd".into()]));
+    }
+
+    #[test]
+    fn cat_007_image_capabilities() {
+        let caps = ImageCapabilities {
+            resolutions: Some(vec!["1024x1024".into()]),
+            aspect_ratios: Some(vec!["1:1".into()]),
+            qualities: Some(vec!["standard".into(), "hd".into()]),
+            max_images: Some(4),
+        };
+        assert_eq!(caps.resolutions, Some(vec!["1024x1024".into()]));
+        assert_eq!(caps.aspect_ratios, Some(vec!["1:1".into()]));
+        assert_eq!(caps.qualities, Some(vec!["standard".into(), "hd".into()]));
+        assert_eq!(caps.max_images, Some(4));
+    }
+
+    #[test]
+    fn cat_008_audio_capabilities() {
+        let caps = AudioCapabilities {
+            category: Some("Speech".into()),
+            voices: vec!["alloy".into(), "echo".into()],
+            default_voice: Some("alloy".into()),
+            lyrics: Some(true),
+            style_instructions: Some(true),
+            instrumental: Some(false),
+            durations: Some(vec![30.0, 60.0]),
+            min_prompt_length: Some(10),
+            supported_inputs: Some(vec!["text".into()]),
+            min_seconds: Some(1.0),
+            max_seconds: Some(900.0),
+        };
+        assert_eq!(caps.category, Some("Speech".into()));
+        assert_eq!(caps.voices, vec!["alloy", "echo"]);
+        assert_eq!(caps.default_voice, Some("alloy".into()));
+        assert_eq!(caps.lyrics, Some(true));
+        assert_eq!(caps.style_instructions, Some(true));
+        assert_eq!(caps.instrumental, Some(false));
+        assert_eq!(caps.durations, Some(vec![30.0, 60.0]));
+        assert_eq!(caps.min_prompt_length, Some(10));
+        assert_eq!(caps.supported_inputs, Some(vec!["text".into()]));
+        assert_eq!(caps.min_seconds, Some(1.0));
+        assert_eq!(caps.max_seconds, Some(900.0));
+    }
+
+    #[test]
+    fn cat_009_upscale_capabilities() {
+        let caps = UpscaleCapabilities {
+            speed_label: Some("Fast".into()),
+            p75_duration_seconds: Some(15.0),
+            supported_clip_types: vec!["video".into(), "image".into()],
+        };
+        assert_eq!(caps.speed_label, Some("Fast".into()));
+        assert_eq!(caps.p75_duration_seconds, Some(15.0));
+        assert_eq!(caps.supported_clip_types, vec!["video", "image"]);
+    }
+
+    #[test]
+    fn cat_010_unknown_audio_pricing_mode() {
+        // AudioPricingMode has no catch-all; unknown modes cannot be
+        // represented, satisfying CAT-010 (fail decode, not silent).
+        let per_char = AudioPricingMode::PerCharacter {
+            rate_per_thousand: 10.0,
+        };
+        let per_sec = AudioPricingMode::PerSecond { rate: 2.5 };
+        let flat = AudioPricingMode::Flat { price: 50.0 };
+        assert_ne!(format!("{per_char:?}"), format!("{per_sec:?}"));
+        assert_ne!(format!("{per_sec:?}"), format!("{flat:?}"));
+
+        // Unknown string modes at the CostCalculator level produce None
+        // (no silent zero-cost pricing).
+        let pricing = Pricing {
+            credits_per_second: None,
+            resolution_pricing: None,
+            quality_pricing: None,
+            audio_discount: None,
+            audio_pricing: Some(("bogus_mode".into(), serde_json::Value::Null)),
+        };
+        assert!(CostCalculator::audio_cost(&pricing, "test", 1.0).is_none());
+    }
+
+    // ── Rerun cost reconstruction (COST-009) ──
+
+    #[test]
+    fn cost_009_rerun_cost_reconstruction() {
+        // Video rerun: stores model id, preserves all input fields,
+        // defaults num_images to 1 when absent.
+        let video_input = GenerationInput {
+            prompt: "a video".into(),
+            model: "video-model".into(),
+            duration: 10,
+            aspect_ratio: "16:9".into(),
+            resolution: Some("1080p".into()),
+            quality: Some("hd".into()),
+            num_images: None,
+            generate_audio: None,
+            ..Default::default()
+        };
+        let prep =
+            GenerationMachine::rerun_from_input(&video_input, GenerationModality::Video).unwrap();
+        assert_eq!(prep.prompt, "a video");
+        assert_eq!(prep.model, "video-model");
+        assert_eq!(prep.duration_seconds, 10.0);
+        assert_eq!(prep.aspect_ratio, "16:9");
+        assert_eq!(prep.resolution, Some("1080p".into()));
+        assert_eq!(prep.quality, Some("hd".into()));
+        assert_eq!(prep.num_images, 1); // defaulted from None via unwrap_or(1)
+        assert_eq!(prep.modality, GenerationModality::Video);
+        assert_eq!(prep.estimated_cost, 0); // populated fresh after dispatch
+
+        // Image rerun: num_images defaults to 1 when absent.
+        let image_input = GenerationInput {
+            prompt: "an image".into(),
+            model: "image-model".into(),
+            num_images: None,
+            generate_audio: None,
+            ..Default::default()
+        };
+        let prep =
+            GenerationMachine::rerun_from_input(&image_input, GenerationModality::Image).unwrap();
+        assert_eq!(prep.num_images, 1); // defaulted from None via unwrap_or(1)
+        assert_eq!(prep.modality, GenerationModality::Image);
     }
 }

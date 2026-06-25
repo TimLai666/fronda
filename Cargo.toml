@@ -11,6 +11,7 @@ members = [
     "crates/timeline_core",
     "crates/generation_core",
     "crates/media_library",
+    "crates/audio_core",
 ]
 resolver = "2"
 

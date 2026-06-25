@@ -305,31 +305,9 @@ pub fn validate_add_clips(input: &Value) -> ValidationResult<AddClipsInput> {
 /// Trims surrounding whitespace/newlines.
 /// Rejects embedded/internal whitespace.
 pub fn validate_hex_color(input: &str) -> ValidationResult<String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return ValidationResult::Error("empty hex color".into());
-    }
-
-    // Check for internal whitespace
-    let without_prefix = if let Some(rest) = trimmed.strip_prefix('#') {
-        rest
-    } else {
-        return ValidationResult::Error("hex color must start with '#'".into());
-    };
-
-    if without_prefix.contains(|c: char| c.is_whitespace()) {
-        return ValidationResult::Error("hex color contains internal whitespace".into());
-    }
-
-    match without_prefix.len() {
-        3 | 6 | 8 => {
-            if without_prefix.chars().all(|c| c.is_ascii_hexdigit()) {
-                ValidationResult::Ok(trimmed.to_string())
-            } else {
-                ValidationResult::Error("hex color contains invalid characters".into())
-            }
-        }
-        _ => ValidationResult::Error("hex color must be #RGB, #RRGGBB, or #RRGGBBAA".into()),
+    match crate::hex_color_parser::parse_hex_color(input) {
+        Ok(s) => ValidationResult::Ok(s),
+        Err(e) => ValidationResult::Error(e),
     }
 }
 

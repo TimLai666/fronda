@@ -1,0 +1,11 @@
+[package]
+name = "fronda-audio-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "audio_core"
+path = "src/lib.rs"
+
+[dependencies]

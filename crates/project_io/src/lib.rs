@@ -1,3 +1,5 @@
+pub mod project_duplicate;
+
 use core_model::{
     ChatSession, GenerationLog, MediaManifest, Timeline, CHAT_DIRECTORY_NAME,
     GENERATION_LOG_FILENAME, MANIFEST_FILENAME, MEDIA_DIRECTORY_NAME, THUMBNAIL_FILENAME,
