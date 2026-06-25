@@ -116,6 +116,18 @@ impl ClipType {
             _ => None,
         }
     }
+
+    /// Human-readable name for this clip type.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Image => "image",
+            Self::Text => "text",
+            Self::Lottie => "lottie",
+            Self::Shape => "shape",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

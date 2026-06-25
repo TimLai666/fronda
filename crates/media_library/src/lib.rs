@@ -1,3 +1,12 @@
+mod media_import;
+mod pasteboard_import;
+pub mod sample_projects;
+mod save_as_media;
+
+pub use media_import::*;
+pub use pasteboard_import::*;
+pub use save_as_media::*;
+
 use core_model::{ClipType, MediaFolder, MediaManifest, MediaManifestEntry, MediaSource};
 use std::collections::{HashMap, HashSet};
 
