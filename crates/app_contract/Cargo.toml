@@ -1,0 +1,13 @@
+[package]
+name = "fronda-app-contract"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "app_contract"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

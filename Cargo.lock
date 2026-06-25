@@ -1811,6 +1811,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fronda-app-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "fronda-app-shell-gpui"
 version = "0.1.0"
 dependencies = [

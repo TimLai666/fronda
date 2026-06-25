@@ -7,7 +7,7 @@ pub use media_import::*;
 pub use pasteboard_import::*;
 pub use save_as_media::*;
 
-use core_model::{ClipType, MediaFolder, MediaManifest, MediaManifestEntry, MediaSource};
+use core_model::{ClipType, MediaFolder, MediaManifest, MediaManifestEntry, MediaSource, Timeline};
 use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
@@ -26,6 +26,23 @@ pub enum FolderError {
 #[derive(Debug, PartialEq)]
 pub enum RelinkError {
     DifferentMediaType { expected: String, got: String },
+}
+
+// ---------------------------------------------------------------------------
+// Folder deletion effect (FLD-014..017)
+// ---------------------------------------------------------------------------
+
+/// Effects returned by `delete_folder_with_timeline_effects`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FolderDeleteEffect {
+    /// All folder IDs that were logically deleted.
+    pub deleted_folder_ids: Vec<String>,
+    /// Asset IDs that were part of the deleted folder subtree.
+    pub deleted_asset_ids: Vec<String>,
+    /// Clip IDs that were removed from the timeline.
+    pub removed_clip_ids: Vec<String>,
+    /// Track IDs that were pruned because they became empty.
+    pub pruned_track_ids: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +204,80 @@ impl FolderOps {
         let mut deleted: Vec<String> = to_delete.into_iter().collect();
         deleted.sort();
         Ok(deleted)
+    }
+
+    /// FLD-014/015/016/017: Delete a folder with full timeline cleanup.
+    ///
+    /// Effectively calls `delete_folder` for the logical deletion, then:
+    /// - FLD-014: Removes timeline clips referencing deleted assets
+    /// - FLD-015: Prunes newly empty tracks after clip removal
+    /// - FLD-016: Returns asset ids for preview-tab cleanup (caller must close tabs)
+    /// - FLD-017: Removes deleted folder/asset ids from timeline selection state
+    pub fn delete_folder_with_timeline_effects(
+        manifest: &mut MediaManifest,
+        timeline: &mut Timeline,
+        folder_id: &str,
+    ) -> Result<FolderDeleteEffect, FolderError> {
+        // First find all assets in the subtree before deleting the folder
+        let affected_asset_ids: HashSet<String> = Self::asset_ids_in_subtree(manifest, folder_id)
+            .into_iter()
+            .collect();
+
+        // Delete folders logically
+        let deleted_folder_ids = Self::delete_folder(manifest, folder_id)?;
+        let deleted_folder_set: HashSet<String> = deleted_folder_ids.iter().cloned().collect();
+
+        // FLD-014: Remove clips referencing deleted assets from timeline
+        let removed_clip_ids = Self::remove_clips_by_media_ref(timeline, &affected_asset_ids);
+
+        // FLD-015: Prune newly empty tracks after clip removal
+        let pruned_track_ids = Self::prune_empty_tracks(timeline);
+
+        // FLD-017: Remove deleted folder/asset/clip ids from selection state
+        timeline
+            .selected_clip_ids
+            .retain(|id| !removed_clip_ids.contains(id));
+
+        // FLD-016: Signal which assets need preview tab closure (returned to caller)
+        Ok(FolderDeleteEffect {
+            deleted_folder_ids: deleted_folder_set.into_iter().collect(),
+            deleted_asset_ids: affected_asset_ids.into_iter().collect(),
+            removed_clip_ids,
+            pruned_track_ids,
+        })
+    }
+
+    /// Remove all clips whose `media_ref` is in the given set. Returns removed clip ids.
+    fn remove_clips_by_media_ref(
+        timeline: &mut Timeline,
+        media_refs: &HashSet<String>,
+    ) -> Vec<String> {
+        let mut removed = Vec::new();
+        for track in &mut timeline.tracks {
+            track.clips.retain(|clip| {
+                if media_refs.contains(&clip.media_ref) {
+                    removed.push(clip.id.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        removed
+    }
+
+    /// Remove tracks that have no clips. Returns ids of pruned tracks.
+    fn prune_empty_tracks(timeline: &mut Timeline) -> Vec<String> {
+        let mut pruned = Vec::new();
+        timeline.tracks.retain(|track| {
+            if track.clips.is_empty() {
+                pruned.push(track.id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        pruned
     }
 
     /// FLD-018/019: Move an asset to a folder (or root when folder_id is None).
@@ -418,6 +509,7 @@ impl SupportedExtensions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_model::{Clip, Crop, Interpolation, Track, Transform};
 
     // -----------------------------------------------------------------------
     // Helper: build a MediaManifestEntry with defaults
@@ -1088,5 +1180,300 @@ mod tests {
     fn clip_type_from_path_unknown() {
         assert_eq!(clip_type_from_extension("/path/to/file.txt"), None);
         assert_eq!(clip_type_from_extension("/path/with.no.ext"), None);
+    }
+
+    // =======================================================================
+    // FLD-014..017: Folder deletion with timeline effects
+    // =======================================================================
+
+    /// Helper: create a minimal Clip with required fields.
+    fn make_clip(id: &str, media_ref: &str, start: i64, dur: i64) -> Clip {
+        Clip {
+            id: id.into(),
+            media_ref: media_ref.into(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: start,
+            duration_frames: dur,
+            trim_start_frame: 0,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            opacity: 1.0,
+            transform: Transform {
+                center_x: 0.5,
+                center_y: 0.5,
+                width: 1.0,
+                height: 1.0,
+                rotation: 0.0,
+                flip_horizontal: false,
+                flip_vertical: false,
+            },
+            crop: Crop {
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+            },
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+            effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
+        }
+    }
+
+    /// Helper: create a minimal Timeline with one track containing one clip.
+    fn timeline_with_clip(clip_id: &str, media_ref: &str) -> Timeline {
+        Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: HashSet::from([clip_id.to_string()]),
+            tracks: vec![Track {
+                id: "track-1".into(),
+                r#type: ClipType::Video,
+                muted: false,
+                hidden: false,
+                sync_locked: true,
+                clips: vec![make_clip(clip_id, media_ref, 0, 30)],
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fld_014_delete_folder_removes_timeline_clips() {
+        let mut manifest = MediaManifest::default();
+        let folder_id =
+            FolderOps::create_folder(&mut manifest, "Test Folder".into(), None).unwrap();
+        manifest.entries.push(entry(
+            "asset-1",
+            ClipType::Video,
+            "video.mp4",
+            Some(&folder_id),
+        ));
+
+        let mut timeline = timeline_with_clip("clip-1", "asset-1");
+
+        let effect = FolderOps::delete_folder_with_timeline_effects(
+            &mut manifest,
+            &mut timeline,
+            &folder_id,
+        )
+        .unwrap();
+
+        assert!(effect.removed_clip_ids.contains(&"clip-1".to_string()));
+        assert!(effect.deleted_asset_ids.contains(&"asset-1".to_string()));
+        // Clip removed — track may also be pruned (FLD-015)
+        assert!(timeline.tracks.is_empty() || timeline.tracks[0].clips.is_empty());
+    }
+
+    #[test]
+    fn fld_014_unaffected_clips_preserved() {
+        let mut manifest = MediaManifest::default();
+        let folder_id = FolderOps::create_folder(&mut manifest, "Folder".into(), None).unwrap();
+        manifest.entries.push(entry(
+            "asset-del",
+            ClipType::Image,
+            "img.png",
+            Some(&folder_id),
+        ));
+        manifest
+            .entries
+            .push(entry("asset-keep", ClipType::Video, "vid.mp4", None));
+
+        let mut timeline = Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: HashSet::new(),
+            tracks: vec![Track {
+                id: "track-1".into(),
+                r#type: ClipType::Video,
+                muted: false,
+                hidden: false,
+                sync_locked: true,
+                clips: vec![
+                    make_clip("clip-del", "asset-del", 0, 30),
+                    make_clip("clip-keep", "asset-keep", 30, 30),
+                ],
+            }],
+            ..Default::default()
+        };
+
+        FolderOps::delete_folder_with_timeline_effects(&mut manifest, &mut timeline, &folder_id)
+            .unwrap();
+
+        // Deleted clip removed, keep clip preserved
+        assert!(!timeline.tracks[0].clips.iter().any(|c| c.id == "clip-del"));
+        assert!(timeline.tracks[0].clips.iter().any(|c| c.id == "clip-keep"));
+    }
+
+    #[test]
+    fn fld_015_prunes_empty_tracks() {
+        let mut manifest = MediaManifest::default();
+        let folder_id = FolderOps::create_folder(&mut manifest, "Folder".into(), None).unwrap();
+        manifest.entries.push(entry(
+            "asset-1",
+            ClipType::Video,
+            "vid.mp4",
+            Some(&folder_id),
+        ));
+
+        let mut timeline = Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: HashSet::new(),
+            tracks: vec![
+                Track {
+                    id: "track-del".into(),
+                    r#type: ClipType::Video,
+                    muted: false,
+                    hidden: false,
+                    sync_locked: true,
+                    clips: vec![make_clip("clip-1", "asset-1", 0, 30)],
+                },
+                Track {
+                    id: "track-keep".into(),
+                    r#type: ClipType::Audio,
+                    muted: false,
+                    hidden: false,
+                    sync_locked: true,
+                    clips: vec![make_clip("clip-2", "asset-2", 0, 60)],
+                },
+            ],
+            ..Default::default()
+        };
+
+        let effect = FolderOps::delete_folder_with_timeline_effects(
+            &mut manifest,
+            &mut timeline,
+            &folder_id,
+        )
+        .unwrap();
+
+        assert!(effect.pruned_track_ids.contains(&"track-del".to_string()));
+        assert!(!effect.pruned_track_ids.contains(&"track-keep".to_string()));
+        assert_eq!(timeline.tracks.len(), 1);
+        assert_eq!(timeline.tracks[0].id, "track-keep");
+    }
+
+    #[test]
+    fn fld_017_removes_deleted_ids_from_selection() {
+        let mut manifest = MediaManifest::default();
+        let folder_id = FolderOps::create_folder(&mut manifest, "Folder".into(), None).unwrap();
+        manifest.entries.push(entry(
+            "asset-1",
+            ClipType::Video,
+            "vid.mp4",
+            Some(&folder_id),
+        ));
+
+        let mut timeline = timeline_with_clip("clip-1", "asset-1");
+        // Add an unrelated selected clip id that should survive
+        timeline.selected_clip_ids.insert("other-clip".into());
+
+        FolderOps::delete_folder_with_timeline_effects(&mut manifest, &mut timeline, &folder_id)
+            .unwrap();
+
+        assert!(!timeline.selected_clip_ids.contains("clip-1"));
+        assert!(timeline.selected_clip_ids.contains("other-clip"));
+    }
+
+    #[test]
+    fn fld_016_preview_tab_ids_returned() {
+        let mut manifest = MediaManifest::default();
+        let folder_id = FolderOps::create_folder(&mut manifest, "Folder".into(), None).unwrap();
+        manifest
+            .entries
+            .push(entry("asset-a", ClipType::Video, "a.mp4", Some(&folder_id)));
+        manifest
+            .entries
+            .push(entry("asset-b", ClipType::Image, "b.png", Some(&folder_id)));
+
+        let mut timeline = Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: HashSet::new(),
+            tracks: vec![],
+            ..Default::default()
+        };
+
+        let effect = FolderOps::delete_folder_with_timeline_effects(
+            &mut manifest,
+            &mut timeline,
+            &folder_id,
+        )
+        .unwrap();
+
+        // FLD-016: Caller should close preview tabs for these asset ids
+        assert!(effect.deleted_asset_ids.contains(&"asset-a".to_string()));
+        assert!(effect.deleted_asset_ids.contains(&"asset-b".to_string()));
+    }
+
+    #[test]
+    fn fld_014_017_subtree_nested_folders() {
+        let mut manifest = MediaManifest::default();
+        let root_id = FolderOps::create_folder(&mut manifest, "Root".into(), None).unwrap();
+        let child_id =
+            FolderOps::create_folder(&mut manifest, "Child".into(), Some(root_id.clone())).unwrap();
+        manifest.entries.push(entry(
+            "asset-child",
+            ClipType::Audio,
+            "sound.mp3",
+            Some(&child_id),
+        ));
+        manifest.entries.push(entry(
+            "asset-root",
+            ClipType::Video,
+            "root.mp4",
+            Some(&root_id),
+        ));
+
+        let mut timeline = timeline_with_clip("clip-child", "asset-child");
+        timeline.tracks.push(Track {
+            id: "track-2".into(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: true,
+            clips: vec![make_clip("clip-root", "asset-root", 30, 30)],
+        });
+
+        // Delete the root folder — should cascade to child
+        let effect =
+            FolderOps::delete_folder_with_timeline_effects(&mut manifest, &mut timeline, &root_id)
+                .unwrap();
+
+        assert!(effect.deleted_folder_ids.contains(&root_id));
+        assert!(effect.deleted_folder_ids.contains(&child_id));
+        assert!(effect
+            .deleted_asset_ids
+            .contains(&"asset-child".to_string()));
+        assert!(effect.deleted_asset_ids.contains(&"asset-root".to_string()));
+        assert!(effect.removed_clip_ids.contains(&"clip-child".to_string()));
+        assert!(effect.removed_clip_ids.contains(&"clip-root".to_string()));
+        // Both tracks should be empty and thus pruned
+        assert_eq!(effect.pruned_track_ids.len(), 2);
+        assert!(timeline.tracks.is_empty());
     }
 }

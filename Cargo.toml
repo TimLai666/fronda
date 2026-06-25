@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/agent_contract",
+    "crates/app_contract",
     "crates/app_shell_gpui",
     "crates/mcp_server",
     "crates/core_model",
@@ -12,6 +13,10 @@ members = [
     "crates/media_library",
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
 
 [workspace.dependencies]
 chrono = { version = "0.4", features = ["serde"] }

@@ -6,6 +6,9 @@
 //!
 //! Pure state machine with no platform dependencies.
 
+pub mod backend_config;
+pub mod generation_payload;
+
 use core_model::GenerationInput;
 use std::collections::HashMap;
 
