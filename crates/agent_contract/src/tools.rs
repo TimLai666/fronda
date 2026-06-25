@@ -229,7 +229,9 @@ fn inspect_media() -> ToolDefinition {
         description: "Inspect a media asset and return details. Transcription defaults to system language — pass language when the audio is in another language.",
         input_schema: object(&[
             ("mediaId", string("Media asset id to inspect")),
+            ("clipId", string("Optional clip id for cross-validation (READ-014)")),
             ("language", string("Optional BCP-47 spoken language (e.g. 'fr', 'ja', 'en-GB'). Overrides project transcriptionLanguage for this call; falls back to system language if neither is set.")),
+            ("maxFrames", string("Optional max frames for storyboard (default 6, max 12, READ-015)")),
         ]),
     }
 }

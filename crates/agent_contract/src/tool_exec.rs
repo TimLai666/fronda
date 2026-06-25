@@ -4,7 +4,8 @@
 //! and provides a single `execute()` entry point for the MCP server.
 
 use crate::read_tools::{
-    format_timeline_json, format_transcript_json, TranscriptClipInput, TranscriptFormatOptions,
+    format_inspect_media, format_timeline_json, format_transcript_json, InspectMediaInput,
+    TranscriptClipInput, TranscriptFormatOptions,
 };
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
@@ -921,17 +922,63 @@ impl ToolExecutor {
             .find(|e| e.id == media_id)
             .ok_or_else(|| format!("Media '{}' not found", media_id))?;
 
-        let details = json!({
-            "id": entry.id,
-            "name": entry.name,
-            "type": entry.r#type,
-            "duration": entry.duration,
-            "sourceWidth": entry.source_width,
-            "sourceHeight": entry.source_height,
-            "sourceFps": entry.source_fps,
-            "hasAudio": entry.has_audio,
-            "folderId": entry.folder_id,
-        });
+        // READ-013: Text clip rejection
+        if entry.r#type == core_model::ClipType::Text {
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": "Cannot inspect a text clip with inspect_media. Use get_timeline to view text clips."
+                }],
+                "isError": true,
+            }));
+        }
+
+        // READ-014: clipId → mediaRef cross-validation
+        if let Some(clip_id) = args.get("clipId").and_then(|v| v.as_str()) {
+            let all_clips: Vec<&Clip> =
+                self.timeline.tracks.iter().flat_map(|t| &t.clips).collect();
+            let clip = all_clips
+                .iter()
+                .find(|c| c.id == clip_id)
+                .ok_or_else(|| format!("Clip '{}' not found on timeline", clip_id))?;
+            if clip.media_ref != entry.id {
+                return Err(format!(
+                    "Clip '{}' references media '{}', not '{}'",
+                    clip_id, clip.media_ref, media_id
+                ));
+            }
+        }
+
+        // READ-015: maxFrames default 6, clamped to 1..12
+        let max_frames: usize = args
+            .get("maxFrames")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(6)
+            .clamp(1, 12);
+
+        // Find matching clip on timeline (if any)
+        let clip = self
+            .timeline
+            .tracks
+            .iter()
+            .flat_map(|t| &t.clips)
+            .find(|c| c.media_ref == media_id)
+            .cloned();
+
+        // Build the InspectMediaInput
+        let inspect_input = InspectMediaInput {
+            entry: entry.clone(),
+            clip,
+            timeline_fps: self.timeline.fps,
+            max_frames,
+            inline_image_data: None,         // caller supplies via callbacks
+            inline_video_frames: Vec::new(), // caller supplies via callbacks
+            transcription_words: Vec::new(), // caller supplies via callbacks
+        };
+
+        let details = format_inspect_media(&inspect_input)
+            .map_err(|e| format!("inspect_media error: {}", e))?;
 
         Ok(json!({
             "content": [{
@@ -2451,6 +2498,124 @@ mod tests {
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("1920"));
+    }
+
+    #[test]
+    fn exec_019_inspect_media_rejects_text() {
+        // READ-013: Text clip rejection
+        let mut manifest = core_model::MediaManifest::default();
+        manifest.entries.push(core_model::MediaManifestEntry {
+            id: "text-media".to_string(),
+            name: "text_asset".to_string(),
+            r#type: core_model::ClipType::Text,
+            source: core_model::MediaSource::External {
+                absolute_path: "/tmp/text.txt".to_string(),
+            },
+            duration: 5.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        });
+        let mut exec = ToolExecutor::new(core_model::Timeline::default(), manifest);
+        let result = exec
+            .execute("inspect_media", &json!({"mediaId": "text-media"}))
+            .unwrap();
+        assert_eq!(result["isError"], true, "READ-013: text clips return error");
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("text clip"),
+            "READ-013: error mentions text clip"
+        );
+    }
+
+    #[test]
+    fn exec_019_inspect_media_cross_validates_clip_id() {
+        // READ-014: clipId → mediaRef cross-validation
+        let mut manifest = core_model::MediaManifest::default();
+        manifest.entries.push(core_model::MediaManifestEntry {
+            id: "media-vid".to_string(),
+            name: "video.mp4".to_string(),
+            r#type: core_model::ClipType::Video,
+            source: core_model::MediaSource::External {
+                absolute_path: "/tmp/video.mp4".to_string(),
+            },
+            duration: 10.0,
+            generation_input: None,
+            source_width: Some(1920),
+            source_height: Some(1080),
+            source_fps: Some(30.0),
+            has_audio: Some(true),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        });
+        let mut timeline = core_model::Timeline::default();
+        timeline.tracks.push(core_model::Track {
+            id: "track-v".to_string(),
+            r#type: core_model::ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            clips: vec![core_model::Clip {
+                id: "clip-vid".to_string(),
+                media_ref: "media-vid".to_string(),
+                media_type: core_model::ClipType::Video,
+                source_clip_type: core_model::ClipType::Video,
+                start_frame: 0,
+                duration_frames: 100,
+                trim_start_frame: 0,
+                trim_end_frame: 0,
+                speed: 1.0,
+                volume: 1.0,
+                fade_in_frames: 0,
+                fade_out_frames: 0,
+                fade_in_interpolation: core_model::Interpolation::Linear,
+                fade_out_interpolation: core_model::Interpolation::Linear,
+                opacity: 1.0,
+                transform: core_model::Transform::default(),
+                crop: core_model::Crop::default(),
+                link_group_id: None,
+                caption_group_id: None,
+                text_content: None,
+                text_style: None,
+                opacity_track: None,
+                position_track: None,
+                scale_track: None,
+                rotation_track: None,
+                crop_track: None,
+                volume_track: None,
+                effects: None,
+                shape_style: None,
+                stroke_progress_track: None,
+            }],
+        });
+        let mut exec = ToolExecutor::new(timeline, manifest);
+        // Valid clipId → mediaRef should succeed
+        let result = exec.execute(
+            "inspect_media",
+            &json!({"mediaId": "media-vid", "clipId": "clip-vid"}),
+        );
+        assert!(result.is_ok(), "READ-014: valid clipId should work");
+
+        // Mismatched clipId → mediaRef should fail
+        let result = exec.execute(
+            "inspect_media",
+            &json!({"mediaId": "media-vid", "clipId": "nonexistent"}),
+        );
+        assert!(result.is_err(), "READ-014: nonexistent clipId should fail");
     }
 
     #[test]

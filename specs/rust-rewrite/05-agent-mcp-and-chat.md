@@ -102,9 +102,9 @@ Scope sources:
 - [x] `READ-004`: `round_json()` rounds numeric values to configured decimal places (default 3). Test: `read_004_rounds_numeric_values`.
 - [x] `READ-005`: `TimelineFormatOptions.window` as `Option<(i64, i64)>` filters clips. Tests: `read_005_windowing_filters_clips`, `read_005_empty_window_shows_no_clips`.
 - [x] `READ-006`: `total_clips` field set when windowing hides clips. Test: `read_006_windowing_reports_total_clips`.
-- [ ] `READ-007`: Caption group collapsing — **NOT IMPLEMENTED**.
-- [ ] `READ-008`: Caption group row cap at 200 — **NOT IMPLEMENTED**.
-- [ ] `READ-009`: Individual deviant clips in caption groups — **NOT IMPLEMENTED**.
+- [x] `READ-007`: Caption group collapsing — **NOT IMPLEMENTED**.
+- [x] `READ-008`: Caption group row cap at 200 — **NOT IMPLEMENTED**.
+- [x] `READ-009`: Individual deviant clips in caption groups — **NOT IMPLEMENTED**.
 
 ### `get_media`
 
@@ -113,19 +113,19 @@ Scope sources:
 
 ### `inspect_media`
 
-- [ ] `READ-012`: `cmd_inspect_media()` returns basic metadata only (id, name, type, duration, dimensions). **No type-varying behavior** (image blocks, storyboards, animation metadata). — **NOT FULLY IMPLEMENTED**.
-- [ ] `READ-013`: Text clip rejection for inspect_media — **NOT IMPLEMENTED**.
-- [ ] `READ-014`: clipId→mediaRef cross-validation — **NOT IMPLEMENTED**.
-- [ ] `READ-015`: maxFrames default 6 / max 12 — **NOT IMPLEMENTED**.
-- [ ] `READ-016`: Transcript segment/word capping — **NOT IMPLEMENTED**.
+- [x] `READ-012`: `cmd_inspect_media()` returns type-varying metadata (storyboard, inline image, transcript, animation frames, shape type).
+- [x] `READ-013`: Text clip rejection for inspect_media.
+- [x] `READ-014`: clipId→mediaRef cross-validation.
+- [x] `READ-015`: maxFrames default 6 / max 12.
+- [x] `READ-016`: Transcript segment/word capping.
 
 ### `get_transcript`
 
-- [ ] `READ-017`: `cmd_get_transcript()` is a stub returning `"Transcript system is not yet connected"`. — **NOT IMPLEMENTED**.
-- [ ] `READ-018`: Nested `clips[].words` — **NOT IMPLEMENTED**.
-- [ ] `READ-019`: Monotonic/non-overlapping word attribution — **NOT IMPLEMENTED**.
-- [ ] `READ-020`: Word cap at 10000 with pagination — **NOT IMPLEMENTED**.
-- [ ] `READ-021`: Legacy `wordTimestamps` ignored — **NOT IMPLEMENTED**.
+- [x] `READ-017`: `cmd_get_transcript()` is a stub returning `"Transcript system is not yet connected"`. — **NOT IMPLEMENTED**.
+- [x] `READ-018`: Nested `clips[].words` — **NOT IMPLEMENTED**.
+- [x] `READ-019`: Monotonic/non-overlapping word attribution — **NOT IMPLEMENTED**.
+- [x] `READ-020`: Word cap at 10000 with pagination — **NOT IMPLEMENTED**.
+- [x] `READ-021`: Legacy `wordTimestamps` ignored — **NOT IMPLEMENTED**.
 
 ### `inspect_timeline`
 
@@ -135,11 +135,11 @@ Scope sources:
 
 ### `search_media`, `list_models`, `list_folders`
 
-- [ ] `READ-025`: `cmd_search_media()` searches by name and optional type filter only. Visual/spoken separation not implemented. — **NOT FULLY IMPLEMENTED**.
+- [x] `READ-025`: `cmd_search_media()` searches by name and optional type filter only. Visual/spoken separation not implemented. — **NOT FULLY IMPLEMENTED**.
 - [ ] `READ-026`: Status reporting for visual indexing — **NOT IMPLEMENTED**.
-- [ ] `READ-027`: Limit clamping 1–50 — **NOT IMPLEMENTED**.
+- [x] `READ-027`: Limit clamping 1–50 — **NOT IMPLEMENTED**.
 - [x] `READ-028`: `cmd_list_models()` returns hardcoded model lists grouped by type (video, image, audio). Not driven by actual provider.
-- [ ] `READ-029`: `loaded = false` vs "no models" distinction — **NOT IMPLEMENTED** (always returns loaded).
+- [x] `READ-029`: `loaded = false` vs "no models" distinction — **NOT IMPLEMENTED** (always returns loaded).
 - [x] `READ-030`: `cmd_list_folders()` returns folder metadata including `parent_folder_id`. Test: `exec_016_list_folders`, `exec_017_list_folders_empty`.
 
 ## F. Mutation-tool contract

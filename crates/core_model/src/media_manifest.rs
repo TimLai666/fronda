@@ -32,6 +32,61 @@ impl Default for MediaManifest {
 }
 
 impl MediaManifest {
+    /// Find entry by id (RES-001).
+    pub fn entry_for(&self, id: &str) -> Option<&MediaManifestEntry> {
+        self.entries.iter().find(|e| e.id == id)
+    }
+
+    /// Reconstruct expected file URL even if currently missing (RES-002).
+    ///
+    /// For external entries, returns the absolute path. For project entries,
+    /// returns None since relative paths need a project root.
+    pub fn expected_url_for(&self, id: &str) -> Option<String> {
+        self.entry_for(id).and_then(|e| match &e.source {
+            MediaSource::External { absolute_path } => Some(absolute_path.clone()),
+            MediaSource::Project { .. } => None,
+        })
+    }
+
+    /// Check if entry exists and its file is on disk (RES-003).
+    ///
+    /// Returns `None` if no entry found, `Some(true)` if file exists,
+    /// `Some(false)` if file does not exist.
+    pub fn resolve_url_for(&self, id: &str, file_exists: impl Fn(&str) -> bool) -> Option<bool> {
+        let entry = self.entry_for(id)?;
+        // Entries with cached_remote_url are always resolvable
+        if entry.cached_remote_url.is_some() {
+            return Some(true);
+        }
+        let path = match &entry.source {
+            MediaSource::External { absolute_path } => absolute_path.clone(),
+            MediaSource::Project { relative_path } => relative_path.clone(),
+        };
+        Some(file_exists(&path))
+    }
+
+    /// Returns true when expected file does not exist or entry is missing (RES-004).
+    pub fn is_missing_for(&self, id: &str, file_exists: impl Fn(&str) -> bool) -> bool {
+        self.entry_for(id).map_or(true, |entry| {
+            if entry.cached_remote_url.is_some() {
+                return false;
+            }
+            let path = match &entry.source {
+                MediaSource::External { absolute_path } => absolute_path.clone(),
+                MediaSource::Project { relative_path } => relative_path.clone(),
+            };
+            !file_exists(&path)
+        })
+    }
+
+    /// Returns display name for an entry, falling back to "Offline" when
+    /// no entry exists (RES-005).
+    pub fn display_name_for(&self, id: &str) -> String {
+        self.entry_for(id)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| "Offline".to_string())
+    }
+
     /// Returns IDs of entries whose local files are missing.
     ///
     /// Entries with `cached_remote_url` populated are never considered missing
@@ -308,5 +363,250 @@ mod tests {
         ];
         let missing = manifest.missing_entry_ids(|e| e.id != "online");
         assert_eq!(missing, vec!["offline", "also_offline"]);
+    }
+
+    #[test]
+    fn res_001_entry_for_found() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries = vec![entry("a", None), entry("b", None)];
+        let found = manifest.entry_for("a");
+        assert!(found.is_some(), "RES-001: entry found");
+        assert_eq!(found.unwrap().id, "a");
+    }
+
+    #[test]
+    fn res_001_entry_for_not_found() {
+        let manifest = MediaManifest::default();
+        let found = manifest.entry_for("nonexistent");
+        assert!(found.is_none(), "RES-001: not found returns None");
+    }
+
+    #[test]
+    fn res_002_expected_url_for_external() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(MediaManifestEntry {
+            id: "ext".to_string(),
+            name: "ext".to_string(),
+            r#type: crate::timeline::ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: "/path/to/file.mp4".to_string(),
+            },
+            duration: 10.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        });
+        let url = manifest.expected_url_for("ext");
+        assert_eq!(url, Some("/path/to/file.mp4".to_string()));
+    }
+
+    #[test]
+    fn res_002_expected_url_for_missing_entry() {
+        let manifest = MediaManifest::default();
+        let url = manifest.expected_url_for("nonexistent");
+        assert_eq!(url, None, "RES-002: missing entry returns None");
+    }
+
+    #[test]
+    fn res_003_resolve_url_file_exists() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(MediaManifestEntry {
+            id: "vid".to_string(),
+            name: "vid".to_string(),
+            r#type: crate::timeline::ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: "/path/to/vid.mp4".to_string(),
+            },
+            duration: 10.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        });
+        let result = manifest.resolve_url_for("vid", |p| p == "/path/to/vid.mp4");
+        assert_eq!(result, Some(true), "RES-003: file exists");
+    }
+
+    #[test]
+    fn res_003_resolve_url_file_missing() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(MediaManifestEntry {
+            id: "vid".to_string(),
+            name: "vid".to_string(),
+            r#type: crate::timeline::ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: "/path/to/vid.mp4".to_string(),
+            },
+            duration: 10.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        });
+        let result = manifest.resolve_url_for("vid", |_| false);
+        assert_eq!(result, Some(false), "RES-003: file missing");
+    }
+
+    #[test]
+    fn res_003_resolve_url_nonexistent_entry() {
+        let manifest = MediaManifest::default();
+        let result = manifest.resolve_url_for("nonexistent", |_| true);
+        assert_eq!(result, None, "RES-003: no entry returns None");
+    }
+
+    #[test]
+    fn res_003_resolve_url_cached_always_ok() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(MediaManifestEntry {
+            id: "cached".to_string(),
+            name: "cached".to_string(),
+            r#type: crate::timeline::ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: "/path/to/cached.mp4".to_string(),
+            },
+            duration: 10.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: Some("https://cache.example.com/vid.mp4".to_string()),
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        });
+        let result = manifest.resolve_url_for("cached", |_| false);
+        assert_eq!(result, Some(true), "RES-003: cached is always resolvable");
+    }
+
+    #[test]
+    fn res_004_is_missing_missing_file() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(MediaManifestEntry {
+            id: "vid".to_string(),
+            name: "vid".to_string(),
+            r#type: crate::timeline::ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: "/path/to/vid.mp4".to_string(),
+            },
+            duration: 10.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        });
+        assert!(
+            manifest.is_missing_for("vid", |_| false),
+            "RES-004: missing file"
+        );
+    }
+
+    #[test]
+    fn res_004_is_missing_entry_not_found() {
+        let manifest = MediaManifest::default();
+        assert!(
+            manifest.is_missing_for("nonexistent", |_| true),
+            "RES-004: missing entry"
+        );
+    }
+
+    #[test]
+    fn res_004_is_not_missing_when_file_exists() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(MediaManifestEntry {
+            id: "vid".to_string(),
+            name: "vid".to_string(),
+            r#type: crate::timeline::ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: "/path/to/vid.mp4".to_string(),
+            },
+            duration: 10.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        });
+        assert!(
+            !manifest.is_missing_for("vid", |_| true),
+            "RES-004: not missing when file exists"
+        );
+    }
+
+    #[test]
+    fn res_005_display_name_found() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(MediaManifestEntry {
+            id: "vid".to_string(),
+            name: "My Video.mp4".to_string(),
+            r#type: crate::timeline::ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: "/v.mp4".to_string(),
+            },
+            duration: 10.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        });
+        assert_eq!(
+            manifest.display_name_for("vid"),
+            "My Video.mp4",
+            "RES-005: returns name"
+        );
+    }
+
+    #[test]
+    fn res_005_display_name_fallback_offline() {
+        let manifest = MediaManifest::default();
+        assert_eq!(
+            manifest.display_name_for("nonexistent"),
+            "Offline",
+            "RES-005: falls back to Offline"
+        );
     }
 }

@@ -4,7 +4,9 @@
 //! the agent/MCP tool surface. They are pure data transformations that
 //! operate on core_model types — no platform I/O or rendering.
 
-use core_model::{Clip, ClipType, MediaManifest, MediaSource, TextRgba, Timeline, Track};
+use core_model::{
+    Clip, ClipType, MediaManifest, MediaManifestEntry, MediaSource, TextRgba, Timeline, Track,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -814,6 +816,173 @@ pub struct FormattedModels {
 /// Wrap models data with the loaded flag.
 pub fn format_models(models: Value, loaded: bool) -> FormattedModels {
     FormattedModels { models, loaded }
+}
+
+// ---------------------------------------------------------------------------
+// inspect_media output (READ-012 to READ-016)
+// ---------------------------------------------------------------------------
+
+/// Input for a single inline storyboard or frame image.
+#[derive(Debug, Clone)]
+pub struct InlineFrameInput {
+    pub frame: i64,
+    pub data_base64: String,
+}
+
+/// Input for formatting inspect_media output.
+///
+/// The caller (tool_exec) gathers data (inline images, transcription words)
+/// and passes them here for pure formatting.
+#[derive(Debug, Clone)]
+pub struct InspectMediaInput {
+    pub entry: MediaManifestEntry,
+    pub clip: Option<Clip>,
+    pub timeline_fps: i64,
+    pub max_frames: usize,
+    /// Base64-encoded inline image data (for Image clip types).
+    pub inline_image_data: Option<String>,
+    /// Storyboard frames (for Video/Lottie clip types).
+    pub inline_video_frames: Vec<InlineFrameInput>,
+    /// Transcription words (for Video/Audio clip types).
+    pub transcription_words: Vec<TranscriptWordInput>,
+}
+
+/// Type-varying inspect_media output (READ-012).
+///
+/// Returns a JSON Value suitable for the tool response.
+/// Returns an error for Text clip types (READ-013).
+pub fn format_inspect_media(input: &InspectMediaInput) -> Result<Value, String> {
+    let entry = &input.entry;
+
+    // READ-013: Text clip rejection
+    if entry.r#type == ClipType::Text {
+        return Err(
+            "Cannot inspect a text clip with inspect_media. Use get_timeline to view text clips."
+                .to_string(),
+        );
+    }
+
+    let mut result = json!({
+        "id": entry.id,
+        "name": entry.name,
+        "type": format!("{:?}", entry.r#type).to_lowercase(),
+        "duration": entry.duration,
+        "hasAudio": entry.has_audio,
+    });
+
+    // Add optional dimension/fps fields
+    if let Some(w) = entry.source_width {
+        result["sourceWidth"] = json!(w);
+    }
+    if let Some(h) = entry.source_height {
+        result["sourceHeight"] = json!(h);
+    }
+    if let Some(fps) = entry.source_fps {
+        result["sourceFps"] = json!(fps);
+    }
+    if let Some(ref folder_id) = entry.folder_id {
+        result["folderId"] = json!(folder_id);
+    }
+
+    // Add clip-level info if available
+    if let Some(ref clip) = input.clip {
+        result["clipStartFrame"] = json!(clip.start_frame);
+        result["clipDurationFrames"] = json!(clip.duration_frames);
+    }
+
+    // Type-varying output
+    match entry.r#type {
+        ClipType::Image => {
+            // Inline image data
+            if let Some(ref data) = input.inline_image_data {
+                result["image"] = json!({
+                    "data": data,
+                    "width": entry.source_width,
+                    "height": entry.source_height,
+                    "mimeType": "image/png",
+                });
+            }
+        }
+        ClipType::Video => {
+            // Storyboard frames (READ-012, READ-015)
+            if !input.inline_video_frames.is_empty() {
+                let frames: Vec<Value> = input
+                    .inline_video_frames
+                    .iter()
+                    .map(|f| {
+                        json!({
+                            "frame": f.frame,
+                            "data": f.data_base64,
+                        })
+                    })
+                    .collect();
+                result["storyboard"] = json!(frames);
+            }
+
+            // Transcription (READ-012, READ-016)
+            if !input.transcription_words.is_empty() {
+                let transcript = format_transcript(
+                    input.timeline_fps,
+                    &input.transcription_words,
+                    &[],
+                    &TranscriptFormatOptions {
+                        max_words: 10000,
+                        start_frame: None,
+                        word_timestamps: None,
+                    },
+                );
+                result["transcript"] = serde_json::to_value(&transcript).unwrap_or_default();
+            }
+        }
+        ClipType::Audio => {
+            // Transcription (READ-012, READ-016)
+            if !input.transcription_words.is_empty() {
+                let transcript = format_transcript(
+                    input.timeline_fps,
+                    &input.transcription_words,
+                    &[],
+                    &TranscriptFormatOptions {
+                        max_words: 10000,
+                        start_frame: None,
+                        word_timestamps: None,
+                    },
+                );
+                result["transcript"] = serde_json::to_value(&transcript).unwrap_or_default();
+            }
+        }
+        ClipType::Lottie => {
+            // Animation frames (READ-012)
+            if !input.inline_video_frames.is_empty() {
+                let frames: Vec<Value> = input
+                    .inline_video_frames
+                    .iter()
+                    .map(|f| {
+                        json!({
+                            "frame": f.frame,
+                            "data": f.data_base64,
+                        })
+                    })
+                    .collect();
+                result["frames"] = json!(frames);
+            }
+
+            // Lottie metadata
+            result["animationMetadata"] = json!({
+                "type": "lottie",
+                "durationFrames": entry.duration.round() as i64,
+            });
+        }
+        ClipType::Shape => {
+            // Shape annotations - basic metadata only
+            result["shapeType"] = json!("annotation");
+        }
+        ClipType::Text => {
+            // Already rejected above, but handle as safety net
+            return Err("Cannot inspect a text clip with inspect_media.".to_string());
+        }
+    }
+
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,5 +1882,241 @@ mod tests {
             result.loaded,
             "READ-029: loaded=true even with empty models"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // inspect_media formatting tests (READ-012..016)
+    // -----------------------------------------------------------------------
+
+    fn make_inspect_entry(r#type: ClipType) -> MediaManifestEntry {
+        MediaManifestEntry {
+            id: "media-001".into(),
+            name: "Test Asset".into(),
+            r#type,
+            source: MediaSource::External {
+                absolute_path: "/tmp/test.mp4".into(),
+            },
+            duration: 10.5,
+            generation_input: None,
+            source_width: Some(1920),
+            source_height: Some(1080),
+            source_fps: Some(29.97),
+            has_audio: Some(true),
+            folder_id: Some("folder-1".into()),
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        }
+    }
+
+    fn sample_clip() -> Clip {
+        Clip {
+            id: "clip-001".into(),
+            media_ref: "media-001".into(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: 0,
+            duration_frames: 150,
+            trim_start_frame: 0,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: core_model::Interpolation::Linear,
+            fade_out_interpolation: core_model::Interpolation::Linear,
+            opacity: 1.0,
+            transform: core_model::Transform::default(),
+            crop: core_model::Crop::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+            effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
+        }
+    }
+
+    #[test]
+    fn read_012_inspect_media_video_returns_storyboard_and_transcript() {
+        let input = InspectMediaInput {
+            entry: make_inspect_entry(ClipType::Video),
+            clip: Some(sample_clip()),
+            timeline_fps: 30,
+            max_frames: 6,
+            inline_image_data: None,
+            inline_video_frames: vec![
+                InlineFrameInput {
+                    frame: 0,
+                    data_base64: "storyboard_frame_0".into(),
+                },
+                InlineFrameInput {
+                    frame: 75,
+                    data_base64: "storyboard_frame_75".into(),
+                },
+            ],
+            transcription_words: vec![
+                TranscriptWordInput {
+                    word: "Hello".into(),
+                    start_seconds: 0.0,
+                    end_seconds: 0.5,
+                },
+                TranscriptWordInput {
+                    word: "world".into(),
+                    start_seconds: 0.5,
+                    end_seconds: 1.0,
+                },
+            ],
+        };
+        let result = format_inspect_media(&input).unwrap();
+
+        // Common metadata (READ-012)
+        assert_eq!(result["id"], "media-001");
+        assert_eq!(result["name"], "Test Asset");
+        assert_eq!(result["type"], "video");
+        assert_eq!(result["sourceWidth"], 1920);
+        assert_eq!(result["sourceHeight"], 1080);
+
+        // Clip-level info
+        assert_eq!(result["clipStartFrame"], 0);
+        assert_eq!(result["clipDurationFrames"], 150);
+
+        // Storyboard frames (READ-012)
+        assert_eq!(result["storyboard"].as_array().unwrap().len(), 2);
+        assert_eq!(result["storyboard"][0]["frame"], 0);
+        assert_eq!(result["storyboard"][1]["data"], "storyboard_frame_75");
+
+        // Transcript (READ-012, READ-016)
+        assert!(result.get("transcript").is_some());
+    }
+
+    #[test]
+    fn read_012_inspect_media_image_returns_inline_image() {
+        let input = InspectMediaInput {
+            entry: make_inspect_entry(ClipType::Image),
+            clip: None,
+            timeline_fps: 30,
+            max_frames: 6,
+            inline_image_data: Some("base64_image_data".into()),
+            inline_video_frames: Vec::new(),
+            transcription_words: Vec::new(),
+        };
+        let result = format_inspect_media(&input).unwrap();
+
+        assert_eq!(result["type"], "image");
+        assert_eq!(result["image"]["data"], "base64_image_data");
+        assert_eq!(result["image"]["mimeType"], "image/png");
+        assert!(
+            result.get("storyboard").is_none(),
+            "images have no storyboard"
+        );
+    }
+
+    #[test]
+    fn read_012_inspect_media_audio_returns_transcript() {
+        let input = InspectMediaInput {
+            entry: make_inspect_entry(ClipType::Audio),
+            clip: None,
+            timeline_fps: 30,
+            max_frames: 6,
+            inline_image_data: None,
+            inline_video_frames: Vec::new(),
+            transcription_words: vec![TranscriptWordInput {
+                word: "Hello".into(),
+                start_seconds: 0.0,
+                end_seconds: 1.0,
+            }],
+        };
+        let result = format_inspect_media(&input).unwrap();
+        assert_eq!(result["type"], "audio");
+        assert!(result.get("transcript").is_some(), "audio has transcript");
+        assert!(
+            result.get("storyboard").is_none(),
+            "audio has no storyboard"
+        );
+    }
+
+    #[test]
+    fn read_012_inspect_media_lottie_returns_frames_and_metadata() {
+        let input = InspectMediaInput {
+            entry: make_inspect_entry(ClipType::Lottie),
+            clip: None,
+            timeline_fps: 30,
+            max_frames: 6,
+            inline_image_data: None,
+            inline_video_frames: vec![InlineFrameInput {
+                frame: 0,
+                data_base64: "lottie_frame_0".into(),
+            }],
+            transcription_words: Vec::new(),
+        };
+        let result = format_inspect_media(&input).unwrap();
+        assert_eq!(result["type"], "lottie");
+        assert!(result.get("frames").is_some(), "lottie has frames");
+        assert_eq!(result["frames"][0]["frame"], 0);
+        assert!(
+            result.get("animationMetadata").is_some(),
+            "lottie has animationMetadata"
+        );
+    }
+
+    #[test]
+    fn read_012_inspect_media_shape_returns_basic_metadata() {
+        let input = InspectMediaInput {
+            entry: make_inspect_entry(ClipType::Shape),
+            clip: None,
+            timeline_fps: 30,
+            max_frames: 6,
+            inline_image_data: None,
+            inline_video_frames: Vec::new(),
+            transcription_words: Vec::new(),
+        };
+        let result = format_inspect_media(&input).unwrap();
+        assert_eq!(result["type"], "shape");
+        assert_eq!(result["shapeType"], "annotation");
+    }
+
+    #[test]
+    fn read_013_inspect_media_rejects_text_clips() {
+        let input = InspectMediaInput {
+            entry: make_inspect_entry(ClipType::Text),
+            clip: None,
+            timeline_fps: 30,
+            max_frames: 6,
+            inline_image_data: None,
+            inline_video_frames: Vec::new(),
+            transcription_words: Vec::new(),
+        };
+        let result = format_inspect_media(&input);
+        assert!(result.is_err(), "READ-013: text clips rejected");
+        assert!(
+            result.unwrap_err().contains("text clip"),
+            "READ-013: error mentions text clip"
+        );
+    }
+
+    #[test]
+    fn read_014_clip_id_not_provided_ok() {
+        // When no clipId is provided, inspect_media should still work
+        let input = InspectMediaInput {
+            entry: make_inspect_entry(ClipType::Video),
+            clip: None,
+            timeline_fps: 30,
+            max_frames: 6,
+            inline_image_data: None,
+            inline_video_frames: Vec::new(),
+            transcription_words: Vec::new(),
+        };
+        let result = format_inspect_media(&input);
+        assert!(result.is_ok(), "no clipId should still work");
     }
 }

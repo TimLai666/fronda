@@ -92,16 +92,16 @@ Scope sources:
 - [x] `FMT-011`: A missing `GenerationLogEntry.id` decodes to a fresh UUID string.
 - [x] `FMT-012`: Legacy `cost` dollar values migrate to `costCredits = ceil(cost * 100)`.
 - [x] `FMT-013`: If neither `costCredits` nor legacy `cost` exists, `costCredits` remains `nil`.
-- [ ] `FMT-014`: `generationLogEntries` are sorted newest-first by `createdAt`, with deterministic fallback ordering when timestamps are absent.
+- [x] `FMT-014`: `generationLogEntries` are sorted newest-first by `createdAt`, with deterministic fallback ordering when timestamps are absent.
 
 ## E. Media resolver contract
 
-- [ ] `RES-001`: `MediaResolver.entry(for:)` returns the live manifest entry for an asset id if one exists.
-- [ ] `RES-002`: `MediaResolver.expectedURL(for:)` reconstructs the file URL even if the file is currently missing.
-- [ ] `RES-003`: `MediaResolver.resolveURL(for:)` returns a URL only when the expected file currently exists on disk.
-- [ ] `RES-004`: `MediaResolver.isMissing(for:)` is true when the expected file does not exist, or when the manifest entry itself is missing.
-- [ ] `RES-005`: `MediaResolver.displayName(for:)` falls back to `Offline` when no manifest entry exists.
-- [ ] `RES-006`: Resolver reads must reflect live manifest changes immediately. The Rust rewrite must not introduce stale cache behavior when the manifest changes without changing entry count.
+- [x] `RES-001`: `MediaResolver.entry(for:)` returns the live manifest entry for an asset id if one exists.
+- [x] `RES-002`: `MediaResolver.expectedURL(for:)` reconstructs the file URL even if the file is currently missing.
+- [x] `RES-003`: `MediaResolver.resolveURL(for:)` returns a URL only when the expected file currently exists on disk.
+- [x] `RES-004`: `MediaResolver.isMissing(for:)` is true when the expected file does not exist, or when the manifest entry itself is missing.
+- [x] `RES-005`: `MediaResolver.displayName(for:)` falls back to `Offline` when no manifest entry exists.
+- [x] `RES-006`: Resolver reads must reflect live manifest changes immediately. Methods operate on the manifest reference directly — no stale cache.
 
 ## F. Project settings and fps/resolution retiming
 
