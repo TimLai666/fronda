@@ -1,12 +1,13 @@
-//! Read-only tool output formatting (READ-001 to READ-011).
+//! Read-only tool output formatting (READ-001 to READ-021).
 //!
 //! These functions format project state into the JSON structures expected by
 //! the agent/MCP tool surface. They are pure data transformations that
 //! operate on core_model types — no platform I/O or rendering.
 
-use core_model::{Clip, ClipType, MediaManifest, MediaSource, Timeline, Track};
+use core_model::{Clip, ClipType, MediaManifest, MediaSource, TextRgba, Timeline, Track};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
 // get_timeline output (READ-001 to READ-009)
@@ -351,6 +352,468 @@ pub fn format_timeline_json(timeline: &Timeline) -> Value {
 pub fn format_media_json(manifest: &MediaManifest) -> Value {
     let formatted = format_media_manifest(manifest, 3);
     serde_json::to_value(formatted).unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// get_transcript output (READ-017 to READ-021)
+// ---------------------------------------------------------------------------
+
+/// A word from a transcript with seconds-based timing.
+#[derive(Debug, Clone)]
+pub struct TranscriptWordInput {
+    pub word: String,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+}
+
+/// A clip on the timeline for word attribution.
+#[derive(Debug, Clone)]
+pub struct TranscriptClipInput {
+    pub id: String,
+    pub start_frame: i64,
+    pub duration_frames: i64,
+}
+
+/// Options for formatting transcript output.
+#[derive(Debug, Clone)]
+pub struct TranscriptFormatOptions {
+    /// Maximum number of words to return (READ-020).
+    pub max_words: usize,
+    /// Start frame for pagination (READ-020).
+    pub start_frame: Option<i64>,
+    /// Legacy wordTimestamps flag — tolerated and ignored (READ-021).
+    #[allow(dead_code)]
+    pub word_timestamps: Option<bool>,
+}
+
+impl Default for TranscriptFormatOptions {
+    fn default() -> Self {
+        Self {
+            max_words: 10000,
+            start_frame: None,
+            word_timestamps: None,
+        }
+    }
+}
+
+/// A word attributed to a clip with frame-range timing.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormattedTranscriptWord {
+    pub word: String,
+    pub start_frame: i64,
+    pub end_frame: i64,
+}
+
+/// A clip containing its attributed transcript words.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormattedTranscriptClip {
+    pub clip_id: String,
+    pub words: Vec<FormattedTranscriptWord>,
+}
+
+/// Formatted transcript output (READ-017 to READ-020).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormattedTranscript {
+    pub clips: Vec<FormattedTranscriptClip>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_start_frame: Option<i64>,
+    pub text: String,
+}
+
+/// Format transcript data for get_transcript output.
+///
+/// READ-017: Returns timeline transcript in project frames.
+/// READ-018: Returns nested clips[].words.
+/// READ-019: Monotonic/non-overlapping word attribution.
+/// READ-020: Capped at 10000 words with pagination.
+/// READ-021: Options silently ignore legacy wordTimestamps.
+pub fn format_transcript(
+    fps: i64,
+    words: &[TranscriptWordInput],
+    clips: &[TranscriptClipInput],
+    options: &TranscriptFormatOptions,
+) -> FormattedTranscript {
+    let frame_scale = fps as f64;
+
+    // Convert seconds to frames, sort by start for monotonic order (READ-019)
+    let mut frame_words: Vec<(String, i64, i64)> = words
+        .iter()
+        .map(|w| {
+            let start_frame = (w.start_seconds * frame_scale).round() as i64;
+            let end_frame = (w.end_seconds * frame_scale).round() as i64;
+            (w.word.clone(), start_frame, end_frame)
+        })
+        .collect();
+    frame_words.sort_by_key(|(_, start, _)| *start);
+
+    // Apply pagination: skip words whose end frame is at or before start_frame
+    if let Some(start_at) = options.start_frame {
+        frame_words.retain(|(_, _, end)| *end > start_at);
+    }
+
+    // Cap at max_words (READ-020)
+    let truncated = frame_words.len() > options.max_words;
+    frame_words.truncate(options.max_words);
+
+    // Determine next_start_frame for pagination continuation
+    let next_start_frame = if truncated {
+        frame_words.last().map(|(_, _, end)| *end)
+    } else {
+        None
+    };
+
+    // Build clip ranges sorted by timeline position
+    let mut clip_ranges: Vec<(String, i64, i64)> = clips
+        .iter()
+        .map(|c| {
+            (
+                c.id.clone(),
+                c.start_frame,
+                c.start_frame + c.duration_frames,
+            )
+        })
+        .collect();
+    clip_ranges.sort_by_key(|(_, start, _)| *start);
+
+    // Attribute words to clips by word-midpoint (READ-019)
+    let mut clip_words: Vec<(String, Vec<(String, i64, i64)>)> = Vec::new();
+    for (word, start_f, end_f) in &frame_words {
+        let mid = (start_f + end_f) / 2;
+        let mut _assigned = false;
+        for (clip_id, clip_start, clip_end) in &clip_ranges {
+            if mid >= *clip_start && mid < *clip_end {
+                if let Some(entry) = clip_words.iter_mut().find(|(id, _)| id == clip_id) {
+                    entry.1.push((word.clone(), *start_f, *end_f));
+                } else {
+                    clip_words.push((clip_id.clone(), vec![(word.clone(), *start_f, *end_f)]));
+                }
+                _assigned = true;
+                break;
+            }
+        }
+        // Words not matching any visible clip are dropped
+    }
+
+    let formatted_clips: Vec<FormattedTranscriptClip> = clip_words
+        .into_iter()
+        .map(|(clip_id, words)| FormattedTranscriptClip {
+            clip_id,
+            words: words
+                .into_iter()
+                .map(|(w, s, e)| FormattedTranscriptWord {
+                    word: w,
+                    start_frame: s,
+                    end_frame: e,
+                })
+                .collect(),
+        })
+        .collect();
+
+    let text = formatted_clips
+        .iter()
+        .flat_map(|c| c.words.iter())
+        .map(|w| w.word.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    FormattedTranscript {
+        clips: formatted_clips,
+        next_start_frame,
+        text,
+    }
+}
+
+/// Format transcript as a JSON Value suitable for tool output.
+pub fn format_transcript_json(
+    fps: i64,
+    words: &[TranscriptWordInput],
+    clips: &[TranscriptClipInput],
+    options: &TranscriptFormatOptions,
+) -> Value {
+    let formatted = format_transcript(fps, words, clips, options);
+    serde_json::to_value(formatted).unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// Caption group collapsing (READ-007 to READ-009)
+// ---------------------------------------------------------------------------
+
+/// A single caption clip extracted from the timeline for grouping.
+#[derive(Debug, Clone)]
+pub struct CaptionClipInfo {
+    pub clip_id: String,
+    pub track_index: usize,
+    pub start_frame: i64,
+    pub duration_frames: i64,
+    pub text: String,
+    pub caption_group_id: String,
+    pub font_size: Option<f64>,
+    pub font_name: Option<String>,
+    pub text_color: Option<String>,
+}
+
+impl CaptionClipInfo {
+    /// Extract caption clip info from a timeline clip, returning None if
+    /// the clip is not a caption clip (no caption_group_id or no text_content).
+    pub fn from_clip(clip: &Clip, track_index: usize) -> Option<Self> {
+        let caption_group_id = clip.caption_group_id.as_ref()?;
+        let text = clip.text_content.as_ref()?;
+
+        let (font_size, font_name, text_color) =
+            clip.text_style
+                .as_ref()
+                .map_or((None, None, None), |style| {
+                    (
+                        Some(style.font_size),
+                        Some(style.font_name.clone()),
+                        Some(rgba_to_hex(&style.color)),
+                    )
+                });
+
+        Some(Self {
+            clip_id: clip.id.clone(),
+            track_index,
+            start_frame: clip.start_frame,
+            duration_frames: clip.duration_frames,
+            text: text.clone(),
+            caption_group_id: caption_group_id.clone(),
+            font_size,
+            font_name,
+            text_color,
+        })
+    }
+}
+
+/// A collapsed caption group for get_timeline output.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct CaptionGroup {
+    pub track_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_font_size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_font_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_text_color: Option<String>,
+    pub clip_count: usize,
+    pub rows: Vec<CaptionRow>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct CaptionRow {
+    pub clip_id: String,
+    pub start_frame: i64,
+    pub duration_frames: i64,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_color: Option<String>,
+}
+
+/// Collapse caption clips into groups with hoisted shared properties.
+///
+/// READ-007: Caption clips with the same `caption_group_id` are collapsed into
+///           `CaptionGroup` entries with shared font properties hoisted.
+/// READ-008: Total rows across all groups are capped at 200. When the cap is
+///           exceeded a warning string is returned.
+/// READ-009: Clips whose individual font properties deviate from the shared
+///           group value are emitted with their specific values in the row.
+pub fn collapse_caption_groups(clips: &[CaptionClipInfo]) -> (Vec<CaptionGroup>, Option<String>) {
+    if clips.is_empty() {
+        return (Vec::new(), None);
+    }
+
+    // Group by caption_group_id, preserving insertion order via BTreeMap
+    let mut groups: BTreeMap<&str, Vec<&CaptionClipInfo>> = BTreeMap::new();
+    for clip in clips {
+        groups.entry(&clip.caption_group_id).or_default().push(clip);
+    }
+
+    // Count total rows for cap check
+    let total_clip_count: usize = groups.values().map(|g| g.len()).sum();
+    let warning = if total_clip_count > 200 {
+        Some(format!(
+            "Caption group rows exceed 200 ({} total). Only first 200 rows shown.",
+            total_clip_count
+        ))
+    } else {
+        None
+    };
+
+    let mut result = Vec::new();
+    let mut rows_emitted = 0usize;
+
+    for group_clips in groups.into_values() {
+        if rows_emitted >= 200 {
+            break;
+        }
+
+        let track_index = group_clips[0].track_index;
+        let clip_count = group_clips.len();
+
+        // Determine shared properties across this group
+        let shared_font_size = shared_f64(group_clips.iter().map(|c| c.font_size.as_ref()));
+        let shared_font_name = shared_str(group_clips.iter().map(|c| c.font_name.as_deref()));
+        let shared_text_color = shared_str(group_clips.iter().map(|c| c.text_color.as_deref()));
+
+        let remaining_budget = 200usize.saturating_sub(rows_emitted);
+        let take_count = group_clips.len().min(remaining_budget);
+
+        let rows: Vec<CaptionRow> = group_clips[..take_count]
+            .iter()
+            .map(|c| {
+                // Emit per-clip value only when it deviates from shared
+                let font_size = match shared_font_size {
+                    Some(ref shared) if c.font_size.as_ref() == Some(shared) => None,
+                    _ => c.font_size,
+                };
+                let font_name = match shared_font_name {
+                    Some(shared) if c.font_name.as_deref() == Some(shared) => None,
+                    _ => c.font_name.clone(),
+                };
+                let text_color = match shared_text_color {
+                    Some(shared) if c.text_color.as_deref() == Some(shared) => None,
+                    _ => c.text_color.clone(),
+                };
+
+                CaptionRow {
+                    clip_id: c.clip_id.clone(),
+                    start_frame: c.start_frame,
+                    duration_frames: c.duration_frames,
+                    text: c.text.clone(),
+                    font_size,
+                    font_name,
+                    text_color,
+                }
+            })
+            .collect();
+
+        rows_emitted += rows.len();
+
+        result.push(CaptionGroup {
+            track_index,
+            shared_font_size,
+            shared_font_name: shared_font_name.map(|s| s.to_string()),
+            shared_text_color: shared_text_color.map(|s| s.to_string()),
+            clip_count,
+            rows,
+        });
+    }
+
+    (result, warning)
+}
+
+/// Returns Some(value) if all non-None values in the iterator are identical.
+fn shared_f64<'a>(values: impl Iterator<Item = Option<&'a f64>>) -> Option<f64> {
+    const EPSILON: f64 = 0.001;
+    let mut common: Option<f64> = None;
+    for v in values.flatten() {
+        match common {
+            None => common = Some(*v),
+            Some(c) if (c - *v).abs() < EPSILON => continue,
+            Some(_) => return None,
+        }
+    }
+    common
+}
+
+/// Returns Some(value) if all non-None values in the iterator are identical.
+fn shared_str<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Option<&'a str> {
+    let mut common: Option<&'a str> = None;
+    for v in values.flatten() {
+        match common {
+            None => common = Some(v),
+            Some(c) if c == v => continue,
+            Some(_) => return None,
+        }
+    }
+    common
+}
+
+/// Convert a TextRgba to a hex color string (#RRGGBB).
+fn rgba_to_hex(color: &TextRgba) -> String {
+    format!(
+        "#{:02X}{:02X}{:02X}",
+        (color.r * 255.0).round() as u8,
+        (color.g * 255.0).round() as u8,
+        (color.b * 255.0).round() as u8,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// search_media formatting (READ-025 to READ-027)
+// ---------------------------------------------------------------------------
+
+/// A single search hit in the formatted output.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SearchHitInfo {
+    pub media_id: String,
+    pub frame: i64,
+    pub score: f64,
+    pub kind: String,
+}
+
+/// Formatted search results with separated groups.
+///
+/// READ-025: visual (moments) and spoken results are kept in separate fields.
+/// READ-026: status reporting for visual indexing is preserved.
+/// READ-027: limit is clamped to 1..50.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SearchMediaOutput {
+    pub moments: Vec<SearchHitInfo>,
+    pub spoken: Vec<SearchHitInfo>,
+    pub files: Vec<SearchHitInfo>,
+    pub status: String,
+    pub limit: usize,
+}
+
+/// Format search results with separated groups and clamped limit.
+///
+/// Each result group is truncated to the (clamped) limit. Returns the
+/// structured output ready for JSON serialization.
+pub fn format_search_results(
+    moments: Vec<SearchHitInfo>,
+    spoken: Vec<SearchHitInfo>,
+    files: Vec<SearchHitInfo>,
+    status: String,
+    limit: usize,
+) -> SearchMediaOutput {
+    let limit = limit.clamp(1, 50);
+    let trunc = |mut v: Vec<SearchHitInfo>| {
+        v.truncate(limit);
+        v
+    };
+    SearchMediaOutput {
+        moments: trunc(moments),
+        spoken: trunc(spoken),
+        files: trunc(files),
+        status,
+        limit,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// list_models formatting (READ-029)
+// ---------------------------------------------------------------------------
+
+/// Formatted models output with loaded distinction.
+///
+/// READ-029: `loaded = false` means models have not yet been fetched,
+/// which is distinct from having fetched and found zero models.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct FormattedModels {
+    pub models: Value,
+    pub loaded: bool,
+}
+
+/// Wrap models data with the loaded flag.
+pub fn format_models(models: Value, loaded: bool) -> FormattedModels {
+    FormattedModels { models, loaded }
 }
 
 // ---------------------------------------------------------------------------
@@ -709,5 +1172,546 @@ mod tests {
         for track in &result.tracks {
             assert!(track.clips.is_empty(), "READ-005: all clips outside window");
         }
+    }
+
+    // ── get_transcript formatting tests ────────────────────────────────
+
+    fn sample_transcript_words() -> Vec<TranscriptWordInput> {
+        vec![
+            TranscriptWordInput {
+                word: "hello".into(),
+                start_seconds: 0.0,
+                end_seconds: 0.5,
+            },
+            TranscriptWordInput {
+                word: "world".into(),
+                start_seconds: 0.6,
+                end_seconds: 1.2,
+            },
+            TranscriptWordInput {
+                word: "this".into(),
+                start_seconds: 3.0,
+                end_seconds: 3.3,
+            },
+            TranscriptWordInput {
+                word: "is".into(),
+                start_seconds: 3.4,
+                end_seconds: 3.6,
+            },
+            TranscriptWordInput {
+                word: "a".into(),
+                start_seconds: 3.7,
+                end_seconds: 3.8,
+            },
+            TranscriptWordInput {
+                word: "test".into(),
+                start_seconds: 3.9,
+                end_seconds: 4.5,
+            },
+            TranscriptWordInput {
+                word: "goodbye".into(),
+                start_seconds: 6.0,
+                end_seconds: 7.5,
+            },
+        ]
+    }
+
+    fn sample_transcript_clips() -> Vec<TranscriptClipInput> {
+        vec![
+            TranscriptClipInput {
+                id: "clip1".into(),
+                start_frame: 0,
+                duration_frames: 60,
+            },
+            TranscriptClipInput {
+                id: "clip2".into(),
+                start_frame: 90,
+                duration_frames: 60,
+            },
+            TranscriptClipInput {
+                id: "clip3".into(),
+                start_frame: 180,
+                duration_frames: 60,
+            },
+        ]
+    }
+
+    #[test]
+    fn format_transcript_returns_nested_structure() {
+        let fps = 30;
+        let result = format_transcript(
+            fps,
+            &sample_transcript_words(),
+            &sample_transcript_clips(),
+            &TranscriptFormatOptions::default(),
+        );
+        // READ-018: nested clips[].words
+        assert!(!result.clips.is_empty(), "should have clips");
+        assert_eq!(result.clips[0].clip_id, "clip1");
+        assert_eq!(result.clips[0].words.len(), 2);
+        assert_eq!(result.clips[0].words[0].word, "hello");
+        assert_eq!(result.clips[0].words[1].word, "world");
+        assert_eq!(result.clips[1].clip_id, "clip2");
+        assert_eq!(result.clips[1].words.len(), 4);
+        assert_eq!(result.clips[2].clip_id, "clip3");
+        assert_eq!(result.clips[2].words.len(), 1);
+        assert_eq!(result.clips[2].words[0].word, "goodbye");
+    }
+
+    #[test]
+    fn format_transcript_word_count_capped_at_10000() {
+        let fps = 30;
+        let words: Vec<TranscriptWordInput> = (0..15000)
+            .map(|i| TranscriptWordInput {
+                word: format!("w{}", i),
+                start_seconds: i as f64 * 0.1,
+                end_seconds: i as f64 * 0.1 + 0.08,
+            })
+            .collect();
+        let clips = vec![TranscriptClipInput {
+            id: "clip1".into(),
+            start_frame: 0,
+            duration_frames: 1_000_000,
+        }];
+        let result = format_transcript(fps, &words, &clips, &TranscriptFormatOptions::default());
+        let total: usize = result.clips.iter().map(|c| c.words.len()).sum();
+        // READ-020: capped at 10000
+        assert_eq!(total, 10000);
+        assert!(result.next_start_frame.is_some());
+    }
+
+    #[test]
+    fn format_transcript_pagination_next_start_frame() {
+        let fps = 30;
+        let words: Vec<TranscriptWordInput> = (0..12000)
+            .map(|i| TranscriptWordInput {
+                word: format!("w{}", i),
+                start_seconds: i as f64 * 0.1,
+                end_seconds: i as f64 * 0.1 + 0.08,
+            })
+            .collect();
+        let clip = TranscriptClipInput {
+            id: "clip1".into(),
+            start_frame: 0,
+            duration_frames: 1_000_000,
+        };
+
+        // First page: 10000 words
+        let page1 = format_transcript(
+            fps,
+            &words,
+            &[clip.clone()],
+            &TranscriptFormatOptions::default(),
+        );
+        let total1: usize = page1.clips.iter().map(|c| c.words.len()).sum();
+        assert_eq!(total1, 10000);
+        let next = page1.next_start_frame.expect("should have next frame");
+
+        // next_start_frame is the end_frame of the last word on page 1
+        let last_word = &page1.clips[0].words[9999];
+        assert_eq!(next, last_word.end_frame);
+
+        // Second page: continue from next
+        let page2 = format_transcript(
+            fps,
+            &words,
+            &[clip],
+            &TranscriptFormatOptions {
+                start_frame: Some(next),
+                ..Default::default()
+            },
+        );
+        let total2: usize = page2.clips.iter().map(|c| c.words.len()).sum();
+        assert_eq!(total2, 2000);
+        assert!(page2.next_start_frame.is_none(), "no more pages");
+
+        // No overlap: page1 words end at <= next, page2 words start after next
+        for c in &page2.clips {
+            for w in &c.words {
+                assert!(
+                    w.end_frame > next,
+                    "no word on page 2 should have end_frame <= next_start_frame"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn format_transcript_empty_returns_no_transcript() {
+        let fps = 30;
+        let words: Vec<TranscriptWordInput> = vec![];
+        let clips = sample_transcript_clips();
+        let result = format_transcript(fps, &words, &clips, &TranscriptFormatOptions::default());
+        assert!(result.clips.is_empty());
+        assert!(result.text.is_empty());
+        assert!(result.next_start_frame.is_none());
+    }
+
+    #[test]
+    fn format_transcript_words_are_monotonic() {
+        let fps = 30;
+        let mut words = sample_transcript_words();
+        // Reverse to deliberately break source order
+        words.reverse();
+        let result = format_transcript(
+            fps,
+            &words,
+            &sample_transcript_clips(),
+            &TranscriptFormatOptions::default(),
+        );
+        // READ-019: each clip's words must be in start_frame order
+        for clip in &result.clips {
+            for pair in clip.words.windows(2) {
+                assert!(
+                    pair[0].start_frame <= pair[1].start_frame,
+                    "words must be monotonic within clip"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_word_timestamps_tolerated() {
+        let fps = 30;
+        let result = format_transcript(
+            fps,
+            &sample_transcript_words(),
+            &sample_transcript_clips(),
+            &TranscriptFormatOptions {
+                word_timestamps: Some(true),
+                ..Default::default()
+            },
+        );
+        // READ-021: word_timestamps is silently ignored, output is unaffected
+        assert_eq!(result.clips.len(), 3);
+        assert_eq!(result.text, "hello world this is a test goodbye");
+    }
+
+    // -----------------------------------------------------------------------
+    // Caption group tests (READ-007..009)
+    // -----------------------------------------------------------------------
+
+    fn sample_caption_clips() -> Vec<CaptionClipInfo> {
+        vec![
+            CaptionClipInfo {
+                clip_id: "cap-001".into(),
+                track_index: 2,
+                start_frame: 0,
+                duration_frames: 100,
+                text: "First caption".into(),
+                caption_group_id: "cg-1".into(),
+                font_size: Some(96.0),
+                font_name: Some("Helvetica-Bold".into()),
+                text_color: Some("#FFFFFF".into()),
+            },
+            CaptionClipInfo {
+                clip_id: "cap-002".into(),
+                track_index: 2,
+                start_frame: 100,
+                duration_frames: 100,
+                text: "Second caption".into(),
+                caption_group_id: "cg-1".into(),
+                font_size: Some(96.0),
+                font_name: Some("Helvetica-Bold".into()),
+                text_color: Some("#FFFFFF".into()),
+            },
+            CaptionClipInfo {
+                clip_id: "cap-003".into(),
+                track_index: 2,
+                start_frame: 200,
+                duration_frames: 100,
+                text: "Third caption".into(),
+                caption_group_id: "cg-1".into(),
+                font_size: Some(96.0),
+                font_name: Some("Helvetica-Bold".into()),
+                text_color: Some("#FFFFFF".into()),
+            },
+        ]
+    }
+
+    #[test]
+    fn caption_group_collapses_shared_properties() {
+        let clips = sample_caption_clips();
+        let (groups, warning) = collapse_caption_groups(&clips);
+
+        assert_eq!(groups.len(), 1, "one caption group");
+        let g = &groups[0];
+
+        // All font_size=96.0 -> shared
+        assert_eq!(g.shared_font_size, Some(96.0), "READ-007: shared font_size");
+        // All font_name=Helvetica-Bold -> shared
+        assert_eq!(
+            g.shared_font_name.as_deref(),
+            Some("Helvetica-Bold"),
+            "READ-007: shared font_name"
+        );
+        // All text_color=#FFFFFF -> shared
+        assert_eq!(
+            g.shared_text_color.as_deref(),
+            Some("#FFFFFF"),
+            "READ-007: shared text_color"
+        );
+        assert_eq!(g.clip_count, 3, "group has 3 clips");
+
+        // Individual rows should have None for all shared properties
+        // (inherited from group)
+        for row in &g.rows {
+            assert!(
+                row.font_size.is_none(),
+                "READ-007: individual font_size is None when shared"
+            );
+            assert!(
+                row.font_name.is_none(),
+                "READ-007: individual font_name is None when shared"
+            );
+            assert!(
+                row.text_color.is_none(),
+                "READ-007: individual text_color is None when shared"
+            );
+        }
+
+        assert!(warning.is_none(), "no warning under 200 rows");
+    }
+
+    #[test]
+    fn caption_group_capped_at_200_rows() {
+        let mut clips = sample_caption_clips();
+        // Add 200 clips in a second group
+        for i in 0..200 {
+            clips.push(CaptionClipInfo {
+                clip_id: format!("cap-bulk-{:04}", i),
+                track_index: 2,
+                start_frame: i * 10,
+                duration_frames: 10,
+                text: format!("Bulk caption {}", i),
+                caption_group_id: "cg-bulk".into(),
+                font_size: Some(72.0),
+                font_name: None,
+                text_color: None,
+            });
+        }
+
+        let (groups, warning) = collapse_caption_groups(&clips);
+        let total_rows: usize = groups.iter().map(|g| g.rows.len()).sum();
+
+        assert_eq!(total_rows, 200, "READ-008: capped at 200 total rows");
+        assert!(
+            warning.is_some(),
+            "READ-008: warning returned when rows exceed 200"
+        );
+        let msg = warning.unwrap();
+        assert!(
+            msg.contains("203 total"),
+            "warning mentions total count: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn caption_group_deviant_clips_emitted_individually() {
+        let clips = vec![
+            CaptionClipInfo {
+                clip_id: "cap-001".into(),
+                track_index: 2,
+                start_frame: 0,
+                duration_frames: 100,
+                text: "Normal".into(),
+                caption_group_id: "cg-1".into(),
+                font_size: Some(96.0),
+                font_name: Some("Helvetica-Bold".into()),
+                text_color: Some("#FFFFFF".into()),
+            },
+            CaptionClipInfo {
+                clip_id: "cap-002".into(),
+                track_index: 2,
+                start_frame: 100,
+                duration_frames: 100,
+                text: "Deviant font size".into(),
+                caption_group_id: "cg-1".into(),
+                font_size: Some(48.0),
+                font_name: Some("Helvetica-Bold".into()),
+                text_color: Some("#FFFFFF".into()),
+            },
+            CaptionClipInfo {
+                clip_id: "cap-003".into(),
+                track_index: 2,
+                start_frame: 200,
+                duration_frames: 100,
+                text: "Deviant color".into(),
+                caption_group_id: "cg-1".into(),
+                font_size: Some(96.0),
+                font_name: Some("Helvetica-Bold".into()),
+                text_color: Some("#FF0000".into()),
+            },
+        ];
+
+        let (groups, warning) = collapse_caption_groups(&clips);
+        assert_eq!(groups.len(), 1, "one caption group");
+        let g = &groups[0];
+
+        // font_size differs between 96.0 and 48.0 -> NOT shared
+        assert!(
+            g.shared_font_size.is_none(),
+            "READ-009: divergent font_size is not shared"
+        );
+        // font_name is same -> shared
+        assert_eq!(
+            g.shared_font_name.as_deref(),
+            Some("Helvetica-Bold"),
+            "READ-009: uniform font_name is shared"
+        );
+        // text_color differs between #FFFFFF and #FF0000 -> NOT shared
+        assert!(
+            g.shared_text_color.is_none(),
+            "READ-009: divergent text_color is not shared"
+        );
+
+        // Row 0 (normal) should have font_size and text_color emitted
+        // (not shared), font_name None (shared)
+        assert_eq!(
+            g.rows[0].font_size,
+            Some(96.0),
+            "READ-009: row 0 has explicit font_size"
+        );
+        assert!(
+            g.rows[0].font_name.is_none(),
+            "READ-009: row 0 inherits shared font_name"
+        );
+        assert_eq!(
+            g.rows[0].text_color.as_deref(),
+            Some("#FFFFFF"),
+            "READ-009: row 0 has explicit text_color"
+        );
+
+        // Row 1 (deviant font_size=48.0) should emit its specific value
+        assert_eq!(
+            g.rows[1].font_size,
+            Some(48.0),
+            "READ-009: row 1 deviant font_size emitted"
+        );
+
+        // Row 2 (deviant text_color=#FF0000) should emit its specific value
+        assert_eq!(
+            g.rows[2].text_color.as_deref(),
+            Some("#FF0000"),
+            "READ-009: row 2 deviant text_color emitted"
+        );
+
+        assert!(warning.is_none(), "no warning");
+    }
+
+    // -----------------------------------------------------------------------
+    // Search formatting tests (READ-025..027)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn search_results_separated_by_group() {
+        let result = format_search_results(
+            vec![SearchHitInfo {
+                media_id: "m1".into(),
+                frame: 10,
+                score: 0.9,
+                kind: "visual".into(),
+            }],
+            vec![SearchHitInfo {
+                media_id: "s1".into(),
+                frame: 20,
+                score: 0.8,
+                kind: "spoken".into(),
+            }],
+            vec![SearchHitInfo {
+                media_id: "f1".into(),
+                frame: 0,
+                score: 1.0,
+                kind: "file".into(),
+            }],
+            "indexed".into(),
+            10,
+        );
+
+        assert_eq!(result.moments.len(), 1, "READ-025: moments present");
+        assert_eq!(result.spoken.len(), 1, "READ-025: spoken present");
+        assert_eq!(result.files.len(), 1, "READ-025: files present");
+        assert_eq!(result.status, "indexed", "READ-026: status preserved");
+        assert_eq!(result.limit, 10, "limit preserved");
+    }
+
+    #[test]
+    fn search_limit_clamped_to_1_50() {
+        // Test lower clamp
+        let result = format_search_results(
+            vec![SearchHitInfo {
+                media_id: "m1".into(),
+                frame: 0,
+                score: 1.0,
+                kind: "visual".into(),
+            }],
+            vec![],
+            vec![],
+            "idle".into(),
+            0,
+        );
+        assert_eq!(result.limit, 1, "READ-027: limit clamped to minimum 1");
+
+        // Test upper clamp
+        let result = format_search_results(vec![], vec![], vec![], "idle".into(), 100);
+        assert_eq!(result.limit, 50, "READ-027: limit clamped to maximum 50");
+
+        // Test within range
+        let result = format_search_results(vec![], vec![], vec![], "idle".into(), 25);
+        assert_eq!(result.limit, 25, "READ-027: limit within range preserved");
+    }
+
+    #[test]
+    fn search_limit_truncates_results() {
+        let many_hits: Vec<SearchHitInfo> = (0..10)
+            .map(|i| SearchHitInfo {
+                media_id: format!("m{}", i),
+                frame: i * 10,
+                score: 1.0 - (i as f64 * 0.1),
+                kind: "visual".into(),
+            })
+            .collect();
+
+        let result = format_search_results(many_hits.clone(), vec![], vec![], "indexed".into(), 3);
+
+        assert_eq!(result.moments.len(), 3, "truncated to limit=3");
+        assert_eq!(result.moments[0].media_id, "m0", "first hit preserved");
+        assert_eq!(result.moments[2].media_id, "m2", "third hit preserved");
+        assert_eq!(result.limit, 3, "limit stored");
+    }
+
+    // -----------------------------------------------------------------------
+    // Models formatting tests (READ-029)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn list_models_loaded_distinction() {
+        // loaded = true with actual models
+        let models = json!({
+            "video": [{"id": "gen-3", "name": "Gen-3 Alpha"}],
+            "image": [],
+            "audio": []
+        });
+        let result = format_models(models.clone(), true);
+        assert!(result.loaded, "READ-029: loaded=true");
+        assert_eq!(
+            result
+                .models
+                .pointer("/video/0/id")
+                .and_then(|v| v.as_str()),
+            Some("gen-3")
+        );
+
+        // loaded = false (not yet fetched) vs empty models
+        let result = format_models(json!({}), false);
+        assert!(!result.loaded, "READ-029: loaded=false");
+
+        // loaded = true with empty models (fetched, nothing available)
+        let result = format_models(json!({"video": [], "image": [], "audio": []}), true);
+        assert!(
+            result.loaded,
+            "READ-029: loaded=true even with empty models"
+        );
     }
 }

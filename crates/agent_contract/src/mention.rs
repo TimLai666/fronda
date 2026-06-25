@@ -158,6 +158,66 @@ pub fn pack_referenced_mentions(text: &str, mentions: Vec<AgentMention>) -> Vec<
     prune_mentions(text, mentions)
 }
 
+// ---------------------------------------------------------------------------
+// MNT-009 / MNT-010: Image inlining
+// ---------------------------------------------------------------------------
+
+/// Result of attempting to inline an image mention.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImageInlineResult {
+    /// Successfully inlined with image data.
+    Inlined { media_ref: String, data_url: String },
+    /// Could not read the image.
+    Failed { media_ref: String, reason: String },
+}
+
+/// Try to inline an image asset mention.
+///
+/// Returns an `ImageInlineResult`: on success the image data URL, on failure
+/// a message describing why. The actual image reading is done via callback to
+/// keep this pure logic.
+pub fn try_inline_image(
+    media_ref: &str,
+    read_image_data: impl FnOnce(&str) -> Option<String>,
+) -> ImageInlineResult {
+    match read_image_data(media_ref) {
+        Some(data_url) => ImageInlineResult::Inlined {
+            media_ref: media_ref.to_string(),
+            data_url,
+        },
+        None => ImageInlineResult::Failed {
+            media_ref: media_ref.to_string(),
+            reason: format!("Could not read image for media: {media_ref}"),
+        },
+    }
+}
+
+/// Build context message for image mentions in a conversation.
+///
+/// Inlines images when possible, falls back to text description on failure.
+/// Returns a tuple of (inlined_results, failed_descriptions).
+pub fn pack_image_mentions(
+    image_mentions: &[String],
+    read_image: impl Fn(&str) -> Option<String>,
+) -> (Vec<ImageInlineResult>, Vec<String>) {
+    let mut inlined = Vec::new();
+    let mut failed = Vec::new();
+
+    for mention in image_mentions {
+        match try_inline_image(mention, &read_image) {
+            ok @ ImageInlineResult::Inlined { .. } => {
+                inlined.push(ok);
+            }
+            ImageInlineResult::Failed { ref media_ref, .. } => {
+                let desc = format!("Image could not be read: {media_ref}");
+                failed.push(desc);
+            }
+        }
+    }
+
+    (inlined, failed)
+}
+
 /// Convert frames to a timecode string (HH:MM:SS:FF).
 fn frames_to_timecode(frames: i64, fps: i64) -> String {
     if fps <= 0 {
@@ -313,5 +373,56 @@ mod tests {
     #[test]
     fn frames_to_timecode_zero_fps() {
         assert_eq!(frames_to_timecode(100, 0), "00:00:00:00");
+    }
+
+    // ── MNT-009 / MNT-010: Image inlining ────────────────────────────
+
+    #[test]
+    fn mnt_009_try_inline_image_success() {
+        let result = try_inline_image("img-001", |ref_| {
+            assert_eq!(ref_, "img-001");
+            Some("data:image/png;base64,abc123".to_string())
+        });
+        match result {
+            ImageInlineResult::Inlined {
+                media_ref,
+                data_url,
+            } => {
+                assert_eq!(media_ref, "img-001");
+                assert_eq!(data_url, "data:image/png;base64,abc123");
+            }
+            _ => panic!("Expected Inlined, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn mnt_009_try_inline_image_failure() {
+        let result = try_inline_image("img-002", |_| None);
+        match result {
+            ImageInlineResult::Failed { media_ref, reason } => {
+                assert_eq!(media_ref, "img-002");
+                assert!(reason.contains("Could not read image"));
+            }
+            _ => panic!("Expected Failed, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn mnt_010_pack_image_mentions_separates_success_and_failure() {
+        let mentions = vec!["good-img".to_string(), "bad-img".to_string()];
+        let (inlined, failed) = pack_image_mentions(&mentions, |ref_| match ref_ {
+            "good-img" => Some("data:image/png;base64,good".to_string()),
+            _ => None,
+        });
+        assert_eq!(inlined.len(), 1);
+        assert_eq!(failed.len(), 1);
+        assert!(failed[0].contains("bad-img"));
+    }
+
+    #[test]
+    fn mnt_010_pack_image_mentions_empty_input() {
+        let (inlined, failed) = pack_image_mentions(&[], |_| unreachable!());
+        assert!(inlined.is_empty());
+        assert!(failed.is_empty());
     }
 }

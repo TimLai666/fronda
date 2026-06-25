@@ -32,8 +32,8 @@ Scope sources:
 - [x] `TRK-004`: Removing a track removes every clip on that track.
 - [x] `TRK-005`: Removing a track shifts remaining track indexes downward.
 - [x] `TRK-006`: `pruneEmptyTracks()` removes empty tracks without violating the visual-above-audio partition.
-- [ ] `TRK-007`: Track mute, hidden, and sync-lock toggles remain individually undoable.
-- [ ] `TRK-008`: Track display height is clamped to the current min/max track-height limits.
+- [x] `TRK-007`: Track mute, hidden, and sync-lock toggles remain individually undoable.
+- [x] `TRK-008`: Track display height is clamped to the current min/max track-height limits.
 
 ## C. Clip placement, overwrite, and move behavior
 
@@ -95,12 +95,12 @@ Scope sources:
 - [x] `SNP-004`: Snap targets include clip boundaries and optionally the playhead.
 - [x] `SNP-005`: Snapping stays sticky until the pointer escapes the sticky threshold.
 - [x] `SNP-006`: Multi-clip drag allows any selected clip start/end to participate in snapping (multi-probe-offset).
-- [ ] `SNP-007`: Dragging must never allow the moved selection to cross frame 0.
-- [ ] `SNP-008`: Razor/cut previews snap to the same resolved snap target as drag operations.
+- [x] `SNP-007`: Dragging must never allow the moved selection to cross frame 0.
+- [x] `SNP-008`: Razor/cut previews snap to the same resolved snap target as drag operations.
 - [x] `RNG-001`: Plain ruler drag scrubs the playhead (TimelineRange normalized/is_valid/contains).
-- [ ] `RNG-002`: Shift-ruler drag creates or edits a timeline range.
-- [ ] `RNG-003`: Existing timeline range edges remain draggable.
-- [ ] `RNG-004`: Gap selection is defined as the empty interval between the previous clip end and the next clip start on one track.
+- [x] `RNG-002`: Shift-ruler drag creates or edits a timeline range.
+- [x] `RNG-003`: Existing timeline range edges remain draggable.
+- [x] `RNG-004`: Gap selection is defined as the empty interval between the previous clip end and the next clip start on one track.
 
 ## H. Inspector, transform, crop, fades, and keyframes
 
@@ -141,10 +141,10 @@ Scope sources:
 
 ## J. Editor shell and layout behavior
 
-- [ ] `EDT-001`: The editor keeps the current five functional panes: media, preview, inspector, timeline, and agent.
-- [ ] `EDT-002`: Layout presets remain `default`, `media`, and `vertical`.
+- [x] `EDT-001`: The editor keeps the current five functional panes: media, preview, inspector, timeline, and agent.
+- [x] `EDT-002`: Layout presets remain `default`, `media`, and `vertical`.
 - [ ] `EDT-003`: Pane visibility state for media/inspector/agent persists across launches.
-- [ ] `EDT-004`: Maximizing a pane collapses ancestor/sibling panes and unmaximizing restores visibility state rather than forcing everything visible.
+- [x] `EDT-004`: Maximizing a pane collapses ancestor/sibling panes and unmaximizing restores visibility state rather than forcing everything visible.
 - [ ] `EDT-005`: The editor keeps independent playhead state for timeline preview and source-media preview tabs.
 
 ## Upstream change tracking

@@ -199,6 +199,7 @@ fn get_transcript() -> ToolDefinition {
             ("startFrame", string("Optional start frame for range-limited transcript")),
             ("endFrame", string("Optional end frame for range-limited transcript")),
             ("language", string("Optional BCP-47 spoken language (e.g. 'fr', 'ja', 'en-GB'). Overrides project transcriptionLanguage for this call; falls back to system language if neither is set.")),
+            ("wordTimestamps", string("Legacy flag: tolerated and ignored for backward compatibility.")),
         ]),
     }
 }

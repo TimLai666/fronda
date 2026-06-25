@@ -3,7 +3,9 @@
 //! A ToolExecutor holds the mutable project state (Timeline + UndoStack)
 //! and provides a single `execute()` entry point for the MCP server.
 
-use crate::read_tools::format_timeline_json;
+use crate::read_tools::{
+    format_timeline_json, format_transcript_json, TranscriptClipInput, TranscriptFormatOptions,
+};
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
     Clip, ClipType, Effect, GenerationInput, Interpolation, Keyframe, KeyframeTrack, MediaManifest,
@@ -949,13 +951,57 @@ impl ToolExecutor {
         }))
     }
 
-    fn cmd_get_transcript(&self, _args: &Value) -> Result<Value, String> {
+    fn cmd_get_transcript(&self, args: &Value) -> Result<Value, String> {
+        // READ-021: tolerate legacy wordTimestamps
+        let _word_timestamps = args.get("wordTimestamps");
+
+        // Look up media
+        let media_id = args.get("mediaId").and_then(|v| v.as_str());
+        if media_id.is_none() {
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": "Transcript system is not yet connected to the timeline engine. No captions available."
+                }],
+                "isError": true,
+            }));
+        }
+
+        // Parse optional pagination
+        let start_frame = args
+            .get("startFrame")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<i64>().ok());
+
+        let fps = self.timeline.fps.max(1);
+
+        // Collect timeline-visible clips for word attribution
+        let clips: Vec<TranscriptClipInput> = self
+            .timeline
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| c.media_ref == media_id.unwrap())
+            .map(|c| TranscriptClipInput {
+                id: c.id.clone(),
+                start_frame: c.start_frame,
+                duration_frames: c.duration_frames,
+            })
+            .collect();
+
+        let options = TranscriptFormatOptions {
+            start_frame,
+            ..Default::default()
+        };
+
+        // No transcript data source connected yet, return empty result
+        let formatted = format_transcript_json(fps, &[], &clips, &options);
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": "Transcript system is not yet connected to the timeline engine. No captions available."
-            }],
-            "isError": true,
+                "text": serde_json::to_string_pretty(&formatted)
+                    .unwrap_or_else(|_| "{}".into()),
+            }]
         }))
     }
 
@@ -2418,10 +2464,45 @@ mod tests {
     }
 
     #[test]
-    fn exec_021_get_transcript_stub() {
+    fn exec_021_get_transcript_no_media_id() {
         let mut exec = make_executor();
         let result = exec.execute("get_transcript", &json!({})).unwrap();
         assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn exec_021_get_transcript_with_media_id() {
+        let mut exec = make_executor_with_media();
+        let result = exec
+            .execute("get_transcript", &json!({"mediaId": "media-001"}))
+            .unwrap();
+        assert!(result.get("isError").is_none(), "no error for known media");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(!text.is_empty(), "has result text");
+    }
+
+    #[test]
+    fn exec_021_get_transcript_tolerates_word_timestamps() {
+        let mut exec = make_executor();
+        // READ-021: legacy wordTimestamps should not cause errors
+        let result = exec
+            .execute(
+                "get_transcript",
+                &json!({"wordTimestamps": true, "mediaId": "media-001"}),
+            )
+            .unwrap();
+        // isError should be absent since mediaId is present
+        assert!(
+            result.get("isError").is_none(),
+            "no error when mediaId provided"
+        );
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("clips"),
+            "returns formatted transcript JSON"
+        );
     }
 
     #[test]

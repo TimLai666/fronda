@@ -642,6 +642,63 @@ impl UserSettings {
     }
 }
 
+// ── Storage clear actions (SET-007) ─────────────────────────────
+
+/// Types of storage clear actions available.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StorageClearAction {
+    /// Clear playback preview cache.
+    PlaybackPreview,
+    /// Clear waveform cache.
+    Waveform,
+    /// Clear filmstrip cache.
+    Filmstrip,
+    /// Clear global search index.
+    GlobalSearchIndex,
+    /// Remove installed visual model.
+    InstalledVisualModel,
+}
+
+/// Result of a storage clear action (pure logic - just planning).
+/// The actual I/O is handled by the platform layer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StorageClearPlan {
+    pub action: StorageClearAction,
+    pub estimated_size_bytes: Option<u64>,
+    pub requires_confirmation: bool,
+}
+
+/// Determine which clear actions are available and their implications.
+pub fn available_storage_actions() -> Vec<StorageClearPlan> {
+    vec![
+        StorageClearPlan {
+            action: StorageClearAction::PlaybackPreview,
+            estimated_size_bytes: None,
+            requires_confirmation: false,
+        },
+        StorageClearPlan {
+            action: StorageClearAction::Waveform,
+            estimated_size_bytes: None,
+            requires_confirmation: false,
+        },
+        StorageClearPlan {
+            action: StorageClearAction::Filmstrip,
+            estimated_size_bytes: None,
+            requires_confirmation: false,
+        },
+        StorageClearPlan {
+            action: StorageClearAction::GlobalSearchIndex,
+            estimated_size_bytes: Some(0),
+            requires_confirmation: true,
+        },
+        StorageClearPlan {
+            action: StorageClearAction::InstalledVisualModel,
+            estimated_size_bytes: Some(0),
+            requires_confirmation: true,
+        },
+    ]
+}
+
 // ── Model catalog ───────────────────────────────────────────────
 
 /// A model entry in the live catalog.
@@ -1038,8 +1095,44 @@ mod tests {
     }
 
     #[test]
-    fn set_007_storage_clear_not_tested() {
-        // Placeholder for storage-pane behavior (tested via integration in app shell)
+    fn set_007_storage_actions_listed() {
+        let actions = available_storage_actions();
+        assert_eq!(actions.len(), 5);
+        assert!(actions
+            .iter()
+            .any(|a| a.action == StorageClearAction::PlaybackPreview));
+        assert!(actions
+            .iter()
+            .any(|a| a.action == StorageClearAction::Waveform));
+        assert!(actions
+            .iter()
+            .any(|a| a.action == StorageClearAction::Filmstrip));
+        assert!(actions
+            .iter()
+            .any(|a| a.action == StorageClearAction::GlobalSearchIndex));
+        assert!(actions
+            .iter()
+            .any(|a| a.action == StorageClearAction::InstalledVisualModel));
+    }
+
+    #[test]
+    fn set_007_search_index_requires_confirmation() {
+        let actions = available_storage_actions();
+        let search = actions
+            .iter()
+            .find(|a| a.action == StorageClearAction::GlobalSearchIndex)
+            .unwrap();
+        assert!(search.requires_confirmation);
+    }
+
+    #[test]
+    fn set_007_visual_model_requires_confirmation() {
+        let actions = available_storage_actions();
+        let visual = actions
+            .iter()
+            .find(|a| a.action == StorageClearAction::InstalledVisualModel)
+            .unwrap();
+        assert!(visual.requires_confirmation);
     }
 
     // ── Generation (GEN-001~024) ──
