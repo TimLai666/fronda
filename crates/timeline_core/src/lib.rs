@@ -1,7 +1,10 @@
+mod clip_clipboard;
 mod clip_properties;
+mod drag_payload;
 mod edit;
 mod inspector;
 mod project_settings;
+mod project_settings_guard;
 pub use keyframes::{
     clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, sample_keyframe_track,
     set_clip_duration, split_all_clip_keyframe_tracks, split_keyframe_track,
@@ -18,9 +21,14 @@ mod workflow;
 
 use core_model::{Clip, Timeline};
 
+pub use clip_clipboard::{
+    find_first_compatible_track, is_track_compatible, ClipClipboard, ClipClipboardEngine,
+    CopiedClip, PasteError, PasteResult,
+};
 pub use clip_properties::{
     set_clip_properties, write_position, write_scale, PartialTransform, PropertyChanges,
 };
+pub use drag_payload::{is_internal_drag_payload, parse_drag_payload, DragItem, DragPayload};
 pub use edit::{
     apply_clip_speed, clear_region, find_clip, link_audio_for_placed_clips, move_clips,
     place_clips, prune_empty_tracks, remove_clips, split_clip, ClipLocation,
@@ -36,6 +44,9 @@ pub use linking::{
 };
 pub use overwrite::{compute_overwrite, OverwriteAction};
 pub use project_settings::{apply_fps, apply_settings, refit_transforms, FpsChangeReport};
+pub use project_settings_guard::{
+    is_settings_configured, ProjectSettingsGuard, SettingsGuardAction, SettingsMismatch,
+};
 pub use range_selection::{
     drag_range_edge, find_all_gaps, find_gap_at_frame, shift_drag_range, RangeEdge, TimelineRange,
 };
