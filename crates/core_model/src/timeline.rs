@@ -128,6 +128,20 @@ impl ClipType {
             Self::Shape => "shape",
         }
     }
+
+    /// Returns true for visual clip types (CORE-002).
+    /// Video, image, text, lottie, and shape are visual.
+    pub fn is_visual(&self) -> bool {
+        matches!(
+            self,
+            Self::Video | Self::Image | Self::Text | Self::Lottie | Self::Shape
+        )
+    }
+
+    /// Returns true for audio clip types.
+    pub fn is_audio(&self) -> bool {
+        matches!(self, Self::Audio)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -459,6 +473,18 @@ pub struct Clip {
     pub stroke_progress_track: Option<KeyframeTrack<f64>>,
 }
 
+impl Track {
+    /// Returns true if a clip of the given type is compatible with this track (CORE-003).
+    /// Audio clips are compatible only with audio tracks.
+    /// All visual clip types (video, image, text, lottie, shape) are compatible with visual tracks.
+    pub fn is_compatible_with(&self, clip_type: ClipType) -> bool {
+        match self.r#type {
+            ClipType::Audio => clip_type == ClipType::Audio,
+            _ => clip_type.is_visual(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Track {
@@ -497,6 +523,19 @@ pub struct Timeline {
     /// Upstream PR #40.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcription_language: Option<String>,
+}
+
+impl Timeline {
+    /// Convert source seconds to project frames using project fps (CORE-005).
+    /// This must use the project timeline fps, not the source file's native fps.
+    pub fn seconds_to_frames(&self, seconds: f64) -> i64 {
+        (seconds * self.fps as f64).round() as i64
+    }
+
+    /// Convert project frames back to seconds using project fps.
+    pub fn frames_to_seconds(&self, frames: i64) -> f64 {
+        frames as f64 / self.fps as f64
+    }
 }
 
 impl Default for Timeline {
@@ -550,5 +589,88 @@ mod tests {
         assert_eq!(ClipType::from_extension("txt"), None);
         assert_eq!(ClipType::from_extension(""), None);
         assert_eq!(ClipType::from_extension("exe"), None);
+    }
+
+    #[test]
+    fn core_002_is_visual() {
+        assert!(ClipType::Video.is_visual());
+        assert!(ClipType::Image.is_visual());
+        assert!(ClipType::Text.is_visual());
+        assert!(ClipType::Lottie.is_visual());
+        assert!(ClipType::Shape.is_visual());
+        assert!(!ClipType::Audio.is_visual());
+    }
+
+    #[test]
+    fn core_002_is_audio() {
+        assert!(ClipType::Audio.is_audio());
+        assert!(!ClipType::Video.is_audio());
+        assert!(!ClipType::Image.is_audio());
+        assert!(!ClipType::Text.is_audio());
+        assert!(!ClipType::Lottie.is_audio());
+        assert!(!ClipType::Shape.is_audio());
+    }
+
+    #[test]
+    fn core_003_track_compatibility_audio() {
+        let audio_track = Track {
+            id: "a1".into(),
+            r#type: ClipType::Audio,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            clips: vec![],
+        };
+        assert!(audio_track.is_compatible_with(ClipType::Audio));
+        assert!(!audio_track.is_compatible_with(ClipType::Video));
+        assert!(!audio_track.is_compatible_with(ClipType::Image));
+        assert!(!audio_track.is_compatible_with(ClipType::Text));
+        assert!(!audio_track.is_compatible_with(ClipType::Lottie));
+        assert!(!audio_track.is_compatible_with(ClipType::Shape));
+    }
+
+    #[test]
+    fn core_003_track_compatibility_visual() {
+        let video_track = Track {
+            id: "v1".into(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            clips: vec![],
+        };
+        assert!(video_track.is_compatible_with(ClipType::Video));
+        assert!(video_track.is_compatible_with(ClipType::Image));
+        assert!(video_track.is_compatible_with(ClipType::Text));
+        assert!(video_track.is_compatible_with(ClipType::Lottie));
+        assert!(video_track.is_compatible_with(ClipType::Shape));
+        assert!(!video_track.is_compatible_with(ClipType::Audio));
+    }
+
+    #[test]
+    fn core_005_seconds_to_frames() {
+        let mut timeline = Timeline::default();
+        timeline.fps = 30;
+        assert_eq!(timeline.seconds_to_frames(0.0), 0);
+        assert_eq!(timeline.seconds_to_frames(1.0), 30);
+        assert_eq!(timeline.seconds_to_frames(2.5), 75);
+        assert_eq!(timeline.seconds_to_frames(0.033), 1);
+    }
+
+    #[test]
+    fn core_005_frames_to_seconds() {
+        let mut timeline = Timeline::default();
+        timeline.fps = 30;
+        assert!((timeline.frames_to_seconds(0) - 0.0).abs() < 1e-9);
+        assert!((timeline.frames_to_seconds(30) - 1.0).abs() < 1e-9);
+        assert!((timeline.frames_to_seconds(75) - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn core_005_custom_fps() {
+        let mut timeline = Timeline::default();
+        timeline.fps = 60;
+        assert_eq!(timeline.seconds_to_frames(1.0), 60);
+        assert_eq!(timeline.seconds_to_frames(0.5), 30);
     }
 }
