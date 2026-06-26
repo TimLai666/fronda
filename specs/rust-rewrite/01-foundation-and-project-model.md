@@ -41,7 +41,7 @@ Scope sources:
 - [x] `PRJ-009`: `media.json` is optional, but if present and invalid, project open must fail.
 - [x] `PRJ-010`: `generation-log.json` is optional, and invalid generation-log decode must not prevent project open.
 - [x] `PRJ-011`: On open, the editor state must restore timeline, media manifest, and generation log when present.
-- [ ] `PRJ-012`: If no generation log was persisted, the app must seed it from AI-generated assets already present in the project.
+- [x] `PRJ-012`: If no generation log was persisted, the app must seed it from AI-generated assets already present in the project.
 - [x] `PRJ-013`: Saving must persist the current timeline snapshot, manifest snapshot, generation log snapshot, thumbnail, non-empty chat sessions, and any existing internal `media/` directory.
 - [ ] `PRJ-014`: Closing the active project returns the app back to the Home view.
 - [ ] `PRJ-015`: Renaming or moving a project file must update the matching entry in the recent-project registry.

@@ -212,6 +212,34 @@ pub fn finalize_image(entry: &MediaManifestEntry, width: i64, height: i64) -> Fi
     }
 }
 
+/// MED-002: Validate that JSON content is a Lottie animation.
+///
+/// Returns `true` only if the content is valid JSON with Lottie-specific
+/// fields: `v` (version), `fr` (frame rate), `ip`/`op` (in/out points),
+/// `w`/`h` (width/height), and `layers` (array). Plain JSON or any other
+/// JSON format is rejected.
+pub fn is_lottie_content(content: &str) -> bool {
+    let value: serde_json::Value = match serde_json::from_str(content) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let obj = match value.as_object() {
+        Some(o) => o,
+        None => return false,
+    };
+
+    // Lottie files must at minimum have: version, frame rate, in/out points,
+    // dimensions, and an array of layers.
+    obj.contains_key("v")
+        && obj.get("fr").and_then(|v| v.as_f64()).is_some()
+        && obj.get("ip").and_then(|v| v.as_f64()).is_some()
+        && obj.get("op").and_then(|v| v.as_f64()).is_some()
+        && obj.get("w").and_then(|v| v.as_f64()).is_some()
+        && obj.get("h").and_then(|v| v.as_f64()).is_some()
+        && obj.get("layers").and_then(|v| v.as_array()).is_some()
+}
+
 /// Finalize an imported Lottie entry.
 ///
 /// MED-010: Loads animation duration, size, framerate, and thumbnail.
@@ -1214,5 +1242,54 @@ mod tests {
     fn med_021_project_internal_trailing_slash() {
         let path = resolve_project_internal_path("clip.m4a", Some("/p/media/"));
         assert_eq!(path, "/p/media/clip.m4a");
+    }
+
+    // ── MED-002: Lottie content validation ──
+    #[test]
+    fn med_002_lottie_valid_json() {
+        let json = r#"{
+            "v": "5.5.0",
+            "fr": 30,
+            "ip": 0,
+            "op": 90,
+            "w": 500,
+            "h": 500,
+            "layers": []
+        }"#;
+        assert!(is_lottie_content(json), "MED-002: valid Lottie JSON");
+    }
+
+    #[test]
+    fn med_002_plain_json_rejected() {
+        let json = r#"{"name": "config", "version": 2}"#;
+        assert!(!is_lottie_content(json), "MED-002: plain JSON rejected");
+    }
+
+    #[test]
+    fn med_002_invalid_syntax_rejected() {
+        assert!(
+            !is_lottie_content("not json at all"),
+            "MED-002: invalid syntax"
+        );
+        assert!(!is_lottie_content(""), "MED-002: empty string");
+    }
+
+    #[test]
+    fn med_002_missing_layers_rejected() {
+        let json = r#"{"v": "5.5.0", "fr": 30, "ip": 0, "op": 90, "w": 500, "h": 500}"#;
+        assert!(!is_lottie_content(json), "MED-002: missing layers");
+    }
+
+    #[test]
+    fn med_002_wrong_type_layers_rejected() {
+        let json =
+            r#"{"v": "5.5.0", "fr": 30, "ip": 0, "op": 90, "w": 500, "h": 500, "layers": "none"}"#;
+        assert!(!is_lottie_content(json), "MED-002: layers not array");
+    }
+
+    #[test]
+    fn med_002_lottie_minimal_v_can_be_number() {
+        let json = r#"{"v": 5, "fr": 30, "ip": 0, "op": 90, "w": 500, "h": 500, "layers": []}"#;
+        assert!(is_lottie_content(json), "MED-002: version as number");
     }
 }

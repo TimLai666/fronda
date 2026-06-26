@@ -22,7 +22,7 @@ Scope sources:
   - audio: `mp3`, `wav`, `aac`, `m4a`
   - image: `png`, `jpg`, `jpeg`, `tiff`, `heic`, `webp`
   - lottie: `json`, `lottie`
-- [ ] `MED-002`: `.json` files are importable only when they are positively identified as Lottie animations. Plain JSON must be rejected. _(Extension-level mapping exists but no content-level Lottie validation.)_
+- [x] `MED-002`: `.json` files are importable only when they are positively identified as Lottie animations. Plain JSON must be rejected. _(Content-level validation via `is_lottie_content()` — checks for `v`, `fr`, `ip`, `op`, `w`, `h`, `layers`.)_
 - [x] `MED-003`: Imported asset names default to the filename stem.
 - [x] `MED-004`: A normal Finder/open-panel import creates an external manifest reference and does not automatically copy bytes into the project package.
 - [x] `MED-005`: Import creates both:
