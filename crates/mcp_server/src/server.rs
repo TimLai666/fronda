@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_42_tools() {
+    fn tools_list_returns_45_tools() {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: json!(1),
@@ -321,8 +321,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            42,
-            "MCP-003: exactly 42 tools (base + upstream PRs)"
+            45,
+            "MCP-003: exactly 45 tools (42 original + create/open/delete_project)"
         );
     }
 

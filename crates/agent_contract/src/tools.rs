@@ -1,4 +1,5 @@
-//! All 42 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 45 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! Issue #172: added create_project, open_project, delete_project (tool count 42 → 45).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -14,9 +15,9 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 42 tools exposed to the agent.
+/// Returns all 45 tools exposed to the agent.
 ///
-/// TDEF-001: exactly these 42 tools.
+/// TDEF-001: tool set (42 original + 3 project-management tools from Issue #172).
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
@@ -27,8 +28,10 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         apply_color(),
         apply_effect(),
         create_folder(),
+        create_project(),
         delete_folder(),
         delete_media(),
+        delete_project(),
         duplicate_project(),
         generate_audio(),
         generate_image(),
@@ -47,6 +50,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         list_models(),
         move_clips(),
         move_to_folder(),
+        open_project(),
         remove_clips(),
         remove_tracks(),
         rename_folder(),
@@ -631,6 +635,53 @@ fn object_any(description: &str) -> Value {
     Value::Object(map)
 }
 
+// ── Issue #172: project lifecycle MCP tools ──────────────────────────────────
+
+fn create_project() -> ToolDefinition {
+    ToolDefinition {
+        name: "create_project",
+        description: "Create a new Palmier project at the given path with an optional name. \
+            After creation the new project becomes the active project. \
+            Issue #172.",
+        input_schema: object(&[
+            (
+                "path",
+                string("File system path where the new .palmier project should be created"),
+            ),
+            (
+                "name",
+                string("Optional project name (defaults to the file's stem)"),
+            ),
+        ]),
+    }
+}
+
+fn open_project() -> ToolDefinition {
+    ToolDefinition {
+        name: "open_project",
+        description: "Open an existing Palmier project by path. \
+            The project becomes the active project. \
+            Issue #172.",
+        input_schema: object(&[(
+            "path",
+            string("File system path to an existing .palmier project package"),
+        )]),
+    }
+}
+
+fn delete_project() -> ToolDefinition {
+    ToolDefinition {
+        name: "delete_project",
+        description: "Move a Palmier project to the Trash. \
+            This closes the project if it is currently open. \
+            Issue #172.",
+        input_schema: object(&[(
+            "path",
+            string("File system path to the .palmier project to delete"),
+        )]),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -640,12 +691,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_42_tools() {
+    fn tdef_001_exactly_45_tools() {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            42,
-            "TDEF-001: exactly 42 tools (39 + apply_color + apply_effect + inspect_color)"
+            45,
+            "TDEF-001: 45 tools (42 original + create_project + open_project + delete_project)"
         );
     }
 
@@ -674,7 +725,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 42, "all 42 tool names must be unique");
+        assert_eq!(names.len(), 45, "all 45 tool names must be unique");
     }
 
     #[test]

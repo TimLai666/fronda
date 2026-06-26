@@ -137,7 +137,8 @@ impl AppRoot {
             | menu::MenuAction::SplitAtPlayhead
             | menu::MenuAction::TrimStartToPlayhead
             | menu::MenuAction::TrimEndToPlayhead
-            | menu::MenuAction::Delete => {}
+            | menu::MenuAction::Delete
+            | menu::MenuAction::RippleDelete => {}
             menu::MenuAction::About
             | menu::MenuAction::CheckForUpdates
             | menu::MenuAction::Settings => {}
@@ -145,6 +146,25 @@ impl AppRoot {
             | menu::MenuAction::KeyboardShortcuts
             | menu::MenuAction::McpInstructions
             | menu::MenuAction::SendFeedback => {}
+            // Playback actions (KEY-001, Issue #164) — delegated to editor/timeline
+            menu::MenuAction::PlayPause
+            | menu::MenuAction::PlayBackward
+            | menu::MenuAction::PauseJkl
+            | menu::MenuAction::PlayForward
+            | menu::MenuAction::StepFrameBackward
+            | menu::MenuAction::StepFrameForward
+            | menu::MenuAction::SkipFramesBackward
+            | menu::MenuAction::SkipFramesForward => {}
+            // Marking actions (Issue #164)
+            menu::MenuAction::MarkIn
+            | menu::MenuAction::MarkOut
+            | menu::MenuAction::ClearMarkIn
+            | menu::MenuAction::ClearMarkOut
+            | menu::MenuAction::ClearMarks => {}
+            // Timeline zoom (Issue #164)
+            menu::MenuAction::TimelineZoomIn
+            | menu::MenuAction::TimelineZoomOut
+            | menu::MenuAction::TimelineFitToWindow => {}
         }
 
         cx.notify();

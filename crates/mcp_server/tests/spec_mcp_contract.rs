@@ -26,12 +26,12 @@ fn mcp_002_server_version() {
 // ── MCP-003: Exposes the same tool set as the in-app agent ───────────────────
 
 #[test]
-fn mcp_003_exposes_42_tools() {
+fn mcp_003_exposes_45_tools() {
     let tools = agent_contract::all_tools();
     assert_eq!(
         tools.len(),
-        42,
-        "MCP-003: exactly 42 tools (base + upstream PRs)"
+        45,
+        "MCP-003: exactly 45 tools (42 original + create/open/delete_project)"
     );
 }
 
@@ -60,7 +60,7 @@ fn mcp_003_all_tool_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 42, "all 42 tool names must be unique");
+    assert_eq!(names.len(), 45, "all 45 tool names must be unique");
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn json_rpc_tools_list_response_format() {
         .pointer("/result/tools")
         .and_then(|v| v.as_array())
         .unwrap();
-    assert_eq!(tools_arr.len(), 42);
+    assert_eq!(tools_arr.len(), 45);
 
     // Each tool entry has required fields
     for tool_val in tools_arr {

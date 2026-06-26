@@ -34,6 +34,8 @@ pub enum MenuAction {
     TrimStartToPlayhead,
     TrimEndToPlayhead,
     Delete,
+    /// Issue #164: ripple delete (⌥⌫, matching Premiere Pro / DaVinci Resolve).
+    RippleDelete,
     // View menu (MENU-005)
     ToggleMediaPanel,
     ToggleInspector,
@@ -49,6 +51,41 @@ pub enum MenuAction {
     KeyboardShortcuts,
     McpInstructions,
     SendFeedback,
+    // Playback actions (KEY-001, Issue #164) ────────────────────────────────
+    /// Space — play/pause (highest priority, Issue #164).
+    PlayPause,
+    /// J — play backward (JKL standard).
+    PlayBackward,
+    /// K — pause (JKL standard).
+    PauseJkl,
+    /// L — play forward (JKL standard).
+    PlayForward,
+    /// ← — step one frame backward (KEY-001).
+    StepFrameBackward,
+    /// → — step one frame forward (KEY-001).
+    StepFrameForward,
+    /// ⇧← — jump multiple frames backward (KEY-001).
+    SkipFramesBackward,
+    /// ⇧→ — jump multiple frames forward (KEY-001).
+    SkipFramesForward,
+    // Marking actions (Issue #164) ──────────────────────────────────────────
+    /// I — mark range start (KEY-004).
+    MarkIn,
+    /// O — mark range end (KEY-004).
+    MarkOut,
+    /// ⌥I — clear mark in.
+    ClearMarkIn,
+    /// ⌥O — clear mark out.
+    ClearMarkOut,
+    /// ⌥X — clear both marks.
+    ClearMarks,
+    // Timeline zoom (Issue #164) ────────────────────────────────────────────
+    /// = — zoom timeline in.
+    TimelineZoomIn,
+    /// - — zoom timeline out.
+    TimelineZoomOut,
+    /// ⇧Z — fit timeline to window.
+    TimelineFitToWindow,
 }
 
 /// Modifier key flags.
@@ -212,6 +249,76 @@ pub fn all_shortcuts() -> Vec<Shortcut> {
         Shortcut::cmd("3", MenuAction::LayoutVertical),
         // Help menu (MENU-007)
         Shortcut::cmd_shift("/", MenuAction::KeyboardShortcuts),
+        // Playback (KEY-001, Issue #164)
+        Shortcut::new("space", Modifiers::default(), MenuAction::PlayPause),
+        Shortcut::new("j", Modifiers::default(), MenuAction::PlayBackward),
+        Shortcut::new("k", Modifiers::default(), MenuAction::PauseJkl),
+        Shortcut::new("l", Modifiers::default(), MenuAction::PlayForward),
+        Shortcut::new("left", Modifiers::default(), MenuAction::StepFrameBackward),
+        Shortcut::new("right", Modifiers::default(), MenuAction::StepFrameForward),
+        Shortcut::new(
+            "left",
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            MenuAction::SkipFramesBackward,
+        ),
+        Shortcut::new(
+            "right",
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            MenuAction::SkipFramesForward,
+        ),
+        // Marking (KEY-004, Issue #164)
+        Shortcut::new("i", Modifiers::default(), MenuAction::MarkIn),
+        Shortcut::new("o", Modifiers::default(), MenuAction::MarkOut),
+        Shortcut::new(
+            "i",
+            Modifiers {
+                option: true,
+                ..Default::default()
+            },
+            MenuAction::ClearMarkIn,
+        ),
+        Shortcut::new(
+            "o",
+            Modifiers {
+                option: true,
+                ..Default::default()
+            },
+            MenuAction::ClearMarkOut,
+        ),
+        Shortcut::new(
+            "x",
+            Modifiers {
+                option: true,
+                ..Default::default()
+            },
+            MenuAction::ClearMarks,
+        ),
+        // Ripple delete (Issue #164)
+        Shortcut::new(
+            "backspace",
+            Modifiers {
+                option: true,
+                ..Default::default()
+            },
+            MenuAction::RippleDelete,
+        ),
+        // Timeline zoom (Issue #164)
+        Shortcut::new("=", Modifiers::default(), MenuAction::TimelineZoomIn),
+        Shortcut::new("-", Modifiers::default(), MenuAction::TimelineZoomOut),
+        Shortcut::new(
+            "z",
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            MenuAction::TimelineFitToWindow,
+        ),
     ]
 }
 
@@ -315,8 +422,8 @@ mod tests {
     #[test]
     fn menu_008_shortcuts_count() {
         let shortcuts = all_shortcuts();
-        // 27 shortcuts matching MENU-002 to MENU-007 bindings
-        assert_eq!(shortcuts.len(), 27);
+        // 27 original + 17 new playback/marking/ripple/zoom shortcuts (Issue #164)
+        assert_eq!(shortcuts.len(), 44);
     }
 
     #[test]
@@ -345,5 +452,63 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(route_shortcut("unknown", &modifiers), None);
+    }
+
+    // ---- Issue #164: playback / marking / zoom shortcuts --------------------
+
+    #[test]
+    fn issue_164_space_routes_play_pause() {
+        assert_eq!(
+            route_shortcut("space", &Modifiers::default()),
+            Some(MenuAction::PlayPause)
+        );
+    }
+
+    #[test]
+    fn issue_164_jkl_routes_playback() {
+        assert_eq!(route_shortcut("j", &Modifiers::default()), Some(MenuAction::PlayBackward));
+        assert_eq!(route_shortcut("k", &Modifiers::default()), Some(MenuAction::PauseJkl));
+        assert_eq!(route_shortcut("l", &Modifiers::default()), Some(MenuAction::PlayForward));
+    }
+
+    #[test]
+    fn issue_164_arrow_keys_route_frame_step() {
+        assert_eq!(route_shortcut("left", &Modifiers::default()), Some(MenuAction::StepFrameBackward));
+        assert_eq!(route_shortcut("right", &Modifiers::default()), Some(MenuAction::StepFrameForward));
+    }
+
+    #[test]
+    fn issue_164_shift_arrow_routes_skip() {
+        let shift = Modifiers { shift: true, ..Default::default() };
+        assert_eq!(route_shortcut("left", &shift), Some(MenuAction::SkipFramesBackward));
+        assert_eq!(route_shortcut("right", &shift), Some(MenuAction::SkipFramesForward));
+    }
+
+    #[test]
+    fn issue_164_i_o_routes_mark_in_out() {
+        assert_eq!(route_shortcut("i", &Modifiers::default()), Some(MenuAction::MarkIn));
+        assert_eq!(route_shortcut("o", &Modifiers::default()), Some(MenuAction::MarkOut));
+    }
+
+    #[test]
+    fn issue_164_option_backspace_routes_ripple_delete() {
+        let opt = Modifiers { option: true, ..Default::default() };
+        assert_eq!(route_shortcut("backspace", &opt), Some(MenuAction::RippleDelete));
+    }
+
+    #[test]
+    fn issue_164_timeline_zoom_shortcuts() {
+        assert_eq!(route_shortcut("=", &Modifiers::default()), Some(MenuAction::TimelineZoomIn));
+        assert_eq!(route_shortcut("-", &Modifiers::default()), Some(MenuAction::TimelineZoomOut));
+        let shift = Modifiers { shift: true, ..Default::default() };
+        assert_eq!(route_shortcut("z", &shift), Some(MenuAction::TimelineFitToWindow));
+    }
+
+    #[test]
+    fn issue_164_clear_marks_shortcuts() {
+        let opt = Modifiers { option: true, ..Default::default() };
+        assert_eq!(route_shortcut("i", &opt), Some(MenuAction::ClearMarkIn));
+        assert_eq!(route_shortcut("o", &opt), Some(MenuAction::ClearMarkOut));
+        assert_eq!(route_shortcut("x", &opt), Some(MenuAction::ClearMarks));
     }
 }
