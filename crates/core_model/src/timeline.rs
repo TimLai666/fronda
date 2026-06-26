@@ -399,6 +399,18 @@ pub struct TextStyle {
     /// Font weight (400 = normal, 700 = bold). Upstream PR #65.
     #[serde(default = "default_font_weight")]
     pub font_weight: f64,
+    /// Variable font axis values (Issue #50).
+    ///
+    /// Maps OpenType axis tag → value, e.g. {"wdth": 100.0, "GRAD": 0.0}.
+    /// Requires a variable font; ignored on static fonts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variable_font_axes: Option<std::collections::HashMap<String, f64>>,
+    /// Letter spacing in points (Issue #50 / motion typography).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter_spacing: Option<f64>,
+    /// Line height multiplier (Issue #50). 1.0 = normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<f64>,
 }
 
 impl Default for TextStyle {
@@ -413,6 +425,9 @@ impl Default for TextStyle {
             background: default_text_background(),
             border: default_text_border(),
             font_weight: 400.0,
+            variable_font_axes: None,
+            letter_spacing: None,
+            line_height: None,
         }
     }
 }

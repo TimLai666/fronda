@@ -501,6 +501,9 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
                             },
                         },
                         font_weight: 700.0,
+                        variable_font_axes: None,
+                        letter_spacing: None,
+                        line_height: None,
                     }),
                     opacity_track: Some(KeyframeTrack {
                         keyframes: vec![

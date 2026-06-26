@@ -194,6 +194,35 @@ pub struct MediaManifestEntry {
     /// Drop-frame flag of the `tmcd` track.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_timecode_drop_frame: Option<bool>,
+    /// On-device Vision classification tags (Issue #118).
+    ///
+    /// Populated by `VNClassifyImageRequest` on macOS. Runs locally, no cost.
+    /// Example: ["outdoor", "nature", "sky", "person"]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_tags: Option<Vec<String>>,
+    /// AI-generated one-line content description (Issue #118).
+    ///
+    /// Produced by a vision-LLM call on representative scene frames.
+    /// Credit-metered action. Example: "Person hiking through a forest trail."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_description: Option<String>,
+    /// Label generation status (Issue #118).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_label_status: Option<AiLabelStatus>,
+}
+
+/// Status of AI content label generation for a media asset (Issue #118).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AiLabelStatus {
+    /// Not yet labeled.
+    None,
+    /// On-device tagging complete; AI description pending.
+    TagsOnly,
+    /// Both tags and AI description are available.
+    Complete,
+    /// Label generation failed.
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,6 +332,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+        ai_tags: None,
+        ai_description: None,
+        ai_label_status: None,
         }
     }
 
@@ -403,6 +435,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+        ai_tags: None,
+        ai_description: None,
+        ai_label_status: None,
         });
         let url = manifest.expected_url_for("ext");
         assert_eq!(url, Some("/path/to/file.mp4".to_string()));
@@ -437,6 +472,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+        ai_tags: None,
+        ai_description: None,
+        ai_label_status: None,
         });
         let result = manifest.resolve_url_for("vid", |p| p == "/path/to/vid.mp4");
         assert_eq!(result, Some(true), "RES-003: file exists");
@@ -464,6 +502,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+        ai_tags: None,
+        ai_description: None,
+        ai_label_status: None,
         });
         let result = manifest.resolve_url_for("vid", |_| false);
         assert_eq!(result, Some(false), "RES-003: file missing");
@@ -498,6 +539,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+        ai_tags: None,
+        ai_description: None,
+        ai_label_status: None,
         });
         let result = manifest.resolve_url_for("cached", |_| false);
         assert_eq!(result, Some(true), "RES-003: cached is always resolvable");
@@ -525,6 +569,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+        ai_tags: None,
+        ai_description: None,
+        ai_label_status: None,
         });
         assert!(
             manifest.is_missing_for("vid", |_| false),
@@ -563,6 +610,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+        ai_tags: None,
+        ai_description: None,
+        ai_label_status: None,
         });
         assert!(
             !manifest.is_missing_for("vid", |_| true),
@@ -592,6 +642,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+        ai_tags: None,
+        ai_description: None,
+        ai_label_status: None,
         });
         assert_eq!(
             manifest.display_name_for("vid"),

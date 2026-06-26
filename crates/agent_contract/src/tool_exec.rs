@@ -1309,6 +1309,9 @@ impl ToolExecutor {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         };
         let entry_id = entry.id.clone();
         self.media_manifest.entries.push(entry);
@@ -2115,6 +2118,9 @@ impl ToolExecutor {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -2179,6 +2185,9 @@ impl ToolExecutor {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -2224,6 +2233,9 @@ impl ToolExecutor {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -2292,6 +2304,9 @@ impl ToolExecutor {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -2363,6 +2378,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         manifest.folders.push(core_model::MediaFolder {
             id: "folder-001".to_string(),
@@ -2665,6 +2683,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let mut exec = ToolExecutor::new(core_model::Timeline::default(), manifest);
         let result = exec
@@ -2703,6 +2724,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let mut timeline = core_model::Timeline::default();
         timeline.tracks.push(core_model::Track {
@@ -3370,6 +3394,9 @@ mod tests {
                 source_timecode_frame: None,
                 source_timecode_quanta: None,
                 source_timecode_drop_frame: None,
+                ai_tags: None,
+                ai_description: None,
+                ai_label_status: None,
             });
         assert!(
             !exec.is_media_offline("cached", |_| true),
