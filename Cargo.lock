@@ -1824,6 +1824,7 @@ dependencies = [
 name = "fronda-app-shell-gpui"
 version = "0.1.0"
 dependencies = [
+ "fronda-app-contract",
  "gpui",
  "gpui_platform",
 ]

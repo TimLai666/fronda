@@ -2,12 +2,18 @@
 pub mod app_root;
 #[cfg(feature = "desktop-app")]
 pub mod editor_view;
+#[cfg(feature = "desktop-app")]
+pub mod feedback_view;
+#[cfg(feature = "desktop-app")]
+pub mod help_view;
 pub mod home_model;
 #[cfg(feature = "desktop-app")]
 pub mod home_view;
 pub mod menu;
 pub mod pane;
 pub mod platform_adapter;
+#[cfg(feature = "desktop-app")]
+pub mod settings_view;
 pub mod window;
 
 #[cfg(feature = "desktop-app")]
