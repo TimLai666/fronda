@@ -1,10 +1,18 @@
 #[cfg(feature = "desktop-app")]
+pub mod app_root;
+#[cfg(feature = "desktop-app")]
 pub mod editor_view;
+pub mod home_model;
+#[cfg(feature = "desktop-app")]
+pub mod home_view;
 pub mod menu;
 pub mod pane;
 pub mod platform_adapter;
 pub mod window;
 
+#[cfg(feature = "desktop-app")]
+pub use app_root::{open_main_window, AppRoot};
+pub use home_model::{HomeAction, HomeLayout, ProjectCard};
 pub use menu::{
     all_menus, all_shortcuts, route_shortcut, MenuAction, MenuGroup, Modifiers, Shortcut,
 };
