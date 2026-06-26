@@ -1,5 +1,7 @@
-//! All 45 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
-//! Issue #172: added create_project, open_project, delete_project (tool count 42 → 45).
+//! All 49 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! Issue #172: added create_project, open_project, delete_project (42 → 45).
+//! Issue #174: added remove_silence (45 → 46).
+//! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -15,9 +17,9 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 45 tools exposed to the agent.
+/// Returns all 49 tools exposed to the agent.
 ///
-/// TDEF-001: tool set (42 original + 3 project-management tools from Issue #172).
+/// TDEF-001: tool set (42 original + Issues #172/174/157 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
@@ -25,6 +27,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         add_shapes(),
         add_texts(),
         apply_animation(),
+        apply_clip_preset(),
         apply_color(),
         apply_effect(),
         create_folder(),
@@ -33,6 +36,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         delete_media(),
         delete_project(),
         duplicate_project(),
+        list_clip_presets(),
         generate_audio(),
         generate_image(),
         generate_music(),
@@ -52,6 +56,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         move_to_folder(),
         open_project(),
         remove_clips(),
+        remove_silence(),
         remove_tracks(),
         rename_folder(),
         rename_media(),
@@ -62,6 +67,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         set_clip_properties(),
         set_color_grade(),
         set_keyframes(),
+        save_clip_preset(),
         split_clip(),
         undo(),
         upscale_media(),
@@ -635,6 +641,67 @@ fn object_any(description: &str) -> Value {
     Value::Object(map)
 }
 
+// ── Issue #174: silence removal MCP tool ─────────────────────────────────────
+
+fn remove_silence() -> ToolDefinition {
+    ToolDefinition {
+        name: "remove_silence",
+        description: "Detect and ripple-delete silent regions in a clip using on-device RMS analysis. \
+            No AI or transcription dependency. Issue #174.",
+        input_schema: object(&[
+            ("clipId", string("Clip id to process (must be a single audio or video clip)")),
+            (
+                "thresholdDb",
+                number("RMS amplitude threshold in dBFS (e.g. -40.0). Regions below this are considered silent. Default: -40."),
+            ),
+            (
+                "minSilenceSeconds",
+                number("Minimum silence duration to remove in seconds. Default: 0.5."),
+            ),
+            (
+                "edgePaddingSeconds",
+                number("Seconds of padding to leave at each edge of a silent region. Default: 0.1."),
+            ),
+        ]),
+    }
+}
+
+// ── Issue #157: named clip preset MCP tools ────────────────────────────────
+
+fn save_clip_preset() -> ToolDefinition {
+    ToolDefinition {
+        name: "save_clip_preset",
+        description: "Save the current settings of a clip as a named preset for reuse. \
+            The preset captures color grade, transform, speed, and other per-clip properties. \
+            Issue #157.",
+        input_schema: object(&[
+            ("clipId", string("Source clip id to capture settings from")),
+            ("name", string("Preset name (e.g. 'Outdoor warm', 'Interview tight')")),
+        ]),
+    }
+}
+
+fn apply_clip_preset() -> ToolDefinition {
+    ToolDefinition {
+        name: "apply_clip_preset",
+        description: "Apply a named preset to one or more clips. \
+            Issue #157.",
+        input_schema: object(&[
+            ("presetName", string("Name of the preset to apply")),
+            ("clipIds", array("Clip ids to apply the preset to")),
+        ]),
+    }
+}
+
+fn list_clip_presets() -> ToolDefinition {
+    ToolDefinition {
+        name: "list_clip_presets",
+        description: "List all saved named clip presets. \
+            Issue #157.",
+        input_schema: object(&[]),
+    }
+}
+
 // ── Issue #172: project lifecycle MCP tools ──────────────────────────────────
 
 fn create_project() -> ToolDefinition {
@@ -691,12 +758,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_45_tools() {
+    fn tdef_001_exactly_49_tools() {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            45,
-            "TDEF-001: 45 tools (42 original + create_project + open_project + delete_project)"
+            49,
+            "TDEF-001: 49 tools (42 original + Issues #172/174/157)"
         );
     }
 
@@ -725,7 +792,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 45, "all 45 tool names must be unique");
+        assert_eq!(names.len(), 49, "all 49 tool names must be unique");
     }
 
     #[test]

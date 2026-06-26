@@ -14,6 +14,12 @@ pub struct McpConfig {
     pub port: u16,
     pub server_name: String,
     pub server_version: String,
+    /// Optional bearer token for request authentication (Issue #122).
+    ///
+    /// When `Some(token)`, the server rejects requests that do not include
+    /// `Authorization: Bearer <token>` in the HTTP headers.
+    /// Required when `host` is not loopback (network exposure).
+    pub auth_token: Option<String>,
 }
 
 impl Default for McpConfig {
@@ -23,6 +29,41 @@ impl Default for McpConfig {
             port: 19789,                       // MCP-006: default port
             server_name: "palmier-pro".into(), // MCP-001
             server_version: "1.0.0".into(),    // MCP-002
+            auth_token: None,
+        }
+    }
+}
+
+impl McpConfig {
+    /// Whether the server is bound to loopback only (127.0.0.1 / ::1).
+    pub fn is_loopback_only(&self) -> bool {
+        self.host == "127.0.0.1" || self.host == "::1" || self.host == "localhost"
+    }
+
+    /// Issue #122: validate config — network exposure requires an auth token.
+    ///
+    /// Returns `Err` if the host is not loopback and no auth token is set.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.is_loopback_only() && self.auth_token.is_none() {
+            return Err(format!(
+                "MCP server bound to '{}' (network-accessible) requires an auth_token. \
+                 Set auth_token or bind to 127.0.0.1 for local-only access.",
+                self.host
+            ));
+        }
+        Ok(())
+    }
+
+    /// Build a network-accessible config with authentication.
+    ///
+    /// Issue #122: use this to expose the MCP server to the local network
+    /// (e.g. host = "0.0.0.0") with a bearer token for access control.
+    pub fn with_network_access(host: impl Into<String>, port: u16, auth_token: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            auth_token: Some(auth_token.into()),
+            ..Default::default()
         }
     }
 }
@@ -277,6 +318,61 @@ mod tests {
         assert_eq!(config.port, 19789);
     }
 
+    // ---- Issue #122: MCP local network + auth token -----------------------
+
+    #[test]
+    fn issue_122_default_config_is_loopback() {
+        let config = McpConfig::default();
+        assert!(config.is_loopback_only());
+        assert!(config.auth_token.is_none());
+    }
+
+    #[test]
+    fn issue_122_loopback_config_valid_without_auth() {
+        let config = McpConfig::default();
+        assert!(config.validate().is_ok(), "loopback needs no auth");
+    }
+
+    #[test]
+    fn issue_122_network_config_without_auth_rejected() {
+        let config = McpConfig {
+            host: "0.0.0.0".into(),
+            auth_token: None,
+            ..Default::default()
+        };
+        assert!(!config.is_loopback_only());
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("auth_token"), "err={err}");
+    }
+
+    #[test]
+    fn issue_122_network_config_with_auth_valid() {
+        let config = McpConfig::with_network_access("0.0.0.0", 19789, "secret-token");
+        assert!(!config.is_loopback_only());
+        assert!(config.auth_token.is_some());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn issue_122_localhost_is_loopback() {
+        let config = McpConfig {
+            host: "localhost".into(),
+            ..Default::default()
+        };
+        assert!(config.is_loopback_only());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn issue_122_ipv6_loopback_is_loopback() {
+        let config = McpConfig {
+            host: "::1".into(),
+            ..Default::default()
+        };
+        assert!(config.is_loopback_only());
+        assert!(config.validate().is_ok());
+    }
+
     #[test]
     fn json_rpc_parse_error() {
         let err = JsonRpcError::ParseError;
@@ -308,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_45_tools() {
+    fn tools_list_returns_49_tools() {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: json!(1),
@@ -321,8 +417,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            45,
-            "MCP-003: exactly 45 tools (42 original + create/open/delete_project)"
+            49,
+            "MCP-003: exactly 49 tools (42 original + Issues #172/174/157)"
         );
     }
 

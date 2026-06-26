@@ -9,12 +9,12 @@ use core_model::{MediaManifest, Timeline, ToolResultBlock};
 // ── TDEF-001: Exactly the right number of tools ──────────────────────────────
 
 #[test]
-fn tdef_001_exactly_45_tools() {
+fn tdef_001_exactly_49_tools() {
     let tools = all_tools();
     assert_eq!(
         tools.len(),
-        45,
-        "TDEF-001: exactly 45 tools (42 original + create/open/delete_project)"
+        49,
+        "TDEF-001: exactly 49 tools (42 original + Issues #172/174/157)"
     );
 }
 
@@ -45,7 +45,7 @@ fn tdef_002_all_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 45, "all 45 tool names must be unique");
+    assert_eq!(names.len(), 49, "all 49 tool names must be unique");
 }
 
 // ── TDEF-003: Each tool has a valid JSON schema ──────────────────────────────
