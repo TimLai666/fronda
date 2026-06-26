@@ -227,6 +227,11 @@ impl FolderOps {
         let deleted_folder_ids = Self::delete_folder(manifest, folder_id)?;
         let deleted_folder_set: HashSet<String> = deleted_folder_ids.iter().cloned().collect();
 
+        // FLD-013: Remove affected manifest entries from the library
+        manifest
+            .entries
+            .retain(|e| !affected_asset_ids.contains(&e.id));
+
         // FLD-014: Remove clips referencing deleted assets from timeline
         let removed_clip_ids = Self::remove_clips_by_media_ref(timeline, &affected_asset_ids);
 
@@ -1278,8 +1283,43 @@ mod tests {
 
         assert!(effect.removed_clip_ids.contains(&"clip-1".to_string()));
         assert!(effect.deleted_asset_ids.contains(&"asset-1".to_string()));
+        // FLD-013: Manifest entries in deleted folder are removed
+        assert!(
+            manifest.entries.iter().all(|e| e.id != "asset-1"),
+            "FLD-013: asset in deleted folder is removed from manifest"
+        );
         // Clip removed — track may also be pruned (FLD-015)
         assert!(timeline.tracks.is_empty() || timeline.tracks[0].clips.is_empty());
+    }
+
+    #[test]
+    fn fld_013_delete_folder_removes_manifest_entries() {
+        let mut manifest = MediaManifest::default();
+        let folder_id = FolderOps::create_folder(&mut manifest, "Folder".into(), None).unwrap();
+        manifest.entries.push(entry(
+            "asset-in-folder",
+            ClipType::Video,
+            "vid.mp4",
+            Some(&folder_id),
+        ));
+        manifest
+            .entries
+            .push(entry("asset-orphan", ClipType::Image, "img.png", None));
+        let mut timeline = Timeline::default();
+
+        FolderOps::delete_folder_with_timeline_effects(&mut manifest, &mut timeline, &folder_id)
+            .unwrap();
+
+        // FLD-013: Assets inside deleted folder are removed from manifest
+        assert!(
+            manifest.entries.iter().all(|e| e.id != "asset-in-folder"),
+            "FLD-013: asset in deleted folder removed"
+        );
+        // Orphan assets outside the folder are preserved
+        assert!(
+            manifest.entries.iter().any(|e| e.id == "asset-orphan"),
+            "FLD-013: orphan asset preserved"
+        );
     }
 
     #[test]

@@ -62,7 +62,7 @@ Scope sources:
 - [x] `FLD-010`: Folder moves must reject self-parenting.
 - [x] `FLD-011`: Folder moves must reject moving a folder under one of its own descendants.
 - [x] `FLD-012`: Deleting a folder deletes all descendant folders logically.
-- [ ] `FLD-013`: Deleting a folder deletes all assets inside that folder subtree from the library. _(`delete_folder` only removes folders; `delete_folder_with_timeline_effects` tracks affected asset IDs but does not remove manifest entries.)_
+- [x] `FLD-013`: Deleting a folder deletes all assets inside that folder subtree from the library. _(`delete_folder_with_timeline_effects` now removes affected manifest entries, timeline clips, prunes empty tracks, and returns deleted IDs.)_
 - [x] `FLD-014`: Deleting a folder removes timeline clips referencing deleted assets.
 - [x] `FLD-015`: Deleting a folder prunes newly empty tracks after referenced clips are removed.
 - [x] `FLD-016`: Deleting a folder closes preview tabs for deleted assets.
