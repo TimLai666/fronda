@@ -25,9 +25,9 @@ Scope sources:
 ## B. Project package contract
 
 - [x] `PRJ-001`: Project files use the `.palmier` extension.
-- [ ] `PRJ-002`: The document type identifier is `io.palmier.project`.
-- [ ] `PRJ-003`: The default untitled project name is `Untitled Project`.
-- [ ] `PRJ-004`: The default project storage root is `~/Documents/Palmier Pro`.
+- [x] `PRJ-002`: The document type identifier is `io.palmier.project`.
+- [x] `PRJ-003`: The default untitled project name is `Untitled Project`.
+- [x] `PRJ-004`: The default project storage root is `~/Documents/Palmier Pro`.
 - [x] `PRJ-005`: A project package may contain the following well-known children:
   - `project.json`
   - `media.json`
@@ -43,7 +43,7 @@ Scope sources:
 - [x] `PRJ-011`: On open, the editor state must restore timeline, media manifest, and generation log when present.
 - [x] `PRJ-012`: If no generation log was persisted, the app must seed it from AI-generated assets already present in the project.
 - [x] `PRJ-013`: Saving must persist the current timeline snapshot, manifest snapshot, generation log snapshot, thumbnail, non-empty chat sessions, and any existing internal `media/` directory.
-- [ ] `PRJ-014`: Closing the active project returns the app back to the Home view.
+- [x] `PRJ-014`: Closing the active project returns the app back to the Home view.
 - [ ] `PRJ-015`: Renaming or moving a project file must update the matching entry in the recent-project registry.
 
 ## C. Recent-project registry

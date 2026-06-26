@@ -126,18 +126,18 @@ Scope sources:
 - [ ] `PRV-001`: Timeline preview renders the composited timeline, not raw source assets.
 - [ ] `PRV-002`: Media-asset preview tabs render the source asset directly rather than the timeline composition.
 - [ ] `PRV-003`: Text overlays appear in timeline preview/export paths and not in raw source-asset preview paths.
-- [ ] `PRV-004`: Invalid timeline settings (`fps <= 0`, `width <= 0`, `height <= 0`) cause composition build failure.
-- [ ] `PRV-005`: Offline or unprocessable media are skipped rather than failing the entire composition build.
-- [ ] `PRV-006`: Hidden visual tracks contribute no visible output.
-- [ ] `PRV-007`: Muted audio tracks contribute zero audible output.
-- [ ] `PRV-008`: Text clips do not become normal AV composition tracks; they remain overlay-rendered.
-- [ ] `PRV-009`: Visual clips on the same timeline track are inserted only when they are non-overlapping in sorted order.
-- [ ] `PRV-010`: Audio clips at `1.0x` speed may share one composition track per timeline track.
-- [ ] `PRV-011`: Audio clips with non-`1.0x` speed use dedicated composition tracks.
+- [x] `PRV-004`: Invalid timeline settings (`fps <= 0`, `width <= 0`, `height <= 0`) cause composition build failure.
+- [x] `PRV-005`: Offline or unprocessable media are skipped rather than failing the entire composition build.
+- [x] `PRV-006`: Hidden visual tracks contribute no visible output.
+- [x] `PRV-007`: Muted audio tracks contribute zero audible output.
+- [x] `PRV-008`: Text clips do not become normal AV composition tracks; they remain overlay-rendered.
+- [x] `PRV-009`: Visual clips on the same timeline track are inserted only when they are non-overlapping in sorted order.
+- [x] `PRV-010`: Audio clips at `1.0x` speed may share one composition track per timeline track.
+- [x] `PRV-011`: Audio clips with non-`1.0x` speed use dedicated composition tracks.
 - [ ] `PRV-012`: Still images must remain renderable as synthetic video sources for preview/export.
 - [ ] `PRV-013`: Lottie assets must remain renderable as timeline media.
-- [ ] `PRV-014`: Starting playback from the end of the timeline rewinds to frame `0` before playing.
-- [ ] `PRV-015`: Video-backed source trim starts and durations inserted into AV compositions are converted through the source track's natural timescale rather than blindly reusing project fps timescale, preventing invalid source ranges and deep-seek export/preview hangs on high-frame-rate sources while preserving existing audio composition timing behavior.
+- [x] `PRV-014`: Starting playback from the end of the timeline rewinds to frame `0` before playing.
+- [x] `PRV-015`: Video-backed source trim starts and durations inserted into AV compositions are converted through the source track's natural timescale rather than blindly reusing project fps timescale, preventing invalid source ranges and deep-seek export/preview hangs on high-frame-rate sources while preserving existing audio composition timing behavior.
 
 ## J. Editor shell and layout behavior
 
