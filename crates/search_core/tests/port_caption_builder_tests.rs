@@ -3,7 +3,7 @@
 //! Tests caption phrase splitting and spec generation.
 //! All times are in seconds.
 
-use search_core::caption::{phrases_from_words, CaptionConfig};
+use search_core::caption::{phrases_from_words, CaptionConfig, TextCase};
 use search_core::transcript::TranscribedWord;
 
 // Helper to create a single-segment transcript from text.
@@ -33,6 +33,9 @@ fn port_caption_keeps_segment_whole_when_it_fits() {
         max_gap_seconds: 999.0,
         auto_detect_track: false,
         target_clip_ids: None,
+        profanity_censor: false,
+        locale_override: None,
+        text_case: TextCase::Auto,
     };
     let phrases = phrases_from_words(&words, &config, 30);
     assert_eq!(phrases.len(), 1);
@@ -64,6 +67,9 @@ fn port_caption_words_divided_by_gap() {
         max_gap_seconds: 0.7,
         auto_detect_track: false,
         target_clip_ids: None,
+        profanity_censor: false,
+        locale_override: None,
+        text_case: TextCase::Auto,
     };
     let phrases = phrases_from_words(&words, &config, 30);
     // Gap between 1.0 and 5.0 = 4.0 > 0.7 → split

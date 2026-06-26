@@ -223,6 +223,7 @@ fn saves_and_loads_transcripts() {
                 modification_time: 1_700_000_000,
                 file_size: 42_000,
             },
+            is_full_file: true,
             segments: vec![TranscriptSegment {
                 start_seconds: 0.0,
                 end_seconds: 2.0,
