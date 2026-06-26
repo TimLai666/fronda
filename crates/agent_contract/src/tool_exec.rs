@@ -20,6 +20,9 @@ pub struct ToolExecutor {
     timeline: Timeline,
     media_manifest: MediaManifest,
     undo_stack: UndoStack,
+    /// READ-026: Status reporting for visual indexing.
+    /// Set by the caller (app shell) to reflect search model state.
+    search_status: String,
 }
 
 impl ToolExecutor {
@@ -28,6 +31,7 @@ impl ToolExecutor {
             timeline,
             media_manifest,
             undo_stack: UndoStack::new(),
+            search_status: String::new(),
         }
     }
 
@@ -53,6 +57,16 @@ impl ToolExecutor {
 
     pub fn undo_stack_mut(&mut self) -> &mut UndoStack {
         &mut self.undo_stack
+    }
+
+    /// READ-026: Get the current search indexing status.
+    pub fn search_status(&self) -> &str {
+        &self.search_status
+    }
+
+    /// READ-026: Set the search indexing status (by app shell).
+    pub fn set_search_status(&mut self, status: &str) {
+        self.search_status = status.to_string();
     }
 
     /// Returns IDs of media entries that are offline (missing local file, no cached URL).
@@ -858,8 +872,15 @@ impl ToolExecutor {
             })
             .collect();
 
-        let status = if results.is_empty() {
+        // READ-026: Include search indexing status in output.
+        let status = if results.is_empty() && self.search_status.is_empty() {
             "ok".to_string()
+        } else if !self.search_status.is_empty() {
+            if results.is_empty() {
+                self.search_status.clone()
+            } else {
+                format!("Found {} media; {}", results.len(), self.search_status)
+            }
         } else {
             format!("Found {} media", results.len())
         };
@@ -2530,6 +2551,44 @@ mod tests {
         let files = parsed["files"].as_array().unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0]["media_id"], "media-001");
+    }
+
+    #[test]
+    fn exec_027_search_media_with_status() {
+        // READ-026: Status reporting for visual indexing
+        let mut exec = make_executor_with_media();
+        exec.set_search_status("Indexing 1 asset");
+        let result = exec
+            .execute("search_media", &json!({"query": "test_video"}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(parsed["status"].as_str().unwrap().contains("Indexing"));
+    }
+
+    #[test]
+    fn exec_028_search_media_no_results_with_status() {
+        // READ-026: Status shown even with no results
+        let mut exec = make_executor_with_media();
+        exec.set_search_status("Model not ready");
+        let result = exec
+            .execute("search_media", &json!({"query": "nothing"}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["status"], "Model not ready");
+    }
+
+    #[test]
+    fn exec_029_search_media_default_status_ok() {
+        // READ-026: Default empty status shows ok
+        let mut exec = make_executor_with_media();
+        let result = exec
+            .execute("search_media", &json!({"query": "test_video"}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(parsed["status"].as_str().unwrap().contains("Found"));
     }
 
     #[test]

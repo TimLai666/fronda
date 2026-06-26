@@ -136,8 +136,8 @@ Scope sources:
 ### `search_media`, `list_models`, `list_folders`
 
 - [x] `READ-025`: `cmd_search_media()` searches by name and optional type filter only. Visual/spoken separation not implemented. — **NOT FULLY IMPLEMENTED**.
-- [ ] `READ-026`: Status reporting for visual indexing — **NOT IMPLEMENTED**.
-- [x] `READ-027`: Limit clamping 1–50 — **NOT IMPLEMENTED**.
+- [x] `READ-026`: Status reporting for visual indexing. _(`ToolExecutor::search_status` set by app shell; included in `cmd_search_media` output.)_
+- [x] `READ-027`: Limit clamping 1–50. _(Enforced by `format_search_results` via `.clamp(1, 50)`.)_
 - [x] `READ-028`: `cmd_list_models()` returns hardcoded model lists grouped by type (video, image, audio). Not driven by actual provider.
 - [x] `READ-029`: `loaded = false` vs "no models" distinction — **NOT IMPLEMENTED** (always returns loaded).
 - [x] `READ-030`: `cmd_list_folders()` returns folder metadata including `parent_folder_id`. Test: `exec_016_list_folders`, `exec_017_list_folders_empty`.
