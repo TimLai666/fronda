@@ -105,6 +105,9 @@ impl ChatView {
             _ => "",
         };
 
+        let role = role_label(&msg.role).to_string();
+        let text = msg.text.clone();
+
         div()
             .flex()
             .flex_col()
@@ -118,7 +121,7 @@ impl ChatView {
                     .child(
                         div()
                             .text_xs()
-                            .child(role_label(&msg.role))
+                            .child(role)
                             .text_color(ChatColors::TEXT_SECONDARY),
                     )
                     .child(
@@ -132,7 +135,7 @@ impl ChatView {
                 div().px(px(8.0)).py(px(6.0)).rounded(px(6.0)).bg(bg).child(
                     div()
                         .text_sm()
-                        .child(msg.text.clone())
+                        .child(text)
                         .text_color(ChatColors::TEXT_PRIMARY),
                 ),
             )
@@ -147,11 +150,22 @@ impl Focusable for ChatView {
 
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut messages_div = div().flex().flex_col().flex_1().overflow_y_scroll();
+        let mut messages_div = div()
+            .id("chat-messages")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .overflow_y_scroll();
 
         for msg in &self.model.messages {
             messages_div = messages_div.child(Self::render_message(msg));
         }
+
+        let input_placeholder = if self.model.input.is_empty() {
+            "Ask the agent…".to_string()
+        } else {
+            self.model.input.text.clone()
+        };
 
         let input_bar = div()
             .flex()
@@ -166,11 +180,7 @@ impl Render for ChatView {
                 div().flex_1().px(px(8.0)).py(px(6.0)).child(
                     div()
                         .text_sm()
-                        .child(if self.model.input.is_empty() {
-                            "Ask the agent…"
-                        } else {
-                            &self.model.input.text
-                        })
+                        .child(input_placeholder)
                         .text_color(ChatColors::TEXT_SECONDARY),
                 ),
             );

@@ -35,6 +35,7 @@ impl FeedbackColors {
 #[derive(Debug, Clone)]
 pub struct FeedbackView {
     focus_handle: FocusHandle,
+    #[allow(dead_code)]
     model: FeedbackViewModel,
 }
 

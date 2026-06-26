@@ -46,9 +46,7 @@ pub struct HomeView {
 impl HomeView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let handle = cx.focus_handle();
-        if let Some(window) = cx.window_mut() {
-            window.focus(&handle, cx);
-        }
+        // focus handled by gpui
         Self {
             focus_handle: handle,
         }
@@ -63,26 +61,6 @@ impl Focusable for HomeView {
 
 impl Render for HomeView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let card_style = |id: &str, label: &str| {
-            div()
-                .id(gpui::SharedString::from(id))
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .w(px(HomeLayout::CARD_WIDTH as f32))
-                .h(px(HomeLayout::CARD_HEIGHT as f32))
-                .bg(HomeColors::CARD_BG)
-                .rounded(px(8.0))
-                .cursor_pointer()
-                .child(
-                    div()
-                        .text_sm()
-                        .child(label)
-                        .text_color(HomeColors::TEXT_PRIMARY),
-                )
-        };
-
         div()
             .id("fronda-home")
             .track_focus(&self.focus_handle.clone())
@@ -120,8 +98,44 @@ impl Render for HomeView {
                             .flex()
                             .flex_row()
                             .gap(px(HomeLayout::CARD_GAP as f32))
-                            .child(card_style("action-new-project", "New Project"))
-                            .child(card_style("action-open-project", "Open Project")),
+                            .child(
+                                div()
+                                    .id("action-new-project")
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(HomeLayout::CARD_WIDTH as f32))
+                                    .h(px(HomeLayout::CARD_HEIGHT as f32))
+                                    .bg(HomeColors::CARD_BG)
+                                    .rounded(px(8.0))
+                                    .cursor_pointer()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .child("New Project")
+                                            .text_color(HomeColors::TEXT_PRIMARY),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("action-open-project")
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(HomeLayout::CARD_WIDTH as f32))
+                                    .h(px(HomeLayout::CARD_HEIGHT as f32))
+                                    .bg(HomeColors::CARD_BG)
+                                    .rounded(px(8.0))
+                                    .cursor_pointer()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .child("Open Project")
+                                            .text_color(HomeColors::TEXT_PRIMARY),
+                                    ),
+                            ),
                     ),
             )
     }

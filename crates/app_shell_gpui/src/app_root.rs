@@ -4,7 +4,7 @@
 //! and PRJ-014 (close project → Home).
 
 use crate::editor_view;
-use crate::home_view::{HomeAction, HomeView};
+use crate::home_view::HomeView;
 use crate::menu;
 use crate::pane::{LayoutPreset, PaneId, PaneLayout};
 use crate::window::WindowConfig;
@@ -31,9 +31,7 @@ pub struct AppRoot {
 impl AppRoot {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let handle = cx.focus_handle();
-        if let Some(window) = cx.window_mut() {
-            window.focus(&handle, cx);
-        }
+        // window focus handled by gpui
         Self {
             focus_handle: handle,
             active_screen: ActiveScreen::Home,
@@ -144,13 +142,13 @@ impl Focusable for AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content: gpui::AnyElement = match self.active_screen {
-            ActiveScreen::Home => cx.new(|cx| HomeView::new(cx)).into_element(),
+            ActiveScreen::Home => cx.new(|cx| HomeView::new(cx)).into_any_element(),
             ActiveScreen::Editor => {
                 let layout = self.pane_layout.clone();
                 div()
                     .size_full()
                     .child(editor_view::render_pane_layout(&layout))
-                    .into_element()
+                    .into_any_element()
             }
         };
 
