@@ -648,6 +648,90 @@ pub struct UserSettings {
     pub disabled_models: Vec<String>,
     /// SET-006: Agent API keys (last 4 chars only for display).
     pub agent_api_keys: Vec<ApiKeyEntry>,
+    /// Active agent provider (Issues #140, #142). Default: Anthropic.
+    pub active_agent_provider: AgentProvider,
+    /// Config for Custom OpenAI-compatible providers (Issue #140).
+    pub custom_llm_config: Option<CustomLlmConfig>,
+}
+
+/// Agent LLM provider.
+///
+/// Issue #140: multi-provider support (Anthropic, DeepSeek, Custom).
+/// Issue #142: Codex CLI as an agent provider option.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentProvider {
+    /// Anthropic Claude (existing default).
+    Anthropic,
+    /// DeepSeek (deepseek-chat, deepseek-reasoner).
+    DeepSeek,
+    /// Codex CLI — routes generation through the Codex CLI agent binary.
+    Codex,
+    /// Generic OpenAI-compatible endpoint (Groq, Together, Mistral, Ollama, etc.).
+    Custom,
+}
+
+impl AgentProvider {
+    /// Display name shown in Settings → Agent picker.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            AgentProvider::Anthropic => "Anthropic (Claude)",
+            AgentProvider::DeepSeek => "DeepSeek",
+            AgentProvider::Codex => "Codex CLI",
+            AgentProvider::Custom => "Custom (OpenAI-compatible)",
+        }
+    }
+
+    /// Whether this provider requires an API key stored in the keychain.
+    pub fn requires_api_key(&self) -> bool {
+        match self {
+            AgentProvider::Anthropic => true,
+            AgentProvider::DeepSeek => true,
+            AgentProvider::Codex => false, // CLI auth is managed by the Codex binary
+            AgentProvider::Custom => false, // optional; local servers like Ollama don't need one
+        }
+    }
+
+    /// Whether this provider is cloud-based (affects offline behavior).
+    pub fn is_cloud(&self) -> bool {
+        match self {
+            AgentProvider::Anthropic => true,
+            AgentProvider::DeepSeek => true,
+            AgentProvider::Codex => false,
+            AgentProvider::Custom => false, // unknown; treat as local
+        }
+    }
+}
+
+impl Default for AgentProvider {
+    fn default() -> Self {
+        AgentProvider::Anthropic
+    }
+}
+
+/// Configuration for a custom OpenAI-compatible LLM endpoint (Issue #140).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CustomLlmConfig {
+    /// Base URL of the OpenAI-compatible endpoint.
+    /// e.g. "http://localhost:11434/v1" for Ollama or "https://api.groq.com/openai/v1".
+    pub base_url: String,
+    /// Model identifier to request (e.g. "llama3", "mixtral-8x7b-32768").
+    pub model_id: String,
+}
+
+impl CustomLlmConfig {
+    pub fn new(base_url: impl Into<String>, model_id: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            model_id: model_id.into(),
+        }
+    }
+
+    /// Validate that the base_url is non-empty and looks like a URL.
+    pub fn is_valid(&self) -> bool {
+        !self.base_url.is_empty()
+            && !self.model_id.is_empty()
+            && (self.base_url.starts_with("http://") || self.base_url.starts_with("https://"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -663,6 +747,8 @@ impl Default for UserSettings {
             telemetry_enabled: true,
             disabled_models: Vec::new(),
             agent_api_keys: Vec::new(),
+            active_agent_provider: AgentProvider::default(),
+            custom_llm_config: None,
         }
     }
 }
@@ -1138,6 +1224,103 @@ mod tests {
     fn set_006_mask_api_key() {
         assert_eq!(UserSettings::mask_api_key("sk-abc12345"), "2345****");
         assert_eq!(UserSettings::mask_api_key("abc"), "abc");
+    }
+
+    // ---- Issue #140: multi-provider LLM support --------------------------
+
+    #[test]
+    fn issue_140_default_provider_is_anthropic() {
+        let s = UserSettings::default();
+        assert_eq!(s.active_agent_provider, AgentProvider::Anthropic);
+        assert!(s.custom_llm_config.is_none());
+    }
+
+    #[test]
+    fn issue_140_deepseek_provider_display_name() {
+        assert_eq!(AgentProvider::DeepSeek.display_name(), "DeepSeek");
+        assert!(AgentProvider::DeepSeek.requires_api_key());
+        assert!(AgentProvider::DeepSeek.is_cloud());
+    }
+
+    #[test]
+    fn issue_140_custom_provider_no_api_key_required() {
+        assert!(!AgentProvider::Custom.requires_api_key());
+        assert!(!AgentProvider::Custom.is_cloud());
+    }
+
+    #[test]
+    fn issue_140_custom_llm_config_valid_url() {
+        let cfg = CustomLlmConfig::new("http://localhost:11434/v1", "llama3");
+        assert!(cfg.is_valid());
+    }
+
+    #[test]
+    fn issue_140_custom_llm_config_invalid_empty_url() {
+        let cfg = CustomLlmConfig::new("", "llama3");
+        assert!(!cfg.is_valid());
+    }
+
+    #[test]
+    fn issue_140_custom_llm_config_invalid_no_scheme() {
+        let cfg = CustomLlmConfig::new("localhost:11434/v1", "llama3");
+        assert!(!cfg.is_valid());
+    }
+
+    #[test]
+    fn issue_140_custom_llm_config_empty_model_invalid() {
+        let cfg = CustomLlmConfig::new("http://localhost:11434/v1", "");
+        assert!(!cfg.is_valid());
+    }
+
+    #[test]
+    fn issue_140_user_settings_can_set_deepseek() {
+        let mut s = UserSettings::default();
+        s.active_agent_provider = AgentProvider::DeepSeek;
+        assert_eq!(s.active_agent_provider, AgentProvider::DeepSeek);
+    }
+
+    #[test]
+    fn issue_140_user_settings_can_set_custom_config() {
+        let mut s = UserSettings::default();
+        s.active_agent_provider = AgentProvider::Custom;
+        s.custom_llm_config = Some(CustomLlmConfig::new("https://api.groq.com/openai/v1", "mixtral-8x7b-32768"));
+        assert!(s.custom_llm_config.as_ref().unwrap().is_valid());
+        assert_eq!(s.active_agent_provider.display_name(), "Custom (OpenAI-compatible)");
+    }
+
+    // ---- Issue #142: Codex CLI agent provider ----------------------------
+
+    #[test]
+    fn issue_142_codex_provider_exists() {
+        assert_eq!(AgentProvider::Codex.display_name(), "Codex CLI");
+    }
+
+    #[test]
+    fn issue_142_codex_no_api_key_no_cloud() {
+        let codex = AgentProvider::Codex;
+        assert!(!codex.requires_api_key(), "Codex CLI manages auth itself");
+        assert!(!codex.is_cloud(), "Codex CLI runs locally");
+    }
+
+    #[test]
+    fn issue_142_user_settings_can_select_codex() {
+        let mut s = UserSettings::default();
+        s.active_agent_provider = AgentProvider::Codex;
+        assert_eq!(s.active_agent_provider, AgentProvider::Codex);
+        assert!(s.custom_llm_config.is_none(), "Codex uses CLI, no base_url config");
+    }
+
+    #[test]
+    fn issue_140_142_all_providers_have_display_names() {
+        let providers = [
+            AgentProvider::Anthropic,
+            AgentProvider::DeepSeek,
+            AgentProvider::Codex,
+            AgentProvider::Custom,
+        ];
+        for p in &providers {
+            assert!(!p.display_name().is_empty(), "{p:?} has no display name");
+        }
     }
 
     #[test]
