@@ -1850,6 +1850,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "fronda-core-model",
+ "proptest",
  "serde",
  "serde_json",
  "uuid",

@@ -14,3 +14,6 @@ core_model = { package = "fronda-core-model", path = "../core_model" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
