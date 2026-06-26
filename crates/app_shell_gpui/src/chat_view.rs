@@ -7,8 +7,8 @@ use app_contract::chat_model::{ChatMessage, ChatPanelModel, ChatRole, MessageSta
 use app_contract::mention_picker::{MentionCandidate, MentionCategory, MentionPickerState};
 use app_contract::session_manager::SessionManager;
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, Hsla, InteractiveElement,
-    KeyDownEvent, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable, Hsla,
+    InteractiveElement, KeyDownEvent, ParentElement, Render, Styled, Window,
 };
 
 /// Colors for the chat view.
@@ -226,7 +226,7 @@ impl ChatView {
 
     // ── Render helpers ──
 
-    fn render_tab_bar(&self) -> impl IntoElement {
+    fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.session_mgr.sessions.len();
         let active_idx = self.session_mgr.active_index;
 
@@ -258,6 +258,15 @@ impl ChatView {
                 .rounded(px(4.0))
                 .bg(tab_bg)
                 .cursor_pointer()
+                .on_click(cx.listener(
+                    move |this: &mut ChatView,
+                          _event: &ClickEvent,
+                          _window: &mut Window,
+                          cx: &mut Context<ChatView>| {
+                        this.session_mgr.select_tab(i);
+                        cx.notify();
+                    },
+                ))
                 .child(
                     div()
                         .text_xs()
@@ -281,6 +290,15 @@ impl ChatView {
                 .rounded(px(4.0))
                 .bg(new_tab_bg)
                 .cursor_pointer()
+                .on_click(cx.listener(
+                    |this: &mut ChatView,
+                     _event: &ClickEvent,
+                     _window: &mut Window,
+                     cx: &mut Context<ChatView>| {
+                        this.session_mgr.new_tab();
+                        cx.notify();
+                    },
+                ))
                 .child(
                     div()
                         .text_xs()
@@ -290,6 +308,7 @@ impl ChatView {
         );
 
         if count > 1 {
+            let close_tab_idx = active_idx;
             bar = bar.child(
                 div().flex_1().flex().justify_end().child(
                     div()
@@ -297,6 +316,15 @@ impl ChatView {
                         .px(px(6.0))
                         .py(px(2.0))
                         .cursor_pointer()
+                        .on_click(cx.listener(
+                            move |this: &mut ChatView,
+                                  _event: &ClickEvent,
+                                  _window: &mut Window,
+                                  cx: &mut Context<ChatView>| {
+                                this.session_mgr.close_tab(close_tab_idx);
+                                cx.notify();
+                            },
+                        ))
                         .child(
                             div()
                                 .text_xs()
@@ -369,7 +397,7 @@ impl ChatView {
             )
     }
 
-    fn render_mention_picker(&self) -> impl IntoElement {
+    fn render_mention_picker(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.mention_picker.visible {
             return div().id("mention-picker-hidden").size_0();
         }
@@ -389,6 +417,7 @@ impl ChatView {
             } else {
                 ChatColors::PICKER_BG
             };
+            let cat_val = *cat;
 
             category_bar = category_bar.child(
                 div()
@@ -401,6 +430,16 @@ impl ChatView {
                     .rounded(px(3.0))
                     .bg(bg)
                     .cursor_pointer()
+                    .on_click(cx.listener(
+                        move |this: &mut ChatView,
+                              _event: &ClickEvent,
+                              _window: &mut Window,
+                              cx: &mut Context<ChatView>| {
+                            this.mention_picker.active_category = cat_val;
+                            this.mention_picker.refresh_filter();
+                            cx.notify();
+                        },
+                    ))
                     .child(
                         div()
                             .text_xs()
@@ -418,15 +457,29 @@ impl ChatView {
             .py(px(4.0))
             .gap(px(2.0));
 
-        for (i, candidate) in self.mention_picker.candidates.iter().enumerate() {
+        let candidates_snapshot: Vec<(String, String, String)> = self
+            .mention_picker
+            .candidates
+            .iter()
+            .map(|c| {
+                (
+                    c.id.clone(),
+                    c.label.clone(),
+                    c.subtitle.clone().unwrap_or_default(),
+                )
+            })
+            .collect();
+
+        for (i, (_id, label, subtitle)) in candidates_snapshot.iter().enumerate() {
             let is_highlighted = i == self.mention_picker.highlighted_index;
             let bg = if is_highlighted {
                 ChatColors::PICKER_HIGHLIGHT
             } else {
                 ChatColors::PICKER_BG
             };
-            let label = candidate.label.clone();
-            let subtitle = candidate.subtitle.clone();
+            let display_label = label.clone();
+            let mention_label_capture = label.clone();
+            let mention_subtitle = subtitle.clone();
 
             candidate_list = candidate_list.child(
                 div()
@@ -439,17 +492,30 @@ impl ChatView {
                     .rounded(px(3.0))
                     .bg(bg)
                     .cursor_pointer()
+                    .on_click(cx.listener(
+                        move |this: &mut ChatView,
+                              _event: &ClickEvent,
+                              _window: &mut Window,
+                              cx: &mut Context<ChatView>| {
+                            let mention_text = format!("@{} ", mention_label_capture);
+                            this.model.input.text.push_str(&mention_text);
+                            this.model.input.cursor_position = this.model.input.text.len();
+                            this.model.show_mention_picker = false;
+                            this.mention_picker.close();
+                            cx.notify();
+                        },
+                    ))
                     .child(
                         div()
                             .flex_1()
                             .text_sm()
-                            .child(label)
+                            .child(display_label)
                             .text_color(ChatColors::TEXT_PRIMARY),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .child(subtitle.unwrap_or_default())
+                            .child(mention_subtitle)
                             .text_color(ChatColors::TEXT_SECONDARY),
                     ),
             );
@@ -494,7 +560,7 @@ impl Render for ChatView {
         }
 
         // ── Mention picker ──
-        let picker = self.render_mention_picker();
+        let picker = self.render_mention_picker(cx);
 
         // ── Input bar ──
         let can_send = self.model.can_send();
@@ -548,6 +614,15 @@ impl Render for ChatView {
                     .rounded(px(6.0))
                     .bg(ChatColors::STOP_BG)
                     .cursor_pointer()
+                    .on_click(cx.listener(
+                        |this: &mut ChatView,
+                         _event: &ClickEvent,
+                         _window: &mut Window,
+                         cx: &mut Context<ChatView>| {
+                            this.model.stop_generation();
+                            cx.notify();
+                        },
+                    ))
                     .child(
                         div()
                             .text_sm()
@@ -565,6 +640,32 @@ impl Render for ChatView {
                     .rounded(px(6.0))
                     .bg(send_bg)
                     .cursor_pointer()
+                    .on_click(cx.listener(
+                        |this: &mut ChatView,
+                         _event: &ClickEvent,
+                         _window: &mut Window,
+                         cx: &mut Context<ChatView>| {
+                            if this.model.handle_send_action(false).is_some() {
+                                this.session_mgr.increment_message_count();
+                                if this
+                                    .session_mgr
+                                    .active_session()
+                                    .map(|s| s.message_count == 1)
+                                    .unwrap_or(false)
+                                {
+                                    let title = truncate_title(
+                                        this.model
+                                            .messages
+                                            .last()
+                                            .map(|m| m.text.as_str())
+                                            .unwrap_or(""),
+                                    );
+                                    this.session_mgr.set_active_title(title);
+                                }
+                            }
+                            cx.notify();
+                        },
+                    ))
                     .child(
                         div()
                             .text_sm()
@@ -584,7 +685,7 @@ impl Render for ChatView {
             .flex_col()
             .size_full()
             .bg(ChatColors::BACKGROUND)
-            .child(self.render_tab_bar())
+            .child(self.render_tab_bar(cx))
             .child(div().h(px(1.0)).bg(ChatColors::INPUT_BORDER).w_full())
             .child(messages_div)
             .child(picker)

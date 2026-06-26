@@ -157,7 +157,7 @@ impl MentionPickerState {
     }
 
     /// Rebuild the filtered candidate list from the query and active category.
-    fn refresh_filter(&mut self) {
+    pub fn refresh_filter(&mut self) {
         self.candidates =
             Self::filter_candidates(&self.all_candidates, &self.query, self.active_category);
         if self.highlighted_index >= self.candidates.len() && !self.candidates.is_empty() {

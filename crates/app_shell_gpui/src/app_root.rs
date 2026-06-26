@@ -4,7 +4,8 @@
 //! and PRJ-014 (close project → Home).
 
 use crate::editor_view;
-use crate::home_view::HomeView;
+use crate::home_model::HomeLayout;
+use crate::home_view::{HomeColors, HomeView};
 use crate::menu;
 use crate::pane::{LayoutPreset, PaneId, PaneLayout};
 use crate::window::WindowConfig;
@@ -27,16 +28,17 @@ pub struct AppRoot {
     focus_handle: FocusHandle,
     active_screen: ActiveScreen,
     pane_layout: PaneLayout,
+    home: HomeView,
 }
 
 impl AppRoot {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let handle = cx.focus_handle();
-        // window focus handled by gpui
         Self {
-            focus_handle: handle,
+            focus_handle: handle.clone(),
             active_screen: ActiveScreen::Home,
             pane_layout: PaneLayout::new(),
+            home: HomeView::new(handle),
         }
     }
 
@@ -105,20 +107,16 @@ impl AppRoot {
             }
             menu::MenuAction::EnterFullScreen => {}
             menu::MenuAction::Quit => {}
-            // File actions — stubs
             menu::MenuAction::SaveProject
             | menu::MenuAction::SaveProjectAs
             | menu::MenuAction::ImportMedia
             | menu::MenuAction::Export => {}
-            // Edit actions — stubs (paste routing via CCB-014)
             menu::MenuAction::Undo
             | menu::MenuAction::Redo
             | menu::MenuAction::Cut
             | menu::MenuAction::Copy => {}
             menu::MenuAction::Paste => {
-                // CCB-014: route paste based on focus target
                 let _action = route_paste(FocusTarget::Timeline);
-                // At runtime this dispatches to the appropriate handler
             }
             menu::MenuAction::SelectAll
             | menu::MenuAction::SplitAtPlayhead
@@ -136,6 +134,97 @@ impl AppRoot {
 
         cx.notify();
     }
+
+    /// Render the Home screen with inline click handlers on action cards.
+    fn render_home(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("fronda-home")
+            .track_focus(&self.home.focus_handle.clone())
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(HomeColors::BACKGROUND)
+            // ── Heading ──
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .pt(px(HomeLayout::HEADING_TOP as f32))
+                    .child(
+                        div()
+                            .text_xl()
+                            .child("Fronda")
+                            .text_color(HomeColors::TEXT_PRIMARY),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .child("Palmier Pro compatibility baseline")
+                            .text_color(HomeColors::TEXT_SECONDARY),
+                    ),
+            )
+            // ── Action cards ──
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .pt(px(HomeLayout::SECTION_TOP as f32))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(HomeLayout::CARD_GAP as f32))
+                            // New Project
+                            .child(
+                                div()
+                                    .id("action-new-project")
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(HomeLayout::CARD_WIDTH as f32))
+                                    .h(px(HomeLayout::CARD_HEIGHT as f32))
+                                    .bg(HomeColors::CARD_BG)
+                                    .rounded(px(8.0))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.open_editor(cx);
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .child("New Project")
+                                            .text_color(HomeColors::TEXT_PRIMARY),
+                                    ),
+                            )
+                            // Open Project
+                            .child(
+                                div()
+                                    .id("action-open-project")
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(HomeLayout::CARD_WIDTH as f32))
+                                    .h(px(HomeLayout::CARD_HEIGHT as f32))
+                                    .bg(HomeColors::CARD_BG)
+                                    .rounded(px(8.0))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.open_editor(cx);
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .child("Open Project")
+                                            .text_color(HomeColors::TEXT_PRIMARY),
+                                    ),
+                            ),
+                    ),
+            )
+    }
 }
 
 impl Focusable for AppRoot {
@@ -147,7 +236,7 @@ impl Focusable for AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content: gpui::AnyElement = match self.active_screen {
-            ActiveScreen::Home => cx.new(|cx| HomeView::new(cx)).into_any_element(),
+            ActiveScreen::Home => self.render_home(cx).into_any_element(),
             ActiveScreen::Editor => {
                 let layout = self.pane_layout.clone();
                 div()
@@ -168,9 +257,9 @@ impl Render for AppRoot {
     }
 }
 
-/// Create and open the initial window.
+/// Create and open the initial window (WIN-001: 1200×1200 default).
 pub fn open_main_window(cx: &mut App) {
-    let cfg = WindowConfig::for_project();
+    let cfg = WindowConfig::for_home();
     let bounds = Bounds::centered(
         None,
         size(px(cfg.default_width as f32), px(cfg.default_height as f32)),
