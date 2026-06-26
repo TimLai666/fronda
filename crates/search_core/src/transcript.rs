@@ -33,6 +33,15 @@ pub struct Transcript {
     pub identity: CacheIdentity,
     pub segments: Vec<TranscriptSegment>,
     pub language: Option<String>,
+    /// TRN-002: Only full-file transcripts are cached on disk.
+    /// This flag is `true` for a complete-file transcript and `false`
+    /// for partial/range-limited results that should not be persisted.
+    #[serde(default = "default_true")]
+    pub is_full_file: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Transcript {
@@ -41,6 +50,7 @@ impl Transcript {
             identity,
             segments: Vec::new(),
             language: None,
+            is_full_file: true,
         }
     }
 
@@ -56,6 +66,7 @@ impl Transcript {
     /// TRN-005: keeps segments whose time spans overlap the requested range.
     /// TRN-006: boundary-straddling segments remain included.
     /// TRN-007: words without complete timestamps are dropped from the output.
+    /// TRN-004: The returned TranscriptRange carries `is_partial: true`.
     pub fn filter_range(&self, start_seconds: f64, end_seconds: f64) -> TranscriptRange {
         let filtered: Vec<TranscriptSegment> = self
             .segments
@@ -85,7 +96,41 @@ impl Transcript {
             segments: filtered,
             original_start_seconds: start_seconds,
             original_end_seconds: end_seconds,
+            is_partial: true,
         }
+    }
+
+    /// Search for query terms within this transcript (TRN-009, TRN-011).
+    ///
+    /// Only operates on full-file transcripts (TRN-009). Returns segments where
+    /// ALL query terms match within a single segment (TRN-011). Matching is
+    /// case-insensitive (TRN-010).
+    ///
+    /// Returns `None` if the transcript is not a full-file transcript.
+    pub fn keyword_search(&self, query: &str) -> Option<Vec<&TranscriptSegment>> {
+        if !self.is_full_file {
+            return None;
+        }
+
+        let terms: Vec<String> = query
+            .split_whitespace()
+            .map(|t| t.to_lowercase())
+            .collect();
+
+        if terms.is_empty() {
+            return Some(Vec::new());
+        }
+
+        let hits: Vec<&TranscriptSegment> = self
+            .segments
+            .iter()
+            .filter(|seg| {
+                let seg_lower = seg.text.to_lowercase();
+                terms.iter().all(|term| seg_lower.contains(term.as_str()))
+            })
+            .collect();
+
+        Some(hits)
     }
 }
 
@@ -96,6 +141,9 @@ pub struct TranscriptRange {
     pub segments: Vec<TranscriptSegment>,
     pub original_start_seconds: f64,
     pub original_end_seconds: f64,
+    /// TRN-004: `true` when this result came from a range-limited request.
+    /// Partial results must not overwrite the canonical full-file cache.
+    pub is_partial: bool,
 }
 
 impl TranscriptRange {
@@ -121,6 +169,7 @@ mod tests {
     fn sample_transcript(identity: CacheIdentity) -> Transcript {
         Transcript {
             identity,
+            is_full_file: true,
             segments: vec![
                 TranscriptSegment {
                     start_seconds: 0.0,
@@ -247,5 +296,124 @@ mod tests {
         assert!(all.contains("hello"));
         assert!(all.contains("test"));
         assert!(!all.contains("missing"));
+    }
+
+    // -----------------------------------------------------------------------
+    // TRN-002: Only full-file transcripts cached on disk
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trn_002_new_transcript_is_full_file() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let transcript = Transcript::new(identity);
+        assert!(transcript.is_full_file, "TRN-002: new transcript is full-file by default");
+    }
+
+    #[test]
+    fn trn_002_partial_transcript_not_full_file() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let mut transcript = sample_transcript(identity);
+        transcript.is_full_file = false;
+        assert!(!transcript.is_full_file, "TRN-002: partial transcript not full-file");
+    }
+
+    // -----------------------------------------------------------------------
+    // TRN-004: Range-limited requests do not overwrite full-file cache
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trn_004_range_result_is_partial() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let transcript = sample_transcript(identity);
+        let range = transcript.filter_range(3.0, 5.0);
+        assert!(range.is_partial, "TRN-004: range result is partial");
+    }
+
+    #[test]
+    fn trn_004_range_result_segments_correct() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let transcript = sample_transcript(identity);
+        let range = transcript.filter_range(0.0, 10.0);
+        // Even a full-coverage range request is still `is_partial` because it
+        // went through filter_range (a range-limited operation).
+        assert!(range.is_partial, "TRN-004: filter_range always sets is_partial");
+        assert_eq!(range.segments.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // TRN-009: Keyword search operates over cached-on-disk (full-file) transcripts
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trn_009_keyword_search_returns_none_for_partial() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let mut transcript = sample_transcript(identity);
+        transcript.is_full_file = false;
+        let result = transcript.keyword_search("hello");
+        assert_eq!(result, None, "TRN-009: partial transcript returns None");
+    }
+
+    #[test]
+    fn trn_009_keyword_search_works_for_full_file() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let transcript = sample_transcript(identity);
+        let result = transcript.keyword_search("hello");
+        assert!(result.is_some(), "TRN-009: full-file transcript returns results");
+        let hits = result.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "hello world");
+    }
+
+    #[test]
+    fn trn_009_empty_query_returns_empty_list() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let transcript = sample_transcript(identity);
+        let result = transcript.keyword_search("");
+        assert!(result.is_some(), "empty query returns empty list");
+        assert!(result.unwrap().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // TRN-011: All query terms must match within a single segment
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trn_011_all_terms_must_match_same_segment() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let transcript = sample_transcript(identity);
+        // "hello" and "world" are both in segment 0
+        let result = transcript.keyword_search("hello world");
+        let hits = result.unwrap();
+        assert_eq!(hits.len(), 1, "TRN-011: both terms in same segment");
+        assert_eq!(hits[0].text, "hello world");
+    }
+
+    #[test]
+    fn trn_011_terms_across_segments_no_hit() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let transcript = sample_transcript(identity);
+        // "hello" is in segment 0, "test" is in segment 1 — no segment has both
+        let result = transcript.keyword_search("hello test");
+        let hits = result.unwrap();
+        assert_eq!(hits.len(), 0, "TRN-011: terms across segments = no hit");
+    }
+
+    #[test]
+    fn trn_011_missing_word_no_hit() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let transcript = sample_transcript(identity);
+        let result = transcript.keyword_search("hello nonexistent");
+        let hits = result.unwrap();
+        assert_eq!(hits.len(), 0, "TRN-011: one term missing = no hit");
+    }
+
+    #[test]
+    fn trn_011_single_word_matches_correct_segment() {
+        let identity = CacheIdentity::from_path("/audio/test.wav");
+        let transcript = sample_transcript(identity);
+        let result = transcript.keyword_search("goodbye");
+        let hits = result.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "goodbye");
     }
 }

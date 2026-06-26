@@ -15,6 +15,7 @@ use search_core::transcript::{TranscribedWord, Transcript, TranscriptSegment};
 fn sample_transcript(identity: CacheIdentity) -> Transcript {
     Transcript {
         identity,
+        is_full_file: true,
         segments: vec![
             TranscriptSegment {
                 start_seconds: 0.0,
@@ -240,6 +241,7 @@ fn trn_007_only_word_with_bad_timestamp_in_segment() {
     let id = identity("/audio/t.wav");
     let transcript = Transcript {
         identity: id,
+        is_full_file: true,
         segments: vec![TranscriptSegment {
             start_seconds: 0.0,
             end_seconds: 1.0,
