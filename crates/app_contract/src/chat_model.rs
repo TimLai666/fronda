@@ -107,6 +107,33 @@ impl ChatPanelModel {
         self.is_agent_running = false;
     }
 
+    /// Whether the send button should be enabled.
+    ///
+    /// CHAT-001: Send action is enabled when input is non-empty and agent is not running.
+    pub fn can_send(&self) -> bool {
+        !self.input.is_empty() && !self.is_agent_running
+    }
+
+    /// Stop the current agent generation.
+    ///
+    /// CHAT-002: Streaming stop action — sets agent to idle.
+    pub fn stop_generation(&mut self) {
+        self.is_agent_running = false;
+    }
+
+    /// Handle send action — returns the message text if sent, or None if blocked.
+    ///
+    /// CHAT-003: Enter sends the message; Shift+Enter inserts a newline.
+    /// When `shift_held` is true, inserts a newline into the input instead of sending.
+    pub fn handle_send_action(&mut self, shift_held: bool) -> Option<String> {
+        if shift_held {
+            self.input.text.push('\n');
+            self.input.cursor_position = self.input.text.len();
+            return None;
+        }
+        self.send_message()
+    }
+
     /// Toggle mention picker.
     pub fn toggle_mention_picker(&mut self) {
         self.show_mention_picker = !self.show_mention_picker;
@@ -179,6 +206,54 @@ mod tests {
         model.set_mention_query("@med".into());
         assert!(model.show_mention_picker);
         assert_eq!(model.mention_query, "@med");
+    }
+
+    #[test]
+    fn chat_can_send_empty_input_returns_false() {
+        let model = ChatPanelModel::default();
+        assert!(!model.can_send());
+    }
+
+    #[test]
+    fn chat_can_send_with_input_returns_true() {
+        let mut model = ChatPanelModel::default();
+        model.input.text = "Hello".into();
+        assert!(model.can_send());
+    }
+
+    #[test]
+    fn chat_can_send_while_agent_running_returns_false() {
+        let mut model = ChatPanelModel::default();
+        model.input.text = "Hello".into();
+        model.is_agent_running = true;
+        assert!(!model.can_send());
+    }
+
+    #[test]
+    fn chat_stop_generation_sets_idle() {
+        let mut model = ChatPanelModel::default();
+        model.is_agent_running = true;
+        model.stop_generation();
+        assert!(!model.is_agent_running);
+    }
+
+    #[test]
+    fn chat_handle_send_enter_sends_message() {
+        let mut model = ChatPanelModel::default();
+        model.input.text = "Hello".into();
+        let result = model.handle_send_action(false);
+        assert_eq!(result, Some("Hello".into()));
+        assert_eq!(model.messages.len(), 1);
+    }
+
+    #[test]
+    fn chat_handle_send_shift_enter_inserts_newline() {
+        let mut model = ChatPanelModel::default();
+        model.input.text = "Hello".into();
+        let result = model.handle_send_action(true);
+        assert_eq!(result, None);
+        assert!(model.input.text.contains('\n'));
+        assert_eq!(model.input.cursor_position, model.input.text.len());
     }
 
     #[test]
