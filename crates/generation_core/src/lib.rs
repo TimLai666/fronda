@@ -578,6 +578,12 @@ impl ExportState {
         ExportState::Cancelling
     }
 
+    /// Returns true if the export is currently active (rendering or cancelling).
+    /// PAR-003: When active, search indexing should be paused.
+    pub fn is_active(&self) -> bool {
+        matches!(self, ExportState::Rendering(_) | ExportState::Cancelling)
+    }
+
     /// Complete successfully.
     pub fn complete() -> Self {
         ExportState::Completed
@@ -2242,5 +2248,49 @@ mod tests {
             GenerationMachine::rerun_from_input(&image_input, GenerationModality::Image).unwrap();
         assert_eq!(prep.num_images, 1); // defaulted from None via unwrap_or(1)
         assert_eq!(prep.modality, GenerationModality::Image);
+    }
+
+    // ── PAR-003: Export/search interaction ───────────────────────
+
+    #[test]
+    fn par_003_idle_not_active() {
+        let state = ExportState::Idle;
+        assert!(!state.is_active());
+    }
+
+    #[test]
+    fn par_003_rendering_is_active() {
+        let state = ExportState::start_rendering(120);
+        assert!(state.is_active());
+    }
+
+    #[test]
+    fn par_003_completed_not_active() {
+        let state = ExportState::Completed;
+        assert!(!state.is_active());
+    }
+
+    #[test]
+    fn par_003_failed_not_active() {
+        let state = ExportState::Failed("error".into());
+        assert!(!state.is_active());
+    }
+
+    #[test]
+    fn par_003_cancelling_is_active() {
+        let rendering = ExportState::start_rendering(120);
+        match rendering {
+            ExportState::Rendering(s) => {
+                let cancelled = ExportState::cancel(s);
+                assert!(cancelled.is_active());
+            }
+            _ => panic!("expected Rendering"),
+        }
+    }
+
+    #[test]
+    fn par_003_cancelled_not_active() {
+        let state = ExportState::Cancelled;
+        assert!(!state.is_active());
     }
 }

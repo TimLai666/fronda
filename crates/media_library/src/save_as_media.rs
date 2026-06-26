@@ -168,8 +168,69 @@ pub fn default_filename_for(kind: &SaveAsMediaKind) -> String {
     }
 }
 
+/// SAV-006/007/011: The final result of a placeholder export.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlaceholderResult {
+    /// Export succeeded: finalize the placeholder into a real media entry.
+    Success {
+        entry_id: String,
+        entry: core_model::MediaManifestEntry,
+    },
+    /// Export failed: keep the placeholder with an error.
+    Failure { error: String },
+}
+
+/// SAV-006/011: Build the final `MediaManifestEntry` from a successful export.
+///
+/// The caller provides the export output path and the new asset name.
+/// The returned entry can be added to the manifest to finalize the placeholder.
+pub fn finalize_placeholder(
+    placeholder: &PlaceholderState,
+    output_path: &str,
+    asset_name: &str,
+    clip_type: core_model::ClipType,
+    duration_seconds: f64,
+) -> Option<PlaceholderResult> {
+    match placeholder {
+        PlaceholderState::Pending | PlaceholderState::Rendering => {
+            // Not yet ready for finalization
+            None
+        }
+        PlaceholderState::Completed { entry_id } => {
+            let entry = core_model::MediaManifestEntry {
+                id: entry_id.clone(),
+                name: asset_name.to_string(),
+                r#type: clip_type,
+                source: core_model::MediaSource::Project {
+                    relative_path: output_path.to_string(),
+                },
+                duration: duration_seconds,
+                generation_input: None,
+                source_width: None,
+                source_height: None,
+                source_fps: None,
+                has_audio: None,
+                folder_id: None,
+                cached_remote_url: None,
+                cached_remote_url_expires_at: None,
+                source_timecode_frame: None,
+                source_timecode_quanta: None,
+                source_timecode_drop_frame: None,
+            };
+            Some(PlaceholderResult::Success {
+                entry_id: entry_id.clone(),
+                entry,
+            })
+        }
+        PlaceholderState::Failed { error } => Some(PlaceholderResult::Failure {
+            error: error.clone(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::*;
 
     // ── SAV-001: Video clip is valid ──
@@ -472,5 +533,148 @@ mod tests {
             }),
             "captured-frame.png"
         );
+    }
+
+    // ── SAV-006: Finalize placeholder on success ────────────────
+
+    #[test]
+    fn sav_006_finalize_completed_placeholder() {
+        let placeholder = PlaceholderState::Completed {
+            entry_id: "entry-final".into(),
+        };
+        let result = finalize_placeholder(
+            &placeholder,
+            "media/clip-export.mp4",
+            "My Video (clip)",
+            core_model::ClipType::Video,
+            5.0,
+        );
+        match result {
+            Some(PlaceholderResult::Success { entry_id, entry }) => {
+                assert_eq!(entry_id, "entry-final");
+                assert_eq!(entry.name, "My Video (clip)");
+                assert_eq!(entry.r#type, core_model::ClipType::Video);
+                assert!((entry.duration - 5.0).abs() < f64::EPSILON);
+            }
+            other => panic!("expected Success, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn sav_006_finalize_pending_placeholder_not_ready() {
+        let placeholder = PlaceholderState::Pending;
+        let result = finalize_placeholder(
+            &placeholder,
+            "media/output.mp4",
+            "Asset",
+            core_model::ClipType::Video,
+            1.0,
+        );
+        assert!(result.is_none(), "pending should not be finalizable");
+    }
+
+    #[test]
+    fn sav_006_finalize_rendering_placeholder_not_ready() {
+        let placeholder = PlaceholderState::Rendering;
+        let result = finalize_placeholder(
+            &placeholder,
+            "media/output.mp4",
+            "Asset",
+            core_model::ClipType::Video,
+            1.0,
+        );
+        assert!(result.is_none(), "rendering should not be finalizable");
+    }
+
+    // ── SAV-007: Finalize placeholder on failure ────────────────
+
+    #[test]
+    fn sav_007_finalize_failed_placeholder() {
+        let placeholder = PlaceholderState::Failed {
+            error: "disk full".into(),
+        };
+        let result = finalize_placeholder(
+            &placeholder,
+            "media/output.mp4",
+            "Asset",
+            core_model::ClipType::Video,
+            1.0,
+        );
+        match result {
+            Some(PlaceholderResult::Failure { error }) => {
+                assert_eq!(error, "disk full");
+            }
+            other => panic!("expected Failure, got {:?}", other),
+        }
+    }
+
+    // ── SAV-011: Timeline range follows same rules ──────────────
+
+    #[test]
+    fn sav_011_timeline_range_finalize_success() {
+        let placeholder = PlaceholderState::Completed {
+            entry_id: "range-final".into(),
+        };
+        let result = finalize_placeholder(
+            &placeholder,
+            "media/timeline-range.mp4",
+            "Timeline range",
+            core_model::ClipType::Video,
+            10.0,
+        );
+        match result {
+            Some(PlaceholderResult::Success { entry_id, entry }) => {
+                assert_eq!(entry_id, "range-final");
+                assert_eq!(entry.name, "Timeline range");
+                assert_eq!(entry.r#type, core_model::ClipType::Video);
+            }
+            other => panic!("expected Success, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn sav_011_timeline_range_finalize_failure() {
+        let placeholder = PlaceholderState::Failed {
+            error: "render timeout".into(),
+        };
+        let result = finalize_placeholder(
+            &placeholder,
+            "media/timeline-range.mp4",
+            "Timeline range",
+            core_model::ClipType::Video,
+            10.0,
+        );
+        match result {
+            Some(PlaceholderResult::Failure { error }) => {
+                assert_eq!(error, "render timeout");
+            }
+            other => panic!("expected Failure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn sav_011_audio_clip_finalize() {
+        let placeholder = PlaceholderState::Completed {
+            entry_id: "audio-final".into(),
+        };
+        let result = finalize_placeholder(
+            &placeholder,
+            "media/clip-export.m4a",
+            "Voiceover (clip)",
+            core_model::ClipType::Audio,
+            30.0,
+        );
+        match result {
+            Some(PlaceholderResult::Success { entry, .. }) => {
+                assert_eq!(entry.r#type, core_model::ClipType::Audio);
+                match entry.source {
+                    core_model::MediaSource::Project { relative_path } => {
+                        assert_eq!(relative_path, "media/clip-export.m4a");
+                    }
+                    _ => panic!("expected Project source"),
+                }
+            }
+            other => panic!("expected Success, got {:?}", other),
+        }
     }
 }

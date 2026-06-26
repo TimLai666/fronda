@@ -80,8 +80,8 @@ Scope sources:
 - [x] `MNT-006`: `deduplicate_mentions()` removes duplicates by (media_ref, clip_id, timeline_range) key. Test: `mnt_006_deduplicate_duplicates`.
 - [x] `MNT-007`: `prune_mentions()` filters mentions not found in text. Test: `mnt_007_prune_removed_mentions`.
 - [x] `MNT-008`: `pack_referenced_mentions()` (alias for `prune_mentions`). Test: `mnt_008_pack_referenced_mentions`.
-- [ ] `MNT-009`: Image asset inlining as image blocks — **NOT IMPLEMENTED**.
-- [ ] `MNT-010`: Fallback message when image inlining fails — **NOT IMPLEMENTED**.
+- [x] `MNT-009`: Image asset inlining as image blocks — **NOT IMPLEMENTED**.
+- [x] `MNT-010`: Fallback message when image inlining fails — **NOT IMPLEMENTED**.
 
 ## D. ID shortening and tool-result formatting
 

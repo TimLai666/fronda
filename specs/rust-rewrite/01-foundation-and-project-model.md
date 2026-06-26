@@ -44,7 +44,7 @@ Scope sources:
 - [x] `PRJ-012`: If no generation log was persisted, the app must seed it from AI-generated assets already present in the project.
 - [x] `PRJ-013`: Saving must persist the current timeline snapshot, manifest snapshot, generation log snapshot, thumbnail, non-empty chat sessions, and any existing internal `media/` directory.
 - [x] `PRJ-014`: Closing the active project returns the app back to the Home view.
-- [ ] `PRJ-015`: Renaming or moving a project file must update the matching entry in the recent-project registry.
+- [x] `PRJ-015`: Renaming or moving a project file must update the matching entry in the recent-project registry.
 
 ## C. Recent-project registry
 

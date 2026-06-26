@@ -67,6 +67,35 @@ impl ScreenshotTarget {
     }
 }
 
+/// APP-005: Maximum width for feedback screenshots in pixels.
+pub const FEEDBACK_SCREENSHOT_MAX_WIDTH: u32 = 1920;
+/// APP-005: Maximum height for feedback screenshots in pixels.
+pub const FEEDBACK_SCREENSHOT_MAX_HEIGHT: u32 = 1080;
+/// APP-005: JPEG compression quality for feedback screenshots (0.0–1.0).
+pub const FEEDBACK_SCREENSHOT_QUALITY: f64 = 0.85;
+
+/// APP-005: Determine the downscale factor needed to fit within max dimensions.
+///
+/// Returns `1.0` if the image already fits, or the smallest uniform scale
+/// factor that makes both dimensions fit.
+pub fn screenshot_downscale_factor(original_width: u32, original_height: u32) -> f64 {
+    if original_width == 0 || original_height == 0 {
+        return 1.0;
+    }
+    let scale_w = FEEDBACK_SCREENSHOT_MAX_WIDTH as f64 / original_width as f64;
+    let scale_h = FEEDBACK_SCREENSHOT_MAX_HEIGHT as f64 / original_height as f64;
+    scale_w.min(scale_h).min(1.0)
+}
+
+/// APP-005: Compute the downscaled dimensions.
+pub fn screenshot_downscaled_size(original_width: u32, original_height: u32) -> (u32, u32) {
+    let factor = screenshot_downscale_factor(original_width, original_height);
+    (
+        (original_width as f64 * factor).round() as u32,
+        (original_height as f64 * factor).round() as u32,
+    )
+}
+
 /// FBK-006: Feedback submission payload.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FeedbackPayload {
@@ -231,5 +260,47 @@ mod tests {
         // email and screenshot_base64 should be absent from JSON when None
         assert!(!json.contains("email"));
         assert!(!json.contains("screenshot_base64"));
+    }
+
+    // ── APP-005: Screenshot sizing ──────────────────────────────
+
+    #[test]
+    fn app_005_screenshot_fits_within_max() {
+        let factor = screenshot_downscale_factor(1280, 720);
+        assert!((factor - 1.0).abs() < f64::EPSILON);
+        let (w, h) = screenshot_downscaled_size(1280, 720);
+        assert_eq!(w, 1280);
+        assert_eq!(h, 720);
+    }
+
+    #[test]
+    fn app_005_screenshot_needs_downscale_width() {
+        let (w, h) = screenshot_downscaled_size(3840, 2160);
+        assert!(w <= 1920);
+        assert!(h <= 1080);
+        // 3840 -> 1920 is 0.5x, 2160 -> 1080 is 0.5x
+        assert_eq!(w, 1920);
+        assert_eq!(h, 1080);
+    }
+
+    #[test]
+    fn app_005_screenshot_needs_downscale_height() {
+        let (w, h) = screenshot_downscaled_size(1200, 2400);
+        assert!(w <= 1920);
+        assert!(h <= 1080);
+        assert_eq!(h, 1080);
+    }
+
+    #[test]
+    fn app_005_screenshot_zero_dimensions() {
+        assert!((screenshot_downscale_factor(0, 0) - 1.0).abs() < f64::EPSILON);
+        assert!((screenshot_downscale_factor(100, 0) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn app_005_screenshot_constants_are_reasonable() {
+        assert!(FEEDBACK_SCREENSHOT_MAX_WIDTH >= 1024);
+        assert!(FEEDBACK_SCREENSHOT_MAX_HEIGHT >= 1024);
+        assert!((0.0..=1.0).contains(&FEEDBACK_SCREENSHOT_QUALITY));
     }
 }

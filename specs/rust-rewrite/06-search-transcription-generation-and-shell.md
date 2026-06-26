@@ -32,10 +32,10 @@ Scope sources:
 - [x] `SRCH-014`: Export pause is refcounted, not boolean.
 - [x] `SRCH-015`: Search index identity depends on path + modification time + file size.
 - [x] `SRCH-016`: Still-image indexes contain exactly one embedding row at time zero.
-- [ ] `SRCH-017`: Short videos still receive at least one midpoint sample.
-- [ ] `SRCH-018`: Frame-sampler output times are strictly increasing with no duplicates.
-- [ ] `SRCH-019`: Scene starts are promoted from visual change detection, but long static spans still receive coverage-floor samples.
-- [ ] `SRCH-020`: Corrupt/undecodable videos yield a valid empty index rather than causing perpetual retry.
+- [x] `SRCH-017`: Short videos still receive at least one midpoint sample.
+- [x] `SRCH-018`: Frame-sampler output times are strictly increasing with no duplicates.
+- [x] `SRCH-019`: Scene starts are promoted from visual change detection, but long static spans still receive coverage-floor samples.
+- [x] `SRCH-020`: Corrupt/undecodable videos yield a valid empty index rather than causing perpetual retry.
 - [x] `SRCH-021`: Visual search is available only when the model is ready and the trimmed query is non-empty.
 - [x] `SRCH-022`: Visual search keeps the best frame per shot before cross-asset ranking.
 - [x] `SRCH-023`: Visual search sorts hits by descending score.
@@ -127,7 +127,7 @@ Scope sources:
 - [x] `SET-004`: Telemetry privacy changes apply on next launch, not immediately for the current run.
 - [x] `SET-005`: Disabled-model preferences persist and filter generation choices.
 - [x] `SET-006`: Agent pane stores API keys in secure storage and masks all but the last 4 characters in UI.
-- [ ] `SET-007`: Storage pane actions preserve current semantics for clearing caches, embeddings, and installed search models.
+- [x] `SET-007`: Storage pane actions preserve current semantics for clearing caches, embeddings, and installed search models.
 
 ## G. Help, feedback, and app shell behavior
 
@@ -135,10 +135,10 @@ Scope sources:
 - [ ] `APP-002`: Reopening the app with no visible windows shows Home again.
 - [x] `APP-003`: Feedback submission requires non-empty message and current maximum length validation.
 - [x] `APP-004`: Feedback screenshot capture occurs before the feedback window becomes key, so the feedback window does not capture itself.
-- [ ] `APP-005`: Feedback screenshots are downscaled to the current maximum-dimension behavior.
+- [x] `APP-005`: Feedback screenshots are downscaled to the current maximum-dimension behavior.
 - [ ] `APP-006`: Generation-complete notification clicks activate the app and reveal the generated asset in the best matching project.
-- [ ] `APP-007`: The “What’s New” surface appears only on a real version change and not on first install.
-- [ ] `APP-008`: Update badge visibility follows current update-available detection and local dismissal state.
+- [x] `APP-007`: The “What’s New” surface appears only on a real version change and not on first install.
+- [x] `APP-008`: Update badge visibility follows current update-available detection and local dismissal state.
 - [x] `APP-009`: MCP instructions/help continue exposing server URL, copyable snippets, and install guidance for supported clients.
 
 ## H. Telemetry

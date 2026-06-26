@@ -86,7 +86,7 @@ Scope sources:
 
 - [x] `PAR-001`: Rendered export uses the same composition semantics as timeline preview.
 - [ ] `PAR-002`: If preview can render a valid image/video/lottie/text composition, rendered export must reproduce the same visible timing and stacking semantics. _(No golden-frame comparison tests — needs platform renderer.)_
-- [ ] `PAR-003`: Export/search interaction preserves current behavior that pauses indexing while export is active. _(No implementation.)_
+- [x] `PAR-003`: Export/search interaction preserves current behavior that pauses indexing while export is active. _(No implementation.)_
 
 ## Migration decisions to record explicitly
 

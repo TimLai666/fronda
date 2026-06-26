@@ -89,6 +89,11 @@ impl ProjectRegistry {
         self.entries.len() < len
     }
 
+    /// Find an entry by its file URL (mutable, for internal use).
+    pub fn find_by_url_mut(&mut self, url: &PathBuf) -> Option<&mut ProjectEntry> {
+        self.entries.iter_mut().find(|e| e.url == *url)
+    }
+
     /// Update a project's URL (REC-008).
     pub fn update_url(&mut self, id: &str, new_url: PathBuf, now: DateTime<Utc>) -> bool {
         if let Some(entry) = self.find_by_id_mut(id) {
@@ -98,6 +103,22 @@ impl ProjectRegistry {
         } else {
             false
         }
+    }
+
+    /// PRJ-015: Update the registry when a project file is renamed or moved.
+    ///
+    /// Finds the entry matching `old_url`, updates it to `new_url`,
+    /// and updates `last_opened_date`. Returns the entry id if found.
+    pub fn rename_project(
+        &mut self,
+        old_url: &PathBuf,
+        new_url: PathBuf,
+        now: DateTime<Utc>,
+    ) -> Option<String> {
+        let entry = self.entries.iter_mut().find(|e| e.url == *old_url)?;
+        entry.url = new_url;
+        entry.last_opened_date = now;
+        Some(entry.id.clone())
     }
 
     /// Get entries sorted by descending lastOpenedDate (REC-009).
@@ -277,5 +298,76 @@ mod tests {
         let json = serde_json::to_string_pretty(&reg).unwrap();
         let restored: ProjectRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(reg, restored);
+    }
+
+    // ── PRJ-015: Rename/move project ────────────────────────────
+
+    #[test]
+    fn prj_015_rename_project_updates_url() {
+        let mut reg = ProjectRegistry::new();
+        let id = reg.register(PathBuf::from("/old/path.palmier"), utc(1000));
+        let t2 = utc(2000);
+        let result = reg.rename_project(
+            &PathBuf::from("/old/path.palmier"),
+            PathBuf::from("/new/path.palmier"),
+            t2,
+        );
+        assert_eq!(result, Some(id.clone()));
+        let entry = reg.find_by_id(&id).unwrap();
+        assert_eq!(entry.url, PathBuf::from("/new/path.palmier"));
+        assert_eq!(entry.last_opened_date, t2);
+    }
+
+    #[test]
+    fn prj_015_rename_unknown_url_returns_none() {
+        let mut reg = ProjectRegistry::new();
+        reg.register(PathBuf::from("/exists.palmier"), utc(1000));
+        let result = reg.rename_project(
+            &PathBuf::from("/unknown.palmier"),
+            PathBuf::from("/new.palmier"),
+            utc(2000),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn prj_015_rename_empty_registry_returns_none() {
+        let mut reg = ProjectRegistry::new();
+        let result = reg.rename_project(
+            &PathBuf::from("/any.palmier"),
+            PathBuf::from("/new.palmier"),
+            utc(1000),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn prj_015_rename_to_existing_url_allowed() {
+        let mut reg = ProjectRegistry::new();
+        reg.register(PathBuf::from("/a.palmier"), utc(100));
+        let id_b = reg.register(PathBuf::from("/b.palmier"), utc(200));
+        // Rename b to a's old path (simulating swap)
+        let result = reg.rename_project(
+            &PathBuf::from("/b.palmier"),
+            PathBuf::from("/a_new.palmier"),
+            utc(300),
+        );
+        assert_eq!(result, Some(id_b));
+    }
+
+    #[test]
+    fn prj_015_rename_preserves_other_entries() {
+        let mut reg = ProjectRegistry::new();
+        reg.register(PathBuf::from("/keep.palmier"), utc(100));
+        let id_move = reg.register(PathBuf::from("/move.palmier"), utc(200));
+        reg.rename_project(
+            &PathBuf::from("/move.palmier"),
+            PathBuf::from("/moved.palmier"),
+            utc(300),
+        );
+        assert_eq!(reg.entries.len(), 2);
+        assert!(reg.find_by_url(&PathBuf::from("/keep.palmier")).is_some());
+        assert!(reg.find_by_url(&PathBuf::from("/moved.palmier")).is_some());
+        assert!(reg.find_by_url(&PathBuf::from("/move.palmier")).is_none());
     }
 }

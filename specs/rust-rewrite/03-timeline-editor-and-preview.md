@@ -143,9 +143,9 @@ Scope sources:
 
 - [x] `EDT-001`: The editor keeps the current five functional panes: media, preview, inspector, timeline, and agent.
 - [x] `EDT-002`: Layout presets remain `default`, `media`, and `vertical`.
-- [ ] `EDT-003`: Pane visibility state for media/inspector/agent persists across launches.
+- [x] `EDT-003`: Pane visibility state for media/inspector/agent persists across launches.
 - [x] `EDT-004`: Maximizing a pane collapses ancestor/sibling panes and unmaximizing restores visibility state rather than forcing everything visible.
-- [ ] `EDT-005`: The editor keeps independent playhead state for timeline preview and source-media preview tabs.
+- [x] `EDT-005`: The editor keeps independent playhead state for timeline preview and source-media preview tabs.
 
 ## Upstream change tracking
 

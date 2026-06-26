@@ -205,6 +205,193 @@ fn builtin_sample_projects() -> Vec<SampleProjectDefinition> {
     ]
 }
 
+/// SMP-003: Status of a single download in the batch.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DownloadStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed(String),
+}
+
+/// SMP-003: Tracks concurrent download progress for a materialization plan.
+#[derive(Debug, Clone)]
+pub struct DownloadCoordinator {
+    /// All download items with their status.
+    pub items: Vec<DownloadItem>,
+    /// Maximum number of concurrent downloads.
+    pub max_concurrent: usize,
+    /// Whether any download has failed (triggers cleanup).
+    pub has_failures: bool,
+}
+
+/// A single download item with status tracking.
+#[derive(Debug, Clone)]
+pub struct DownloadItem {
+    /// URL to download from.
+    pub url: String,
+    /// Target relative path inside the package.
+    pub relative_path: String,
+    /// Current status.
+    pub status: DownloadStatus,
+}
+
+impl DownloadCoordinator {
+    /// Create a new coordinator for a materialization plan.
+    ///
+    /// SMP-003: All downloads are tracked for concurrent execution.
+    pub fn new(plan: &MaterializationPlan, max_concurrent: usize) -> Self {
+        let items = plan
+            .media_downloads
+            .iter()
+            .map(|d| DownloadItem {
+                url: d.url.clone(),
+                relative_path: d.relative_path.clone(),
+                status: DownloadStatus::Pending,
+            })
+            .collect();
+
+        Self {
+            items,
+            max_concurrent: max_concurrent.max(1),
+            has_failures: false,
+        }
+    }
+
+    /// Number of pending items.
+    pub fn pending_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| i.status == DownloadStatus::Pending)
+            .count()
+    }
+
+    /// Number of completed items.
+    pub fn completed_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| i.status == DownloadStatus::Completed)
+            .count()
+    }
+
+    /// Number of failed items.
+    pub fn failed_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| matches!(i.status, DownloadStatus::Failed(_)))
+            .count()
+    }
+
+    /// Total number of items.
+    pub fn total_count(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Returns true if all downloads are complete (success or failure).
+    pub fn is_finished(&self) -> bool {
+        self.items
+            .iter()
+            .all(|i| i.status != DownloadStatus::Pending && i.status != DownloadStatus::InProgress)
+    }
+
+    /// Mark the next pending item as in-progress.
+    /// Returns the index of the started item, or None if all are started/completed.
+    pub fn start_next(&mut self) -> Option<usize> {
+        let idx = self
+            .items
+            .iter()
+            .position(|i| i.status == DownloadStatus::Pending)?;
+        self.items[idx].status = DownloadStatus::InProgress;
+        Some(idx)
+    }
+
+    /// Mark an item as completed.
+    pub fn mark_completed(&mut self, index: usize) {
+        if let Some(item) = self.items.get_mut(index) {
+            item.status = DownloadStatus::Completed;
+        }
+    }
+
+    /// Mark an item as failed.
+    pub fn mark_failed(&mut self, index: usize, error: String) {
+        if let Some(item) = self.items.get_mut(index) {
+            item.status = DownloadStatus::Failed(error);
+            self.has_failures = true;
+        }
+    }
+
+    /// Get the indices of items that should be started now.
+    /// Respects `max_concurrent`.
+    pub fn next_batch(&self) -> Vec<usize> {
+        let in_progress = self
+            .items
+            .iter()
+            .filter(|i| i.status == DownloadStatus::InProgress)
+            .count();
+        let slots = self.max_concurrent.saturating_sub(in_progress);
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.status == DownloadStatus::Pending)
+            .take(slots)
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+}
+
+/// SMP-004: Plan for cleaning up partial sample materialization.
+///
+/// Lists all files that should be removed if materialization fails partway through.
+#[derive(Debug, Clone)]
+pub struct CleanupPlan {
+    /// All files that were created or partially downloaded.
+    pub files_to_remove: Vec<String>,
+    /// The target directory to remove if completely empty after cleanup.
+    pub target_dir: String,
+}
+
+/// SMP-004: Generate a cleanup plan from a materialization plan.
+///
+/// Enumerates all outputs that would need to be removed on failure.
+pub fn cleanup_plan_for(plan: &MaterializationPlan) -> CleanupPlan {
+    let mut files_to_remove = Vec::new();
+
+    // All media downloads target media/ subdirectory
+    for dl in &plan.media_downloads {
+        files_to_remove.push(format!(
+            "{}/{}",
+            plan.target_path.trim_end_matches('/'),
+            dl.relative_path
+        ));
+    }
+
+    // Timeline JSON
+    files_to_remove.push(format!(
+        "{}/project.json",
+        plan.target_path.trim_end_matches('/')
+    ));
+
+    // Media manifest JSON
+    files_to_remove.push(format!(
+        "{}/media.json",
+        plan.target_path.trim_end_matches('/')
+    ));
+
+    // Chat payload files
+    for chat in &plan.chat_files {
+        files_to_remove.push(format!(
+            "{}/{}",
+            plan.target_path.trim_end_matches('/'),
+            chat.relative_path
+        ));
+    }
+
+    CleanupPlan {
+        files_to_remove,
+        target_dir: plan.target_path.clone(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -516,5 +703,214 @@ mod tests {
         };
         let plan = plan_materialization(&p, "/tmp/MC.palmier", "https://media.example.com");
         assert_eq!(plan.chat_files.len(), 2);
+    }
+
+    // ── SMP-003: Download coordinator ───────────────────────────
+
+    #[test]
+    fn smp_003_coordinator_created_from_plan() {
+        let project = SampleProjectDefinition {
+            id: "test".into(),
+            name: "Test".into(),
+            description: "".into(),
+            thumbnail_url: None,
+            media_urls: vec![
+                "http://example.com/v1.mp4".into(),
+                "http://example.com/v2.mp4".into(),
+            ],
+            timeline_json: "{}".into(),
+            manifest_json: "{}".into(),
+            chat_payloads: vec![],
+            sort_order: 0,
+        };
+        let plan = plan_materialization(&project, "/tmp/test.palmier", "http://cdn.example.com");
+        let coord = DownloadCoordinator::new(&plan, 4);
+        assert_eq!(coord.total_count(), 2);
+        assert_eq!(coord.pending_count(), 2);
+        assert_eq!(coord.completed_count(), 0);
+        assert!(!coord.is_finished());
+    }
+
+    #[test]
+    fn smp_003_coordinator_start_next() {
+        let project = SampleProjectDefinition {
+            id: "test".into(),
+            name: "Test".into(),
+            description: "".into(),
+            thumbnail_url: None,
+            media_urls: vec!["http://example.com/v1.mp4".into()],
+            timeline_json: "{}".into(),
+            manifest_json: "{}".into(),
+            chat_payloads: vec![],
+            sort_order: 0,
+        };
+        let plan = plan_materialization(&project, "/tmp/test.palmier", "http://cdn.example.com");
+        let mut coord = DownloadCoordinator::new(&plan, 4);
+        let idx = coord.start_next();
+        assert_eq!(idx, Some(0));
+        assert_eq!(coord.pending_count(), 0);
+        // No more pending
+        assert!(coord.start_next().is_none());
+    }
+
+    #[test]
+    fn smp_003_coordinator_mark_completed() {
+        let project = SampleProjectDefinition {
+            id: "test".into(),
+            name: "Test".into(),
+            description: "".into(),
+            thumbnail_url: None,
+            media_urls: vec!["http://example.com/v1.mp4".into()],
+            timeline_json: "{}".into(),
+            manifest_json: "{}".into(),
+            chat_payloads: vec![],
+            sort_order: 0,
+        };
+        let plan = plan_materialization(&project, "/tmp/test.palmier", "http://cdn.example.com");
+        let mut coord = DownloadCoordinator::new(&plan, 4);
+        coord.start_next();
+        coord.mark_completed(0);
+        assert_eq!(coord.completed_count(), 1);
+        assert!(coord.is_finished());
+        assert!(!coord.has_failures);
+    }
+
+    #[test]
+    fn smp_003_coordinator_mark_failed() {
+        let project = SampleProjectDefinition {
+            id: "test".into(),
+            name: "Test".into(),
+            description: "".into(),
+            thumbnail_url: None,
+            media_urls: vec!["http://example.com/v1.mp4".into()],
+            timeline_json: "{}".into(),
+            manifest_json: "{}".into(),
+            chat_payloads: vec![],
+            sort_order: 0,
+        };
+        let plan = plan_materialization(&project, "/tmp/test.palmier", "http://cdn.example.com");
+        let mut coord = DownloadCoordinator::new(&plan, 4);
+        coord.start_next();
+        coord.mark_failed(0, "timeout".into());
+        assert_eq!(coord.failed_count(), 1);
+        assert!(coord.has_failures);
+        assert!(coord.is_finished());
+    }
+
+    #[test]
+    fn smp_003_next_batch_respects_max_concurrent() {
+        let project = SampleProjectDefinition {
+            id: "test".into(),
+            name: "Test".into(),
+            description: "".into(),
+            thumbnail_url: None,
+            media_urls: vec![
+                "http://example.com/v1.mp4".into(),
+                "http://example.com/v2.mp4".into(),
+                "http://example.com/v3.mp4".into(),
+                "http://example.com/v4.mp4".into(),
+                "http://example.com/v5.mp4".into(),
+            ],
+            timeline_json: "{}".into(),
+            manifest_json: "{}".into(),
+            chat_payloads: vec![],
+            sort_order: 0,
+        };
+        let plan = plan_materialization(&project, "/tmp/test.palmier", "http://cdn.example.com");
+        let coord = DownloadCoordinator::new(&plan, 2);
+        let batch = coord.next_batch();
+        assert_eq!(
+            batch.len(),
+            2,
+            "should start at most 2 concurrent downloads"
+        );
+    }
+
+    #[test]
+    fn smp_003_next_batch_respects_already_in_progress() {
+        let project = SampleProjectDefinition {
+            id: "test".into(),
+            name: "Test".into(),
+            description: "".into(),
+            thumbnail_url: None,
+            media_urls: vec![
+                "http://example.com/v1.mp4".into(),
+                "http://example.com/v2.mp4".into(),
+                "http://example.com/v3.mp4".into(),
+            ],
+            timeline_json: "{}".into(),
+            manifest_json: "{}".into(),
+            chat_payloads: vec![],
+            sort_order: 0,
+        };
+        let plan = plan_materialization(&project, "/tmp/test.palmier", "http://cdn.example.com");
+        let mut coord = DownloadCoordinator::new(&plan, 2);
+        coord.start_next(); // 1 in-progress
+        let batch = coord.next_batch();
+        assert_eq!(batch.len(), 1, "only 1 slot left (max 2, 1 in-progress)");
+    }
+
+    // ── SMP-004: Cleanup plan ───────────────────────────────────
+
+    #[test]
+    fn smp_004_cleanup_plan_includes_all_outputs() {
+        let project = SampleProjectDefinition {
+            id: "test".into(),
+            name: "Test".into(),
+            description: "".into(),
+            thumbnail_url: None,
+            media_urls: vec!["http://example.com/v1.mp4".into()],
+            timeline_json: "{}".into(),
+            manifest_json: "{}".into(),
+            chat_payloads: vec![ChatPayloadDef {
+                filename: "chat/welcome.json".into(),
+                content: "{}".into(),
+            }],
+            sort_order: 0,
+        };
+        let plan = plan_materialization(&project, "/tmp/test.palmier", "http://cdn.example.com");
+        let cleanup = cleanup_plan_for(&plan);
+        // Should include media file, timeline, manifest, and chat
+        assert!(cleanup.files_to_remove.iter().any(|f| f.contains("v1.mp4")));
+        assert!(cleanup
+            .files_to_remove
+            .iter()
+            .any(|f| f.contains("project.json")));
+        assert!(cleanup
+            .files_to_remove
+            .iter()
+            .any(|f| f.contains("media.json")));
+        assert!(cleanup
+            .files_to_remove
+            .iter()
+            .any(|f| f.contains("chat/welcome.json")));
+        assert_eq!(cleanup.target_dir, "/tmp/test.palmier");
+    }
+
+    #[test]
+    fn smp_004_cleanup_plan_with_no_chat() {
+        let project = SampleProjectDefinition {
+            id: "test".into(),
+            name: "Test".into(),
+            description: "".into(),
+            thumbnail_url: None,
+            media_urls: vec![],
+            timeline_json: "{}".into(),
+            manifest_json: "{}".into(),
+            chat_payloads: vec![],
+            sort_order: 0,
+        };
+        let plan = plan_materialization(&project, "/tmp/test.palmier", "http://cdn.example.com");
+        let cleanup = cleanup_plan_for(&plan);
+        // No media, no chat — just timeline + manifest
+        assert!(cleanup
+            .files_to_remove
+            .iter()
+            .any(|f| f.contains("project.json")));
+        assert!(cleanup
+            .files_to_remove
+            .iter()
+            .any(|f| f.contains("media.json")));
+        assert_eq!(cleanup.files_to_remove.len(), 2);
     }
 }

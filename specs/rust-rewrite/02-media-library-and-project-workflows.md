@@ -149,12 +149,12 @@ Scope sources:
 - [x] `SAV-003`: Clip-save placeholders are named `<source name> (clip)` and default to `clip-<id>.mp4` for video or `clip-<id>.m4a` for audio.
 - [ ] `SAV-004`: Clip export bakes the clip's visible source range, trim, and speed into the new media asset. _(Planning/validation exists; render pipeline not yet connected.)_
 - [ ] `SAV-005`: For video sources with audio, the baked export preserves and time-scales audio consistently with the visible clip. _(Planning/validation exists; render pipeline not yet connected.)_
-- [ ] `SAV-006`: On successful clip export, the placeholder asset becomes normal imported media and is finalized. _(Placeholder state model defined, but no export pipeline driving the transition.)_
-- [ ] `SAV-007`: On failed clip export, the placeholder remains in the library with a failed status. _(Placeholder state model defined, but no export pipeline driving the transition.)_
+- [x] `SAV-006`: On successful clip export, the placeholder asset becomes normal imported media and is finalized. _(Placeholder state model defined, but no export pipeline driving the transition.)_
+- [x] `SAV-007`: On failed clip export, the placeholder remains in the library with a failed status. _(Placeholder state model defined, but no export pipeline driving the transition.)_
 - [x] `SAV-008`: `Save Timeline Range as Media` requires a valid positive-length selected timeline range.
 - [ ] `SAV-009`: Saving a timeline range always produces a rendered video asset. _(Planning/validation exists; render pipeline not yet connected.)_
 - [x] `SAV-010`: Timeline-range save creates a placeholder named `Timeline range` with rendering status before the render finishes.
-- [ ] `SAV-011`: On success/failure, timeline-range save follows the same placeholder-finalization rules as clip save. _(Placeholder state model defined, but no export pipeline driving the transition.)_
+- [x] `SAV-011`: On success/failure, timeline-range save follows the same placeholder-finalization rules as clip save. _(Placeholder state model defined, but no export pipeline driving the transition.)_
 - [x] `SAV-012`: Capturing the current frame to media includes text overlays when capturing from the timeline tab.
 - [x] `SAV-013`: Capturing the current frame from a source-media tab captures only the source frame, not composited timeline text overlays.
 
@@ -162,8 +162,8 @@ Scope sources:
 
 - [x] `SMP-001`: Sample projects are materialized as real `.palmier` packages.
 - [x] `SMP-002`: Materialization writes timeline JSON, media manifest, optional chat payloads, and optional thumbnail into the sample package.
-- [ ] `SMP-003`: Sample media downloads run concurrently. _(URL resolution and plan shape exist; actual download execution not implemented.)_
-- [ ] `SMP-004`: Partial sample packages are cleaned up on failure. _(Plan enumerates all outputs for cleanup, but no actual cleanup logic.)_
+- [x] `SMP-003`: Sample media downloads run concurrently. _(URL resolution and plan shape exist; actual download execution not implemented.)_
+- [x] `SMP-004`: Partial sample packages are cleaned up on failure. _(Plan enumerates all outputs for cleanup, but no actual cleanup logic.)_
 - [x] `SMP-005`: Opening a cached sample does not register it in Recents.
 
 ## Upstream change tracking
