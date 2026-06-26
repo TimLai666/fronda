@@ -349,12 +349,17 @@ fn search_media() -> ToolDefinition {
 fn set_clip_properties() -> ToolDefinition {
     ToolDefinition {
         name: "set_clip_properties",
-        description: "Set properties on one or more clips.",
+        description: "Set properties on one or more clips. \
+            For text/caption clips, supports: text, fontSize, fontName, fontWeight (400=regular/700=bold), \
+            textAlignment, textColor (#RRGGBB), \
+            textBackground ({enabled: bool, color: #RRGGBB}) for caption background fill (Issue #18), \
+            textBorder ({enabled: bool, color: #RRGGBB}) for caption border/stroke (Issue #18). \
+            For all clips: speed, volume, opacity, trimStart, trimEnd, transform, crop.",
         input_schema: object(&[
             ("clipIds", array("Clip ids to modify")),
             (
                 "properties",
-                object_any("Properties to set (transform, crop, speed, etc.)"),
+                object_any("Properties to set (transform, crop, speed, textBackground, textBorder, etc.)"),
             ),
         ]),
     }

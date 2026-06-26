@@ -117,8 +117,18 @@ pub fn validate_set_clip_properties(
     let mut timing_properties: Vec<String> = Vec::new();
 
     if let Some(ref obj) = properties.as_object() {
-        // MUT-010: detect text-only fields and reject if any non-text clip targeted
-        let text_fields = ["text", "fontSize", "fontName", "textAlignment", "textColor"];
+        // MUT-010: detect text-only fields and reject if any non-text clip targeted.
+        // Includes background/border styling (Issue #18) and fontWeight (PR #65).
+        let text_fields = [
+            "text",
+            "fontSize",
+            "fontName",
+            "textAlignment",
+            "textColor",
+            "fontWeight",
+            "textBackground",
+            "textBorder",
+        ];
         for field in &text_fields {
             if obj.contains_key(*field) {
                 text_only_fields.push(field.to_string());
@@ -131,6 +141,28 @@ pub fn validate_set_clip_properties(
                     "set_clip_properties: text-only fields {:?} rejected for non-text clips",
                     text_only_fields
                 ));
+            }
+        }
+
+        // Issue #18: validate textBackground / textBorder color sub-fields.
+        for fill_key in &["textBackground", "textBorder"] {
+            if let Some(fill) = obj.get(*fill_key).and_then(|v| v.as_object()) {
+                if let Some(color_val) = fill.get("color").and_then(|v| v.as_str()) {
+                    if let Err(e) = crate::hex_color_parser::parse_hex_color(color_val) {
+                        return ValidationResult::Error(format!(
+                            "set_clip_properties: '{}.color' is not a valid hex color: {e}",
+                            fill_key
+                        ));
+                    }
+                }
+            } else if obj.contains_key(*fill_key) {
+                let val = obj.get(*fill_key).unwrap();
+                if !val.is_object() {
+                    return ValidationResult::Error(format!(
+                        "set_clip_properties: '{}' must be an object with 'enabled' and 'color' fields",
+                        fill_key
+                    ));
+                }
             }
         }
 
@@ -1517,6 +1549,97 @@ mod tests {
         let result = validate_set_clip_properties(&input, None);
         let parsed = result.into_ok().expect("MUT-012: no timing");
         assert!(parsed.timing_properties.is_empty());
+    }
+
+    // ---- Issue #18: textBackground / textBorder validation ------------------
+
+    #[test]
+    fn issue_018_text_background_recognized_as_text_field() {
+        let input = json!({
+            "clipIds": ["clip-1"],
+            "properties": {"textBackground": {"enabled": true, "color": "#FF0000"}}
+        });
+        let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
+        let err = result.into_error().expect("textBackground must be rejected for non-text clips");
+        assert!(err.contains("textBackground"), "err={err}");
+    }
+
+    #[test]
+    fn issue_018_text_background_allowed_for_text_clips() {
+        let input = json!({
+            "clipIds": ["clip-1"],
+            "properties": {"textBackground": {"enabled": true, "color": "#FF0000"}}
+        });
+        let result = validate_set_clip_properties(&input, Some(vec!["text".to_string()]));
+        result.into_ok().expect("textBackground must be accepted for text clips");
+    }
+
+    #[test]
+    fn issue_018_text_border_recognized_as_text_field() {
+        let input = json!({
+            "clipIds": ["clip-1"],
+            "properties": {"textBorder": {"enabled": false, "color": "#000000"}}
+        });
+        let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
+        let err = result.into_error().expect("textBorder rejected for non-text");
+        assert!(err.contains("textBorder"), "err={err}");
+    }
+
+    #[test]
+    fn issue_018_text_background_invalid_hex_rejected() {
+        let input = json!({
+            "clipIds": ["clip-1"],
+            "properties": {"textBackground": {"enabled": true, "color": "not-a-color"}}
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let err = result.into_error().expect("invalid hex must be rejected");
+        assert!(err.contains("textBackground.color"), "err={err}");
+    }
+
+    #[test]
+    fn issue_018_text_border_invalid_hex_rejected() {
+        let input = json!({
+            "clipIds": ["clip-1"],
+            "properties": {"textBorder": {"enabled": true, "color": "#ZZZ"}}
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let err = result.into_error().expect("invalid hex must be rejected");
+        assert!(err.contains("textBorder.color"), "err={err}");
+    }
+
+    #[test]
+    fn issue_018_text_background_non_object_rejected() {
+        let input = json!({
+            "clipIds": ["clip-1"],
+            "properties": {"textBackground": "red"}
+        });
+        let result = validate_set_clip_properties(&input, None);
+        let err = result.into_error().expect("non-object textBackground must be rejected");
+        assert!(err.contains("textBackground"), "err={err}");
+    }
+
+    #[test]
+    fn issue_018_font_weight_recognized_as_text_field() {
+        let input = json!({
+            "clipIds": ["clip-1"],
+            "properties": {"fontWeight": 700}
+        });
+        let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
+        let err = result.into_error().expect("fontWeight rejected for non-text");
+        assert!(err.contains("fontWeight"), "err={err}");
+    }
+
+    #[test]
+    fn issue_018_text_background_color_valid_hex_accepted() {
+        // Multiple hex formats should all be accepted
+        for color in &["#FFF", "#FFFFFF", "#FFFFFF80"] {
+            let input = json!({
+                "clipIds": ["clip-1"],
+                "properties": {"textBackground": {"enabled": true, "color": color}}
+            });
+            let result = validate_set_clip_properties(&input, None);
+            result.into_ok().expect(format!("color {} must be accepted", color).as_str());
+        }
     }
 
     // ---- MUT-017/018: ripple_delete_ranges ------------------------------
