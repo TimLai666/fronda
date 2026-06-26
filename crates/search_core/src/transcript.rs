@@ -112,10 +112,7 @@ impl Transcript {
             return None;
         }
 
-        let terms: Vec<String> = query
-            .split_whitespace()
-            .map(|t| t.to_lowercase())
-            .collect();
+        let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
 
         if terms.is_empty() {
             return Some(Vec::new());
@@ -159,6 +156,93 @@ impl TranscriptRange {
     pub fn is_empty(&self) -> bool {
         self.segments.is_empty()
     }
+}
+
+/// TRN-018: Offset a TranscriptRange's timestamps back to original source time.
+///
+/// When transcription is done on a sub-range of the source, the transcription
+/// service returns timestamps relative to that sub-range (starting at 0).
+/// This function shifts all timestamps by `offset_seconds` so they align with
+/// the original source timeline.
+///
+/// Returns `None` if the offset is negative (invalid).
+pub fn offset_transcript_range(
+    range: &TranscriptRange,
+    offset_seconds: f64,
+) -> Option<TranscriptRange> {
+    if offset_seconds < 0.0 {
+        return None;
+    }
+
+    let segments: Vec<TranscriptSegment> = range
+        .segments
+        .iter()
+        .map(|seg| {
+            let words: Vec<TranscribedWord> = seg
+                .words
+                .iter()
+                .map(|w| TranscribedWord {
+                    word: w.word.clone(),
+                    start_seconds: w.start_seconds + offset_seconds,
+                    end_seconds: w.end_seconds + offset_seconds,
+                })
+                .collect();
+
+            TranscriptSegment {
+                start_seconds: seg.start_seconds + offset_seconds,
+                end_seconds: seg.end_seconds + offset_seconds,
+                text: seg.text.clone(),
+                words,
+            }
+        })
+        .collect();
+
+    Some(TranscriptRange {
+        segments,
+        original_start_seconds: range.original_start_seconds,
+        original_end_seconds: range.original_end_seconds,
+        is_partial: range.is_partial,
+    })
+}
+
+/// TRN-018: Offset a single Transcript's timestamps.
+///
+/// Used when the entire transcript was produced from a sub-range extraction
+/// and needs to be realigned with the original source timeline.
+pub fn offset_transcript(transcript: &Transcript, offset_seconds: f64) -> Option<Transcript> {
+    if offset_seconds < 0.0 {
+        return None;
+    }
+
+    let segments: Vec<TranscriptSegment> = transcript
+        .segments
+        .iter()
+        .map(|seg| {
+            let words: Vec<TranscribedWord> = seg
+                .words
+                .iter()
+                .map(|w| TranscribedWord {
+                    word: w.word.clone(),
+                    start_seconds: w.start_seconds + offset_seconds,
+                    end_seconds: w.end_seconds + offset_seconds,
+                })
+                .collect();
+
+            TranscriptSegment {
+                start_seconds: seg.start_seconds + offset_seconds,
+                end_seconds: seg.end_seconds + offset_seconds,
+                text: seg.text.clone(),
+                words,
+            }
+        })
+        .collect();
+
+    Some(Transcript {
+        identity: transcript.identity.clone(),
+        segments,
+        language: transcript.language.clone(),
+        is_full_file: transcript.is_full_file,
+    })
 }
 
 #[cfg(test)]
@@ -306,7 +390,10 @@ mod tests {
     fn trn_002_new_transcript_is_full_file() {
         let identity = CacheIdentity::from_path("/audio/test.wav");
         let transcript = Transcript::new(identity);
-        assert!(transcript.is_full_file, "TRN-002: new transcript is full-file by default");
+        assert!(
+            transcript.is_full_file,
+            "TRN-002: new transcript is full-file by default"
+        );
     }
 
     #[test]
@@ -314,7 +401,10 @@ mod tests {
         let identity = CacheIdentity::from_path("/audio/test.wav");
         let mut transcript = sample_transcript(identity);
         transcript.is_full_file = false;
-        assert!(!transcript.is_full_file, "TRN-002: partial transcript not full-file");
+        assert!(
+            !transcript.is_full_file,
+            "TRN-002: partial transcript not full-file"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -336,7 +426,10 @@ mod tests {
         let range = transcript.filter_range(0.0, 10.0);
         // Even a full-coverage range request is still `is_partial` because it
         // went through filter_range (a range-limited operation).
-        assert!(range.is_partial, "TRN-004: filter_range always sets is_partial");
+        assert!(
+            range.is_partial,
+            "TRN-004: filter_range always sets is_partial"
+        );
         assert_eq!(range.segments.len(), 3);
     }
 
@@ -358,7 +451,10 @@ mod tests {
         let identity = CacheIdentity::from_path("/audio/test.wav");
         let transcript = sample_transcript(identity);
         let result = transcript.keyword_search("hello");
-        assert!(result.is_some(), "TRN-009: full-file transcript returns results");
+        assert!(
+            result.is_some(),
+            "TRN-009: full-file transcript returns results"
+        );
         let hits = result.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text, "hello world");
@@ -415,5 +511,130 @@ mod tests {
         let hits = result.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text, "goodbye");
+    }
+
+    // ── TRN-018: Timestamp offset ────────────────────────────────
+
+    #[test]
+    fn trn_018_offset_range_shifts_timestamps() {
+        let range = TranscriptRange {
+            segments: vec![TranscriptSegment {
+                start_seconds: 0.0,
+                end_seconds: 5.0,
+                text: "hello world".into(),
+                words: vec![
+                    TranscribedWord {
+                        word: "hello".into(),
+                        start_seconds: 0.0,
+                        end_seconds: 1.0,
+                    },
+                    TranscribedWord {
+                        word: "world".into(),
+                        start_seconds: 1.5,
+                        end_seconds: 2.5,
+                    },
+                ],
+            }],
+            original_start_seconds: 30.0,
+            original_end_seconds: 35.0,
+            is_partial: true,
+        };
+
+        let offset = offset_transcript_range(&range, 30.0).unwrap();
+        assert!((offset.segments[0].start_seconds - 30.0).abs() < f64::EPSILON);
+        assert!((offset.segments[0].end_seconds - 35.0).abs() < f64::EPSILON);
+        assert!((offset.segments[0].words[0].start_seconds - 30.0).abs() < f64::EPSILON);
+        assert!((offset.segments[0].words[1].start_seconds - 31.5).abs() < f64::EPSILON);
+        assert_eq!(offset.original_start_seconds, 30.0); // preserved
+    }
+
+    #[test]
+    fn trn_018_offset_range_negative_offset_returns_none() {
+        let range = TranscriptRange {
+            segments: vec![],
+            original_start_seconds: 10.0,
+            original_end_seconds: 20.0,
+            is_partial: true,
+        };
+        assert!(offset_transcript_range(&range, -5.0).is_none());
+    }
+
+    #[test]
+    fn trn_018_offset_range_zero_offset_preserves() {
+        let range = TranscriptRange {
+            segments: vec![TranscriptSegment {
+                start_seconds: 0.0,
+                end_seconds: 10.0,
+                text: "test".into(),
+                words: vec![TranscribedWord {
+                    word: "test".into(),
+                    start_seconds: 0.0,
+                    end_seconds: 2.0,
+                }],
+            }],
+            original_start_seconds: 0.0,
+            original_end_seconds: 10.0,
+            is_partial: true,
+        };
+        let offset = offset_transcript_range(&range, 0.0).unwrap();
+        assert!((offset.segments[0].start_seconds - 0.0).abs() < f64::EPSILON);
+        assert!((offset.segments[0].words[0].start_seconds - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn trn_018_offset_range_empty_segments() {
+        let range = TranscriptRange {
+            segments: vec![],
+            original_start_seconds: 60.0,
+            original_end_seconds: 90.0,
+            is_partial: true,
+        };
+        let offset = offset_transcript_range(&range, 60.0).unwrap();
+        assert!(offset.segments.is_empty());
+        assert_eq!(offset.original_start_seconds, 60.0);
+        assert_eq!(offset.original_end_seconds, 90.0);
+        assert!(offset.is_partial);
+    }
+
+    #[test]
+    fn trn_018_offset_transcript_shifts_timestamps() {
+        let identity = CacheIdentity {
+            path: "/test/audio.wav".into(),
+            modification_time: 100,
+            file_size: 500,
+        };
+        let transcript = Transcript {
+            identity: identity.clone(),
+            segments: vec![TranscriptSegment {
+                start_seconds: 0.0,
+                end_seconds: 3.0,
+                text: "hello from range".into(),
+                words: vec![TranscribedWord {
+                    word: "hello".into(),
+                    start_seconds: 0.0,
+                    end_seconds: 1.0,
+                }],
+            }],
+            language: Some("en".into()),
+            is_full_file: false,
+        };
+        let offset = offset_transcript(&transcript, 45.0).unwrap();
+        assert!((offset.segments[0].start_seconds - 45.0).abs() < f64::EPSILON);
+        assert!((offset.segments[0].end_seconds - 48.0).abs() < f64::EPSILON);
+        assert!((offset.segments[0].words[0].start_seconds - 45.0).abs() < f64::EPSILON);
+        assert_eq!(offset.identity, identity);
+        assert_eq!(offset.language, Some("en".into()));
+        assert!(!offset.is_full_file); // preserved
+    }
+
+    #[test]
+    fn trn_018_offset_transcript_negative_offset_returns_none() {
+        let identity = CacheIdentity {
+            path: "/x.wav".into(),
+            modification_time: 0,
+            file_size: 0,
+        };
+        let transcript = Transcript::new(identity);
+        assert!(offset_transcript(&transcript, -1.0).is_none());
     }
 }

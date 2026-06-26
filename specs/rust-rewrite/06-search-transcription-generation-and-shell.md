@@ -69,7 +69,7 @@ Scope sources:
 - [x] `TRN-015`: If no supported language matches, locale selection returns `nil`.
 - [ ] `TRN-016`: Video transcription first extracts audio to a temp PCM `.caf` file using the current sample-rate/channel/bit-depth contract.
 - [ ] `TRN-017`: If a video has no audio track, video transcription fails cleanly.
-- [ ] `TRN-018`: Range-limited transcription offsets timestamps back into original source time after extracting/transcribing the narrowed source span.
+- [x] `TRN-018`: Range-limited transcription offsets timestamps back into original source time after extracting/transcribing the narrowed source span.
 - [ ] `TRN-019`: If the on-device speech model must be installed and installation fails, transcription fails cleanly with a model-install error.
 
 ## D. Caption generation
