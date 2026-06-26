@@ -3,6 +3,7 @@
 //! Covers APP-002 (reopening shows Home), BOOT-004 (startup flow),
 //! and PRJ-014 (close project → Home).
 
+use crate::chat_view::ChatView;
 use crate::editor_view;
 use crate::home_model::HomeLayout;
 use crate::home_view::{HomeColors, HomeView};
@@ -11,8 +12,8 @@ use crate::pane::{LayoutPreset, PaneId, PaneLayout};
 use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
 use gpui::{
-    div, prelude::*, px, size, App, Bounds, Context, FocusHandle, Focusable, InteractiveElement,
-    KeyDownEvent, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, size, App, Bounds, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement, KeyDownEvent, Window, WindowBounds, WindowOptions,
 };
 
 /// Which screen the app is showing.
@@ -29,6 +30,8 @@ pub struct AppRoot {
     active_screen: ActiveScreen,
     pane_layout: PaneLayout,
     home: HomeView,
+    /// ChatView entity, created when first entering the editor.
+    chat_view: Option<Entity<ChatView>>,
 }
 
 impl AppRoot {
@@ -39,12 +42,17 @@ impl AppRoot {
             active_screen: ActiveScreen::Home,
             pane_layout: PaneLayout::new(),
             home: HomeView::new(handle),
+            chat_view: None,
         }
     }
 
     /// Open the editor for a project.
     pub fn open_editor(&mut self, cx: &mut Context<Self>) {
         self.active_screen = ActiveScreen::Editor;
+        if self.chat_view.is_none() {
+            let chat = cx.new(|cx| ChatView::new(cx));
+            self.chat_view = Some(chat);
+        }
         cx.notify();
     }
 
@@ -239,9 +247,10 @@ impl Render for AppRoot {
             ActiveScreen::Home => self.render_home(cx).into_any_element(),
             ActiveScreen::Editor => {
                 let layout = self.pane_layout.clone();
+                let contents = editor_view::PaneContents::new(self.chat_view.clone());
                 div()
                     .size_full()
-                    .child(editor_view::render_pane_layout(&layout))
+                    .child(editor_view::render_pane_layout(&layout, &contents))
                     .into_any_element()
             }
         };
@@ -258,13 +267,15 @@ impl Render for AppRoot {
 }
 
 /// Create and open the initial window (WIN-001: 1200×1200 default).
+///
+/// Shifts the window down by 60 px from true center so the title bar is
+/// comfortably visible on Windows.
 pub fn open_main_window(cx: &mut App) {
     let cfg = WindowConfig::for_home();
-    let bounds = Bounds::centered(
-        None,
-        size(px(cfg.default_width as f32), px(cfg.default_height as f32)),
-        cx,
-    );
+    let size = size(px(cfg.default_width as f32), px(cfg.default_height as f32));
+    let mut bounds = Bounds::centered(None, size, cx);
+    // Shift down so the title bar stays visible
+    bounds.origin.y = bounds.origin.y + px(60.0);
 
     cx.open_window(
         WindowOptions {

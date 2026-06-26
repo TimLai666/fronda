@@ -1,5 +1,6 @@
+use crate::chat_view::ChatView;
 use crate::pane::{LayoutPreset, PaneId, PaneLayout};
-use gpui::{div, px, Hsla, InteractiveElement, IntoElement, ParentElement, Styled};
+use gpui::{div, px, Entity, Hsla, InteractiveElement, IntoElement, ParentElement, Styled};
 
 /// Background color for each pane.
 fn pane_color(id: PaneId) -> Hsla {
@@ -55,10 +56,10 @@ fn pane_label(id: PaneId) -> &'static str {
     }
 }
 
-/// A pane div with background color, centered label, and drop support.
+/// A pane div with background color and centered label (for panes without custom content).
 fn pane_div(id: PaneId) -> impl IntoElement {
     let label = pane_label(id);
-    let pane = div()
+    div()
         .id(format!("pane-{}", label.to_lowercase()))
         .flex()
         .items_center()
@@ -66,19 +67,35 @@ fn pane_div(id: PaneId) -> impl IntoElement {
         .bg(pane_color(id))
         .w_full()
         .h_full()
-        .child(div().text_lg().child(label.to_string()));
+        .child(div().text_lg().child(label.to_string()))
+}
 
-    // Media panel gets drop target support (DRAG-007..010).
-    // At runtime, gpui dispatches `on_drop` events on this element.
-    // Extension filtering via `is_supported_extension` happens in the handler.
+/// Optional custom content for panes that have real UI.
+#[derive(Clone)]
+pub struct PaneContents {
+    /// When set, replaces the generic Agent pane label with a live ChatView.
+    pub agent_chat: Option<Entity<ChatView>>,
+}
 
-    pane
+impl PaneContents {
+    pub fn new(chat: Option<Entity<ChatView>>) -> Self {
+        Self { agent_chat: chat }
+    }
+}
+
+/// Return the content to place in the Agent pane slot.
+fn agent_content(contents: &PaneContents) -> gpui::AnyElement {
+    contents
+        .agent_chat
+        .clone()
+        .map(|e| e.into_any_element())
+        .unwrap_or_else(|| pane_div(PaneId::Agent).into_any_element())
 }
 
 // ── Layout builders ──
 
 /// Default preset: media | preview + timeline + agent | inspector.
-fn build_default(layout: &PaneLayout) -> impl IntoElement {
+fn build_default(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement {
     let mut root = div().id("layout-default").flex().flex_row().size_full();
 
     if layout.is_visible(PaneId::Media) {
@@ -120,7 +137,7 @@ fn build_default(layout: &PaneLayout) -> impl IntoElement {
                 .h(px(150.0_f32))
                 .border_1()
                 .border_color(BORDER_COLOR)
-                .child(pane_div(PaneId::Agent)),
+                .child(agent_content(contents)),
         );
     }
 
@@ -141,7 +158,7 @@ fn build_default(layout: &PaneLayout) -> impl IntoElement {
 }
 
 /// Media preset: media (wide) | preview.
-fn build_media(layout: &PaneLayout) -> impl IntoElement {
+fn build_media(layout: &PaneLayout, _contents: &PaneContents) -> impl IntoElement {
     let mut root = div().id("layout-media").flex().flex_row().size_full();
 
     if layout.is_visible(PaneId::Media) {
@@ -170,7 +187,7 @@ fn build_media(layout: &PaneLayout) -> impl IntoElement {
 }
 
 /// Vertical preset: all visible panes stacked vertically.
-fn build_vertical(layout: &PaneLayout) -> impl IntoElement {
+fn build_vertical(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement {
     let mut root = div().id("layout-vertical").flex().flex_col().size_full();
 
     if layout.is_visible(PaneId::Preview) {
@@ -189,7 +206,7 @@ fn build_vertical(layout: &PaneLayout) -> impl IntoElement {
                 .h(px(200.0_f32))
                 .border_1()
                 .border_color(BORDER_COLOR)
-                .child(pane_div(PaneId::Agent)),
+                .child(agent_content(contents)),
         );
     }
 
@@ -226,12 +243,12 @@ fn build_vertical(layout: &PaneLayout) -> impl IntoElement {
     root
 }
 
-/// Render the full editor pane layout based on layout state.
-pub fn render_pane_layout(layout: &PaneLayout) -> impl IntoElement {
+/// Render the full editor pane layout based on layout state and pane contents.
+pub fn render_pane_layout(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement {
     match layout.preset {
-        LayoutPreset::Default => build_default(layout).into_any_element(),
-        LayoutPreset::Media => build_media(layout).into_any_element(),
-        LayoutPreset::Vertical => build_vertical(layout).into_any_element(),
+        LayoutPreset::Default => build_default(layout, contents).into_any_element(),
+        LayoutPreset::Media => build_media(layout, contents).into_any_element(),
+        LayoutPreset::Vertical => build_vertical(layout, contents).into_any_element(),
     }
 }
 
@@ -252,5 +269,11 @@ mod tests {
         assert_eq!(pane_label(PaneId::Inspector), "Inspector");
         assert_eq!(pane_label(PaneId::Timeline), "Timeline");
         assert_eq!(pane_label(PaneId::Agent), "Agent");
+    }
+
+    #[test]
+    fn pane_contents_default() {
+        let c = PaneContents::new(None);
+        assert!(c.agent_chat.is_none());
     }
 }
