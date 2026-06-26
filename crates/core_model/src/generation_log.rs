@@ -44,6 +44,26 @@ impl GenerationLog {
             }
         });
     }
+
+    /// PRJ-012: Seed the generation log from AI-generated assets in the media manifest.
+    ///
+    /// Scans all manifest entries and creates a `GenerationLogEntry` for each one that
+    /// has a `generation_input` (indicating it was AI-generated). The entry's model is
+    /// taken from the generation input, and `created_at` is set to the input's timestamp.
+    ///
+    /// This should be called when opening a project that has no persisted generation log.
+    pub fn seed_from_manifest(&mut self, entries: &[crate::MediaManifestEntry]) {
+        for entry in entries {
+            if let Some(ref gen_input) = entry.generation_input {
+                self.entries.push(GenerationLogEntry {
+                    id: new_id(),
+                    model: gen_input.model.clone(),
+                    cost_credits: None, // Unknown for retroactively seeded entries
+                    created_at: gen_input.created_at,
+                });
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -163,5 +183,81 @@ mod tests {
         log.sort_entries();
         assert_eq!(log.entries.len(), 1);
         assert_eq!(log.entries[0].id, "only");
+    }
+
+    // ── PRJ-012: seed_from_manifest ───────────────────────────────────────
+
+    fn make_manifest_entry(id: &str, has_gen_input: bool) -> crate::MediaManifestEntry {
+        crate::MediaManifestEntry {
+            id: id.to_string(),
+            name: format!("asset_{}", id),
+            r#type: crate::ClipType::Video,
+            source: crate::MediaSource::External {
+                absolute_path: format!("/path/{}.mp4", id),
+            },
+            duration: 10.0,
+            generation_input: if has_gen_input {
+                Some(crate::GenerationInput {
+                    prompt: "test prompt".to_string(),
+                    model: "test-model-v2".to_string(),
+                    duration: 5,
+                    created_at: Some(Utc.timestamp_opt(1000, 0).unwrap()),
+                    ..Default::default()
+                })
+            } else {
+                None
+            },
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+        }
+    }
+
+    #[test]
+    fn prj_012_seeds_from_generated_assets() {
+        let mut log = GenerationLog::default();
+        let entries = vec![
+            make_manifest_entry("asset-1", true),
+            make_manifest_entry("asset-2", false),
+            make_manifest_entry("asset-3", true),
+        ];
+        log.seed_from_manifest(&entries);
+        assert_eq!(
+            log.entries.len(),
+            2,
+            "PRJ-012: only generated assets create entries"
+        );
+        assert_eq!(log.entries[0].model, "test-model-v2");
+        assert_eq!(log.entries[1].model, "test-model-v2");
+        assert!(log.entries[0].created_at.is_some());
+    }
+
+    #[test]
+    fn prj_012_ignores_non_generated_assets() {
+        let mut log = GenerationLog::default();
+        let entries = vec![
+            make_manifest_entry("imported-1", false),
+            make_manifest_entry("imported-2", false),
+        ];
+        log.seed_from_manifest(&entries);
+        assert_eq!(
+            log.entries.len(),
+            0,
+            "PRJ-012: non-generated assets are skipped"
+        );
+    }
+
+    #[test]
+    fn prj_012_empty_manifest_produces_empty_log() {
+        let mut log = GenerationLog::default();
+        log.seed_from_manifest(&[]);
+        assert_eq!(log.entries.len(), 0, "PRJ-012: empty manifest, empty log");
     }
 }
