@@ -48,7 +48,7 @@ jobs:
 
   gpui-shell-check:
     name: Check gpui-ce app shell scaffold
-    runs-on: macos-26
+    runs-on: macos-latest
     timeout-minutes: 20
 
     steps:
@@ -68,7 +68,7 @@ jobs:
 
   build-test:
     name: Build and test Swift baseline
-    runs-on: macos-26
+    runs-on: macos-latest
     timeout-minutes: 40
 
     steps:
