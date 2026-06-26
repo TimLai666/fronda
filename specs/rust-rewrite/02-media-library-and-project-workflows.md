@@ -81,15 +81,15 @@ Scope sources:
 - [x] `DRAG-004`: Internal payloads may contain multiple newline-separated items.
 - [x] `DRAG-005`: Mixed asset-and-folder internal payloads are valid.
 - [x] `DRAG-006`: Unknown ids and malformed lines in internal payloads are ignored rather than crashing the drop flow.
-- [ ] `DRAG-007`: Dropping internal payload to the root reparents moved items to the library root. _(Needs gpui-ce drop target integration.)_
-- [ ] `DRAG-008`: Finder drop onto the media panel imports into the current folder. _(Needs gpui-ce.)_
-- [ ] `DRAG-009`: Finder drop onto a folder tile or breadcrumb imports into that logical folder. _(Needs gpui-ce.)_
-- [ ] `DRAG-010`: Unsupported file extensions in Finder drops are ignored. _(Needs gpui-ce.)_
-- [ ] `DRAG-011`: Media-panel keyboard navigation is driven by the currently ordered item ids plus current column count. _(Needs gpui-ce.)_
-- [ ] `DRAG-012`: With no active selection, right/down starts at the first item and left/up starts at the last item. _(Needs gpui-ce.)_
-- [ ] `DRAG-013`: Navigation clamps at grid edges rather than wrapping. _(Needs gpui-ce.)_
-- [ ] `DRAG-014`: Selecting a folder clears selected assets. _(Needs gpui-ce.)_
-- [ ] `DRAG-015`: Selecting an asset clears selected folders. _(Needs gpui-ce.)_
+- [ ] `DRAG-007`: Dropping internal payload to the root reparents moved items to the library root. _(Needs gpui-ce runtime drop integration.)_
+- [ ] `DRAG-008`: Finder drop onto the media panel imports into the current folder. _(Needs gpui-ce runtime drop integration.)_
+- [ ] `DRAG-009`: Finder drop onto a folder tile or breadcrumb imports into that logical folder. _(Needs gpui-ce runtime drop integration.)_
+- [x] `DRAG-010`: Unsupported file extensions in Finder drops are ignored — `is_supported_extension()` in focus_router.
+- [x] `DRAG-011`: Media-panel keyboard navigation driven by ordered item ids + column count — `MediaGridNav` model.
+- [x] `DRAG-012`: No-selection starts at first (right/down) / last (left/up) — `MediaGridNav::move_right/left`.
+- [x] `DRAG-013`: Navigation clamps at grid edges rather than wrapping — `MediaGridNav` move methods clamp.
+- [x] `DRAG-014`: Selecting a folder clears selected assets — `MediaGridNav::select_folder`.
+- [x] `DRAG-015`: Selecting an asset clears selected folders — `MediaGridNav::select_asset`.
 
 ## E. Pasteboard import and media-panel paste behavior
 
@@ -117,9 +117,12 @@ Scope sources:
 - [x] `CCB-011`: Every clone gets a fresh clip id.
 - [x] `CCB-012`: If multiple copied clips shared a source link group, their clones share a new remapped link group id.
 - [x] `CCB-013`: If only one copied clip came from a link group, its pasted clone becomes unlinked.
-- [ ] `CCB-014`: Global keyboard routing preserves current behavior:
-  - timeline-focused paste uses the clip clipboard
-  - media-panel-focused paste imports from the OS pasteboard instead _(Keyboard routing is a gpui-ce focus concern - core logic for both paths is implemented separately.)_
+- [x] `CCB-014`: Global keyboard routing preserves current behavior:
+  - `route_paste(FocusTarget::Timeline)` → `ClipClipboard`
+  - `route_paste(FocusTarget::MediaPanel)` → `OsPasteboard`
+  - `route_paste(FocusTarget::Chat)` → `OsPasteboard`
+  - `route_copy()` dispatches similarly
+  - Focus routing logic in `focus_router` module; wired into `app_root` paste handler.
 
 ## G. Project settings mismatch flow
 

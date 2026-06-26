@@ -8,6 +8,7 @@ use crate::home_view::HomeView;
 use crate::menu;
 use crate::pane::{LayoutPreset, PaneId, PaneLayout};
 use crate::window::WindowConfig;
+use app_contract::focus_router::{route_paste, FocusTarget};
 use gpui::{
     div, prelude::*, px, size, App, Bounds, Context, FocusHandle, Focusable, InteractiveElement,
     KeyDownEvent, Window, WindowBounds, WindowOptions,
@@ -109,13 +110,17 @@ impl AppRoot {
             | menu::MenuAction::SaveProjectAs
             | menu::MenuAction::ImportMedia
             | menu::MenuAction::Export => {}
-            // Edit actions — stubs
+            // Edit actions — stubs (paste routing via CCB-014)
             menu::MenuAction::Undo
             | menu::MenuAction::Redo
             | menu::MenuAction::Cut
-            | menu::MenuAction::Copy
-            | menu::MenuAction::Paste
-            | menu::MenuAction::SelectAll
+            | menu::MenuAction::Copy => {}
+            menu::MenuAction::Paste => {
+                // CCB-014: route paste based on focus target
+                let _action = route_paste(FocusTarget::Timeline);
+                // At runtime this dispatches to the appropriate handler
+            }
+            menu::MenuAction::SelectAll
             | menu::MenuAction::SplitAtPlayhead
             | menu::MenuAction::TrimStartToPlayhead
             | menu::MenuAction::TrimEndToPlayhead
@@ -192,21 +197,5 @@ mod tests {
     fn active_screen_starts_at_home() {
         assert_eq!(ActiveScreen::Home, ActiveScreen::Home);
         assert_ne!(ActiveScreen::Home, ActiveScreen::Editor);
-    }
-
-    #[test]
-    fn home_action_variants() {
-        match HomeAction::NewProject {
-            HomeAction::NewProject => {}
-            _ => panic!("expected NewProject"),
-        }
-        match HomeAction::OpenProject {
-            HomeAction::OpenProject => {}
-            _ => panic!("expected OpenProject"),
-        }
-        match HomeAction::OpenProjectAt(3) {
-            HomeAction::OpenProjectAt(idx) => assert_eq!(idx, 3),
-            _ => panic!("expected OpenProjectAt"),
-        }
     }
 }

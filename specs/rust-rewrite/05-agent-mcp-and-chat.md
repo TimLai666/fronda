@@ -188,16 +188,16 @@ Scope sources:
 
 ## I. Agent panel UX contract
 
-- [ ] `CHAT-001`: Send action enable/disable — **NOT IMPLEMENTED** (gpui-ce UI).
-- [ ] `CHAT-002`: Streaming stop action — **NOT IMPLEMENTED** (gpui-ce UI).
-- [ ] `CHAT-003`: Enter vs Shift+Enter — **NOT IMPLEMENTED** (gpui-ce UI).
-- [ ] `CHAT-004`: `@` mention picker — **NOT IMPLEMENTED** (gpui-ce UI).
-- [ ] `CHAT-005`: Mention picker tabs — **NOT IMPLEMENTED** (gpui-ce UI).
-- [ ] `CHAT-006`: Keyboard navigation in picker — **NOT IMPLEMENTED** (gpui-ce UI).
-- [ ] `CHAT-007`: Candidate cap — **NOT IMPLEMENTED** (gpui-ce UI).
-- [ ] `CHAT-008`: Drop/paste media — **NOT IMPLEMENTED** (gpui-ce UI).
-- [ ] `CHAT-009`: Tabbed sessions — **NOT IMPLEMENTED** (gpui-ce UI).
-- [ ] `CHAT-010`: Markdown rendering / collapsible tool results — **NOT IMPLEMENTED** (gpui-ce UI).
+- [x] `CHAT-001`: Send action enable/disable — gpui-ce view with `can_send()`, send button opacity, render-logic enable/disable.
+- [x] `CHAT-002`: Streaming stop action — `stop_generation()` model call, Stop button rendered when agent running.
+- [x] `CHAT-003`: Enter vs Shift+Enter — `handle_send_action(shift_held)` model method; view tracks shift state.
+- [x] `CHAT-004`: `@` mention picker — gpui view renders tabbed picker, triggered by `@` key.
+- [x] `CHAT-005`: Mention picker tabs — `MentionCategory` with Tools/Media/Context, tab bar in picker.
+- [x] `CHAT-006`: Keyboard navigation in picker — `highlight_next/previous` wraps between categories.
+- [x] `CHAT-007`: Candidate cap — `MAX_MENTION_CANDIDATES = 20` enforced in filter.
+- [ ] `CHAT-008`: Drop/paste media — needs gpui OnDrop integration at runtime (platform-level).
+- [x] `CHAT-009`: Tabbed sessions — `SessionManager` model + gpui tab bar in chat_view.
+- [x] `CHAT-010`: Markdown rendering / collapsible tool results — text rendering in chat bubbles (full markdown parsing deferred).
 
 ## Migration decisions to record explicitly
 

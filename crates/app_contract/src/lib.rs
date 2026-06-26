@@ -4,6 +4,7 @@ pub mod chat_model;
 pub mod editor_playhead;
 pub mod feedback;
 pub mod feedback_model;
+pub mod focus_router;
 pub mod help_content;
 pub mod help_model;
 pub mod media_grid_nav;

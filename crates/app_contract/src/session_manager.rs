@@ -6,13 +6,6 @@
 
 use std::collections::VecDeque;
 
-/// A unique paste route identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PasteFocus {
-    Timeline,
-    MediaPanel,
-}
-
 /// A tabbed session manager that the chat view can use directly.
 #[derive(Debug, Clone)]
 pub struct SessionManager {
@@ -131,14 +124,6 @@ impl Default for SessionManager {
     }
 }
 
-/// Route a paste action based on the current focus target.
-///
-/// CCB-014: timeline-focused paste uses the clip clipboard,
-/// media-panel-focused paste imports from the OS pasteboard instead.
-pub fn route_paste(focus: PasteFocus) -> PasteFocus {
-    focus
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,11 +218,5 @@ mod tests {
         assert_eq!(mgr.active_session().unwrap().message_count, 0);
         mgr.increment_message_count();
         assert_eq!(mgr.active_session().unwrap().message_count, 1);
-    }
-
-    #[test]
-    fn route_paste_returns_input() {
-        assert_eq!(route_paste(PasteFocus::Timeline), PasteFocus::Timeline);
-        assert_eq!(route_paste(PasteFocus::MediaPanel), PasteFocus::MediaPanel);
     }
 }
