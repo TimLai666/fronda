@@ -352,6 +352,17 @@ impl AnimationDurations {
     pub const TRANSITION: f64 = 0.2;
 }
 
+/// THM-020: Panel header bar configuration.
+///
+/// Full-width bar at `Layout.panelHeaderHeight` with raised background
+/// and bottom primary border of thin width.
+pub struct PanelHeaderBar;
+impl PanelHeaderBar {
+    /// Height matches `Toolbar::PANEL_HEADER_HEIGHT`.
+    pub const HEIGHT: f64 = 28.0;
+    pub const BORDER_WIDTH: f64 = 1.0;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════
@@ -675,7 +686,13 @@ mod tests {
         assert!((AnimationDurations::TRANSITION - 0.2).abs() < 1e-10);
     }
 
-    // UIX-003: Tool shortcuts
+    // THM-020
+    #[test]
+    fn panel_header_bar() {
+        assert!((PanelHeaderBar::HEIGHT - 28.0).abs() < 1e-10);
+        assert!((PanelHeaderBar::BORDER_WIDTH - 1.0).abs() < 1e-10);
+    }
+
     #[test]
     fn tool_shortcuts() {
         assert_eq!('V', 'V');
