@@ -1,8 +1,9 @@
-//! All 51 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 53 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
 //! Issue #165/#158: added set_clip_noise_reduction, set_clip_audio_effects (49 → 51).
+//! Issue #155: added create_compound_clip, dissolve_compound_clip (51 → 53).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -18,13 +19,15 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 51 tools exposed to the agent.
+/// Returns all 53 tools exposed to the agent.
 ///
-/// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158 additions).
+/// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
         add_clips(),
+        create_compound_clip(),
+        dissolve_compound_clip(),
         add_shapes(),
         add_texts(),
         apply_animation(),
@@ -700,6 +703,33 @@ fn set_clip_audio_effects() -> ToolDefinition {
     }
 }
 
+// ── Issue #155: compound clip MCP tools ───────────────────────────────────────
+
+fn create_compound_clip() -> ToolDefinition {
+    ToolDefinition {
+        name: "create_compound_clip",
+        description: "Group selected clips into a compound clip (nested sequence). \
+            The selected clips are replaced with a single compound clip on the timeline. \
+            Issue #155.",
+        input_schema: object(&[
+            ("clipIds", array("Clip ids to nest into the compound clip")),
+            ("name", string("Optional name for the compound clip")),
+        ]),
+    }
+}
+
+fn dissolve_compound_clip() -> ToolDefinition {
+    ToolDefinition {
+        name: "dissolve_compound_clip",
+        description: "Dissolve a compound clip back to its constituent clips on the timeline. \
+            Issue #155.",
+        input_schema: object(&[(
+            "clipId",
+            string("Id of the compound clip to dissolve"),
+        )]),
+    }
+}
+
 // ── Issue #174: silence removal MCP tool ─────────────────────────────────────
 
 fn remove_silence() -> ToolDefinition {
@@ -817,12 +847,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_51_tools() {
+    fn tdef_001_exactly_53_tools() {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            51,
-            "TDEF-001: 51 tools (42 + Issues #172/174/157/165/158)"
+            53,
+            "TDEF-001: 53 tools (42 + Issues #172/174/157/165/158/155)"
         );
     }
 
@@ -851,7 +881,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 51, "all 51 tool names must be unique");
+        assert_eq!(names.len(), 53, "all 53 tool names must be unique");
     }
 
     #[test]

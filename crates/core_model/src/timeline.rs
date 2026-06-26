@@ -1,7 +1,7 @@
 use crate::effect::Effect;
 use crate::shape_style::ShapeStyle;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 fn new_id() -> String {
@@ -486,6 +486,13 @@ pub struct Clip {
     /// Stroke-draw progress keyframes for draw-on/un-draw animation. PR #46.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke_progress_track: Option<KeyframeTrack<f64>>,
+    /// Compound clip (nested sequence) reference (Issue #155).
+    ///
+    /// When `Some`, this clip is a compound clip whose internal timeline
+    /// is stored in the project's `compound_timelines` map under this key.
+    /// Double-clicking opens the nested timeline; dissolving flattens it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compound_timeline_id: Option<String>,
 }
 
 impl Track {
@@ -538,6 +545,13 @@ pub struct Timeline {
     /// Upstream PR #40.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcription_language: Option<String>,
+    /// Nested timelines for compound clips (Issue #155).
+    ///
+    /// Maps `compound_timeline_id` → nested `Timeline`. When a clip has
+    /// `compound_timeline_id = Some(id)`, the corresponding nested timeline
+    /// lives here. Serialized only when non-empty.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub compound_timelines: HashMap<String, Box<Timeline>>,
 }
 
 impl Timeline {
@@ -563,6 +577,7 @@ impl Default for Timeline {
             selected_clip_ids: HashSet::new(),
             tracks: Vec::new(),
             transcription_language: None,
+            compound_timelines: HashMap::new(),
         }
     }
 }

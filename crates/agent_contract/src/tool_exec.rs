@@ -624,6 +624,7 @@ impl ToolExecutor {
                 effects: None,
                 shape_style: None,
                 stroke_progress_track: None,
+                compound_timeline_id: None,
             })
             .collect();
 
@@ -736,6 +737,7 @@ impl ToolExecutor {
                         effects: None,
                         shape_style: None,
                         stroke_progress_track: None,
+                        compound_timeline_id: None,
                     })
                     .collect();
 
@@ -1463,6 +1465,7 @@ impl ToolExecutor {
                 effects: None,
                 shape_style: None,
                 stroke_progress_track: None,
+                compound_timeline_id: None,
             };
             let clip_id = clip.id.clone();
             created_ids.push(clip_id);
@@ -1568,6 +1571,7 @@ impl ToolExecutor {
                 effects: None,
                 shape_style: Some(shape_style),
                 stroke_progress_track: None,
+                compound_timeline_id: None,
             };
             let clip_id = clip.id.clone();
             created_ids.push(clip_id);
@@ -2766,6 +2770,7 @@ mod tests {
                 effects: None,
                 shape_style: None,
                 stroke_progress_track: None,
+                compound_timeline_id: None,
             }],
         });
         let mut exec = ToolExecutor::new(timeline, manifest);
