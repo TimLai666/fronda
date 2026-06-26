@@ -19,6 +19,7 @@ pub mod media_panel_view;
 pub mod menu;
 pub mod pane;
 pub mod platform_adapter;
+pub mod preview_guides;
 #[cfg(feature = "desktop-app")]
 pub mod settings_view;
 #[cfg(feature = "desktop-app")]
