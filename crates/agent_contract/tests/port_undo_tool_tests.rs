@@ -16,6 +16,7 @@ fn test_timeline(fps: i64, width: i64, height: i64) -> Timeline {
         selected_clip_ids: Default::default(),
         transcription_language: None,
         tracks: vec![],
+        compound_timelines: std::collections::HashMap::new(),
     }
 }
 

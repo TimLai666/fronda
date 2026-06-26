@@ -1005,6 +1005,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
             tracks: vec![
                 Track {
                     id: "track-v".into(),
@@ -1044,6 +1045,7 @@ mod tests {
                             effects: None,
                             shape_style: None,
                             stroke_progress_track: None,
+                            compound_timeline_id: None,
                         },
                         Clip {
                             id: "clip-002".into(),
@@ -1076,6 +1078,7 @@ mod tests {
                             effects: None,
                             shape_style: None,
                             stroke_progress_track: None,
+                            compound_timeline_id: None,
                         },
                     ],
                 },
@@ -1116,6 +1119,7 @@ mod tests {
                         effects: None,
                         shape_style: None,
                         stroke_progress_track: None,
+                        compound_timeline_id: None,
                     }],
                 },
             ],
@@ -1955,6 +1959,7 @@ mod tests {
             effects: None,
             shape_style: None,
             stroke_progress_track: None,
+            compound_timeline_id: None,
         }
     }
 

@@ -1,9 +1,10 @@
-//! All 53 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 54 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
 //! Issue #165/#158: added set_clip_noise_reduction, set_clip_audio_effects (49 → 51).
 //! Issue #155: added create_compound_clip, dissolve_compound_clip (51 → 53).
+//! Issue #154: added import_xml (53 → 54).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -19,15 +20,16 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 53 tools exposed to the agent.
+/// Returns all 54 tools exposed to the agent.
 ///
-/// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155 additions).
+/// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
         add_clips(),
         create_compound_clip(),
         dissolve_compound_clip(),
+        import_xml(),
         add_shapes(),
         add_texts(),
         apply_animation(),
@@ -703,6 +705,29 @@ fn set_clip_audio_effects() -> ToolDefinition {
     }
 }
 
+// ── Issue #154: XML import MCP tool ───────────────────────────────────────────
+
+fn import_xml() -> ToolDefinition {
+    ToolDefinition {
+        name: "import_xml",
+        description: "Import a timeline from an XML file (XMEML, FCPXML, Premiere Pro XML, \
+            or DaVinci Resolve XML). The imported timeline is merged into the current project. \
+            Issue #154.",
+        input_schema: object(&[
+            ("path", string("File system path to the XML file (.xml, .fcpxml)")),
+            (
+                "format",
+                string("XML format hint: 'xmeml', 'fcpxml', 'premiere', or 'davinci'. \
+                    Auto-detected from file extension and content if omitted."),
+            ),
+            (
+                "preserveProjectFps",
+                boolean("Keep the current project FPS rather than adopting the imported timeline's FPS. Default: false."),
+            ),
+        ]),
+    }
+}
+
 // ── Issue #155: compound clip MCP tools ───────────────────────────────────────
 
 fn create_compound_clip() -> ToolDefinition {
@@ -847,12 +872,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_53_tools() {
+    fn tdef_001_exactly_54_tools() {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            53,
-            "TDEF-001: 53 tools (42 + Issues #172/174/157/165/158/155)"
+            54,
+            "TDEF-001: 54 tools (42 + Issues #172/174/157/165/158/155/154)"
         );
     }
 
@@ -881,7 +906,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 53, "all 53 tool names must be unique");
+        assert_eq!(names.len(), 54, "all 54 tool names must be unique");
     }
 
     #[test]

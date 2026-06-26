@@ -26,12 +26,12 @@ fn mcp_002_server_version() {
 // ── MCP-003: Exposes the same tool set as the in-app agent ───────────────────
 
 #[test]
-fn mcp_003_exposes_53_tools() {
+fn mcp_003_exposes_54_tools() {
     let tools = agent_contract::all_tools();
     assert_eq!(
         tools.len(),
-        53,
-        "MCP-003: exactly 53 tools (42 + Issues #172/174/157/165/158/155)"
+        54,
+        "MCP-003: exactly 54 tools (42 + Issues #172/174/157/165/158/155/154)"
     );
 }
 
@@ -60,7 +60,7 @@ fn mcp_003_all_tool_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 53, "all 53 tool names must be unique");
+    assert_eq!(names.len(), 54, "all 54 tool names must be unique");
 }
 
 #[test]
