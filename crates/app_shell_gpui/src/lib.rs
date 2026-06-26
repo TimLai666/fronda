@@ -13,6 +13,9 @@ pub mod help_view;
 pub mod home_model;
 #[cfg(feature = "desktop-app")]
 pub mod home_view;
+pub mod inspector_model;
+#[cfg(feature = "desktop-app")]
+pub mod inspector_view;
 pub mod media_panel_model;
 #[cfg(feature = "desktop-app")]
 pub mod media_panel_view;
@@ -20,6 +23,12 @@ pub mod menu;
 pub mod pane;
 pub mod platform_adapter;
 pub mod preview_guides;
+pub mod preview_model;
+#[cfg(feature = "desktop-app")]
+pub mod preview_view;
+pub mod timeline_model;
+#[cfg(feature = "desktop-app")]
+pub mod timeline_view;
 #[cfg(feature = "desktop-app")]
 pub mod settings_view;
 #[cfg(feature = "desktop-app")]

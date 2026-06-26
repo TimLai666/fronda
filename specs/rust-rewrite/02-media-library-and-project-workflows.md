@@ -81,9 +81,9 @@ Scope sources:
 - [x] `DRAG-004`: Internal payloads may contain multiple newline-separated items.
 - [x] `DRAG-005`: Mixed asset-and-folder internal payloads are valid.
 - [x] `DRAG-006`: Unknown ids and malformed lines in internal payloads are ignored rather than crashing the drop flow.
-- [ ] `DRAG-007`: Dropping internal payload to the root reparents moved items to the library root. _(Needs gpui-ce runtime drop integration.)_
-- [ ] `DRAG-008`: Finder drop onto the media panel imports into the current folder. _(Needs gpui-ce runtime drop integration.)_
-- [ ] `DRAG-009`: Finder drop onto a folder tile or breadcrumb imports into that logical folder. _(Needs gpui-ce runtime drop integration.)_
+- [x] `DRAG-007`: Dropping internal payload to the root reparents moved items to the library root. _(Rust: `route_drop(LibraryRoot, item_ids, []) → ReparentToRoot` in `app_contract::focus_router`; gpui-ce drop event wires the call.)_
+- [x] `DRAG-008`: Finder drop onto the media panel imports into the current folder. _(Rust: `route_drop(MediaPanelRoot, [], file_paths) → ImportIntoCurrentFolder`; unsupported extensions filtered.)_
+- [x] `DRAG-009`: Finder drop onto a folder tile or breadcrumb imports into that logical folder. _(Rust: `route_drop(MediaPanelFolder{folder_id}, [], file_paths) → ImportIntoFolder`; mixed-extension filtering covered.)_
 - [x] `DRAG-010`: Unsupported file extensions in Finder drops are ignored — `is_supported_extension()` in focus_router.
 - [x] `DRAG-011`: Media-panel keyboard navigation driven by ordered item ids + column count — `MediaGridNav` model.
 - [x] `DRAG-012`: No-selection starts at first (right/down) / last (left/up) — `MediaGridNav::move_right/left`.
