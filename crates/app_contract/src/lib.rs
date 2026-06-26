@@ -1,4 +1,6 @@
+pub mod agent_panel_model;
 pub mod app_state_machine;
+pub mod chat_model;
 pub mod feedback;
 pub mod feedback_model;
 pub mod help_content;
