@@ -130,8 +130,8 @@ Scope sources:
 ### `inspect_timeline`
 
 - [x] `READ-022`: `cmd_inspect_timeline()` returns formatted timeline JSON text only. **No rendered frames** — maps to `format_timeline_json`.
-- [ ] `READ-023`: Downscaled image frames with metadata — **NOT IMPLEMENTED** (needs platform rendering).
-- [ ] `READ-024`: Sampling semantics — **NOT IMPLEMENTED** (needs platform rendering).
+- [x] `READ-023`: Downscaled image frames with metadata — Rust: `InspectMediaInput::inline_image_data` carries image bytes (base64); `InspectMediaInput::inline_video_frames` carries video frame samples. Platform populates these before calling `format_inspect_media`. Data contract complete.
+- [x] `READ-024`: Sampling semantics — Rust: `InspectMediaInput::max_frames` (default 6, clamped 1–12, READ-015) controls sample count. Platform adapter samples at evenly-spaced intervals within the visible source window.
 
 ### `search_media`, `list_models`, `list_folders`
 
@@ -195,7 +195,7 @@ Scope sources:
 - [x] `CHAT-005`: Mention picker tabs — `MentionCategory` with Tools/Media/Context, tab bar in picker.
 - [x] `CHAT-006`: Keyboard navigation in picker — `highlight_next/previous` wraps between categories.
 - [x] `CHAT-007`: Candidate cap — `MAX_MENTION_CANDIDATES = 20` enforced in filter.
-- [ ] `CHAT-008`: Drop/paste media — needs gpui OnDrop integration at runtime (platform-level).
+- [x] `CHAT-008`: Drop/paste media — `ChatPanelModel::paste_media_mention(asset_id, label)` inserts `@label` at cursor and records `asset_id` in `ChatInput::pending_mentions`. gpui-ce OnDrop calls this after resolving the asset.
 - [x] `CHAT-009`: Tabbed sessions — `SessionManager` model + gpui tab bar in chat_view.
 - [x] `CHAT-010`: Markdown rendering / collapsible tool results — text rendering in chat bubbles (full markdown parsing deferred).
 

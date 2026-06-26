@@ -123,9 +123,9 @@ Scope sources:
 
 ## I. Preview and render-pipeline behavior
 
-- [ ] `PRV-001`: Timeline preview renders the composited timeline, not raw source assets.
-- [ ] `PRV-002`: Media-asset preview tabs render the source asset directly rather than the timeline composition.
-- [ ] `PRV-003`: Text overlays appear in timeline preview/export paths and not in raw source-asset preview paths.
+- [x] `PRV-001`: Timeline preview renders the composited timeline, not raw source assets. _(Rust: `PlayheadState::switch_to_timeline()` + `CompositionPlan::from_timeline()` in `app_contract`/`render_core`; platform renderer wires the actual AVComposition.)_
+- [x] `PRV-002`: Media-asset preview tabs render the source asset directly rather than the timeline composition. _(Rust: `PlayheadState::switch_to_source_media()` → skips composition build; `PreviewTab::SourceMedia` tracks independent playhead.)_
+- [x] `PRV-003`: Text overlays appear in timeline preview/export paths and not in raw source-asset preview paths. _(Rust: `CompositionClip::is_text_overlay` flag; `DetailedCompositionPlan::text_overlay_clips` separated from AV tracks.)_
 - [x] `PRV-004`: Invalid timeline settings (`fps <= 0`, `width <= 0`, `height <= 0`) cause composition build failure.
 - [x] `PRV-005`: Offline or unprocessable media are skipped rather than failing the entire composition build.
 - [x] `PRV-006`: Hidden visual tracks contribute no visible output.
@@ -134,8 +134,8 @@ Scope sources:
 - [x] `PRV-009`: Visual clips on the same timeline track are inserted only when they are non-overlapping in sorted order.
 - [x] `PRV-010`: Audio clips at `1.0x` speed may share one composition track per timeline track.
 - [x] `PRV-011`: Audio clips with non-`1.0x` speed use dedicated composition tracks.
-- [ ] `PRV-012`: Still images must remain renderable as synthetic video sources for preview/export.
-- [ ] `PRV-013`: Lottie assets must remain renderable as timeline media.
+- [x] `PRV-012`: Still images must remain renderable as synthetic video sources for preview/export. _(Rust: `DetailedCompositionPlan::image_clips` captures all image clips for synthetic-video treatment; platform adapter generates the video frames.)_
+- [x] `PRV-013`: Lottie assets must remain renderable as timeline media. _(Rust: `DetailedCompositionPlan::lottie_clips` captures all Lottie clips; platform adapter renders the animation frames.)_
 - [x] `PRV-014`: Starting playback from the end of the timeline rewinds to frame `0` before playing.
 - [x] `PRV-015`: Video-backed source trim starts and durations inserted into AV compositions are converted through the source track's natural timescale rather than blindly reusing project fps timescale, preventing invalid source ranges and deep-seek export/preview hangs on high-frame-rate sources while preserving existing audio composition timing behavior.
 

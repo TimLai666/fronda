@@ -35,6 +35,8 @@ pub enum MessageStatus {
 pub struct ChatInput {
     pub text: String,
     pub cursor_position: usize,
+    /// CHAT-008: Asset IDs of media mentioned via drop/paste (for submission context).
+    pub pending_mentions: Vec<String>,
 }
 
 impl Default for ChatInput {
@@ -42,6 +44,7 @@ impl Default for ChatInput {
         Self {
             text: String::new(),
             cursor_position: 0,
+            pending_mentions: Vec::new(),
         }
     }
 }
@@ -54,6 +57,7 @@ impl ChatInput {
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor_position = 0;
+        self.pending_mentions.clear();
     }
 }
 
@@ -146,6 +150,25 @@ impl ChatPanelModel {
     pub fn set_mention_query(&mut self, query: String) {
         self.mention_query = query;
         self.show_mention_picker = true;
+    }
+
+    /// CHAT-008: Insert a media mention into the chat input when a media asset
+    /// is dropped or pasted into the chat panel.
+    ///
+    /// Appends `@<asset_label>` at the current cursor position (with a leading
+    /// space if the input is non-empty and doesn't already end in whitespace).
+    /// The gpui-ce OnDrop handler calls this after resolving the dropped asset id.
+    pub fn paste_media_mention(&mut self, asset_id: &str, label: &str) {
+        let tag = format!("@{label}");
+        if !self.input.text.is_empty()
+            && !self.input.text.ends_with(|c: char| c.is_whitespace())
+        {
+            self.input.text.push(' ');
+        }
+        self.input.text.push_str(&tag);
+        self.input.cursor_position = self.input.text.len();
+        // Record which asset was mentioned (for submission context)
+        self.input.pending_mentions.push(asset_id.to_string());
     }
 }
 
@@ -291,5 +314,50 @@ mod tests {
             MessageStatus::Failed(reason) => assert_eq!(reason, "timeout"),
             _ => panic!("expected Failed"),
         }
+    }
+
+    // ── CHAT-008: Drop/paste media mention ────────────────────────────────────
+
+    #[test]
+    fn chat_008_paste_media_mention_empty_input() {
+        let mut model = ChatPanelModel::default();
+        model.paste_media_mention("asset-123", "beach.mp4");
+        assert_eq!(model.input.text, "@beach.mp4");
+        assert_eq!(model.input.pending_mentions, vec!["asset-123".to_string()]);
+    }
+
+    #[test]
+    fn chat_008_paste_media_mention_appends_space_if_needed() {
+        let mut model = ChatPanelModel::default();
+        model.input.text = "Tell me about".into();
+        model.paste_media_mention("a1", "clip.mp4");
+        assert_eq!(model.input.text, "Tell me about @clip.mp4");
+    }
+
+    #[test]
+    fn chat_008_paste_media_mention_no_extra_space_if_already_spaced() {
+        let mut model = ChatPanelModel::default();
+        model.input.text = "Tell me about ".into();
+        model.paste_media_mention("a1", "clip.mp4");
+        assert_eq!(model.input.text, "Tell me about @clip.mp4");
+    }
+
+    #[test]
+    fn chat_008_paste_multiple_mentions() {
+        let mut model = ChatPanelModel::default();
+        model.paste_media_mention("a1", "clip1.mp4");
+        model.paste_media_mention("a2", "clip2.mp4");
+        assert!(model.input.text.contains("@clip1.mp4"));
+        assert!(model.input.text.contains("@clip2.mp4"));
+        assert_eq!(model.input.pending_mentions.len(), 2);
+    }
+
+    #[test]
+    fn chat_008_clear_also_clears_pending_mentions() {
+        let mut model = ChatPanelModel::default();
+        model.paste_media_mention("a1", "clip.mp4");
+        model.input.clear();
+        assert!(model.input.pending_mentions.is_empty());
+        assert!(model.input.text.is_empty());
     }
 }

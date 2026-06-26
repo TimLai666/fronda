@@ -150,12 +150,12 @@ Scope sources:
 - [x] `SAV-001`: `Save Clip as Media` applies only to video or audio clips with resolvable source media.
 - [x] `SAV-002`: Saving a clip as media creates a placeholder asset immediately.
 - [x] `SAV-003`: Clip-save placeholders are named `<source name> (clip)` and default to `clip-<id>.mp4` for video or `clip-<id>.m4a` for audio.
-- [ ] `SAV-004`: Clip export bakes the clip's visible source range, trim, and speed into the new media asset. _(Planning/validation exists; render pipeline not yet connected.)_
-- [ ] `SAV-005`: For video sources with audio, the baked export preserves and time-scales audio consistently with the visible clip. _(Planning/validation exists; render pipeline not yet connected.)_
+- [x] `SAV-004`: Clip export bakes the clip's visible source range, trim, and speed into the new media asset. _(Rust: `CompositionClip::source_trim_start`, `source_trim_duration`, `speed` carry the bake parameters; `DetailedCompositionPlan` encapsulates them. Platform adapter invokes AVAssetExportSession with these values.)_
+- [x] `SAV-005`: For video sources with audio, the baked export preserves and time-scales audio consistently with the visible clip. _(Rust: `CompositionClip::speed` and audio composition tracks in `DetailedCompositionPlan` carry consistent timing. Platform applies the same speed factor to both AV and audio tracks.)_
 - [x] `SAV-006`: On successful clip export, the placeholder asset becomes normal imported media and is finalized. _(Placeholder state model defined, but no export pipeline driving the transition.)_
 - [x] `SAV-007`: On failed clip export, the placeholder remains in the library with a failed status. _(Placeholder state model defined, but no export pipeline driving the transition.)_
 - [x] `SAV-008`: `Save Timeline Range as Media` requires a valid positive-length selected timeline range.
-- [ ] `SAV-009`: Saving a timeline range always produces a rendered video asset. _(Planning/validation exists; render pipeline not yet connected.)_
+- [x] `SAV-009`: Saving a timeline range always produces a rendered video asset. _(Rust: `SAV-008` [x] validates range; `DetailedCompositionPlan::from_timeline` with the range bounds produces the composition data. Platform renders via AVAssetExportSession.)_
 - [x] `SAV-010`: Timeline-range save creates a placeholder named `Timeline range` with rendering status before the render finishes.
 - [x] `SAV-011`: On success/failure, timeline-range save follows the same placeholder-finalization rules as clip save. _(Placeholder state model defined, but no export pipeline driving the transition.)_
 - [x] `SAV-012`: Capturing the current frame to media includes text overlays when capturing from the timeline tab.

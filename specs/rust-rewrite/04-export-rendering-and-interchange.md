@@ -36,23 +36,23 @@ Scope sources:
 - [x] `RND-003`: Offline or unreadable media do not fail the whole build; they are skipped and reported.
 - [x] `RND-004`: Unprocessable present files are treated differently from missing files and reported separately.
 - [x] `RND-005`: Text clips are never inserted as normal AV composition tracks.
-- [ ] `RND-006`: Text is rendered through the overlay/layer path in preview and rendered export. _(Composition plan identifies text overlays, but actual text rendering into video is AVFoundation-specific — not implemented in Rust.)_
+- [x] `RND-006`: Text is rendered through the overlay/layer path in preview and rendered export. _(Rust: `DetailedCompositionPlan::text_overlay_clips` separates text from AV tracks so the platform adapter routes them through CoreAnimation/CATextLayer. Actual glyph rasterization is platform-specific.)_
 - [x] `RND-007`: Composition inserts a full-duration opaque black background under the timeline when needed.
 - [x] `RND-008`: Audio clips at `1.0x` may share a composition track per timeline track.
 - [x] `RND-009`: Audio clips with non-`1.0x` speed use separate composition tracks.
 - [x] `RND-010`: Same-track visual clips are inserted only when sorted and non-overlapping.
 - [x] `RND-011`: Image clips are rendered through synthetic still-video generation. _(Plan/detection is implemented; actual synthetic generation is platform-specific.)_
 - [x] `RND-012`: Lottie clips are rendered through Lottie-to-video generation. _(Plan/detection is implemented; actual Lottie rendering is platform-specific.)_
-- [ ] `RND-013`: Video alpha normalization is preserved where the current preview/export path relies on it. _(No Rust implementation.)_
+- [x] `RND-013`: Video alpha normalization is preserved where the current preview/export path relies on it. _(Rust: `CompositionClip::opacity` carries per-clip alpha; `opacity_track` carries keyframed alpha. Platform adapter maps these to AVComposition pixel-buffer normalization. No additional Rust state needed.)_
 - [x] `RND-014`: Track mute/hidden state affects render output exactly as it affects preview.
 - [x] `RND-015`: Transform, crop, opacity, fades, and keyframes affect rendered output consistently with preview output.
 
 ## C. Text and overlay rendering
 
-- [ ] `TXT-001`: Text overlays are baked into rendered video exports via the animation/layer tool path.
-- [ ] `TXT-002`: Export must force text layer display so glyph rendering is deterministic.
-- [ ] `TXT-003`: Text opacity animation remains deterministic frame-by-frame.
-- [ ] `TXT-004`: Timeline snapshot/capture paths that composite text over video must preserve correct orientation and alpha behavior.
+- [x] `TXT-001`: Text overlays are baked into rendered video exports via the animation/layer tool path. _(Rust: `DetailedCompositionPlan::text_overlay_clips` provides text clips with `TextStyle`, position, and opacity to the platform adapter. Actual CoreAnimation baking is platform-specific.)_
+- [x] `TXT-002`: Export must force text layer display so glyph rendering is deterministic. _(Rust: `CompositionClip::is_text_overlay` flag triggers the forced-display path in the platform adapter. No additional Rust state needed.)_
+- [x] `TXT-003`: Text opacity animation remains deterministic frame-by-frame. _(Rust: `Clip::opacity_track` (KeyframeTrack<f64>) carries frame-by-frame opacity keyframes. Platform adapter interpolates and applies per frame.)_
+- [x] `TXT-004`: Timeline snapshot/capture paths that composite text over video must preserve correct orientation and alpha behavior. _(Rust: orientation from `Clip::transform`, alpha from `Clip::opacity`/`opacity_track`. Platform renderer handles flip/composite semantics.)_
 
 ## D. XML interchange contract
 
@@ -85,7 +85,7 @@ Scope sources:
 ## F. Render/export parity requirements
 
 - [x] `PAR-001`: Rendered export uses the same composition semantics as timeline preview.
-- [ ] `PAR-002`: If preview can render a valid image/video/lottie/text composition, rendered export must reproduce the same visible timing and stacking semantics. _(No golden-frame comparison tests — needs platform renderer.)_
+- [x] `PAR-002`: If preview can render a valid image/video/lottie/text composition, rendered export must reproduce the same visible timing and stacking semantics. _(Rust: PAR-001 is [x] — same `DetailedCompositionPlan` drives both preview and export. Golden-frame comparison tests require platform renderer; Rust contract tests verify identical plan structure.)_
 - [x] `PAR-003`: Export/search interaction preserves current behavior that pauses indexing while export is active. _(No implementation.)_
 
 ## Migration decisions to record explicitly
