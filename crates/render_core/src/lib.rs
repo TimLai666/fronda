@@ -147,15 +147,77 @@ pub enum ExportFormat {
     H264,
     H265,
     ProRes,
+    /// Issue #59: HEVC Main10 for 10-bit HDR output (BT.2020 + HLG or PQ).
+    H265Hdr,
 }
 
 impl ExportFormat {
     pub fn file_extension(self) -> &'static str {
         match self {
-            ExportFormat::H264 | ExportFormat::H265 => "mp4",
+            ExportFormat::H264 | ExportFormat::H265 | ExportFormat::H265Hdr => "mp4",
             ExportFormat::ProRes => "mov",
         }
     }
+
+    /// Whether this format supports 10-bit depth (Issue #59).
+    pub fn is_10bit_capable(self) -> bool {
+        matches!(self, ExportFormat::H265Hdr | ExportFormat::ProRes)
+    }
+}
+
+/// Color space and transfer function for export (Issue #59).
+///
+/// Determines whether output is SDR or HDR and which HDR standard to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorSpace {
+    /// Standard dynamic range (BT.709 / sRGB). Default.
+    Sdr,
+    /// Hybrid Log-Gamma — broadcast HDR standard (ITU-R BT.2100-2).
+    /// Recommended for streaming platforms (YouTube, Vimeo HDR).
+    Hlg,
+    /// Perceptual Quantizer — cinema/streaming HDR (SMPTE ST 2084).
+    /// Used by Netflix, Apple TV+, Dolby Vision base layer.
+    Pq,
+}
+
+impl Default for ColorSpace {
+    fn default() -> Self {
+        ColorSpace::Sdr
+    }
+}
+
+impl ColorSpace {
+    /// Display name for Settings UI.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            ColorSpace::Sdr => "SDR (BT.709)",
+            ColorSpace::Hlg => "HDR — HLG (BT.2020)",
+            ColorSpace::Pq => "HDR — PQ (BT.2020)",
+        }
+    }
+
+    /// Whether this color space requires a 10-bit codec (Issue #59).
+    pub fn requires_10bit(self) -> bool {
+        matches!(self, ColorSpace::Hlg | ColorSpace::Pq)
+    }
+}
+
+/// Validate that a format/color-space pair is compatible (Issue #59).
+///
+/// Returns `Err` if 10-bit HDR color space is combined with a codec that
+/// cannot carry 10-bit depth (H.264, H.265 SDR profile).
+pub fn validate_export_color_space(
+    format: ExportFormat,
+    color_space: ColorSpace,
+) -> Result<(), String> {
+    if color_space.requires_10bit() && !format.is_10bit_capable() {
+        return Err(format!(
+            "{:?} does not support 10-bit depth required for {:?}. Use H265Hdr or ProRes.",
+            format,
+            color_space
+        ));
+    }
+    Ok(())
 }
 
 /// The full composition plan for rendering or exporting a timeline.
@@ -249,6 +311,8 @@ impl CompositionPlan {
         let base = match format {
             ExportFormat::H264 => 8_000_000,
             ExportFormat::H265 => 5_000_000,
+            // Issue #59: H265Hdr uses ~1.5× H265 bitrate to carry 10-bit HDR data
+            ExportFormat::H265Hdr => 7_500_000,
             ExportFormat::ProRes => 30_000_000,
         };
         (base as f64 * megapixels / 2.0).round() as u64
@@ -1348,7 +1412,58 @@ mod tests {
     fn export_format_extension_matches_spec() {
         assert_eq!(ExportFormat::H264.file_extension(), "mp4");
         assert_eq!(ExportFormat::H265.file_extension(), "mp4");
+        assert_eq!(ExportFormat::H265Hdr.file_extension(), "mp4");
         assert_eq!(ExportFormat::ProRes.file_extension(), "mov");
+    }
+
+    // === Issue #59: 10-bit HDR export ===
+
+    #[test]
+    fn issue_059_h265_hdr_is_10bit_capable() {
+        assert!(ExportFormat::H265Hdr.is_10bit_capable());
+        assert!(ExportFormat::ProRes.is_10bit_capable());
+        assert!(!ExportFormat::H264.is_10bit_capable());
+        assert!(!ExportFormat::H265.is_10bit_capable());
+    }
+
+    #[test]
+    fn issue_059_color_space_display_names() {
+        assert!(!ColorSpace::Sdr.display_name().is_empty());
+        assert!(ColorSpace::Hlg.display_name().contains("HLG"));
+        assert!(ColorSpace::Pq.display_name().contains("PQ"));
+    }
+
+    #[test]
+    fn issue_059_hdr_color_spaces_require_10bit() {
+        assert!(ColorSpace::Hlg.requires_10bit());
+        assert!(ColorSpace::Pq.requires_10bit());
+        assert!(!ColorSpace::Sdr.requires_10bit());
+    }
+
+    #[test]
+    fn issue_059_validate_h265_hdr_with_hlg_ok() {
+        assert!(validate_export_color_space(ExportFormat::H265Hdr, ColorSpace::Hlg).is_ok());
+        assert!(validate_export_color_space(ExportFormat::H265Hdr, ColorSpace::Pq).is_ok());
+        assert!(validate_export_color_space(ExportFormat::ProRes, ColorSpace::Hlg).is_ok());
+    }
+
+    #[test]
+    fn issue_059_validate_h264_with_hdr_fails() {
+        let err = validate_export_color_space(ExportFormat::H264, ColorSpace::Hlg).unwrap_err();
+        assert!(err.contains("10-bit"), "err={err}");
+    }
+
+    #[test]
+    fn issue_059_validate_h265_sdr_with_hdr_fails() {
+        let err = validate_export_color_space(ExportFormat::H265, ColorSpace::Pq).unwrap_err();
+        assert!(err.contains("H265Hdr"), "err={err}");
+    }
+
+    #[test]
+    fn issue_059_sdr_works_with_any_format() {
+        for fmt in [ExportFormat::H264, ExportFormat::H265, ExportFormat::H265Hdr, ExportFormat::ProRes] {
+            assert!(validate_export_color_space(fmt, ColorSpace::Sdr).is_ok(), "{fmt:?}");
+        }
     }
 
     // === EXP-009: Export progress tracking ===

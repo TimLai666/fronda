@@ -1,7 +1,8 @@
-//! All 49 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 51 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
+//! Issue #165/#158: added set_clip_noise_reduction, set_clip_audio_effects (49 → 51).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -17,9 +18,9 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 49 tools exposed to the agent.
+/// Returns all 51 tools exposed to the agent.
 ///
-/// TDEF-001: tool set (42 original + Issues #172/174/157 additions).
+/// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
@@ -68,6 +69,8 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         set_color_grade(),
         set_keyframes(),
         save_clip_preset(),
+        set_clip_audio_effects(),
+        set_clip_noise_reduction(),
         split_clip(),
         undo(),
         upscale_media(),
@@ -641,6 +644,62 @@ fn object_any(description: &str) -> Value {
     Value::Object(map)
 }
 
+// ── Issues #165/#158: audio effect MCP tools ─────────────────────────────────
+
+fn set_clip_noise_reduction() -> ToolDefinition {
+    ToolDefinition {
+        name: "set_clip_noise_reduction",
+        description: "Apply noise reduction to a clip's audio. \
+            Uses on-device audio processing (VoiceProcessingIO / AVAudioUnitEQ). \
+            No AI dependency. Issue #165.",
+        input_schema: object(&[
+            ("clipId", string("Clip id (must have an audio track)")),
+            (
+                "amount",
+                number("Reduction strength 0.0 (off) to 1.0 (maximum). Default: 0.5."),
+            ),
+            (
+                "sensitivity",
+                number("Noise floor sensitivity 0.0 to 1.0. Default: 0.5."),
+            ),
+            (
+                "smoothing",
+                string("Temporal smoothing: 'low', 'medium', or 'high'. Default: 'medium'."),
+            ),
+            ("enabled", boolean("Enable or disable the effect. Default: true.")),
+        ]),
+    }
+}
+
+fn set_clip_audio_effects() -> ToolDefinition {
+    ToolDefinition {
+        name: "set_clip_audio_effects",
+        description: "Apply audio shaping effects (EQ, compressor, pitch, reverb) to a clip. \
+            Issue #158.",
+        input_schema: object(&[
+            ("clipId", string("Clip id (must have an audio track)")),
+            (
+                "eq",
+                object_any("Optional EQ settings: {lowGain, midGain, highGain} in dB (-12 to 12)"),
+            ),
+            (
+                "compressor",
+                object_any(
+                    "Optional compressor: {threshold_db, ratio, attack_ms, release_ms}",
+                ),
+            ),
+            (
+                "pitchShift",
+                number("Pitch shift in semitones (-12 to 12). Default: 0."),
+            ),
+            (
+                "reverb",
+                object_any("Optional reverb: {roomSize 0-1, wetDry 0-1}"),
+            ),
+        ]),
+    }
+}
+
 // ── Issue #174: silence removal MCP tool ─────────────────────────────────────
 
 fn remove_silence() -> ToolDefinition {
@@ -758,12 +817,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_49_tools() {
+    fn tdef_001_exactly_51_tools() {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            49,
-            "TDEF-001: 49 tools (42 original + Issues #172/174/157)"
+            51,
+            "TDEF-001: 51 tools (42 + Issues #172/174/157/165/158)"
         );
     }
 
@@ -792,7 +851,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 49, "all 49 tool names must be unique");
+        assert_eq!(names.len(), 51, "all 51 tool names must be unique");
     }
 
     #[test]
