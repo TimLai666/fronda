@@ -1,7 +1,10 @@
 pub mod app_state_machine;
 pub mod feedback;
+pub mod feedback_model;
 pub mod help_content;
+pub mod help_model;
 pub mod runtime_metadata;
+pub mod settings_model;
 pub mod settings_storage;
 pub mod shortcut_defs;
 pub mod telemetry;
