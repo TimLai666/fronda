@@ -637,6 +637,11 @@ pub fn prepare_export_destination(
 
 // ── Settings (SET-001~007) ──────────────────────────────────────
 
+/// Default Anthropic API base URL.
+///
+/// Issue #17: this is the fallback when no custom base URL is configured.
+pub const ANTHROPIC_DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
+
 /// Persisted user settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserSettings {
@@ -652,6 +657,12 @@ pub struct UserSettings {
     pub active_agent_provider: AgentProvider,
     /// Config for Custom OpenAI-compatible providers (Issue #140).
     pub custom_llm_config: Option<CustomLlmConfig>,
+    /// Custom Anthropic API base URL (Issue #17).
+    ///
+    /// When `None`, defaults to `ANTHROPIC_DEFAULT_BASE_URL`.
+    /// Supports Anthropic-compatible proxies (VibeProxy, LiteLLM, cli-proxy-api, etc.)
+    /// and respects the `ANTHROPIC_BASE_URL` environment variable in the macOS adapter.
+    pub anthropic_base_url: Option<String>,
 }
 
 /// Agent LLM provider.
@@ -749,7 +760,22 @@ impl Default for UserSettings {
             agent_api_keys: Vec::new(),
             active_agent_provider: AgentProvider::default(),
             custom_llm_config: None,
+            anthropic_base_url: None,
         }
+    }
+}
+
+impl UserSettings {
+    /// Issue #17: return the effective Anthropic API base URL.
+    ///
+    /// Precedence: configured `anthropic_base_url` → `ANTHROPIC_DEFAULT_BASE_URL`.
+    /// The macOS adapter additionally checks the `ANTHROPIC_BASE_URL` env var
+    /// before reading persisted settings.
+    pub fn effective_anthropic_base_url(&self) -> &str {
+        self.anthropic_base_url
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(ANTHROPIC_DEFAULT_BASE_URL)
     }
 }
 
@@ -1224,6 +1250,42 @@ mod tests {
     fn set_006_mask_api_key() {
         assert_eq!(UserSettings::mask_api_key("sk-abc12345"), "2345****");
         assert_eq!(UserSettings::mask_api_key("abc"), "abc");
+    }
+
+    // ---- Issue #17: custom Anthropic base URL ----------------------------
+
+    #[test]
+    fn issue_017_default_url_is_anthropic_prod() {
+        let s = UserSettings::default();
+        assert_eq!(
+            s.effective_anthropic_base_url(),
+            ANTHROPIC_DEFAULT_BASE_URL
+        );
+        assert_eq!(ANTHROPIC_DEFAULT_BASE_URL, "https://api.anthropic.com");
+    }
+
+    #[test]
+    fn issue_017_custom_url_overrides_default() {
+        let mut s = UserSettings::default();
+        s.anthropic_base_url = Some("http://127.0.0.1:8318".into());
+        assert_eq!(s.effective_anthropic_base_url(), "http://127.0.0.1:8318");
+    }
+
+    #[test]
+    fn issue_017_empty_url_falls_back_to_default() {
+        let mut s = UserSettings::default();
+        s.anthropic_base_url = Some(String::new());
+        assert_eq!(
+            s.effective_anthropic_base_url(),
+            ANTHROPIC_DEFAULT_BASE_URL
+        );
+    }
+
+    #[test]
+    fn issue_017_litellm_proxy_url_accepted() {
+        let mut s = UserSettings::default();
+        s.anthropic_base_url = Some("http://localhost:4000".into());
+        assert_eq!(s.effective_anthropic_base_url(), "http://localhost:4000");
     }
 
     // ---- Issue #140: multi-provider LLM support --------------------------
