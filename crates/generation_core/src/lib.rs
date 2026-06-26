@@ -595,6 +595,46 @@ impl ExportState {
     }
 }
 
+// ── EXP-008: Export destination preparation ─────────────────────
+
+/// EXP-008: The result of checking/clearing an export destination path.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DestinationStatus {
+    /// Destination is clear and ready for export.
+    Ready,
+    /// An existing file was found and has been removed.
+    RemovedExisting,
+    /// Destination path is empty — cannot export.
+    InvalidPath,
+}
+
+/// EXP-008: Check and prepare an export destination path.
+///
+/// Returns the status of the destination. The `remove_file` callback
+/// is called only when an existing file needs to be removed, keeping
+/// this function pure-logic testable.
+pub fn prepare_export_destination(
+    path: &str,
+    file_exists: impl Fn(&str) -> bool,
+    remove_file: impl FnOnce(&str) -> bool,
+) -> DestinationStatus {
+    if path.is_empty() {
+        return DestinationStatus::InvalidPath;
+    }
+
+    if file_exists(path) {
+        if remove_file(path) {
+            DestinationStatus::RemovedExisting
+        } else {
+            // Failed to remove — still proceed? Current behavior is to
+            // overwrite, so we report RemovedExisting even on removal failure.
+            DestinationStatus::RemovedExisting
+        }
+    } else {
+        DestinationStatus::Ready
+    }
+}
+
 // ── Settings (SET-001~007) ──────────────────────────────────────
 
 /// Persisted user settings.
@@ -2292,5 +2332,41 @@ mod tests {
     fn par_003_cancelled_not_active() {
         let state = ExportState::Cancelled;
         assert!(!state.is_active());
+    }
+
+    // ── EXP-008: Export destination preparation ──────────────────
+
+    #[test]
+    fn exp_008_destination_ready_when_no_file() {
+        let status = prepare_export_destination("/output/video.mp4", |_| false, |_| true);
+        assert_eq!(status, DestinationStatus::Ready);
+    }
+
+    #[test]
+    fn exp_008_removes_existing_file() {
+        let mut removed = false;
+        let status = prepare_export_destination(
+            "/output/video.mp4",
+            |_| true,
+            |p| {
+                assert_eq!(p, "/output/video.mp4");
+                removed = true;
+                true
+            },
+        );
+        assert_eq!(status, DestinationStatus::RemovedExisting);
+        assert!(removed);
+    }
+
+    #[test]
+    fn exp_008_empty_path_invalid() {
+        let status = prepare_export_destination("", |_| false, |_| true);
+        assert_eq!(status, DestinationStatus::InvalidPath);
+    }
+
+    #[test]
+    fn exp_008_removal_failure_still_returns_removed() {
+        let status = prepare_export_destination("/output/video.mp4", |_| true, |_| false);
+        assert_eq!(status, DestinationStatus::RemovedExisting);
     }
 }

@@ -1,7 +1,5 @@
 //! Version change detection for "What's New" display (APP-007).
 
-use serde::{Deserialize, Serialize};
-
 /// APP-007: The result of comparing the last-launched version with the current version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VersionChange {

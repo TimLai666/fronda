@@ -1,10 +1,5 @@
 use std::fmt;
 
-/// Internal media drag payload: `palmier-asset://<id>`
-const ASSET_URL_SCHEME: &str = "palmier-asset";
-/// Internal folder drag payload: `palmier-folder://<id>`
-const FOLDER_URL_SCHEME: &str = "palmier-folder";
-
 /// A parsed internal drag payload item
 #[derive(Debug, Clone, PartialEq)]
 pub enum DragItem {
@@ -34,7 +29,9 @@ impl fmt::Display for DragPayload {
     }
 }
 
-/// Errors that can occur during drag payload parsing
+/// Errors that can occur during drag payload parsing.
+/// Not currently returned — reserved for stricter validation.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum DragParseError {
     /// Empty input

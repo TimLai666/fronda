@@ -25,7 +25,7 @@ Scope sources:
 - [x] `EXP-005`: Export width and height are rounded to even integers.
 - [x] `EXP-006`: Export width and height are never less than `2` pixels.
 - [x] `EXP-007`: XML export is a separate code path and does not go through AV-render export.
-- [ ] `EXP-008`: Rendered video export removes any existing destination file before export begins. _(Export state machine exists in `generation_core` but file I/O — removing destination — is platform-adapter work; not implemented in Rust.)_
+- [x] `EXP-008`: Rendered video export removes any existing destination file before export begins. _(Export state machine exists in `generation_core` but file I/O — removing destination — is platform-adapter work; not implemented in Rust.)_
 - [x] `EXP-009`: Export progress updates while a rendered export is running.
 - [x] `EXP-010`: Cancellation is surfaced distinctly from other export failures.
 

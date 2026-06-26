@@ -267,65 +267,6 @@ mod tests {
     use super::*;
     use core_model::{Interpolation, Track};
 
-    fn make_clip(
-        id: &str,
-        track_idx: usize,
-        start: i64,
-        dur: i64,
-        media_type: ClipType,
-        link_group: Option<&str>,
-    ) -> CopiedClip {
-        CopiedClip {
-            clip: Clip {
-                id: id.to_string(),
-                media_ref: format!("ref-{id}"),
-                media_type,
-                source_clip_type: media_type,
-                start_frame: start,
-                duration_frames: dur,
-                speed: 1.0,
-                volume: 1.0,
-                opacity: 1.0,
-                trim_start_frame: 0,
-                trim_end_frame: 0,
-                fade_in_frames: 0,
-                fade_out_frames: 0,
-                fade_in_interpolation: Interpolation::Linear,
-                fade_out_interpolation: Interpolation::Linear,
-                link_group_id: link_group.map(String::from),
-                caption_group_id: None,
-                text_content: None,
-                text_style: None,
-                transform: core_model::Transform {
-                    center_x: 0.5,
-                    center_y: 0.5,
-                    width: 1.0,
-                    height: 1.0,
-                    rotation: 0.0,
-                    flip_horizontal: false,
-                    flip_vertical: false,
-                },
-                crop: core_model::Crop {
-                    left: 0.0,
-                    top: 0.0,
-                    right: 0.0,
-                    bottom: 0.0,
-                },
-                shape_style: None,
-                stroke_progress_track: None,
-                opacity_track: None,
-                position_track: None,
-                scale_track: None,
-                rotation_track: None,
-                crop_track: None,
-                volume_track: None,
-                effects: None,
-            },
-            source_track_index: track_idx,
-            offset_from_anchor: start - 0,
-        }
-    }
-
     fn make_video_track(clips: Vec<Clip>) -> Track {
         Track {
             id: "track-video".into(),

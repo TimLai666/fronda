@@ -430,7 +430,7 @@ mod tests {
         }
     }
 
-    fn video_input(id: &str) -> IndexJobInput {
+    fn _video_input(id: &str) -> IndexJobInput {
         IndexJobInput {
             asset_id: id.into(),
             media_type: "video".into(),
@@ -439,7 +439,7 @@ mod tests {
         }
     }
 
-    fn image_input(id: &str) -> IndexJobInput {
+    fn _image_input(id: &str) -> IndexJobInput {
         IndexJobInput {
             asset_id: id.into(),
             media_type: "image".into(),
@@ -448,7 +448,7 @@ mod tests {
         }
     }
 
-    fn silent_video_input(id: &str) -> IndexJobInput {
+    fn _silent_video_input(id: &str) -> IndexJobInput {
         IndexJobInput {
             asset_id: id.into(),
             media_type: "video".into(),
