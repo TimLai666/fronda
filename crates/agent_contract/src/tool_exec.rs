@@ -951,6 +951,13 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing mediaId".to_string())?;
 
+        // Issue #39: resolve language — per-call arg → project setting → None.
+        let _language = args
+            .get("language")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .or_else(|| self.timeline.transcription_language.clone());
+
         let entry = self
             .media_manifest
             .entries
@@ -1050,6 +1057,13 @@ impl ToolExecutor {
             }));
         }
 
+        // Issue #39: resolve language — per-call arg → project setting → None (platform uses system).
+        let language = args
+            .get("language")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .or_else(|| self.timeline.transcription_language.clone());
+
         // Parse optional pagination
         let start_frame = args
             .get("startFrame")
@@ -1074,6 +1088,7 @@ impl ToolExecutor {
 
         let options = TranscriptFormatOptions {
             start_frame,
+            language,
             ..Default::default()
         };
 
@@ -2795,6 +2810,78 @@ mod tests {
                 .contains("clips"),
             "returns formatted transcript JSON"
         );
+    }
+
+    // ---- Issue #39: language resolution in get_transcript / inspect_media --
+
+    #[test]
+    fn issue_039_get_transcript_per_call_language_propagated() {
+        let mut exec = make_executor_with_media();
+        let result = exec
+            .execute(
+                "get_transcript",
+                &json!({"mediaId": "media-001", "language": "fr"}),
+            )
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        // The formatted output should include the language field
+        assert!(text.contains("\"language\""), "language field in output: {text}");
+        assert!(text.contains("fr"), "language value in output: {text}");
+    }
+
+    #[test]
+    fn issue_039_get_transcript_project_language_fallback() {
+        // When no per-call language but timeline has transcriptionLanguage
+        let mut exec = make_executor_with_media();
+        exec.timeline.transcription_language = Some("ja".to_string());
+        let result = exec
+            .execute("get_transcript", &json!({"mediaId": "media-001"}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"language\""), "project language in output: {text}");
+        assert!(text.contains("ja"), "language value in output: {text}");
+    }
+
+    #[test]
+    fn issue_039_get_transcript_per_call_overrides_project_language() {
+        let mut exec = make_executor_with_media();
+        exec.timeline.transcription_language = Some("ja".to_string());
+        let result = exec
+            .execute(
+                "get_transcript",
+                &json!({"mediaId": "media-001", "language": "ko"}),
+            )
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        // per-call "ko" should win over project "ja"
+        assert!(text.contains("ko"), "per-call language wins: {text}");
+        assert!(!text.contains("\"ja\""), "project language not in output: {text}");
+    }
+
+    #[test]
+    fn issue_039_get_transcript_no_language_no_field() {
+        let mut exec = make_executor_with_media();
+        // Neither per-call nor project language set
+        exec.timeline.transcription_language = None;
+        let result = exec
+            .execute("get_transcript", &json!({"mediaId": "media-001"}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        // language field should be omitted when None
+        assert!(!text.contains("\"language\""), "no language field expected: {text}");
+    }
+
+    #[test]
+    fn issue_039_inspect_media_accepts_language_param() {
+        let mut exec = make_executor_with_media();
+        // Should not error — language param accepted
+        let result = exec
+            .execute(
+                "inspect_media",
+                &json!({"mediaId": "media-001", "language": "de"}),
+            )
+            .unwrap();
+        assert!(result.get("isError").is_none(), "no error with language param");
     }
 
     #[test]

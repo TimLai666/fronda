@@ -386,6 +386,11 @@ pub struct TranscriptFormatOptions {
     /// Legacy wordTimestamps flag — tolerated and ignored (READ-021).
     #[allow(dead_code)]
     pub word_timestamps: Option<bool>,
+    /// Resolved BCP-47 language for this transcript request (Issue #39).
+    ///
+    /// Precedence: per-call `language` arg → project `transcriptionLanguage`
+    /// → `None` (platform falls back to system language).
+    pub language: Option<String>,
 }
 
 impl Default for TranscriptFormatOptions {
@@ -394,6 +399,7 @@ impl Default for TranscriptFormatOptions {
             max_words: 10000,
             start_frame: None,
             word_timestamps: None,
+            language: None,
         }
     }
 }
@@ -423,6 +429,10 @@ pub struct FormattedTranscript {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_start_frame: Option<i64>,
     pub text: String,
+    /// Resolved language used for this transcript (Issue #39).
+    /// `None` means the platform will use system language.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 /// Format transcript data for get_transcript output.
@@ -525,6 +535,7 @@ pub fn format_transcript(
         clips: formatted_clips,
         next_start_frame,
         text,
+        language: options.language.clone(),
     }
 }
 
@@ -925,11 +936,7 @@ pub fn format_inspect_media(input: &InspectMediaInput) -> Result<Value, String> 
                     input.timeline_fps,
                     &input.transcription_words,
                     &[],
-                    &TranscriptFormatOptions {
-                        max_words: 10000,
-                        start_frame: None,
-                        word_timestamps: None,
-                    },
+                    &TranscriptFormatOptions::default(),
                 );
                 result["transcript"] = serde_json::to_value(&transcript).unwrap_or_default();
             }
@@ -941,11 +948,7 @@ pub fn format_inspect_media(input: &InspectMediaInput) -> Result<Value, String> 
                     input.timeline_fps,
                     &input.transcription_words,
                     &[],
-                    &TranscriptFormatOptions {
-                        max_words: 10000,
-                        start_frame: None,
-                        word_timestamps: None,
-                    },
+                    &TranscriptFormatOptions::default(),
                 );
                 result["transcript"] = serde_json::to_value(&transcript).unwrap_or_default();
             }
