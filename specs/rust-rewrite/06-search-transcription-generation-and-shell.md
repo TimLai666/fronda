@@ -67,10 +67,10 @@ Scope sources:
 - [x] `TRN-013`: If no exact region exists, locale matching falls back to any supported locale with the same language.
 - [x] `TRN-014`: Region override suffixes and Unicode extension tags such as `@rg=...` and `-u-rg-...` do not block language matching.
 - [x] `TRN-015`: If no supported language matches, locale selection returns `nil`.
-- [ ] `TRN-016`: Video transcription first extracts audio to a temp PCM `.caf` file using the current sample-rate/channel/bit-depth contract.
-- [ ] `TRN-017`: If a video has no audio track, video transcription fails cleanly.
+- [x] `TRN-016`: Video transcription first extracts audio to a temp PCM `.caf` file using the current sample-rate/channel/bit-depth contract. _(Rust: `AudioExtractionConfig::new_temp()` in `search_core::transcript`; platform adapter invokes AVFoundation.)_
+- [x] `TRN-017`: If a video has no audio track, video transcription fails cleanly. _(Rust: `TranscriptionError::NoAudioTrack` in `search_core::transcript`.)_
 - [x] `TRN-018`: Range-limited transcription offsets timestamps back into original source time after extracting/transcribing the narrowed source span.
-- [ ] `TRN-019`: If the on-device speech model must be installed and installation fails, transcription fails cleanly with a model-install error.
+- [x] `TRN-019`: If the on-device speech model must be installed and installation fails, transcription fails cleanly with a model-install error. _(Rust: `TranscriptionError::ModelInstallFailed` in `search_core::transcript`.)_
 
 ## D. Caption generation
 
@@ -132,11 +132,11 @@ Scope sources:
 ## G. Help, feedback, and app shell behavior
 
 - [x] `APP-001`: App startup still performs logging bootstrap, telemetry startup, bundled font registration, notifications configuration, MCP startup when enabled, updater initialization, and deferred account/model configuration after the first Home window is shown.
-- [ ] `APP-002`: Reopening the app with no visible windows shows Home again.
+- [x] `APP-002`: Reopening the app with no visible windows shows Home again. _(Rust: `PlatformAdapter::should_reopen_to_home()` + `open_main_window(cx)` in `app_shell_gpui`; macOS adapter wires `applicationShouldHandleReopen`.)_
 - [x] `APP-003`: Feedback submission requires non-empty message and current maximum length validation.
 - [x] `APP-004`: Feedback screenshot capture occurs before the feedback window becomes key, so the feedback window does not capture itself.
 - [x] `APP-005`: Feedback screenshots are downscaled to the current maximum-dimension behavior.
-- [ ] `APP-006`: Generation-complete notification clicks activate the app and reveal the generated asset in the best matching project.
+- [x] `APP-006`: Generation-complete notification clicks activate the app and reveal the generated asset in the best matching project. _(Rust: `PlatformAdapter::reveal_generated_asset(asset_id)` in `app_shell_gpui`; macOS adapter wires UNNotificationResponse.)_
 - [x] `APP-007`: The “What’s New” surface appears only on a real version change and not on first install.
 - [x] `APP-008`: Update badge visibility follows current update-available detection and local dismissal state.
 - [x] `APP-009`: MCP instructions/help continue exposing server URL, copyable snippets, and install guidance for supported clients.

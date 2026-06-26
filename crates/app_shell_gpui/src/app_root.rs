@@ -7,8 +7,10 @@ use crate::chat_view::ChatView;
 use crate::editor_view;
 use crate::home_model::HomeLayout;
 use crate::home_view::{HomeColors, HomeView};
+use crate::media_panel_view::MediaPanelView;
 use crate::menu;
 use crate::pane::{LayoutPreset, PaneId, PaneLayout};
+use crate::toolbar_view::ToolbarView;
 use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
 use gpui::{
@@ -30,8 +32,10 @@ pub struct AppRoot {
     active_screen: ActiveScreen,
     pane_layout: PaneLayout,
     home: HomeView,
-    /// ChatView entity, created when first entering the editor.
+    /// Editor panel entities, created when first entering the editor.
     chat_view: Option<Entity<ChatView>>,
+    toolbar_view: Option<Entity<ToolbarView>>,
+    media_panel_view: Option<Entity<MediaPanelView>>,
 }
 
 impl AppRoot {
@@ -43,6 +47,8 @@ impl AppRoot {
             pane_layout: PaneLayout::new(),
             home: HomeView::new(handle),
             chat_view: None,
+            toolbar_view: None,
+            media_panel_view: None,
         }
     }
 
@@ -50,8 +56,9 @@ impl AppRoot {
     pub fn open_editor(&mut self, cx: &mut Context<Self>) {
         self.active_screen = ActiveScreen::Editor;
         if self.chat_view.is_none() {
-            let chat = cx.new(|cx| ChatView::new(cx));
-            self.chat_view = Some(chat);
+            self.chat_view = Some(cx.new(|cx| ChatView::new(cx)));
+            self.toolbar_view = Some(cx.new(|cx| ToolbarView::new(cx)));
+            self.media_panel_view = Some(cx.new(|cx| MediaPanelView::new(cx)));
         }
         cx.notify();
     }
@@ -247,7 +254,11 @@ impl Render for AppRoot {
             ActiveScreen::Home => self.render_home(cx).into_any_element(),
             ActiveScreen::Editor => {
                 let layout = self.pane_layout.clone();
-                let contents = editor_view::PaneContents::new(self.chat_view.clone());
+                let contents = editor_view::PaneContents::new(
+                    self.chat_view.clone(),
+                    self.toolbar_view.clone(),
+                    self.media_panel_view.clone(),
+                );
                 div()
                     .size_full()
                     .child(editor_view::render_pane_layout(&layout, &contents))
@@ -266,16 +277,15 @@ impl Render for AppRoot {
     }
 }
 
-/// Create and open the initial window (WIN-001: 1200×1200 default).
+/// Create and open the initial window (WIN-001: 960×640 default).
 ///
-/// Shifts the window down by 60 px from true center so the title bar is
-/// comfortably visible on Windows.
+/// Shifts the window down so the title bar is comfortably visible on Windows.
 pub fn open_main_window(cx: &mut App) {
     let cfg = WindowConfig::for_home();
     let size = size(px(cfg.default_width as f32), px(cfg.default_height as f32));
     let mut bounds = Bounds::centered(None, size, cx);
-    // Shift down so the title bar stays visible
-    bounds.origin.y = bounds.origin.y + px(60.0);
+    // Shift down so the title bar stays visible on Windows
+    bounds.origin.y = bounds.origin.y + px(220.0);
 
     cx.open_window(
         WindowOptions {

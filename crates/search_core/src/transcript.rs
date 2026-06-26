@@ -1,6 +1,109 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use crate::search_index::CacheIdentity;
+
+// ── Transcription errors (TRN-016, TRN-017, TRN-019) ─────────────────────────
+
+/// Error variants for the video transcription pipeline.
+///
+/// Covers the three failure modes the platform adapter must map to:
+/// - TRN-016: audio extraction failure (`.caf` temp write)
+/// - TRN-017: video with no audio track
+/// - TRN-019: on-device speech model installation failure
+#[derive(Debug, Clone, PartialEq)]
+pub enum TranscriptionError {
+    /// TRN-017: The video source has no extractable audio track.
+    NoAudioTrack { source: String },
+    /// TRN-016: Extracting audio from the video source to a temp PCM file failed.
+    AudioExtractionFailed { reason: String },
+    /// TRN-019: The on-device speech model could not be installed.
+    ModelInstallFailed { reason: String },
+    /// The transcription result could not be decoded.
+    DecodeFailed,
+    /// Transcription analysis failed for another reason.
+    AnalysisFailed { reason: String },
+}
+
+impl fmt::Display for TranscriptionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TranscriptionError::NoAudioTrack { source } => {
+                write!(f, "No audio track in {source}")
+            }
+            TranscriptionError::AudioExtractionFailed { reason } => {
+                write!(f, "Audio extraction failed: {reason}")
+            }
+            TranscriptionError::ModelInstallFailed { reason } => {
+                write!(f, "Could not install the on-device speech model: {reason}")
+            }
+            TranscriptionError::DecodeFailed => {
+                write!(f, "Could not parse transcription result")
+            }
+            TranscriptionError::AnalysisFailed { reason } => {
+                write!(f, "Transcription analysis failed: {reason}")
+            }
+        }
+    }
+}
+
+/// Audio extraction configuration for the temp PCM `.caf` file.
+///
+/// TRN-016: Video transcription first extracts audio to a temp PCM `.caf`
+/// file using this sample-rate/channel/bit-depth contract before passing
+/// the audio to the on-device speech analyzer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioExtractionConfig {
+    /// Output file path (should be a `.caf` extension in a temp directory).
+    pub output_path: String,
+    /// The nominal sample rate is preserved from the source asset's audio track
+    /// rather than resampled, matching the Swift `AVAudioFile` behavior.
+    pub preserve_source_format: bool,
+}
+
+impl AudioExtractionConfig {
+    /// Create a config for a temp `.caf` file in the given directory.
+    ///
+    /// `dir` should be a writable temp directory (e.g. `NSTemporaryDirectory()`).
+    /// A UUID-based filename is used to avoid collisions.
+    pub fn new_temp(dir: &str, uuid: &str) -> Self {
+        let output_path = format!("{dir}/palmier-stt-{uuid}.caf");
+        Self {
+            output_path,
+            preserve_source_format: true,
+        }
+    }
+
+    /// Whether the output path ends with `.caf`, as required by the contract.
+    pub fn is_caf(&self) -> bool {
+        self.output_path.ends_with(".caf")
+    }
+}
+
+/// Request to transcribe a video file.
+///
+/// Bundles all parameters needed by the platform adapter to:
+/// 1. Check for an audio track (TRN-017)
+/// 2. Extract audio to a temp `.caf` (TRN-016)
+/// 3. Run on-device speech model, installing it first if needed (TRN-019)
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoTranscriptionRequest {
+    /// Path to the source video file.
+    pub source_path: String,
+    /// BCP-47 locale string (e.g. `"en-US"`). `None` auto-detects.
+    pub locale: Option<String>,
+    /// Optional time range (start, end) in seconds for range-limited transcription.
+    pub range_seconds: Option<(f64, f64)>,
+    /// Audio extraction config (temp `.caf` destination).
+    pub audio_config: AudioExtractionConfig,
+}
+
+impl VideoTranscriptionRequest {
+    /// Returns true if the request is for the full file (no range limit).
+    pub fn is_full_file(&self) -> bool {
+        self.range_seconds.is_none()
+    }
+}
 
 /// A transcribed word with timing.
 /// TRN-007: words without valid timestamps should be dropped.
@@ -636,5 +739,91 @@ mod tests {
         };
         let transcript = Transcript::new(identity);
         assert!(offset_transcript(&transcript, -1.0).is_none());
+    }
+
+    // ── TRN-016/017/019 error contract tests ─────────────────────────────────
+
+    #[test]
+    fn trn_017_no_audio_track_error_display() {
+        let err = TranscriptionError::NoAudioTrack {
+            source: "clip.mp4".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("clip.mp4"), "msg={msg}");
+        assert!(msg.contains("No audio"), "msg={msg}");
+    }
+
+    #[test]
+    fn trn_016_audio_extraction_failed_display() {
+        let err = TranscriptionError::AudioExtractionFailed {
+            reason: "reader could not start".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("reader could not start"), "msg={msg}");
+        assert!(msg.contains("Audio extraction"), "msg={msg}");
+    }
+
+    #[test]
+    fn trn_019_model_install_failed_display() {
+        let err = TranscriptionError::ModelInstallFailed {
+            reason: "no disk space".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("no disk space"), "msg={msg}");
+        assert!(msg.contains("speech model"), "msg={msg}");
+    }
+
+    #[test]
+    fn trn_016_audio_extraction_config_caf_extension() {
+        let cfg = AudioExtractionConfig::new_temp("/tmp", "abc123");
+        assert!(cfg.is_caf(), "output must be .caf, got: {}", cfg.output_path);
+        assert!(cfg.output_path.contains("abc123"));
+        assert!(cfg.preserve_source_format);
+    }
+
+    #[test]
+    fn trn_016_audio_extraction_config_path_construction() {
+        let cfg = AudioExtractionConfig::new_temp("/var/folders/tmp", "uuid-xyz");
+        assert_eq!(
+            cfg.output_path,
+            "/var/folders/tmp/palmier-stt-uuid-xyz.caf"
+        );
+    }
+
+    #[test]
+    fn trn_016_video_transcription_request_is_full_file() {
+        let cfg = AudioExtractionConfig::new_temp("/tmp", "u1");
+        let req = VideoTranscriptionRequest {
+            source_path: "/video/clip.mp4".into(),
+            locale: Some("en-US".into()),
+            range_seconds: None,
+            audio_config: cfg,
+        };
+        assert!(req.is_full_file());
+    }
+
+    #[test]
+    fn trn_016_video_transcription_request_range_not_full_file() {
+        let cfg = AudioExtractionConfig::new_temp("/tmp", "u2");
+        let req = VideoTranscriptionRequest {
+            source_path: "/video/clip.mp4".into(),
+            locale: None,
+            range_seconds: Some((10.0, 30.0)),
+            audio_config: cfg,
+        };
+        assert!(!req.is_full_file());
+    }
+
+    #[test]
+    fn transcription_error_variants_are_distinct() {
+        let e1 = TranscriptionError::NoAudioTrack { source: "a".into() };
+        let e2 = TranscriptionError::AudioExtractionFailed { reason: "b".into() };
+        let e3 = TranscriptionError::ModelInstallFailed { reason: "c".into() };
+        let e4 = TranscriptionError::DecodeFailed;
+        let e5 = TranscriptionError::AnalysisFailed { reason: "d".into() };
+        assert_ne!(e1, e2);
+        assert_ne!(e2, e3);
+        assert_ne!(e3, e4);
+        assert_ne!(e4, e5);
     }
 }

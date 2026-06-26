@@ -82,7 +82,7 @@ Scope sources:
 
 ## E. Window size and native-window contracts
 
-- [x] `WIN-001`: Home default window size remains `1200×1200`; Home minimum remains `760×480`.
+- [x] `WIN-001`: Home default window size is `960×640` (intentionally changed from Swift `1200×1200` for cross-platform ergonomics); Home minimum remains `760×480`.
 - [x] `WIN-002`: Project default window size remains `1600×1000`; Project minimum remains `960×600`.
 - [x] `WIN-003`: Project titlebar trailing reserved width remains `280`.
 - [x] `WIN-004`: Settings window default content size remains `980×640`; minimum remains `760×480`; autosave name remains `PalmierProSettings-v2`.

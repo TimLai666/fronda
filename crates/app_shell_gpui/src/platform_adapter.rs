@@ -11,6 +11,22 @@ pub trait PlatformAdapter {
     fn open_url(&self, url: &str);
     fn clipboard_text(&self) -> Option<String>;
     fn set_clipboard_text(&self, text: &str);
+
+    /// APP-002: Whether the platform should show the Home window when the user
+    /// reopens the app (e.g. macOS Dock click) with no visible windows.
+    ///
+    /// The macOS platform adapter hooks `applicationShouldHandleReopen` and
+    /// calls `open_main_window(cx)` when this returns `true`.
+    fn should_reopen_to_home(&self) -> bool {
+        true
+    }
+
+    /// APP-006: Activate the app and reveal a generated asset by its ID in
+    /// the best matching open project.
+    ///
+    /// Called when the user taps a generation-complete notification banner.
+    /// On platforms without notification support this is a no-op.
+    fn reveal_generated_asset(&self, _asset_id: &str) {}
 }
 
 /// Adapter that performs no platform operations.
@@ -69,7 +85,20 @@ mod tests {
         a.open_url("https://example.com");
         let _ = a.clipboard_text();
         a.set_clipboard_text("hello");
+        a.reveal_generated_asset("asset-123");
 
         // All no-ops — reached here without panic
+    }
+
+    #[test]
+    fn app_002_noop_adapter_reopen_default_true() {
+        let a = NoopPlatformAdapter;
+        assert!(a.should_reopen_to_home());
+    }
+
+    #[test]
+    fn app_006_reveal_generated_asset_no_panic() {
+        let a = NoopPlatformAdapter;
+        a.reveal_generated_asset("gen-asset-abc");
     }
 }

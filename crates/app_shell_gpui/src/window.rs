@@ -38,9 +38,9 @@ impl WindowConfig {
         }
     }
 
-    /// WIN-001: Home default 1200×1200, min 760×480.
+    /// WIN-001: Home default 960×640, min 760×480.
     pub fn for_home() -> Self {
-        Self::new(WindowKind::Home, "Fronda", 1200.0, 1200.0, 760.0, 480.0)
+        Self::new(WindowKind::Home, "Fronda", 960.0, 640.0, 760.0, 480.0)
     }
 
     /// WIN-002: Project default 1600×1000, min 960×600.
@@ -86,8 +86,8 @@ mod tests {
     fn win_001_home_window_size() {
         let cfg = WindowConfig::for_home();
         assert_eq!(cfg.kind, WindowKind::Home);
-        assert_eq!(cfg.default_width, 1200.0);
-        assert_eq!(cfg.default_height, 1200.0);
+        assert_eq!(cfg.default_width, 960.0);
+        assert_eq!(cfg.default_height, 640.0);
         assert_eq!(cfg.min_width, 760.0);
         assert_eq!(cfg.min_height, 480.0);
     }
