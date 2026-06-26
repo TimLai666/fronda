@@ -129,9 +129,9 @@ Scope sources:
 
 ### `inspect_timeline`
 
-- [ ] `READ-022`: `cmd_inspect_timeline()` returns formatted timeline JSON text only. **No rendered frames** — **NOT IMPLEMENTED**.
-- [ ] `READ-023`: Downscaled image frames with metadata — **NOT IMPLEMENTED**.
-- [ ] `READ-024`: Sampling semantics — **NOT IMPLEMENTED**.
+- [x] `READ-022`: `cmd_inspect_timeline()` returns formatted timeline JSON text only. **No rendered frames** — maps to `format_timeline_json`.
+- [ ] `READ-023`: Downscaled image frames with metadata — **NOT IMPLEMENTED** (needs platform rendering).
+- [ ] `READ-024`: Sampling semantics — **NOT IMPLEMENTED** (needs platform rendering).
 
 ### `search_media`, `list_models`, `list_folders`
 

@@ -4,8 +4,8 @@
 //! and provides a single `execute()` entry point for the MCP server.
 
 use crate::read_tools::{
-    format_inspect_media, format_timeline_json, format_transcript_json, InspectMediaInput,
-    TranscriptClipInput, TranscriptFormatOptions,
+    format_inspect_media, format_search_results, format_timeline_json, format_transcript_json,
+    InspectMediaInput, SearchHitInfo, TranscriptClipInput, TranscriptFormatOptions,
 };
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
@@ -825,8 +825,13 @@ impl ToolExecutor {
     fn cmd_search_media(&self, args: &Value) -> Result<Value, String> {
         let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
         let r#type = args.get("type").and_then(|v| v.as_str());
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(50);
 
-        let results: Vec<&core_model::MediaManifestEntry> = self
+        let results: Vec<&MediaManifestEntry> = self
             .media_manifest
             .entries
             .iter()
@@ -842,20 +847,30 @@ impl ToolExecutor {
             })
             .collect();
 
-        if results.is_empty() {
-            return Ok(json!({
-                "content": [{"type": "text", "text": "No media found".to_string()}]
-            }));
-        }
-
-        let lines: Vec<String> = results
+        // Convert to SearchHitInfo for the files group (name-based search).
+        let files: Vec<SearchHitInfo> = results
             .iter()
-            .map(|e| format!("{}: {} ({:?})", e.id, e.name, e.r#type))
+            .map(|e| SearchHitInfo {
+                media_id: e.id.clone(),
+                frame: 0,
+                score: 1.0,
+                kind: "File".to_string(),
+            })
             .collect();
+
+        let status = if results.is_empty() {
+            "ok".to_string()
+        } else {
+            format!("Found {} media", results.len())
+        };
+
+        let output = format_search_results(Vec::new(), Vec::new(), files, status, limit);
+        let output_json = serde_json::to_string_pretty(&output).unwrap_or_default();
+
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": format!("Found {} media:\n{}", results.len(), lines.join("\n"))
+                "text": output_json
             }]
         }))
     }
@@ -2451,6 +2466,9 @@ mod tests {
             .execute("search_media", &json!({"query": "test_video"}))
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
+        // Should return structured output with files group
+        assert!(text.contains("media-001"));
+        assert!(text.contains("\"files\""));
         assert!(text.contains("Found 1 media"));
     }
 
@@ -2461,7 +2479,57 @@ mod tests {
             .execute("search_media", &json!({"query": "nothing"}))
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("No media found"));
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(parsed["files"].as_array().unwrap().is_empty());
+        assert_eq!(parsed["status"], "ok");
+    }
+
+    #[test]
+    fn exec_023_search_media_by_type() {
+        let mut exec = make_executor_with_media();
+        let result = exec
+            .execute("search_media", &json!({"type": "video"}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let files = parsed["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["media_id"], "media-001");
+    }
+
+    #[test]
+    fn exec_024_search_media_no_match_type() {
+        let mut exec = make_executor_with_media();
+        let result = exec
+            .execute("search_media", &json!({"type": "image"}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(parsed["files"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn exec_025_search_media_limit() {
+        let mut exec = make_executor_with_media();
+        let result = exec
+            .execute("search_media", &json!({"query": "", "limit": 1}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["limit"], 1);
+        let files = parsed["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn exec_026_search_media_empty_query_shows_all() {
+        let mut exec = make_executor_with_media();
+        let result = exec.execute("search_media", &json!({"query": ""})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+        let files = parsed["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["media_id"], "media-001");
     }
 
     #[test]

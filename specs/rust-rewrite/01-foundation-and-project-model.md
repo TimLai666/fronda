@@ -17,10 +17,10 @@ Scope sources:
 ## A. Core type and compatibility rules
 
 - [x] `CORE-001`: The canonical clip/media types are exactly `video`, `audio`, `image`, `text`, and `lottie`.
-- [ ] `CORE-002`: `video`, `image`, `text`, and `lottie` are all treated as **visual** clip types.
-- [ ] `CORE-003`: Track compatibility is strict: audio is compatible only with audio, while all visual types are mutually compatible.
+- [x] `CORE-002`: `video`, `image`, `text`, and `lottie` are all treated as **visual** clip types.
+- [x] `CORE-003`: Track compatibility is strict: audio is compatible only with audio, while all visual types are mutually compatible.
 - [x] `CORE-004`: Project time is frame-based. Timeline math and persistence use integer project frames, not seconds.
-- [ ] `CORE-005`: Any source-seconds-to-frame mapping in the rewrite must be computed against the **project fps**, not the source file's native fps.
+- [x] `CORE-005`: Any source-seconds-to-frame mapping in the rewrite must be computed against the **project fps**, not the source file's native fps.
 
 ## B. Project package contract
 
@@ -48,18 +48,18 @@ Scope sources:
 
 ## C. Recent-project registry
 
-- [ ] `REC-001`: Recent projects are persisted in `~/Documents/Palmier Pro/project-registry.json`.
-- [ ] `REC-002`: Registry deduplication is based on the standardized file URL.
-- [ ] `REC-003`: Registering an already-known project updates `lastOpenedDate` but keeps the same entry id.
-- [ ] `REC-004`: Registering a new project creates a new UUID-backed entry with `createdDate` and `lastOpenedDate` set.
-- [ ] `REC-005`: Removing a recent project removes only the registry entry and does not delete the package from disk.
-- [ ] `REC-006`: Deleting a recent project attempts to move the package to Trash, then removes the registry entry only if that trash operation succeeds.
-- [ ] `REC-007`: If the package is already missing, deleting it from Recents still removes the registry entry.
-- [ ] `REC-008`: Updating a project URL replaces the stored URL for the matching entry and updates `lastOpenedDate`.
-- [ ] `REC-009`: `sortedEntries` are ordered by descending `lastOpenedDate`.
-- [ ] `REC-010`: `ProjectEntry.name` is derived from the package filename stem.
-- [ ] `REC-011`: `ProjectEntry.isAccessible` reflects whether the stored file path currently exists.
-- [ ] `REC-012`: Inaccessible recent projects remain visible in the Home UI, can be removed from Recents, and can still surface a delete action.
+- [x] `REC-001`: Recent projects are persisted in `~/Documents/Palmier Pro/project-registry.json`.
+- [x] `REC-002`: Registry deduplication is based on the standardized file URL.
+- [x] `REC-003`: Registering an already-known project updates `lastOpenedDate` but keeps the same entry id.
+- [x] `REC-004`: Registering a new project creates a new UUID-backed entry with `createdDate` and `lastOpenedDate` set.
+- [x] `REC-005`: Removing a recent project removes only the registry entry and does not delete the package from disk.
+- [x] `REC-006`: Deleting a recent project attempts to move the package to Trash, then removes the registry entry only if that trash operation succeeds.
+- [x] `REC-007`: If the package is already missing, deleting it from Recents still removes the registry entry.
+- [x] `REC-008`: Updating a project URL replaces the stored URL for the matching entry and updates `lastOpenedDate`.
+- [x] `REC-009`: `sortedEntries` are ordered by descending `lastOpenedDate`.
+- [x] `REC-010`: `ProjectEntry.name` is derived from the package filename stem.
+- [x] `REC-011`: `ProjectEntry.isAccessible` reflects whether the stored file path currently exists.
+- [x] `REC-012`: Inaccessible recent projects remain visible in the Home UI, can be removed from Recents, and can still surface a delete action.
 
 ## D. Persistence schema and backward compatibility
 

@@ -16,50 +16,50 @@ Scope sources:
 
 ## A. Search model lifecycle and indexing
 
-- [ ] `SRCH-001`: Media search remains enabled by default unless the user disables it.
-- [ ] `SRCH-002`: Opening a project attempts to prepare the visual model and then sweep current assets for indexing.
-- [ ] `SRCH-003`: Search enable/disable state persists across launches.
-- [ ] `SRCH-004`: Disabling search cancels in-flight indexing and unloads the model without deleting stored indexes.
-- [ ] `SRCH-005`: Re-enabling search prepares the model if installed and re-sweeps current assets.
-- [ ] `SRCH-006`: Removing the installed model resets coordinators, unloads the embedder, and deletes installed model files.
-- [ ] `SRCH-007`: Only video/image assets participate in visual indexing.
-- [ ] `SRCH-008`: Only audio assets or video assets with audio participate in transcript indexing.
-- [ ] `SRCH-009`: Assets currently generating are not scheduled for indexing.
-- [ ] `SRCH-010`: Index queues dedupe asset ids within a batch.
-- [ ] `SRCH-011`: Failed assets are not retried again within the same batch, but may be retried in a later sweep.
-- [ ] `SRCH-012`: Missing queued assets are treated as completed so a batch cannot stall forever.
-- [ ] `SRCH-013`: Search indexing pauses while any export is active.
-- [ ] `SRCH-014`: Export pause is refcounted, not boolean.
+- [x] `SRCH-001`: Media search remains enabled by default unless the user disables it.
+- [x] `SRCH-002`: Opening a project attempts to prepare the visual model and then sweep current assets for indexing.
+- [x] `SRCH-003`: Search enable/disable state persists across launches.
+- [x] `SRCH-004`: Disabling search cancels in-flight indexing and unloads the model without deleting stored indexes.
+- [x] `SRCH-005`: Re-enabling search prepares the model if installed and re-sweeps current assets.
+- [x] `SRCH-006`: Removing the installed model resets coordinators, unloads the embedder, and deletes installed model files.
+- [x] `SRCH-007`: Only video/image assets participate in visual indexing.
+- [x] `SRCH-008`: Only audio assets or video assets with audio participate in transcript indexing.
+- [x] `SRCH-009`: Assets currently generating are not scheduled for indexing.
+- [x] `SRCH-010`: Index queues dedupe asset ids within a batch.
+- [x] `SRCH-011`: Failed assets are not retried again within the same batch, but may be retried in a later sweep.
+- [x] `SRCH-012`: Missing queued assets are treated as completed so a batch cannot stall forever.
+- [x] `SRCH-013`: Search indexing pauses while any export is active.
+- [x] `SRCH-014`: Export pause is refcounted, not boolean.
 - [x] `SRCH-015`: Search index identity depends on path + modification time + file size.
 - [x] `SRCH-016`: Still-image indexes contain exactly one embedding row at time zero.
 - [ ] `SRCH-017`: Short videos still receive at least one midpoint sample.
 - [ ] `SRCH-018`: Frame-sampler output times are strictly increasing with no duplicates.
 - [ ] `SRCH-019`: Scene starts are promoted from visual change detection, but long static spans still receive coverage-floor samples.
 - [ ] `SRCH-020`: Corrupt/undecodable videos yield a valid empty index rather than causing perpetual retry.
-- [ ] `SRCH-021`: Visual search is available only when the model is ready and the trimmed query is non-empty.
-- [ ] `SRCH-022`: Visual search keeps the best frame per shot before cross-asset ranking.
+- [x] `SRCH-021`: Visual search is available only when the model is ready and the trimmed query is non-empty.
+- [x] `SRCH-022`: Visual search keeps the best frame per shot before cross-asset ranking.
 - [x] `SRCH-023`: Visual search sorts hits by descending score.
-- [ ] `SRCH-024`: Visual search applies the current absolute minimum score and relative-cutoff behavior.
-- [ ] `SRCH-025`: If the top score is non-positive, visual search returns no hits.
+- [x] `SRCH-024`: Visual search applies the current absolute minimum score and relative-cutoff behavior.
+- [x] `SRCH-025`: If the top score is non-positive, visual search returns no hits.
 - [x] `SRCH-026`: Search UI keeps `Moments`, `Spoken`, and `Files` as separate result groups.
-- [ ] `SRCH-027`: Clearing the query clears visual and spoken results immediately.
-- [ ] `SRCH-028`: Search-result drags preserve current payload semantics:
+- [x] `SRCH-027`: Clearing the query clears visual and spoken results immediately.
+- [x] `SRCH-028`: Search-result drags preserve current payload semantics:
   - still-image moment hit → plain asset drag
   - video/spoken hit → segmented `palmier-asset://<id>#<start>-<end>` drag
 
 ## B. Transcript cache and transcript search
 
 - [x] `TRN-001`: Transcript cache identity depends on path + modification time + file size.
-- [ ] `TRN-002`: Only full-file transcripts are cached on disk.
+- [x] `TRN-002`: Only full-file transcripts are cached on disk.
 - [x] `TRN-003`: Range-limited transcript requests reuse the full-file cache when available and otherwise transcribe only the requested range.
-- [ ] `TRN-004`: Range-limited transcript requests do not overwrite the canonical full-file cache with partial data.
+- [x] `TRN-004`: Range-limited transcript requests do not overwrite the canonical full-file cache with partial data.
 - [x] `TRN-005`: Transcript range filtering keeps segments/words whose time spans overlap the requested range.
 - [x] `TRN-006`: Boundary-straddling transcript segments remain included in filtered results.
 - [x] `TRN-007`: Words without complete start/end timestamps are dropped from filtered results.
 - [x] `TRN-008`: Filtered transcript text is rebuilt from surviving segments.
-- [ ] `TRN-009`: Transcript keyword search operates over cached-on-disk transcripts only.
+- [x] `TRN-009`: Transcript keyword search operates over cached-on-disk transcripts only.
 - [x] `TRN-010`: Transcript keyword matching remains case-insensitive and diacritic-insensitive.
-- [ ] `TRN-011`: A transcript-search segment is a hit only if all query terms match that segment.
+- [x] `TRN-011`: A transcript-search segment is a hit only if all query terms match that segment.
 
 ## C. Transcription and locale behavior
 
@@ -74,19 +74,19 @@ Scope sources:
 
 ## D. Caption generation
 
-- [ ] `CAP-001`: Only clips with transcribable audio are valid caption sources.
-- [ ] `CAP-002`: Silent video is never selected as a caption source.
-- [ ] `CAP-003`: When linked audio/video clips represent the same source, caption generation targets the audio side rather than both sides.
+- [x] `CAP-001`: Only clips with transcribable audio are valid caption sources.
+- [x] `CAP-002`: Silent video is never selected as a caption source.
+- [x] `CAP-003`: When linked audio/video clips represent the same source, caption generation targets the audio side rather than both sides.
 - [x] `CAP-004`: Auto-detect captioning chooses the dominant spoken track by word count and captions only that track.
-- [ ] `CAP-005`: Caption generation reuses cached transcripts by default.
-- [ ] `CAP-006`: Caption generation bypasses transcript cache when profanity-censoring or explicit locale options would produce a different transcript.
+- [x] `CAP-005`: Caption generation reuses cached transcripts by default.
+- [x] `CAP-006`: Caption generation bypasses transcript cache when profanity-censoring or explicit locale options would produce a different transcript.
 - [x] `CAP-007`: Phrase splitting preserves the current sentence/clause/word-grouping heuristics.
 - [x] `CAP-008`: Phrase timing remains distributed proportionally and respects the current minimum-display-duration behavior.
-- [ ] `CAP-009`: Caption phrase ownership requires meaningful overlap with a destination clip before assignment.
-- [ ] `CAP-010`: Generated captions are inserted on a fresh top video track.
-- [ ] `CAP-011`: If caption placement yields no clips, the inserted caption track is reverted.
-- [ ] `CAP-012`: Caption placement must not accidentally prune unrelated tracks.
-- [ ] `CAP-013`: Caption text case modes remain `auto`, `upper`, and `lower`.
+- [x] `CAP-009`: Caption phrase ownership requires meaningful overlap with a destination clip before assignment.
+- [x] `CAP-010`: Generated captions are inserted on a fresh top video track.
+- [x] `CAP-011`: If caption placement yields no clips, the inserted caption track is reverted.
+- [x] `CAP-012`: Caption placement must not accidentally prune unrelated tracks.
+- [x] `CAP-013`: Caption text case modes remain `auto`, `upper`, and `lower`.
 
 ## E. Generation and AI-edit workflow
 

@@ -92,6 +92,138 @@ impl SearchResults {
     pub fn total_hits(&self) -> usize {
         self.moments.len() + self.spoken.len() + self.files.len()
     }
+
+    /// SRCH-027: Clear visual (moments) and spoken results immediately.
+    /// File results are preserved.
+    pub fn clear_query_results(&mut self) {
+        self.moments.clear();
+        self.spoken.clear();
+    }
+
+    /// Clear all results.
+    pub fn clear_all(&mut self) {
+        self.moments.clear();
+        self.spoken.clear();
+        self.files.clear();
+    }
+}
+
+/// Configuration for visual search scoring (SRCH-024).
+#[derive(Debug, Clone, Copy)]
+pub struct VisualSearchConfig {
+    /// Absolute minimum score threshold. Hits below this are discarded.
+    pub min_score: f64,
+    /// Relative cutoff ratio relative to the top score (e.g. 0.5 means
+    /// keep only hits with score >= top_score * 0.5).
+    pub cutoff_ratio: f64,
+}
+
+impl Default for VisualSearchConfig {
+    fn default() -> Self {
+        Self {
+            min_score: 0.0,
+            cutoff_ratio: 0.0, // 0 = no relative cutoff
+        }
+    }
+}
+
+/// SRCH-028: Drag payload kind for search results.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SearchDragPayload {
+    /// Plain asset drag (still-image moment hit).
+    PlainAsset { media_id: String },
+    /// Segmented drag with time range (video/spoken hit).
+    Segmented {
+        media_id: String,
+        start_frame: i64,
+        end_frame: i64,
+    },
+}
+
+/// Determine the drag payload for a search hit (SRCH-028).
+pub fn search_hit_drag_payload(hit: &SearchHit) -> SearchDragPayload {
+    match hit.kind {
+        HitKind::Visual => {
+            // still-image moment → plain asset; video/spoken → segmented
+            // For visual hits, frame is the best-frame. Treat it as a point hit.
+            // In practice, Swift code checks if it's a still image or video.
+            // We use frame == 0 as heuristic for still image (SRCH-016).
+            if hit.frame == 0 {
+                SearchDragPayload::PlainAsset {
+                    media_id: hit.media_id.clone(),
+                }
+            } else {
+                SearchDragPayload::Segmented {
+                    media_id: hit.media_id.clone(),
+                    start_frame: hit.frame,
+                    end_frame: hit.frame + 1,
+                }
+            }
+        }
+        HitKind::Spoken => SearchDragPayload::Segmented {
+            media_id: hit.media_id.clone(),
+            start_frame: hit.frame,
+            end_frame: hit.frame + 1,
+        },
+        HitKind::File => SearchDragPayload::PlainAsset {
+            media_id: hit.media_id.clone(),
+        },
+    }
+}
+
+/// Check whether visual search is available (SRCH-021).
+/// Requires the model to be ready and the trimmed query to be non-empty.
+pub fn is_visual_search_available(model_ready: bool, trimmed_query: &str) -> bool {
+    model_ready && !trimmed_query.is_empty()
+}
+
+/// Rank visual search hits by keeping the best frame per asset before
+/// cross-asset ranking (SRCH-022), applying score cutoffs (SRCH-024),
+/// and checking for non-positive top score (SRCH-025).
+///
+/// Input: per-frame hits from multiple assets.
+/// Output: sorted, filtered hits with at most one hit per asset (best frame).
+pub fn rank_visual_search(hits: Vec<SearchHit>, config: &VisualSearchConfig) -> Vec<SearchHit> {
+    if hits.is_empty() {
+        return Vec::new();
+    }
+
+    // SRCH-022: Keep the best frame per asset (highest score).
+    let mut best_per_asset: std::collections::HashMap<String, SearchHit> =
+        std::collections::HashMap::new();
+    for hit in hits {
+        let entry = best_per_asset
+            .entry(hit.media_id.clone())
+            .or_insert_with(|| hit.clone());
+        if hit.score > entry.score {
+            *entry = hit;
+        }
+    }
+
+    let mut ranked: Vec<SearchHit> = best_per_asset.into_values().collect();
+
+    // SRCH-023: Sort by descending score.
+    ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+
+    // SRCH-025: If the top score is non-positive, return no hits.
+    if ranked.is_empty() || ranked[0].score <= 0.0 {
+        return Vec::new();
+    }
+
+    let top_score = ranked[0].score;
+
+    // SRCH-024: Apply absolute minimum score and relative cutoff.
+    ranked.retain(|hit| {
+        if hit.score < config.min_score {
+            return false;
+        }
+        if config.cutoff_ratio > 0.0 && hit.score < top_score * config.cutoff_ratio {
+            return false;
+        }
+        true
+    });
+
+    ranked
 }
 
 #[cfg(test)]
