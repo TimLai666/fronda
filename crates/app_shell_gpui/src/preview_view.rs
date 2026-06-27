@@ -12,10 +12,23 @@ use gpui::{
     InteractiveElement, ParentElement, Render, Styled, Window,
 };
 
+/// Canvas overlay state — mirrors Swift PreviewView offline/generating/failed states.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CanvasOverlay {
+    None,
+    /// Media file is offline (not found on disk).
+    Offline,
+    /// AI generation in progress.
+    Generating { progress_pct: u8 },
+    /// Generation or render failed.
+    Failed { message: String },
+}
+
 pub struct PreviewView {
     pub state: PlaybackState,
     pub show_transform_overlay: bool,
     pub show_crop_overlay: bool,
+    pub canvas_overlay: CanvasOverlay,
     transform_overlay: Entity<TransformOverlayView>,
     crop_overlay: Entity<CropOverlayView>,
     focus_handle: FocusHandle,
@@ -27,6 +40,7 @@ impl PreviewView {
             state: PlaybackState::new(),
             show_transform_overlay: false,
             show_crop_overlay: false,
+            canvas_overlay: CanvasOverlay::None,
             transform_overlay: cx.new(|cx| TransformOverlayView::new(cx)),
             crop_overlay: cx.new(|cx| CropOverlayView::new(cx)),
             focus_handle: cx.focus_handle(),
@@ -88,6 +102,7 @@ impl Render for PreviewView {
         let total_tc = self.state.format_total();
         let show_transform = self.show_transform_overlay;
         let show_crop = self.show_crop_overlay;
+        let canvas_overlay = self.canvas_overlay.clone();
 
         let transform_entity = self.transform_overlay.clone();
         let crop_entity = self.crop_overlay.clone();
@@ -162,13 +177,83 @@ impl Render for PreviewView {
                     .w_full()
                     .relative()
                     .bg(Background::BASE)
-                    // Placeholder text
-                    .child(
-                        div()
-                            .text_color(Text::MUTED)
-                            .text_size(px(FontSize::SM))
-                            .child("Preview"),
-                    )
+                    // Placeholder text — hidden when an overlay is shown
+                    .when(canvas_overlay == CanvasOverlay::None, |el| {
+                        el.child(
+                            div()
+                                .text_color(Text::MUTED)
+                                .text_size(px(FontSize::SM))
+                                .child("Preview"),
+                        )
+                    })
+                    // Offline overlay (Swift: "Media Offline" message)
+                    .when(canvas_overlay == CanvasOverlay::Offline, |el| {
+                        el.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(Spacing::SM))
+                                .child(
+                                    div()
+                                        .text_color(Text::MUTED)
+                                        .text_size(px(FontSize::MD_LG))
+                                        .child("Media Offline"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(Text::MUTED)
+                                        .text_size(px(FontSize::SM))
+                                        .child("File not found on disk"),
+                                ),
+                        )
+                    })
+                    // Generating overlay (Swift: generation progress spinner)
+                    .when(matches!(canvas_overlay, CanvasOverlay::Generating { .. }), |el| {
+                        let pct = if let CanvasOverlay::Generating { progress_pct } = &canvas_overlay { *progress_pct } else { 0 };
+                        el.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(Spacing::MD))
+                                .child(
+                                    div()
+                                        .text_color(Accent::PRIMARY)
+                                        .text_size(px(FontSize::DISPLAY))
+                                        .child("✦"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(Text::SECONDARY)
+                                        .text_size(px(FontSize::SM))
+                                        .child(format!("Generating… {}%", pct)),
+                                ),
+                        )
+                    })
+                    // Failed overlay (Swift: error badge)
+                    .when(matches!(canvas_overlay, CanvasOverlay::Failed { .. }), |el| {
+                        let msg = if let CanvasOverlay::Failed { message } = &canvas_overlay { message.clone() } else { String::new() };
+                        el.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(Spacing::SM))
+                                .child(
+                                    div()
+                                        .text_color(gpui::Hsla { h: 0.0, s: 0.85, l: 0.55, a: 1.0 })
+                                        .text_size(px(FontSize::MD_LG))
+                                        .child("Generation Failed"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(Text::MUTED)
+                                        .text_size(px(FontSize::SM))
+                                        .child(msg),
+                                ),
+                        )
+                    })
                     // Transform overlay — shown when select tool + clip selected
                     .when(show_transform, |el| {
                         el.child(

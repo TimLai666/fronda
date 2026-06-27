@@ -69,6 +69,7 @@ fn tab_btn(id: &str, label: &str, is_active: bool) -> gpui::Stateful<gpui::Div> 
 }
 
 /// Media library empty state — shown when no assets exist.
+#[allow(dead_code)]
 fn media_empty_state() -> impl IntoElement {
     div()
         .flex()
@@ -88,6 +89,60 @@ fn media_empty_state() -> impl IntoElement {
                 .text_color(Text::MUTED)
                 .text_size(px(FontSize::XS))
                 .child("or click Import"),
+        )
+}
+
+/// Demo media tile — 80×60 thumbnail + name strip (matches Swift AssetThumbnailView).
+fn demo_tile(id: &str, icon: &str, name: &str, hue: f32) -> impl IntoElement {
+    div()
+        .id(id.to_string())
+        .flex()
+        .flex_col()
+        .w(px(80.0))
+        .cursor_pointer()
+        .child(
+            div()
+                .w(px(80.0))
+                .h(px(60.0))
+                .rounded(px(Radius::XS_SM))
+                .bg(gpui::Hsla { h: hue, s: 0.35, l: 0.18, a: 1.0 })
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(gpui::Hsla { h: hue, s: 0.60, l: 0.65, a: 1.0 })
+                .text_size(px(FontSize::LG))
+                .child(icon.to_string()),
+        )
+        .child(
+            div()
+                .w(px(80.0))
+                .pt(px(Spacing::XXS))
+                .text_color(Text::SECONDARY)
+                .text_size(px(FontSize::XS))
+                .overflow_hidden()
+                .child(name.to_string()),
+        )
+}
+
+/// Demo asset grid — flex-wrap tile grid matching Swift LazyVGrid.
+fn media_demo_grid() -> impl IntoElement {
+    div()
+        .id("media-grid-scroll")
+        .flex_1()
+        .overflow_y_scroll()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(Spacing::SM_MD))
+                .p(px(Spacing::SM_MD))
+                .child(demo_tile("tile-0", "▶", "interview.mp4",  0.60))
+                .child(demo_tile("tile-1", "▶", "b-roll.mp4",     0.75))
+                .child(demo_tile("tile-2", "♪", "music.wav",      0.83))
+                .child(demo_tile("tile-3", "⬜", "title-card.png", 0.55))
+                .child(demo_tile("tile-4", "▶", "drone.mp4",      0.35))
+                .child(demo_tile("tile-5", "▶", "closeup.mp4",    0.06))
         )
 }
 
@@ -371,8 +426,8 @@ impl Render for MediaPanelView {
                             .size_full()
                             // Toolbar at top (Import + Generate + Search + View controls)
                             .child(media_toolbar())
-                            // Library grid / empty state (flex-1, scrollable)
-                            .child(media_empty_state())
+                            // Library grid (demo tiles; real assets would populate this)
+                            .child(media_demo_grid())
                             // GenerationView anchored to BOTTOM (Swift: .frame(alignment:.bottom))
                             .child(
                                 div()
