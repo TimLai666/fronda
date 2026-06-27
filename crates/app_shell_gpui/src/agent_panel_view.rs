@@ -1,71 +1,40 @@
-//! Agent panel gpui view — renders MCP status and mention picker.
+//! Agent panel gpui view — renders MCP status and connection info.
 //!
 //! Requires the `desktop-app` feature (gpui).
 
 use app_contract::agent_panel_model::{AgentPanelModel, McpServerStatus};
+use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Status, Text};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, Hsla, InteractiveElement,
+    div, prelude::*, px, App, Context, FocusHandle, Focusable, Hsla,
     ParentElement, Render, Styled, Window,
 };
 
-/// Colors for the agent panel.
-pub struct AgentPanelColors;
-impl AgentPanelColors {
-    pub const BACKGROUND: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.07,
-        a: 1.0,
-    };
-    pub const STATUS_RUNNING: Hsla = Hsla {
-        h: 120.0 / 360.0,
-        s: 0.6,
-        l: 0.35,
-        a: 1.0,
-    };
-    pub const STATUS_STOPPED: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.25,
-        a: 1.0,
-    };
-    pub const STATUS_FAILED: Hsla = Hsla {
-        h: 0.0,
-        s: 0.6,
-        l: 0.35,
-        a: 1.0,
-    };
-    pub const TEXT_PRIMARY: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 1.0,
-        a: 1.0,
-    };
-    pub const TEXT_SECONDARY: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 1.0,
-        a: 0.62,
-    };
-    pub const SECTION_BG: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.1,
-        a: 1.0,
-    };
-}
-
-/// Status indicator color based on MCP server state.
-fn status_color(status: &McpServerStatus) -> Hsla {
+/// Status indicator dot color based on MCP server state.
+fn status_dot(status: &McpServerStatus) -> Hsla {
     match status {
-        McpServerStatus::Running { .. } => AgentPanelColors::STATUS_RUNNING,
-        McpServerStatus::Stopped => AgentPanelColors::STATUS_STOPPED,
-        McpServerStatus::Starting { .. } => AgentPanelColors::STATUS_STOPPED,
-        McpServerStatus::Failed(_) => AgentPanelColors::STATUS_FAILED,
+        McpServerStatus::Running { .. } => Hsla {
+            h: 120.0 / 360.0,
+            s: 0.55,
+            l: 0.44,
+            a: 1.0,
+        },
+        McpServerStatus::Starting { .. } => Hsla {
+            h: 42.0 / 360.0,
+            s: 0.90,
+            l: 0.48,
+            a: 1.0,
+        },
+        McpServerStatus::Stopped => Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.28,
+            a: 1.0,
+        },
+        McpServerStatus::Failed(_) => Status::ERROR,
     }
 }
 
-/// gpui Agent Panel view component.
+/// gpui Agent Panel view — shows MCP status + tool list.
 #[derive(Debug, Clone)]
 pub struct AgentPanelView {
     focus_handle: FocusHandle,
@@ -91,8 +60,99 @@ impl Focusable for AgentPanelView {
 impl Render for AgentPanelView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let status = self.model.mcp_status.clone();
-        let status_color = status_color(&status);
+        let dot_color = status_dot(&status);
         let status_text = self.model.mcp_status_label();
+        let tool_count = self.model.available_tools.len();
+
+        // Panel header (28px)
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .w_full()
+            .h(px(28.0))
+            .px(px(Spacing::MD_LG))
+            .gap(px(Spacing::SM))
+            .bg(Background::SURFACE)
+            .border_b_1()
+            .border_color(BorderColors::SUBTLE)
+            .child(
+                div()
+                    .w(px(6.0))
+                    .h(px(6.0))
+                    .rounded_full()
+                    .bg(dot_color),
+            )
+            .child(
+                div()
+                    .text_color(Text::MUTED)
+                    .text_size(px(FontSize::XS))
+                    .child("MCP"),
+            )
+            .child(
+                div()
+                    .text_color(Text::SECONDARY)
+                    .text_size(px(FontSize::XS))
+                    .child(status_text.to_string()),
+            )
+            .child(div().flex_1())
+            .when(tool_count > 0, |el| {
+                el.child(
+                    div()
+                        .px(px(Spacing::XS))
+                        .py(px(Spacing::XXS))
+                        .rounded(px(Radius::XS))
+                        .bg(BorderColors::SUBTLE)
+                        .text_color(Text::MUTED)
+                        .text_size(px(FontSize::XXS))
+                        .child(format!("{} tools", tool_count)),
+                )
+            });
+
+        // Tool list
+        let mut tool_list = div()
+            .flex()
+            .flex_col()
+            .px(px(Spacing::SM_MD))
+            .py(px(Spacing::SM))
+            .gap(px(Spacing::XXS));
+
+        if self.model.available_tools.is_empty() {
+            tool_list = tool_list.child(
+                div()
+                    .text_color(Text::MUTED)
+                    .text_size(px(FontSize::SM))
+                    .px(px(Spacing::SM))
+                    .child("No tools connected"),
+            );
+        } else {
+            for tool_name in &self.model.available_tools {
+                let name = tool_name.clone();
+                tool_list = tool_list.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .h(px(24.0))
+                        .px(px(Spacing::SM))
+                        .rounded(px(Radius::XS))
+                        .gap(px(Spacing::XS))
+                        .child(
+                            div()
+                                .w(px(4.0))
+                                .h(px(4.0))
+                                .rounded_full()
+                                .bg(dot_color),
+                        )
+                        .child(
+                            div()
+                                .text_color(Text::SECONDARY)
+                                .text_size(px(FontSize::SM))
+                                .child(name),
+                        ),
+                );
+            }
+        }
 
         div()
             .id("fronda-agent-panel")
@@ -100,34 +160,15 @@ impl Render for AgentPanelView {
             .flex()
             .flex_col()
             .size_full()
-            .bg(AgentPanelColors::BACKGROUND)
+            .bg(Background::SURFACE)
+            .child(header)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .px(px(8.0))
-                    .py(px(8.0))
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(6.0))
-                            .items_center()
-                            .child(
-                                div()
-                                    .w(px(8.0))
-                                    .h(px(8.0))
-                                    .rounded(px(4.0))
-                                    .bg(status_color),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .child(status_text)
-                                    .text_color(AgentPanelColors::TEXT_SECONDARY),
-                            ),
-                    ),
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .child(tool_list),
             )
     }
 }

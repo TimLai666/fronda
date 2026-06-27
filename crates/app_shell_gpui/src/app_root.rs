@@ -6,7 +6,7 @@
 use crate::chat_view::ChatView;
 use crate::editor_view;
 use crate::home_model::HomeLayout;
-use crate::home_view::{HomeColors, HomeView};
+use crate::home_view::HomeView;
 use crate::media_panel_view::MediaPanelView;
 use crate::menu;
 use crate::pane::{LayoutPreset, PaneId, PaneLayout};
@@ -209,7 +209,7 @@ impl AppRoot {
             .flex()
             .flex_row()
             .size_full()
-            .bg(HomeColors::BACKGROUND)
+            .bg(Background::SURFACE)
             // ── Left sidebar (220px) ──
             .child(
                 div()
@@ -266,7 +266,7 @@ impl AppRoot {
                     .flex_col()
                     .flex_1()
                     .h_full()
-                    .bg(HomeColors::BACKGROUND)
+                    .bg(Background::SURFACE)
                     // Greeting
                     .child(
                         div()
@@ -278,13 +278,13 @@ impl AppRoot {
                             .child(
                                 div()
                                     .text_size(px(FontSize::TITLE_2))
-                                    .text_color(HomeColors::TEXT_PRIMARY)
+                                    .text_color(Text::PRIMARY)
                                     .child("Welcome to Fronda"),
                             )
                             .child(
                                 div()
                                     .text_size(px(FontSize::SM_MD))
-                                    .text_color(HomeColors::TEXT_SECONDARY)
+                                    .text_color(Text::TERTIARY)
                                     .child("Palmier Pro compatibility baseline"),
                             ),
                     )
@@ -294,7 +294,7 @@ impl AppRoot {
                             .px(px(HomeLayout::CARD_GAP as f32 * 2.0))
                             .pb(px(Spacing::SM))
                             .text_size(px(FontSize::SM_MD))
-                            .text_color(HomeColors::TEXT_SECONDARY)
+                            .text_color(Text::TERTIARY)
                             .child("My Projects"),
                     )
                     // Project grid
@@ -316,7 +316,7 @@ impl AppRoot {
                                     .justify_center()
                                     .w(px(HomeLayout::CARD_WIDTH as f32))
                                     .h(px(HomeLayout::CARD_HEIGHT as f32))
-                                    .bg(HomeColors::CARD_BG)
+                                    .bg(Background::RAISED)
                                     .rounded(px(Radius::MD_LG))
                                     .border_1()
                                     .border_color(BorderColors::SUBTLE)
@@ -327,13 +327,13 @@ impl AppRoot {
                                     .child(
                                         div()
                                             .text_size(px(FontSize::TITLE_2))
-                                            .text_color(HomeColors::TEXT_SECONDARY)
+                                            .text_color(Text::TERTIARY)
                                             .child("+"),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(FontSize::SM))
-                                            .text_color(HomeColors::TEXT_SECONDARY)
+                                            .text_color(Text::TERTIARY)
                                             .child("New Project"),
                                     ),
                             )
@@ -345,7 +345,7 @@ impl AppRoot {
                                     .flex_col()
                                     .w(px(HomeLayout::CARD_WIDTH as f32))
                                     .h(px(HomeLayout::CARD_HEIGHT as f32))
-                                    .bg(HomeColors::CARD_BG)
+                                    .bg(Background::RAISED)
                                     .rounded(px(Radius::MD_LG))
                                     .border_1()
                                     .border_color(BorderColors::SUBTLE)
@@ -375,11 +375,11 @@ impl AppRoot {
                                             .w_full()
                                             .h(px(24.0))
                                             .px(px(Spacing::SM_MD))
-                                            .bg(HomeColors::CARD_BG)
+                                            .bg(Background::RAISED)
                                             .child(
                                                 div()
                                                     .text_size(px(FontSize::SM))
-                                                    .text_color(HomeColors::TEXT_PRIMARY)
+                                                    .text_color(Text::PRIMARY)
                                                     .child(name.to_string()),
                                             ),
                                     )

@@ -4,45 +4,11 @@
 
 use app_contract::settings_model::SettingsWindowModel;
 use app_contract::settings_storage::SettingsTab;
+use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, Hsla, InteractiveElement,
+    div, prelude::*, px, App, Context, FocusHandle, Focusable, InteractiveElement,
     ParentElement, Render, Styled, Window,
 };
-
-/// Colors for the settings view.
-pub struct SettingsColors;
-impl SettingsColors {
-    pub const BACKGROUND: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.07,
-        a: 1.0,
-    };
-    pub const TAB_BG: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.12,
-        a: 1.0,
-    };
-    pub const TAB_ACTIVE_BG: Hsla = Hsla {
-        h: 210.0 / 360.0,
-        s: 0.5,
-        l: 0.2,
-        a: 1.0,
-    };
-    pub const TEXT_PRIMARY: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 1.0,
-        a: 1.0,
-    };
-    pub const TEXT_SECONDARY: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 1.0,
-        a: 0.62,
-    };
-}
 
 /// gpui Settings view component.
 #[derive(Debug, Clone)]
@@ -67,40 +33,122 @@ impl Focusable for SettingsView {
     }
 }
 
+/// A settings row with a label and value.
+fn settings_row(label: &str, value: &str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .w_full()
+        .h(px(32.0))
+        .px(px(Spacing::LG))
+        .child(
+            div()
+                .flex_1()
+                .text_color(Text::SECONDARY)
+                .text_size(px(FontSize::SM))
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .text_color(Text::TERTIARY)
+                .text_size(px(FontSize::SM))
+                .child(value.to_string()),
+        )
+}
+
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut sidebar = div().flex().flex_col().gap(px(4.0)).w(px(200.0));
+        let active_tab = self.model.active_tab;
+
+        let mut sidebar = div()
+            .flex()
+            .flex_col()
+            .w(px(180.0))
+            .h_full()
+            .bg(Background::SURFACE)
+            .border_r_1()
+            .border_color(BorderColors::PRIMARY)
+            .py(px(Spacing::MD));
 
         for tab in SettingsTab::ALL {
             if !self.model.is_tab_visible(tab) {
                 continue;
             }
             let is_active = self.model.active_tab == *tab;
-            let bg = if is_active {
-                SettingsColors::TAB_ACTIVE_BG
-            } else {
-                SettingsColors::TAB_BG
-            };
-            let color = if is_active {
-                SettingsColors::TEXT_PRIMARY
-            } else {
-                SettingsColors::TEXT_SECONDARY
-            };
-
             sidebar = sidebar.child(
                 div()
                     .id(gpui::SharedString::from(format!(
                         "settings-tab-{}",
                         tab.label()
                     )))
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .rounded(px(4.0))
-                    .bg(bg)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .w_full()
+                    .h(px(32.0))
+                    .px(px(Spacing::MD_LG))
+                    .rounded(px(Radius::SM))
                     .cursor_pointer()
-                    .child(div().text_sm().child(tab.label()).text_color(color)),
+                    .bg(if is_active {
+                        BorderColors::PRIMARY
+                    } else {
+                        Background::SURFACE
+                    })
+                    .child(
+                        div()
+                            .text_size(px(FontSize::SM))
+                            .text_color(if is_active { Text::PRIMARY } else { Text::SECONDARY })
+                            .child(tab.label()),
+                    ),
             );
         }
+
+        // Content area for the active tab
+        let content = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .bg(Background::SURFACE)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .px(px(Spacing::XL_XXL))
+                    .py(px(Spacing::XL))
+                    .gap(px(Spacing::MD))
+                    .child(
+                        div()
+                            .text_color(Text::SECONDARY)
+                            .text_size(px(FontSize::LG))
+                            .child(active_tab.label()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .rounded(px(Radius::SM))
+                            .border_1()
+                            .border_color(BorderColors::SUBTLE)
+                            .overflow_hidden()
+                            .child(settings_row("Version", "1.0.0"))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(px(1.0))
+                                    .bg(BorderColors::SUBTLE),
+                            )
+                            .child(settings_row("Build", "fronda-core"))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(px(1.0))
+                                    .bg(BorderColors::SUBTLE),
+                            )
+                            .child(settings_row("Language", "en-US")),
+                    ),
+            );
 
         div()
             .id("fronda-settings")
@@ -108,7 +156,8 @@ impl Render for SettingsView {
             .flex()
             .flex_row()
             .size_full()
-            .bg(SettingsColors::BACKGROUND)
+            .bg(Background::BASE)
             .child(sidebar)
+            .child(content)
     }
 }
