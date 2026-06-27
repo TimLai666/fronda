@@ -101,27 +101,33 @@ impl Render for PreviewView {
                     .bg(Background::RAISED)
                     .border_b_1()
                     .border_color(BorderColors::PRIMARY)
-                    // Nav chevrons
+                    // Nav chevrons (Swift: goBackPreviewTab / goForwardPreviewTab)
                     .child(
                         div()
+                            .id("preview-back")
                             .w(px(18.0))
                             .h(px(22.0))
                             .flex()
                             .items_center()
                             .justify_center()
+                            .cursor_pointer()
                             .text_color(Text::MUTED)
                             .text_size(px(FontSize::SM))
+                            .on_click(cx.listener(|_, _, _, _| {}))
                             .child("<"),
                     )
                     .child(
                         div()
+                            .id("preview-fwd")
                             .w(px(18.0))
                             .h(px(22.0))
                             .flex()
                             .items_center()
                             .justify_center()
+                            .cursor_pointer()
                             .text_color(Text::MUTED)
                             .text_size(px(FontSize::SM))
+                            .on_click(cx.listener(|_, _, _, _| {}))
                             .child(">"),
                     )
                     // Active tab label with bottom underline
