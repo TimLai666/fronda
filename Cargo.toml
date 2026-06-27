@@ -12,6 +12,7 @@ members = [
     "crates/generation_core",
     "crates/media_library",
     "crates/audio_core",
+    "crates/search_visual",
 ]
 resolver = "2"
 

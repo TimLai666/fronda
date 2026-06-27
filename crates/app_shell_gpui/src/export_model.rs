@@ -44,6 +44,9 @@ pub struct ExportViewModel {
     pub thumbnail_asset_key: Option<String>,
     /// Whether the settings panel is expanded (vs. collapsed to progress view).
     pub settings_expanded: bool,
+    /// Number of project media files not found on disk (PalmierProject mode).
+    /// Mirrors Swift ExportView's `palmierSummary.missing` red warning.
+    pub missing_file_count: usize,
 }
 
 impl ExportViewModel {
@@ -53,6 +56,7 @@ impl ExportViewModel {
             panel: ExportPanelState::new(),
             thumbnail_asset_key: None,
             settings_expanded: true,
+            missing_file_count: 0,
         }
     }
 

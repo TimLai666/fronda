@@ -55,6 +55,7 @@ impl Render for TimelineView {
         let scroll_x = self.state.scroll_x;
 
         let playhead_x = playhead_frame as f32 * zoom - scroll_x;
+        let snap_x = self.state.snap_x_frame.map(|f| f as f32 * zoom - scroll_x);
         let has_video = tracks.iter().any(|t| t.kind == TrackKind::Video);
         let has_audio = tracks.iter().any(|t| t.kind == TrackKind::Audio);
         let show_zone_divider = has_video && has_audio;
@@ -282,10 +283,45 @@ impl Render for TimelineView {
                                     .w(px(BorderWidth::MEDIUM))
                                     .h_full()
                                     .bg(Accent::TIMECODE),
-                            ),
+                            )
+                            // Snap indicator — dashed yellow vertical line during clip drag
+                            // Mirrors Swift SnapIndicatorOverlay (CAShapeLayer with dashes).
+                            // Approximated as alternating solid segments (gpui has no native dash).
+                            .when_some(snap_x, |el, sx| {
+                                el.child(snap_indicator(sx))
+                            }),
                     ),
             )
     }
+}
+
+/// Dashed yellow snap line: alternating 4px solid / 4px gap segments.
+fn snap_indicator(x: f32) -> impl IntoElement {
+    const DASH: f32 = 4.0;
+    const GAP: f32 = 4.0;
+    const TOTAL: usize = 40; // covers up to 320px height
+    const YELLOW: gpui::Hsla = gpui::Hsla { h: 0.139, s: 1.0, l: 0.55, a: 1.0 };
+
+    let mut col = div()
+        .id("snap-indicator")
+        .absolute()
+        .top_0()
+        .left(px(x))
+        .flex()
+        .flex_col()
+        .w(px(BorderWidth::MEDIUM));
+
+    for i in 0..TOTAL {
+        col = col.child(
+            div()
+                .w_full()
+                .h(px(DASH))
+                .when(i % 2 == 0, |el| el.bg(YELLOW))
+                .when(i % 2 != 0, |el| el.bg(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 })),
+        );
+        col = col.child(div().w_full().h(px(GAP)));
+    }
+    col
 }
 
 /// Generate ruler tick labels for visible timecodes.

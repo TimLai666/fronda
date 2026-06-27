@@ -109,6 +109,9 @@ pub struct TimelineState {
     pub total_frames: i64,
     /// Project FPS.
     pub fps: i64,
+    /// Snap indicator frame — Some(frame) shows the yellow dashed snap line during clip drag.
+    /// Mirrors Swift SnapIndicatorOverlay's CAShapeLayer positioning.
+    pub snap_x_frame: Option<i64>,
 }
 
 impl TimelineState {
@@ -122,6 +125,7 @@ impl TimelineState {
             playhead_frame: 30,
             total_frames: 600,
             fps: 30,
+            snap_x_frame: None,
         }
     }
 

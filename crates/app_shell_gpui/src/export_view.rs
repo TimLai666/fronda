@@ -347,19 +347,52 @@ impl Render for ExportView {
                                             .child("Exports an XMEML timeline file compatible with Final Cut Pro, Premiere, and DaVinci Resolve."),
                                     )
                                     .into_any_element(),
-                                ExportMode::PalmierProject => div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(Spacing::SM))
-                                    .px(px(Spacing::LG))
-                                    .py(px(Spacing::MD))
-                                    .child(
-                                        div()
-                                            .text_color(Text::SECONDARY)
-                                            .text_size(px(FontSize::SM))
-                                            .child("Exports a .palmier project bundle that can be reopened in Palmier Pro or Fronda."),
-                                    )
-                                    .into_any_element(),
+                                ExportMode::PalmierProject => {
+                                    let missing = self.model.missing_file_count;
+                                    let mut col = div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(Spacing::SM))
+                                        .px(px(Spacing::LG))
+                                        .py(px(Spacing::MD))
+                                        .child(
+                                            div()
+                                                .text_color(Text::SECONDARY)
+                                                .text_size(px(FontSize::SM))
+                                                .child("Exports a .palmier project bundle that can be reopened in Palmier Pro or Fronda."),
+                                        );
+                                    // Matches Swift: if palmierSummary.missing > 0 show errorColor warning
+                                    if missing > 0 {
+                                        col = col.child(
+                                            div()
+                                                .flex()
+                                                .flex_row()
+                                                .items_center()
+                                                .gap(px(Spacing::XS))
+                                                .px(px(Spacing::SM))
+                                                .py(px(Spacing::XS))
+                                                .rounded(px(4.0))
+                                                .bg(gpui::Hsla { h: 0.0, s: 0.75, l: 0.15, a: 0.6 })
+                                                .child(
+                                                    div()
+                                                        .text_color(gpui::Hsla { h: 0.0, s: 0.85, l: 0.60, a: 1.0 })
+                                                        .text_size(px(FontSize::XS))
+                                                        .child("⚠"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .text_color(gpui::Hsla { h: 0.0, s: 0.85, l: 0.65, a: 1.0 })
+                                                        .text_size(px(FontSize::XS))
+                                                        .child(format!(
+                                                            "{missing} media file{} missing from disk and will not be included.",
+                                                            if missing == 1 { "" } else { "s" }
+                                                        )),
+                                                ),
+                                        );
+                                    }
+                                    col.into_any_element()
+                                },
                             }),
                     )
                     // Preview panel (right, flex)

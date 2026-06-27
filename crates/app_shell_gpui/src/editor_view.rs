@@ -213,8 +213,8 @@ fn build_default(layout: &PaneLayout, contents: &PaneContents, timeline_height: 
     root
 }
 
-/// Media preset: media (wide) | preview.
-fn build_media(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement {
+/// Media preset: media (wide) | preview + timeline (matches Swift buildMediaLayout).
+fn build_media(layout: &PaneLayout, contents: &PaneContents, timeline_height: f32, resize_handle: AnyElement) -> impl IntoElement {
     let mut root = div().id("layout-media").flex().flex_row().size_full();
 
     if layout.is_visible(PaneId::Media) {
@@ -228,20 +228,42 @@ fn build_media(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement
         );
     }
 
+    // Right column: Preview + optional Timeline (matches Swift buildMediaLayout)
+    let mut right_col = div().flex().flex_col().flex_1().h_full();
+
     if layout.is_visible(PaneId::Preview) {
-        root = root.child(
+        right_col = right_col.child(
             div()
                 .flex_1()
-                .h_full()
+                .border_b_1()
+                .border_color(BorderColors::PRIMARY)
                 .child(preview_content(contents)),
         );
     }
 
+    if layout.is_visible(PaneId::Timeline) {
+        right_col = right_col.child(
+            div()
+                .flex()
+                .flex_col()
+                .h(px(timeline_height))
+                .child(resize_handle)
+                .child(
+                    div()
+                        .flex_1()
+                        .border_t_1()
+                        .border_color(BorderColors::PRIMARY)
+                        .child(timeline_content(contents)),
+                ),
+        );
+    }
+
+    root = root.child(right_col);
     root
 }
 
-/// Vertical preset (Swift: Media+Inspector stacked left / Toolbar+Timeline left | Preview right).
-fn build_vertical(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement {
+/// Vertical preset (Swift: Media+Inspector stacked left / Toolbar+Timeline right | Preview right).
+fn build_vertical(layout: &PaneLayout, contents: &PaneContents, timeline_height: f32, resize_handle: AnyElement) -> impl IntoElement {
     let mut root = div().id("layout-vertical").flex().flex_row().size_full();
 
     // Left stack: media + inspector (stacked vertically)
@@ -270,28 +292,34 @@ fn build_vertical(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElem
             .border_color(BorderColors::PRIMARY),
     );
 
-    // Right: Preview fills remaining space
+    // Right: Preview + Toolbar + resizable Timeline
     if layout.is_visible(PaneId::Preview) {
-        root = root.child(
-            div()
-                .flex_1()
-                .h_full()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .flex_1()
-                        .child(preview_content(contents)),
-                )
-                .child(toolbar_content(contents))
-                .child(
-                    div()
-                        .h(px(180.0))
-                        .border_t_1()
-                        .border_color(BorderColors::PRIMARY)
-                        .child(timeline_content(contents)),
-                ),
-        );
+        let mut right = div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(div().flex_1().child(preview_content(contents)))
+            .child(toolbar_content(contents));
+
+        if layout.is_visible(PaneId::Timeline) {
+            right = right.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .h(px(timeline_height))
+                    .child(resize_handle)
+                    .child(
+                        div()
+                            .flex_1()
+                            .border_t_1()
+                            .border_color(BorderColors::PRIMARY)
+                            .child(timeline_content(contents)),
+                    ),
+            );
+        }
+
+        root = root.child(right);
     }
 
     root
@@ -306,8 +334,8 @@ pub fn render_pane_layout(
 ) -> impl IntoElement {
     match layout.preset {
         LayoutPreset::Default => build_default(layout, contents, timeline_height, resize_handle).into_any_element(),
-        LayoutPreset::Media => build_media(layout, contents).into_any_element(),
-        LayoutPreset::Vertical => build_vertical(layout, contents).into_any_element(),
+        LayoutPreset::Media => build_media(layout, contents, timeline_height, resize_handle).into_any_element(),
+        LayoutPreset::Vertical => build_vertical(layout, contents, timeline_height, resize_handle).into_any_element(),
     }
 }
 

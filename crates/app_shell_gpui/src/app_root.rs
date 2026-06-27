@@ -5,6 +5,7 @@
 
 use crate::chat_view::ChatView;
 use crate::tour_overlay_view::TourOverlayView;
+use crate::update_overlay_view::UpdateOverlayView;
 use crate::editor_view;
 use crate::home_model::HomeLayout;
 use crate::home_view::HomeView;
@@ -72,6 +73,7 @@ pub struct AppRoot {
     timeline_view: Option<Entity<TimelineView>>,
     inspector_view: Option<Entity<InspectorView>>,
     tour_overlay: Entity<TourOverlayView>,
+    update_overlay: Entity<UpdateOverlayView>,
 }
 
 impl AppRoot {
@@ -92,6 +94,7 @@ impl AppRoot {
             timeline_view: None,
             inspector_view: None,
             tour_overlay: cx.new(|cx| TourOverlayView::new(cx)),
+            update_overlay: cx.new(|cx| UpdateOverlayView::new(cx)),
             timeline_height: 200.0,
             timeline_resize_drag: None,
         }
@@ -686,6 +689,7 @@ impl Render for AppRoot {
         };
 
         let tour = self.tour_overlay.clone();
+        let update_overlay = self.update_overlay.clone();
 
         div()
             .id("fronda-root")
@@ -704,6 +708,15 @@ impl Render for AppRoot {
                     .left_0()
                     .size_full()
                     .child(tour),
+            )
+            // Update changelog overlay — shown once after a new version installs
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .child(update_overlay),
             )
     }
 }

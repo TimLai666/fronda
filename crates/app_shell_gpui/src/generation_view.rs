@@ -62,6 +62,10 @@ pub struct GenerationState {
     pub use_first_last: bool,
     /// GEN-5: whether the model picker dropdown is open.
     pub show_model_picker: bool,
+    /// Whether the credit top-off popover is open (CreditActionsPopover in Swift).
+    pub show_credit_popover: bool,
+    /// Whether the user is on a paid plan (affects popover content).
+    pub is_paid_plan: bool,
 }
 
 impl Default for GenerationState {
@@ -73,6 +77,8 @@ impl Default for GenerationState {
             credits_remaining: Some(1_250),
             use_first_last: true,
             show_model_picker: false,
+            show_credit_popover: false,
+            is_paid_plan: false,
         }
     }
 }
@@ -255,31 +261,45 @@ impl Render for GenerationView {
                     .child(div().flex_1())
                     // Credit chip (CreditSummaryView.compact) — only when credits available
                     .when_some(credits, |el, c| {
+                        let show_popover = self.state.show_credit_popover;
+                        let is_paid = self.state.is_paid_plan;
                         el.child(
                             div()
-                                .id("credit-chip")
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(Spacing::XS))
-                                .px(px(Spacing::SM))
-                                .py(px(Spacing::XXS))
-                                .rounded_full()
-                                .border_1()
-                                .border_color(BorderColors::SUBTLE)
-                                .cursor_pointer()
+                                .relative()
                                 .child(
                                     div()
-                                        .text_color(Accent::PRIMARY)
-                                        .text_size(px(FontSize::SM))
-                                        .child("$"),
+                                        .id("credit-chip")
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(Spacing::XS))
+                                        .px(px(Spacing::SM))
+                                        .py(px(Spacing::XXS))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(BorderColors::SUBTLE)
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.state.show_credit_popover = !this.state.show_credit_popover;
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            div()
+                                                .text_color(Accent::PRIMARY)
+                                                .text_size(px(FontSize::SM))
+                                                .child("$"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_color(Accent::PRIMARY)
+                                                .text_size(px(FontSize::XS))
+                                                .child(format!("{c}")),
+                                        ),
                                 )
-                                .child(
-                                    div()
-                                        .text_color(Accent::PRIMARY)
-                                        .text_size(px(FontSize::XS))
-                                        .child(format!("{c}")),
-                                ),
+                                // CreditActionsPopover — anchored below chip
+                                .when(show_popover, |el| {
+                                    el.child(credit_popover(is_paid, cx))
+                                })
                         )
                     })
                     // Project activity icon button
@@ -532,6 +552,106 @@ impl Render for GenerationView {
                     }),
             )
     }
+}
+
+/// Credit top-off popover (CreditActionsPopover in Swift).
+/// Paid users: dollar-amount input + Buy button (TopOffField).
+/// Free users: upgrade prompt.
+fn credit_popover(is_paid: bool, cx: &mut Context<GenerationView>) -> impl IntoElement {
+    div()
+        .id("credit-popover")
+        .absolute()
+        .bottom(px(28.0))
+        .right(px(0.0))
+        .w(px(220.0))
+        .rounded(px(crate::theme::Radius::MD))
+        .bg(crate::theme::Background::RAISED)
+        .border_1()
+        .border_color(crate::theme::BorderColors::PRIMARY)
+        .shadow_lg()
+        .p(px(crate::theme::Spacing::MD))
+        .flex()
+        .flex_col()
+        .gap(px(crate::theme::Spacing::SM))
+        // Dismiss on outside click is handled by toggling show_credit_popover
+        .on_click(|_, _, _| {}) // absorb click so parent doesn't close it
+        .when(is_paid, |el| {
+            // TopOffField: amount input + Buy button
+            el.child(
+                div()
+                    .text_color(crate::theme::Text::PRIMARY)
+                    .text_size(px(FontSize::SM))
+                    .child("Add credits"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(crate::theme::Spacing::XS))
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(28.0))
+                            .px(px(crate::theme::Spacing::SM))
+                            .border_1()
+                            .border_color(crate::theme::BorderColors::SUBTLE)
+                            .rounded(px(crate::theme::Radius::SM))
+                            .flex()
+                            .items_center()
+                            .text_color(crate::theme::Text::MUTED)
+                            .text_size(px(FontSize::SM))
+                            .child("$10.00"),
+                    )
+                    .child(
+                        div()
+                            .id("credit-buy-btn")
+                            .px(px(crate::theme::Spacing::SM))
+                            .h(px(28.0))
+                            .rounded(px(crate::theme::Radius::SM))
+                            .bg(crate::theme::Accent::PRIMARY)
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.state.show_credit_popover = false;
+                                cx.notify();
+                            }))
+                            .text_color(crate::theme::Background::BASE)
+                            .text_size(px(FontSize::SM))
+                            .child("Buy"),
+                    ),
+            )
+        })
+        .when(!is_paid, |el| {
+            // Free plan: upgrade prompt
+            el.child(
+                div()
+                    .text_color(crate::theme::Text::SECONDARY)
+                    .text_size(px(FontSize::SM))
+                    .child("Upgrade to add credits"),
+            )
+            .child(
+                div()
+                    .id("credit-upgrade-btn")
+                    .w_full()
+                    .px(px(crate::theme::Spacing::MD))
+                    .py(px(crate::theme::Spacing::XS))
+                    .rounded(px(crate::theme::Radius::SM))
+                    .bg(crate::theme::Accent::PRIMARY)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.state.show_credit_popover = false;
+                        cx.notify();
+                    }))
+                    .text_color(crate::theme::Background::BASE)
+                    .text_size(px(FontSize::SM))
+                    .child("Account settings"),
+            )
+        })
 }
 
 /// A single row in the model picker dropdown.
