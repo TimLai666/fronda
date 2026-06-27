@@ -387,19 +387,6 @@ fn keyframes_btn(id: &str, active: bool) -> gpui::Stateful<gpui::Div> {
         .child("Keyframes")
 }
 
-fn text_tab_content() -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .w_full()
-        .pt(px(Spacing::MD))
-        .child(section_header("section-text-tab-content", "Content", true))
-        .child(prop_row("Text", "Title"))
-        .child(prop_row("Font", "System"))
-        .child(prop_row("Color", "White"))
-        .child(prop_row("Alignment", "Center"))
-}
-
 // ── Render ────────────────────────────────────────────────────────────────────
 
 impl Render for InspectorView {
