@@ -15,6 +15,19 @@ pub struct SettingsView {
     focus_handle: FocusHandle,
     active_tab: SettingsTab,
     backend_configured: bool,
+    // Account
+    /// True when a signed-in user exists (controls sidebar IdentityStrip + account pane).
+    pub is_signed_in: bool,
+    /// True when the account is a paid subscriber (controls account pane branch).
+    pub is_paid: bool,
+    /// Account loading state — shows "Loading…" in account pane.
+    pub is_loading: bool,
+    /// User display initial for IdentityStrip avatar (None = not signed in).
+    pub account_initial: Option<char>,
+    /// User display name for IdentityStrip.
+    pub display_name: String,
+    /// User email or plan label for IdentityStrip secondary line.
+    pub display_secondary: Option<String>,
     // General
     notifications_on: bool,
     privacy_on: bool,
@@ -40,6 +53,12 @@ impl SettingsView {
             focus_handle: cx.focus_handle(),
             active_tab: initial_tab,
             backend_configured,
+            is_signed_in: false,
+            is_paid: false,
+            is_loading: false,
+            account_initial: None,
+            display_name: String::new(),
+            display_secondary: None,
             notifications_on: true,
             privacy_on: true,
             image_models_on: [true, false, true],
@@ -162,26 +181,253 @@ fn card(children: Vec<gpui::AnyElement>) -> impl IntoElement {
 
 // ── Account pane ──────────────────────────────────────────────────────────────
 
-fn pane_account() -> impl IntoElement {
-    div()
+/// Mini card with caption + content — matches Swift AccountPane.card.
+fn account_card(caption: &str, children: Vec<gpui::AnyElement>) -> impl IntoElement {
+    let mut card = div()
         .flex()
         .flex_col()
-        .gap(px(Spacing::LG))
-        .child(body_text("Sign in to subscribe and use AI generation."))
+        .flex_1()
+        .gap(px(Spacing::SM))
+        .p(px(Spacing::MD))
+        .rounded(px(Radius::MD))
+        .border_1()
+        .border_color(BorderColors::SUBTLE)
+        .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.03 })
         .child(
             div()
-                .id("btn-sign-in")
-                .self_start()
-                .px(px(Spacing::MD_LG))
-                .py(px(Spacing::SM))
-                .rounded_full()
-                .border_1()
-                .border_color(BorderColors::PRIMARY)
-                .cursor_pointer()
-                .text_color(Accent::PRIMARY)
-                .text_size(px(FontSize::SM))
-                .child("Sign in with Google"),
-        )
+                .text_color(Text::TERTIARY)
+                .text_size(px(FontSize::XS))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(caption.to_uppercase()),
+        );
+    for child in children {
+        card = card.child(child);
+    }
+    card
+}
+
+fn account_section_label(text: &str) -> impl IntoElement {
+    div()
+        .text_color(Text::TERTIARY)
+        .text_size(px(FontSize::XS))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .child(text.to_uppercase())
+}
+
+fn capsule_btn(id: &str, label: &str, prominent: bool) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id.to_string())
+        .self_start()
+        .px(px(Spacing::MD_LG))
+        .py(px(Spacing::SM))
+        .rounded_full()
+        .border_1()
+        .border_color(if prominent { Accent::PRIMARY } else { BorderColors::PRIMARY })
+        .bg(if prominent { Accent::PRIMARY } else { Background::BASE })
+        .cursor_pointer()
+        .text_color(if prominent { Background::BASE } else { Text::SECONDARY })
+        .text_size(px(FontSize::SM))
+        .child(label.to_string())
+}
+
+/// Account pane — three branches matching Swift AccountPane.
+/// `is_signed_in`, `is_paid`, `is_loading` control which branch renders.
+fn pane_account(is_loading: bool, is_signed_in: bool, is_paid: bool) -> impl IntoElement {
+    let mut col = div()
+        .flex()
+        .flex_col()
+        .gap(px(Spacing::LG));
+
+    if is_loading {
+        col = col.child(body_text("Loading…"));
+    } else if is_signed_in && is_paid {
+        // ── Signed in, paid: subscription + credits ──
+        col = col
+            // Subscription section
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(Spacing::SM))
+                    .child(account_section_label("Subscription"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(Spacing::SM))
+                            .child(
+                                div()
+                                    .text_color(Text::PRIMARY)
+                                    .text_size(px(FontSize::MD))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child("Pro"),
+                            )
+                            .child(capsule_btn("btn-manage-sub", "Manage subscription", false).into_any_element()),
+                    ),
+            )
+            // Credits section: Remaining + Buy more cards side-by-side
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(Spacing::SM))
+                    .child(account_section_label("Credits"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(Spacing::MD))
+                            .child(account_card("Remaining", vec![
+                                div()
+                                    .text_color(Text::PRIMARY)
+                                    .text_size(px(FontSize::LG))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("1,000")
+                                    .into_any_element(),
+                                div()
+                                    .text_color(Text::TERTIARY)
+                                    .text_size(px(FontSize::XS))
+                                    .child("of 1,500 credits")
+                                    .into_any_element(),
+                            ]))
+                            .child(account_card("Buy more", vec![
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(Spacing::XS))
+                                    .child(
+                                        div()
+                                            .text_color(Text::PRIMARY)
+                                            .text_size(px(FontSize::MD))
+                                            .child("$20"),
+                                    )
+                                    .into_any_element(),
+                                div()
+                                    .id("btn-buy-credits")
+                                    .self_start()
+                                    .px(px(Spacing::SM_MD))
+                                    .py(px(Spacing::XXS))
+                                    .rounded_full()
+                                    .bg(Accent::PRIMARY)
+                                    .cursor_pointer()
+                                    .text_color(Background::BASE)
+                                    .text_size(px(FontSize::XS))
+                                    .child("Buy credits")
+                                    .into_any_element(),
+                                div()
+                                    .text_color(Text::TERTIARY)
+                                    .text_size(px(FontSize::XS))
+                                    .child("$10–$500 · Unused credits expire at next billing date.")
+                                    .into_any_element(),
+                            ])),
+                    ),
+            )
+            .child(capsule_btn("btn-sign-out", "Sign out", false).into_any_element());
+    } else if is_signed_in && !is_paid {
+        // ── Signed in, unpaid: upgrade options ──
+        col = col
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(Spacing::SM))
+                    .child(account_section_label("Subscription"))
+                    .child(body_text("Subscribe to use AI generation."))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(Spacing::MD))
+                            // Pro card
+                            .child(account_card("Pro", vec![
+                                div()
+                                    .flex()
+                                    .items_baseline()
+                                    .gap(px(Spacing::XS))
+                                    .child(
+                                        div()
+                                            .text_color(Text::PRIMARY)
+                                            .text_size(px(FontSize::XL))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("$29"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(Text::TERTIARY)
+                                            .text_size(px(FontSize::SM))
+                                            .child("/ month"),
+                                    )
+                                    .into_any_element(),
+                                div()
+                                    .text_color(Text::SECONDARY)
+                                    .text_size(px(FontSize::SM))
+                                    .child("1,500 credits / month")
+                                    .into_any_element(),
+                                div()
+                                    .id("btn-upgrade-pro")
+                                    .w_full()
+                                    .px(px(Spacing::SM))
+                                    .py(px(Spacing::XS))
+                                    .rounded_full()
+                                    .bg(Accent::PRIMARY)
+                                    .cursor_pointer()
+                                    .text_color(Background::BASE)
+                                    .text_size(px(FontSize::SM))
+                                    .child("Upgrade to Pro")
+                                    .into_any_element(),
+                            ]))
+                            // Max card
+                            .child(account_card("Max", vec![
+                                div()
+                                    .flex()
+                                    .items_baseline()
+                                    .gap(px(Spacing::XS))
+                                    .child(
+                                        div()
+                                            .text_color(Text::PRIMARY)
+                                            .text_size(px(FontSize::XL))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("$99"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(Text::TERTIARY)
+                                            .text_size(px(FontSize::SM))
+                                            .child("/ month"),
+                                    )
+                                    .into_any_element(),
+                                div()
+                                    .text_color(Text::SECONDARY)
+                                    .text_size(px(FontSize::SM))
+                                    .child("6,000 credits / month")
+                                    .into_any_element(),
+                                div()
+                                    .id("btn-upgrade-max")
+                                    .w_full()
+                                    .px(px(Spacing::SM))
+                                    .py(px(Spacing::XS))
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(BorderColors::PRIMARY)
+                                    .cursor_pointer()
+                                    .text_color(Text::SECONDARY)
+                                    .text_size(px(FontSize::SM))
+                                    .child("Upgrade to Max")
+                                    .into_any_element(),
+                            ])),
+                    )
+                    .child(body_text("Credits cover AI generation and chat.")),
+            )
+            .child(capsule_btn("btn-sign-out-2", "Sign out", false).into_any_element());
+    } else {
+        // ── Signed out ──
+        col = col
+            .child(body_text("Sign in to subscribe and use AI generation."))
+            .child(capsule_btn("btn-sign-in", "Sign in with Google", false).into_any_element());
+    }
+
+    col
 }
 
 // ── General pane ─────────────────────────────────────────────────────────────
@@ -566,6 +812,65 @@ impl Render for SettingsView {
         let active_tab = self.active_tab;
         let backend = self.backend_configured;
 
+        let is_signed_in = self.is_signed_in;
+        let is_paid = self.is_paid;
+        let is_loading = self.is_loading;
+        let account_initial = self.account_initial;
+        let display_name = self.display_name.clone();
+        let display_secondary = self.display_secondary.clone();
+
+        // ── IdentityStrip (Swift: shown when !account.isMisconfigured) ──
+        let identity_strip = if backend && is_signed_in {
+            let initial_str = account_initial.map(|c| c.to_string()).unwrap_or("?".to_string());
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(Spacing::MD))
+                .px(px(Spacing::LG))
+                .py(px(Spacing::LG))
+                .child(
+                    // Avatar circle
+                    div()
+                        .w(px(32.0))
+                        .h(px(32.0))
+                        .rounded_full()
+                        .bg(gpui::Hsla { h: Accent::PRIMARY.h, s: Accent::PRIMARY.s, l: Accent::PRIMARY.l, a: 0.5 })
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(Text::PRIMARY)
+                        .text_size(px(FontSize::MD_LG))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(initial_str),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .gap(px(Spacing::XXS))
+                        .child(
+                            div()
+                                .text_color(Text::PRIMARY)
+                                .text_size(px(FontSize::MD))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(if display_name.is_empty() { "Account".to_string() } else { display_name }),
+                        )
+                        .when_some(display_secondary, |el, sec| {
+                            el.child(
+                                div()
+                                    .text_color(Text::TERTIARY)
+                                    .text_size(px(FontSize::XS))
+                                    .child(sec),
+                            )
+                        }),
+                )
+                .into_any_element()
+        } else {
+            div().into_any_element()
+        };
+
         // Sidebar (220px, matching Swift)
         let mut sidebar = div()
             .flex()
@@ -575,6 +880,7 @@ impl Render for SettingsView {
             .bg(Background::SURFACE)
             .border_r_1()
             .border_color(BorderColors::PRIMARY)
+            .child(identity_strip)
             .py(px(Spacing::MD));
 
         for &tab in SettingsTab::ALL {
@@ -630,7 +936,7 @@ impl Render for SettingsView {
         let search_enabled = self.search_enabled;
 
         let pane_content: gpui::AnyElement = match active_tab {
-            SettingsTab::Account => pane_account().into_any_element(),
+            SettingsTab::Account => pane_account(is_loading, is_signed_in, is_paid).into_any_element(),
             SettingsTab::General => pane_general(notifications_on, privacy_on).into_any_element(),
             SettingsTab::Models => pane_models(&image_on, &video_on, &audio_on).into_any_element(),
             SettingsTab::Agent => pane_agent(mcp_running, mcp_enabled).into_any_element(),

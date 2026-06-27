@@ -19,10 +19,17 @@ pub struct AccountState {
     pub display_name: String,
     pub email: String,
     pub plan_label: String,
+    /// Whether the account is a paid subscriber (controls upgradeBlock visibility).
+    pub is_paid: bool,
+    /// Whether the subscription will cancel at period end (shows orange "Cancels" banner).
+    pub cancel_at_period_end: bool,
     /// Credit fraction 0.0–1.0
     pub credit_fraction: f32,
     pub credits_left: u32,
     pub credits_total: u32,
+    /// Optional reset date label (e.g. "Jul 1") — shown as "Resets Jul 1" next to the credit count.
+    /// Matches Swift creditsBlock's "Resets \(date)" label.
+    pub credits_reset_date: Option<String>,
 }
 
 impl AccountState {
@@ -32,9 +39,12 @@ impl AccountState {
             display_name: "Not signed in".to_string(),
             email: String::new(),
             plan_label: "Free".to_string(),
+            is_paid: false,
+            cancel_at_period_end: false,
             credit_fraction: 0.0,
             credits_left: 0,
             credits_total: 0,
+            credits_reset_date: None,
         }
     }
 }
@@ -61,8 +71,9 @@ impl Focusable for AccountView {
 }
 
 /// A footer action button row (Settings / Feedback / Sign in).
-fn footer_btn(icon: &str, label: &str) -> impl IntoElement {
+fn footer_btn(id: &str, icon: &str, label: &str) -> gpui::Stateful<gpui::Div> {
     div()
+        .id(id.to_string())
         .flex()
         .flex_row()
         .items_center()
@@ -88,7 +99,7 @@ fn footer_btn(icon: &str, label: &str) -> impl IntoElement {
 }
 
 impl Render for AccountView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = &self.state;
         let initials = state
             .display_name
@@ -168,17 +179,41 @@ impl Render for AccountView {
             .child(div().w_full().h(px(1.0)).bg(BorderColors::SUBTLE))
             // ── Plan + credits (when signed in) ──
             .when(state.is_signed_in, |el| {
+                let plan_label = state.plan_label.clone();
+                let cancel_at = state.cancel_at_period_end;
+                let credits_left = state.credits_left;
+                let credits_total = state.credits_total;
+                let credit_frac = state.credit_fraction;
+                let is_paid = state.is_paid;
+                let reset_date = state.credits_reset_date.clone();
+
                 el.child(
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(Spacing::SM))
-                        // Plan label
+                        // Plan label row + optional "Cancels" banner
                         .child(
                             div()
-                                .text_color(Text::PRIMARY)
-                                .text_size(px(FontSize::MD))
-                                .child(state.plan_label.clone()),
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_color(Text::PRIMARY)
+                                        .text_size(px(FontSize::MD))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child(plan_label),
+                                )
+                                .when(cancel_at, |el| {
+                                    el.child(
+                                        div()
+                                            .text_color(gpui::Hsla { h: 30.0 / 360.0, s: 0.95, l: 0.60, a: 1.0 })
+                                            .text_size(px(FontSize::XXS))
+                                            .child("Cancels soon"),
+                                    )
+                                }),
                         )
                         // Credit progress bar
                         .child(
@@ -187,7 +222,6 @@ impl Render for AccountView {
                                 .flex_col()
                                 .gap(px(Spacing::XS))
                                 .child(
-                                    // Bar track
                                     div()
                                         .relative()
                                         .w_full()
@@ -200,7 +234,7 @@ impl Render for AccountView {
                                                 .top_0()
                                                 .left_0()
                                                 .h_full()
-                                                .w(px(state.credit_fraction * CARD_WIDTH * 0.85))
+                                                .w(px(credit_frac * CARD_WIDTH * 0.85))
                                                 .rounded_full()
                                                 .bg(bar_color),
                                         ),
@@ -209,18 +243,115 @@ impl Render for AccountView {
                                     div()
                                         .flex()
                                         .flex_row()
+                                        .items_center()
                                         .child(
                                             div()
                                                 .flex_1()
                                                 .text_color(Text::SECONDARY)
                                                 .text_size(px(FontSize::SM))
-                                                .child(format!(
-                                                    "{} / {} credits",
-                                                    state.credits_left, state.credits_total
-                                                )),
-                                        ),
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .child(format!("{} / {} credits", credits_left, credits_total)),
+                                        )
+                                        .when_some(reset_date, |el, date| {
+                                            el.child(
+                                                div()
+                                                    .text_color(Text::TERTIARY)
+                                                    .text_size(px(FontSize::XS))
+                                                    .child(format!("Resets {date}")),
+                                            )
+                                        }),
                                 ),
-                        ),
+                        )
+                        // upgradeBlock — shown when not paid (Swift: if !account.isPaid)
+                        .when(!is_paid, |el| {
+                            el.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(Spacing::XS))
+                                    // Pro plan row
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(px(Spacing::SM))
+                                            .child(
+                                                div()
+                                                    .text_color(Text::PRIMARY)
+                                                    .text_size(px(FontSize::SM))
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .child("Pro"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(Text::SECONDARY)
+                                                    .text_size(px(FontSize::SM))
+                                                    .child("$29/mo"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(Text::TERTIARY)
+                                                    .text_size(px(FontSize::XS))
+                                                    .child("1.5k credits"),
+                                            )
+                                            .child(div().flex_1())
+                                            .child(
+                                                div()
+                                                    .id("btn-upgrade-pro-card")
+                                                    .px(px(Spacing::SM_MD))
+                                                    .py(px(2.0))
+                                                    .rounded_full()
+                                                    .bg(Accent::PRIMARY)
+                                                    .cursor_pointer()
+                                                    .text_color(Background::BASE)
+                                                    .text_size(px(FontSize::XS))
+                                                    .child("Upgrade"),
+                                            ),
+                                    )
+                                    // Max plan row
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(px(Spacing::SM))
+                                            .child(
+                                                div()
+                                                    .text_color(Text::PRIMARY)
+                                                    .text_size(px(FontSize::SM))
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .child("Max"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(Text::SECONDARY)
+                                                    .text_size(px(FontSize::SM))
+                                                    .child("$99/mo"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(Text::TERTIARY)
+                                                    .text_size(px(FontSize::XS))
+                                                    .child("6k credits"),
+                                            )
+                                            .child(div().flex_1())
+                                            .child(
+                                                div()
+                                                    .id("btn-upgrade-max-card")
+                                                    .px(px(Spacing::SM_MD))
+                                                    .py(px(2.0))
+                                                    .rounded_full()
+                                                    .border_1()
+                                                    .border_color(BorderColors::PRIMARY)
+                                                    .cursor_pointer()
+                                                    .text_color(Text::SECONDARY)
+                                                    .text_size(px(FontSize::XS))
+                                                    .child("Upgrade"),
+                                            ),
+                                    ),
+                            )
+                        }),
                 )
                 .child(div().w_full().h(px(1.0)).bg(BorderColors::SUBTLE))
             })
@@ -230,12 +361,18 @@ impl Render for AccountView {
                     .flex()
                     .flex_col()
                     .gap(px(Spacing::XXS))
-                    .child(footer_btn("⚙", "Settings"))
-                    .child(footer_btn("✉", "Feedback"))
+                    .child(footer_btn("footer-settings", "⚙", "Settings")
+                        .on_click(cx.listener(|_, _, _, _| {})))
+                    .child(footer_btn("footer-feedback", "✉", "Feedback")
+                        .on_click(cx.listener(|_, _, _, _| {})))
                     .child(if state.is_signed_in {
-                        footer_btn("→", "Sign out").into_any_element()
+                        footer_btn("footer-signout", "→", "Sign out")
+                            .on_click(cx.listener(|_, _, _, _| {}))
+                            .into_any_element()
                     } else {
-                        footer_btn("↩", "Sign in").into_any_element()
+                        footer_btn("footer-signin", "↩", "Sign in")
+                            .on_click(cx.listener(|_, _, _, _| {}))
+                            .into_any_element()
                     }),
             )
     }

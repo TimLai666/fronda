@@ -1,6 +1,8 @@
 #[cfg(feature = "desktop-app")]
 pub mod account_view;
 #[cfg(feature = "desktop-app")]
+pub mod assets;
+#[cfg(feature = "desktop-app")]
 pub mod ai_edit_tab_view;
 #[cfg(feature = "desktop-app")]
 pub mod crop_overlay_view;

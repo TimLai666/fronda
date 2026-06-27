@@ -9,8 +9,8 @@ use crate::pane::{PaneId, PaneLayout};
 use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text};
 use gpui::Hsla;
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
-    ParentElement, Render, SharedString, Styled, Window,
+    div, prelude::*, px, svg, App, ClickEvent, Context, FocusHandle, Focusable,
+    InteractiveElement, ParentElement, Render, SharedString, Styled, Window,
 };
 
 /// State carried by the title bar.
@@ -20,6 +20,8 @@ pub struct TitleBarState {
     pub agent_panel_visible: bool,
     /// Update badge: None = no update, Some(version) = update available.
     pub update_version: Option<SharedString>,
+    /// Signed-in user display initial (None = not signed in, shows person icon).
+    pub account_initial: Option<char>,
 }
 
 impl Default for TitleBarState {
@@ -28,6 +30,7 @@ impl Default for TitleBarState {
             project_name: "Untitled Project".into(),
             agent_panel_visible: true,
             update_version: None,
+            account_initial: None,
         }
     }
 }
@@ -46,17 +49,15 @@ impl TitleBarView {
         }
     }
 
-    /// Returns the color of the chat-bubble icon — bright when panel is open.
+    /// Returns the color of the chat-bubble icon.
+    /// Swift uses aiGradient (monochrome silver shimmer); we approximate with white at
+    /// full opacity when panel is open, or at reduced opacity when closed.
     fn agent_icon_color(&self) -> Hsla {
-        if self.state.agent_panel_visible {
-            Accent::PRIMARY
-        } else {
-            Hsla {
-                h: 0.0,
-                s: 0.0,
-                l: 1.0,
-                a: Opacity::STRONG,
-            }
+        Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: if self.state.agent_panel_visible { 1.0 } else { Opacity::STRONG },
         }
     }
 }
@@ -100,8 +101,6 @@ impl Render for TitleBarView {
                             .justify_center()
                             .rounded(px(Radius::SM))
                             .cursor_pointer()
-                            .text_color(icon_color)
-                            .text_size(px(FontSize::MD))
                             .on_click(cx.listener(
                                 |this: &mut TitleBarView,
                                  _event: &ClickEvent,
@@ -112,7 +111,14 @@ impl Render for TitleBarView {
                                     cx.notify();
                                 },
                             ))
-                            .child("✦"),
+                            // bubble.left / bubble.left.fill equivalent via embedded SVG
+                            .child(
+                                svg()
+                                    .path("icons/chat.svg")
+                                    .w(px(14.0))
+                                    .h(px(14.0))
+                                    .text_color(icon_color),
+                            ),
                     ),
             )
             // ── Center: project name ──
@@ -124,6 +130,7 @@ impl Render for TitleBarView {
                     .justify_center()
                     .text_color(Text::SECONDARY)
                     .text_size(px(FontSize::SM))
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .child(project_name.to_string()),
             )
             // ── Trailing: update badge + Export button + account avatar ──
@@ -167,7 +174,7 @@ impl Render for TitleBarView {
                                 ),
                         )
                     })
-                    // Export button (matches TitleBarTrailingView)
+                    // Export button (matches TitleBarTrailingView — square.and.arrow.up)
                     .child(
                         div()
                             .id("btn-titlebar-export")
@@ -181,26 +188,49 @@ impl Render for TitleBarView {
                             .border_1()
                             .border_color(BorderColors::SUBTLE)
                             .cursor_pointer()
-                            .text_color(Text::SECONDARY)
-                            .text_size(px(FontSize::SM))
-                            .child("↑ Export"),
+                            .on_click(cx.listener(|_, _, _, _| {}))
+                            .child(
+                                svg()
+                                    .path("icons/export.svg")
+                                    .w(px(11.0))
+                                    .h(px(11.0))
+                                    .text_color(Text::SECONDARY),
+                            )
+                            .child(
+                                div()
+                                    .text_color(Text::SECONDARY)
+                                    .text_size(px(FontSize::SM))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child("Export"),
+                            ),
                     )
-                    // Account avatar circle (matches UserAvatarButton)
-                    .child(
+                    // Account avatar (Swift: UserAvatarButton).
+                    // Signed in: accent circle + display initial.
+                    // Signed out: white@soft circle + ⊙ person approximation.
+                    .child({
+                        let signed_in = self.state.account_initial.is_some();
+                        let initial_str = self.state.account_initial
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "⊙".to_string());
                         div()
                             .id("btn-account-avatar")
                             .w(px(22.0))
                             .h(px(22.0))
                             .rounded_full()
-                            .bg(Accent::PRIMARY)
+                            .bg(if signed_in {
+                                Hsla { h: Accent::PRIMARY.h, s: Accent::PRIMARY.s, l: Accent::PRIMARY.l, a: 0.5 }
+                            } else {
+                                Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.12 }
+                            })
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_color(Background::BASE)
+                            .on_click(cx.listener(|_, _, _, _| {}))
+                            .text_color(if signed_in { Text::PRIMARY } else { Text::TERTIARY })
                             .text_size(px(FontSize::XXS))
-                            .child("P"),
-                    ),
+                            .child(initial_str)
+                    }),
             )
     }
 }

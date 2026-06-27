@@ -1,11 +1,11 @@
 //! Help gpui view — renders the Help window with Shortcuts and MCP tabs.
 //!
-//! Requires the `desktop-app` feature (gpui).
+//! Covers Help/Shortcuts and Help/MCP panes, matching Swift HelpView exactly.
 
 use app_contract::help_model::{HelpTab, HelpViewModel};
-use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Text};
+use crate::theme::{Background, BorderColors, FontSize, Opacity, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable,
+    div, prelude::*, px, svg, App, Context, FocusHandle, Focusable, Hsla, IntoElement,
     ParentElement, Render, Styled, Window,
 };
 
@@ -29,6 +29,21 @@ impl HelpView {
 impl Focusable for HelpView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+/// Active tab background: white at Opacity::SOFT (10%) — matches hoverHighlight isActive=true.
+const TAB_ACTIVE_BG: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 1.0,
+    a: Opacity::SOFT,
+};
+
+fn tab_icon_path(tab: HelpTab) -> &'static str {
+    match tab {
+        HelpTab::Shortcuts => "icons/keyboard.svg",
+        HelpTab::Mcp => "icons/network.svg",
     }
 }
 
@@ -103,7 +118,8 @@ fn shortcut_column(groups: &[(&str, &[(&str, &str)])]) -> impl IntoElement {
             .child(
                 div()
                     .text_color(Text::TERTIARY)
-                    .text_size(px(10.0))
+                    .text_size(px(FontSize::XS))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(title.to_uppercase()),
             );
 
@@ -114,12 +130,13 @@ fn shortcut_column(groups: &[(&str, &[(&str, &str)])]) -> impl IntoElement {
                     .flex_row()
                     .items_center()
                     .gap(px(10.0))
-                    // Key: 118px, caption2 monospaced, semibold, PRIMARY
+                    // Key: 118px, caption2, semibold, PRIMARY
                     .child(
                         div()
                             .w(px(118.0))
                             .text_color(Text::PRIMARY)
                             .text_size(px(FontSize::XXS))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(shortcut.to_string()),
                     )
                     // Description: 11pt, SECONDARY
@@ -151,8 +168,8 @@ fn shortcuts_pane() -> impl IntoElement {
                 .flex_row()
                 .items_start()
                 .gap(px(24.0))
-                .px(px(20.0))
-                .py(px(20.0))
+                .px(px(Spacing::XL_XXL))
+                .py(px(Spacing::XL))
                 .child(shortcut_column(left))
                 .child(shortcut_column(right)),
         )
@@ -164,7 +181,7 @@ fn mcp_pane(endpoint: &str) -> impl IntoElement {
         .flex_1()
         .flex()
         .flex_col()
-        .px(px(Spacing::XL))
+        .px(px(Spacing::XL_XXL))
         .py(px(Spacing::XL))
         .gap(px(Spacing::MD))
         .child(
@@ -194,10 +211,10 @@ fn mcp_pane(endpoint: &str) -> impl IntoElement {
                     div()
                         .px(px(Spacing::SM_MD))
                         .py(px(Spacing::SM))
-                        .rounded(px(crate::theme::Radius::SM))
+                        .rounded(px(Radius::SM))
                         .border_1()
                         .border_color(BorderColors::SUBTLE)
-                        .bg(crate::theme::Background::RAISED)
+                        .bg(Background::RAISED)
                         .text_size(px(FontSize::SM))
                         .text_color(Text::PRIMARY)
                         .child(endpoint.to_string()),
@@ -209,19 +226,23 @@ impl Render for HelpView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.model.active_tab;
 
+        // Sidebar: 220px wide, matching Swift frame(width: 220)
         let mut sidebar = div()
             .flex()
             .flex_col()
-            .w(px(200.0))
+            .w(px(220.0))
             .h_full()
             .bg(Background::SURFACE)
             .border_r_1()
             .border_color(BorderColors::PRIMARY)
+            .px(px(Spacing::SM_MD))
             .py(px(Spacing::MD))
             .gap(px(Spacing::XXS));
 
         for tab in HelpTab::ALL {
             let is_active = self.model.active_tab == *tab;
+            let icon_path = tab_icon_path(*tab);
+            let icon_color = if is_active { Text::PRIMARY } else { Text::SECONDARY };
             sidebar = sidebar.child(
                 div()
                     .id(gpui::SharedString::from(format!(
@@ -231,29 +252,76 @@ impl Render for HelpView {
                     .flex()
                     .flex_row()
                     .items_center()
+                    .gap(px(10.0))
                     .w_full()
-                    .h(px(32.0))
-                    .px(px(Spacing::MD_LG))
+                    .px(px(Spacing::MD))
+                    .py(px(Spacing::SM))
                     .rounded(px(Radius::SM))
                     .cursor_pointer()
-                    .bg(if is_active {
-                        BorderColors::PRIMARY
-                    } else {
-                        Background::SURFACE
-                    })
+                    .bg(if is_active { TAB_ACTIVE_BG } else { Background::SURFACE })
+                    // Icon: 12px in 16px frame
                     .child(
                         div()
-                            .text_size(px(FontSize::SM))
+                            .w(px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                svg()
+                                    .path(icon_path)
+                                    .w(px(12.0))
+                                    .h(px(12.0))
+                                    .text_color(icon_color),
+                            ),
+                    )
+                    // Label: md size, medium weight when active
+                    .child(
+                        div()
+                            .text_size(px(FontSize::MD))
                             .text_color(if is_active { Text::PRIMARY } else { Text::SECONDARY })
+                            .font_weight(if is_active {
+                                gpui::FontWeight::MEDIUM
+                            } else {
+                                gpui::FontWeight::NORMAL
+                            })
                             .child(tab.label()),
-                    ),
+                    )
+                    .child(div().flex_1()),
             );
         }
 
-        let content = match active {
+        // Detail area: title header + pane content (matches Swift `detail` var)
+        let tab_title = active.label();
+        let pane_content = match active {
             HelpTab::Shortcuts => shortcuts_pane().into_any_element(),
             HelpTab::Mcp => mcp_pane(&self.model.mcp_endpoint()).into_any_element(),
         };
+
+        let detail = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .overflow_hidden()
+            // Tab title header
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .px(px(Spacing::XL_XXL))
+                    .pt(px(Spacing::XXL))
+                    .pb(px(Spacing::LG_XL))
+                    .child(
+                        div()
+                            .text_size(px(FontSize::TITLE_2))
+                            .font_weight(gpui::FontWeight::LIGHT)
+                            .text_color(Text::PRIMARY)
+                            .child(tab_title),
+                    )
+                    .child(div().flex_1()),
+            )
+            .child(pane_content);
 
         div()
             .id("fronda-help")
@@ -263,6 +331,6 @@ impl Render for HelpView {
             .size_full()
             .bg(Background::BASE)
             .child(sidebar)
-            .child(content)
+            .child(detail)
     }
 }

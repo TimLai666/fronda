@@ -5,10 +5,10 @@
 
 use crate::crop_overlay_view::CropOverlayView;
 use crate::preview_model::PlaybackState;
-use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Spacing, Text};
+use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Radius, Spacing, Text};
 use crate::transform_overlay_view::TransformOverlayView;
 use gpui::{
-    div, prelude::*, px, App, Context, Entity, FocusHandle, Focusable, IntoElement,
+    div, prelude::*, px, svg, App, Context, Entity, FocusHandle, Focusable, IntoElement,
     InteractiveElement, ParentElement, Render, Styled, Window,
 };
 
@@ -16,12 +16,29 @@ use gpui::{
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanvasOverlay {
     None,
-    /// Media file is offline (not found on disk).
     Offline,
-    /// AI generation in progress.
     Generating { progress_pct: u8 },
-    /// Generation or render failed.
     Failed { message: String },
+}
+
+/// A single open tab in the preview header — mirrors Swift PreviewTab.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreviewTabItem {
+    Timeline,
+    MediaAsset { name: String },
+}
+
+impl PreviewTabItem {
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::Timeline => "Timeline",
+            Self::MediaAsset { name } => name.as_str(),
+        }
+    }
+
+    pub fn is_closeable(&self) -> bool {
+        !matches!(self, Self::Timeline)
+    }
 }
 
 pub struct PreviewView {
@@ -29,6 +46,9 @@ pub struct PreviewView {
     pub show_transform_overlay: bool,
     pub show_crop_overlay: bool,
     pub canvas_overlay: CanvasOverlay,
+    /// Open tabs (Swift: editor.previewTabs). Timeline is always index 0.
+    pub preview_tabs: Vec<PreviewTabItem>,
+    pub active_tab_idx: usize,
     transform_overlay: Entity<TransformOverlayView>,
     crop_overlay: Entity<CropOverlayView>,
     focus_handle: FocusHandle,
@@ -41,9 +61,53 @@ impl PreviewView {
             show_transform_overlay: false,
             show_crop_overlay: false,
             canvas_overlay: CanvasOverlay::None,
+            preview_tabs: vec![PreviewTabItem::Timeline],
+            active_tab_idx: 0,
             transform_overlay: cx.new(|cx| TransformOverlayView::new(cx)),
             crop_overlay: cx.new(|cx| CropOverlayView::new(cx)),
             focus_handle: cx.focus_handle(),
+        }
+    }
+
+    /// Open a media asset tab (Swift: openMediaAssetTab). Selects it immediately.
+    pub fn open_media_tab(&mut self, name: String, cx: &mut Context<Self>) {
+        let tab = PreviewTabItem::MediaAsset { name };
+        if let Some(idx) = self.preview_tabs.iter().position(|t| t == &tab) {
+            self.active_tab_idx = idx;
+        } else {
+            self.preview_tabs.push(tab);
+            self.active_tab_idx = self.preview_tabs.len() - 1;
+        }
+        cx.notify();
+    }
+
+    pub fn close_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
+        if idx == 0 { return; } // Timeline is never closeable
+        self.preview_tabs.remove(idx);
+        if self.active_tab_idx >= self.preview_tabs.len() {
+            self.active_tab_idx = self.preview_tabs.len().saturating_sub(1);
+        }
+        cx.notify();
+    }
+
+    pub fn select_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
+        if idx < self.preview_tabs.len() {
+            self.active_tab_idx = idx;
+            cx.notify();
+        }
+    }
+
+    pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab_idx > 0 {
+            self.active_tab_idx -= 1;
+            cx.notify();
+        }
+    }
+
+    pub fn go_forward(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab_idx + 1 < self.preview_tabs.len() {
+            self.active_tab_idx += 1;
+            cx.notify();
         }
     }
 
@@ -79,7 +143,8 @@ impl Focusable for PreviewView {
     }
 }
 
-fn transport_btn(id: &str, glyph: &str, highlight: bool) -> gpui::Stateful<gpui::Div> {
+fn transport_btn_svg(id: &str, icon_path: &'static str, highlight: bool) -> gpui::Stateful<gpui::Div> {
+    let color = if highlight { Text::PRIMARY } else { Text::SECONDARY };
     div()
         .id(id.to_string())
         .w(px(32.0))
@@ -89,9 +154,25 @@ fn transport_btn(id: &str, glyph: &str, highlight: bool) -> gpui::Stateful<gpui:
         .justify_center()
         .cursor_pointer()
         .rounded(px(4.0))
-        .text_color(if highlight { Text::PRIMARY } else { Text::SECONDARY })
-        .text_size(px(FontSize::MD))
-        .child(glyph.to_string())
+        .child(svg().path(icon_path).w(px(14.0)).h(px(14.0)).text_color(color))
+}
+
+fn settings_badge(id: &str, label: &str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id.to_string())
+        .px(px(Spacing::XS))
+        .py(px(1.0))
+        .rounded(px(Radius::XS_SM))
+        .bg(Background::RAISED)
+        .border_1()
+        .border_color(BorderColors::SUBTLE)
+        .cursor_pointer()
+        .child(
+            div()
+                .text_color(Text::SECONDARY)
+                .text_size(px(FontSize::XS))
+                .child(label.to_string()),
+        )
 }
 
 impl Render for PreviewView {
@@ -103,6 +184,13 @@ impl Render for PreviewView {
         let show_transform = self.show_transform_overlay;
         let show_crop = self.show_crop_overlay;
         let canvas_overlay = self.canvas_overlay.clone();
+        let active_tab_idx = self.active_tab_idx;
+        let tab_count = self.preview_tabs.len();
+        let can_go_back = active_tab_idx > 0;
+        let can_go_forward = active_tab_idx + 1 < tab_count;
+        let tabs: Vec<(usize, String, bool)> = self.preview_tabs.iter().enumerate()
+            .map(|(i, t)| (i, t.display_name().to_string(), t.is_closeable()))
+            .collect();
 
         let transform_entity = self.transform_overlay.clone();
         let crop_entity = self.crop_overlay.clone();
@@ -113,7 +201,7 @@ impl Render for PreviewView {
             .flex_col()
             .size_full()
             .bg(Background::BASE)
-            // Header tab bar
+            // Header tab bar (matches Swift PreviewContainerView.tabBar)
             .child(
                 div()
                     .id("preview-header")
@@ -122,11 +210,12 @@ impl Render for PreviewView {
                     .items_center()
                     .w_full()
                     .h(px(Layout::PANEL_HEADER_HEIGHT))
-                    .px(px(Spacing::MD))
+                    .px(px(Spacing::SM))
                     .gap(px(Spacing::XS))
                     .bg(Background::RAISED)
                     .border_b_1()
                     .border_color(BorderColors::PRIMARY)
+                    // ← back nav button
                     .child(
                         div()
                             .id("preview-back")
@@ -136,11 +225,14 @@ impl Render for PreviewView {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_color(Text::MUTED)
+                            .text_color(if can_go_back { Text::SECONDARY } else { Text::MUTED })
                             .text_size(px(FontSize::SM))
-                            .on_click(cx.listener(|_, _, _, _| {}))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.go_back(cx);
+                            }))
                             .child("<"),
                     )
+                    // → forward nav button
                     .child(
                         div()
                             .id("preview-fwd")
@@ -150,20 +242,76 @@ impl Render for PreviewView {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_color(Text::MUTED)
+                            .text_color(if can_go_forward { Text::SECONDARY } else { Text::MUTED })
                             .text_size(px(FontSize::SM))
-                            .on_click(cx.listener(|_, _, _, _| {}))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.go_forward(cx);
+                            }))
                             .child(">"),
                     )
-                    .child(
+                    // Tab list (scrollable; overflow handled by ellipsis button at right end)
+                    .children(tabs.into_iter().map(|(i, name, closeable)| {
+                        let is_active = i == active_tab_idx;
                         div()
+                            .id(format!("preview-tab-{i}"))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Spacing::XXS))
                             .px(px(Spacing::XS))
                             .pb(px(2.0))
-                            .border_b(px(1.5))
-                            .border_color(Text::PRIMARY)
-                            .text_color(Text::PRIMARY)
+                            .border_b(px(if is_active { 1.5 } else { 0.0 }))
+                            .border_color(Accent::PRIMARY)
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.select_tab(i, cx);
+                            }))
+                            .child(
+                                div()
+                                    .text_color(if is_active { Text::PRIMARY } else { Text::SECONDARY })
+                                    .text_size(px(FontSize::SM))
+                                    .font_weight(if is_active {
+                                        gpui::FontWeight::SEMIBOLD
+                                    } else {
+                                        gpui::FontWeight::MEDIUM
+                                    })
+                                    .child(name),
+                            )
+                            .when(closeable, |el| {
+                                el.child(
+                                    div()
+                                        .id(format!("preview-tab-close-{i}"))
+                                        .w(px(12.0))
+                                        .h(px(12.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(Text::MUTED)
+                                        .text_size(px(FontSize::XS))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.close_tab(i, cx);
+                                        }))
+                                        .child("×"),
+                                )
+                            })
+                    }))
+                    // Spacer pushes overflow button to the right end
+                    .child(div().flex_1())
+                    // Overflow ellipsis button (Swift: tabBarOverflowButton — shows hidden tabs)
+                    .child(
+                        div()
+                            .id("preview-tabs-overflow")
+                            .w(px(22.0))
+                            .h(px(22.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(Radius::XS_SM))
+                            .cursor_pointer()
+                            .text_color(Text::MUTED)
                             .text_size(px(FontSize::SM))
-                            .child("Timeline"),
+                            .child("⋯"),
                     ),
             )
             // Canvas area (relative so overlays can stack absolutely)
@@ -293,7 +441,7 @@ impl Render for PreviewView {
                             .left_0()
                             .h_full()
                             .w(px((fraction as f32) * Layout::PREVIEW_MIN_WIDTH))
-                            .bg(BorderColors::DIVIDER),
+                            .bg(Accent::PRIMARY),
                     )
                     .child(
                         div()
@@ -352,31 +500,35 @@ impl Render for PreviewView {
                             .items_center()
                             .gap(px(Spacing::XS))
                             .child(
-                                transport_btn("btn-go-start", "|<", false)
+                                transport_btn_svg("btn-go-start", "icons/skip_back.svg", false)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.go_to_start(cx);
                                     })),
                             )
                             .child(
-                                transport_btn("btn-step-back", "<<", false)
+                                transport_btn_svg("btn-step-back", "icons/step_back.svg", false)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.step_backward(cx);
                                     })),
                             )
                             .child(
-                                transport_btn("btn-play", if is_playing { "||" } else { ">" }, true)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.toggle_play(cx);
-                                    })),
+                                transport_btn_svg(
+                                    "btn-play",
+                                    if is_playing { "icons/pause.svg" } else { "icons/play.svg" },
+                                    true,
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_play(cx);
+                                })),
                             )
                             .child(
-                                transport_btn("btn-step-fwd", ">>", false)
+                                transport_btn_svg("btn-step-fwd", "icons/step_forward.svg", false)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.step_forward(cx);
                                     })),
                             )
                             .child(
-                                transport_btn("btn-go-end", ">|", false)
+                                transport_btn_svg("btn-go-end", "icons/skip_forward.svg", false)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.go_to_end(cx);
                                     })),
@@ -389,18 +541,15 @@ impl Render for PreviewView {
                             .flex_row()
                             .justify_end()
                             .items_center()
-                            .gap(px(Spacing::SM))
+                            .gap(px(Spacing::XS))
+                            // 4 tappable badge stubs matching Swift: aspectRatio, fps, quality, viewFit
+                            .child(settings_badge("badge-aspect", "16:9"))
+                            .child(settings_badge("badge-fps", "24 fps"))
+                            .child(settings_badge("badge-quality", "HD"))
+                            .child(settings_badge("badge-fit", "Fit"))
+                            // Capture frame button (Swift: captureFrameButton → camera SF symbol)
                             .child(
-                                div()
-                                    .text_color(Text::MUTED)
-                                    .text_size(px(FontSize::XS))
-                                    .child("16:9"),
-                            )
-                            .child(
-                                div()
-                                    .text_color(Text::MUTED)
-                                    .text_size(px(FontSize::XS))
-                                    .child("Fit"),
+                                transport_btn_svg("btn-capture-frame", "icons/camera.svg", false),
                             ),
                     ),
             )

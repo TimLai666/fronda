@@ -428,11 +428,11 @@ impl Render for MediaPanelView {
                             .child(media_toolbar())
                             // Library grid (demo tiles; real assets would populate this)
                             .child(media_demo_grid())
-                            // GenerationView anchored to BOTTOM (Swift: .frame(alignment:.bottom))
+                            // GenerationView anchored to BOTTOM with padding (Swift: .padding(.horizontal, sm).padding(.bottom, sm))
                             .child(
                                 div()
-                                    .border_t_1()
-                                    .border_color(BorderColors::SUBTLE)
+                                    .px(px(crate::theme::Spacing::SM))
+                                    .pb(px(crate::theme::Spacing::SM))
                                     .child(generation_entity),
                             )
                             .into_any_element(),

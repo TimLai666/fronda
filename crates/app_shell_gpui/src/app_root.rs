@@ -20,7 +20,7 @@ use crate::toolbar_view::ToolbarView;
 use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
 use gpui::{
-    div, prelude::*, px, size, App, Bounds, Context, Entity, FocusHandle, Focusable,
+    div, prelude::*, px, size, svg, App, Bounds, Context, Entity, FocusHandle, Focusable,
     InteractiveElement, KeyDownEvent, Window, WindowBounds, WindowOptions,
 };
 
@@ -38,6 +38,8 @@ pub struct AppRoot {
     active_screen: ActiveScreen,
     pane_layout: PaneLayout,
     home: HomeView,
+    samples_expanded: bool,
+    welcome_dismissed: bool,
     /// Editor panel entities — created lazily on first open_editor() call.
     titlebar_view: Option<Entity<TitleBarView>>,
     chat_view: Option<Entity<ChatView>>,
@@ -57,6 +59,8 @@ impl AppRoot {
             active_screen: ActiveScreen::Home,
             pane_layout: PaneLayout::new(),
             home: HomeView::new(handle),
+            samples_expanded: true,
+            welcome_dismissed: false,
             titlebar_view: None,
             chat_view: None,
             toolbar_view: None,
@@ -188,7 +192,7 @@ impl AppRoot {
     }
 
     /// A sidebar navigation button row.
-    fn sidebar_row(id: &str, icon: &str, label: &str) -> gpui::Stateful<gpui::Div> {
+    fn sidebar_row_svg(id: &str, icon_path: &'static str, label: &str) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id.to_string())
             .flex()
@@ -202,9 +206,11 @@ impl AppRoot {
             .cursor_pointer()
             .child(
                 div()
-                    .text_color(Text::TERTIARY)
-                    .text_size(px(FontSize::MD))
-                    .child(icon.to_string()),
+                    .w(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(svg().path(icon_path).w(px(14.0)).h(px(14.0)).text_color(Text::TERTIARY)),
             )
             .child(
                 div()
@@ -216,18 +222,67 @@ impl AppRoot {
 
     /// Render the Home screen: sidebar (220px) + content area.
     fn render_home(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Sample project card data
-        let sample_projects: &[(&str, &str)] = &[
-            ("My Film", "#3a7bd5"),
-            ("Commercial", "#6c63ff"),
-            ("Documentary", "#43b89c"),
+        let samples_expanded = self.samples_expanded;
+
+        // Sample project card data (Swift: SampleProjectsStrip items)
+        let sample_cards: &[(&str, f32)] = &[
+            ("Short Film",   0.60),
+            ("Commercial",   0.75),
+            ("Documentary",  0.43),
         ];
+
+        // Project card helper: thumbnail top + name strip bottom
+        let project_card = |id: &'static str, name: &'static str, hue: f32, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .flex()
+                .flex_col()
+                .w(px(HomeLayout::CARD_WIDTH as f32))
+                .h(px(HomeLayout::CARD_HEIGHT as f32))
+                .bg(Background::RAISED)
+                .rounded(px(Radius::MD_LG))
+                .border_1()
+                .border_color(BorderColors::SUBTLE)
+                .overflow_hidden()
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| { this.open_editor(cx); }))
+                .child(
+                    div()
+                        .flex_1()
+                        .bg(gpui::Hsla { h: hue, s: 0.35, l: 0.14, a: 1.0 })
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(gpui::Hsla { h: hue, s: 0.55, l: 0.55, a: 1.0 })
+                        .text_size(px(FontSize::DISPLAY))
+                        .child("▶"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .w_full()
+                        .h(px(24.0))
+                        .px(px(Spacing::SM_MD))
+                        .bg(Background::RAISED)
+                        .child(
+                            div()
+                                .text_size(px(FontSize::SM))
+                                .text_color(Text::PRIMARY)
+                                .child(name),
+                        ),
+                )
+        };
+
+        let welcome_dismissed = self.welcome_dismissed;
 
         div()
             .id("fronda-home")
             .track_focus(&self.home.focus_handle.clone())
             .flex()
             .flex_row()
+            .relative()
             .size_full()
             .bg(Background::SURFACE)
             // ── Left sidebar (220px) ──
@@ -244,7 +299,6 @@ impl AppRoot {
                     .px(px(Spacing::SM_MD))
                     .py(px(Spacing::MD))
                     .gap(px(Spacing::XXS))
-                    // App identity
                     .child(
                         div()
                             .flex()
@@ -260,23 +314,20 @@ impl AppRoot {
                                     .child("Fronda"),
                             ),
                     )
-                    // Nav items
                     .child(
-                        Self::sidebar_row("sidebar-new-project", "⊕", "New Project")
+                        Self::sidebar_row_svg("sidebar-new-project", "icons/plus.svg", "New Project")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_editor(cx);
                             })),
                     )
                     .child(
-                        Self::sidebar_row("sidebar-open-project", "▲", "Open Project")
+                        Self::sidebar_row_svg("sidebar-open-project", "icons/folder.svg", "Open Project")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_editor(cx);
                             })),
                     )
-                    // Spacer
                     .child(div().flex_1())
-                    // Bottom: Settings
-                    .child(Self::sidebar_row("sidebar-settings", "⚙", "Settings")),
+                    .child(Self::sidebar_row_svg("sidebar-settings", "icons/gear.svg", "Settings")),
             )
             // ── Content area ──
             .child(
@@ -287,37 +338,126 @@ impl AppRoot {
                     .flex_1()
                     .h_full()
                     .bg(Background::SURFACE)
-                    // Greeting
+                    // Header: welcome title
                     .child(
                         div()
                             .flex()
-                            .flex_col()
+                            .flex_row()
+                            .items_center()
                             .px(px(HomeLayout::CARD_GAP as f32 * 2.0))
                             .pt(px(HomeLayout::HEADING_TOP as f32))
-                            .pb(px(Spacing::XL))
+                            .pb(px(Spacing::XXL))
                             .child(
                                 div()
                                     .text_size(px(FontSize::TITLE_2))
                                     .text_color(Text::PRIMARY)
                                     .child("Welcome to Fronda"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(FontSize::SM_MD))
-                                    .text_color(Text::TERTIARY)
-                                    .child("Palmier Pro compatibility baseline"),
                             ),
                     )
-                    // "My Projects" label
+                    // Sample Projects strip (collapsible, matches Swift SampleProjectsStrip)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(Spacing::SM))
+                            .px(px(HomeLayout::CARD_GAP as f32 * 2.0))
+                            .pb(px(Spacing::XXL))
+                            // Section header
+                            .child(
+                                div()
+                                    .id("samples-header")
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(Spacing::XS))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.samples_expanded = !this.samples_expanded;
+                                        cx.notify();
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_size(px(FontSize::SM_MD))
+                                            .text_color(Text::SECONDARY)
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Sample Projects"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(FontSize::XS))
+                                            .text_color(Text::MUTED)
+                                            .child(if samples_expanded { "▾" } else { "▸" }),
+                                    ),
+                            )
+                            // Sample cards strip
+                            .when(samples_expanded, |el| {
+                                el.child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap(px(HomeLayout::CARD_GAP as f32))
+                                        .children(sample_cards.iter().enumerate().map(|(i, (name, hue))| {
+                                            let name: &'static str = match i {
+                                                0 => "Short Film",
+                                                1 => "Commercial",
+                                                _ => "Documentary",
+                                            };
+                                            let h = *hue;
+                                            div()
+                                                .id(format!("sample-card-{i}"))
+                                                .flex()
+                                                .flex_col()
+                                                .w(px(HomeLayout::CARD_WIDTH as f32))
+                                                .h(px(HomeLayout::CARD_HEIGHT as f32))
+                                                .bg(Background::RAISED)
+                                                .rounded(px(Radius::MD_LG))
+                                                .border_1()
+                                                .border_color(BorderColors::SUBTLE)
+                                                .overflow_hidden()
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(|this, _, _, cx| { this.open_editor(cx); }))
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .bg(gpui::Hsla { h, s: 0.35, l: 0.14, a: 1.0 })
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .text_color(gpui::Hsla { h, s: 0.55, l: 0.55, a: 1.0 })
+                                                        .text_size(px(FontSize::DISPLAY))
+                                                        .child("▶"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .flex_row()
+                                                        .items_center()
+                                                        .w_full()
+                                                        .h(px(24.0))
+                                                        .px(px(Spacing::SM_MD))
+                                                        .bg(Background::RAISED)
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(FontSize::SM))
+                                                                .text_color(Text::PRIMARY)
+                                                                .child(name),
+                                                        ),
+                                                )
+                                        }))
+                                )
+                            }),
+                    )
+                    // "My Projects" section label (semibold, matches Swift)
                     .child(
                         div()
                             .px(px(HomeLayout::CARD_GAP as f32 * 2.0))
                             .pb(px(Spacing::SM))
                             .text_size(px(FontSize::SM_MD))
-                            .text_color(Text::TERTIARY)
+                            .text_color(Text::SECONDARY)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child("My Projects"),
                     )
-                    // Project grid
+                    // Project grid: New Project card only (user's real projects go here)
                     .child(
                         div()
                             .id("project-grid")
@@ -326,41 +466,10 @@ impl AppRoot {
                             .flex_wrap()
                             .px(px(HomeLayout::CARD_GAP as f32 * 2.0))
                             .gap(px(HomeLayout::CARD_GAP as f32))
-                            // New project card
+                            // New Project card — thumbnail area + name strip (same structure as project_card)
                             .child(
                                 div()
                                     .id("card-new-project")
-                                    .flex()
-                                    .flex_col()
-                                    .items_center()
-                                    .justify_center()
-                                    .w(px(HomeLayout::CARD_WIDTH as f32))
-                                    .h(px(HomeLayout::CARD_HEIGHT as f32))
-                                    .bg(Background::RAISED)
-                                    .rounded(px(Radius::MD_LG))
-                                    .border_1()
-                                    .border_color(BorderColors::SUBTLE)
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.open_editor(cx);
-                                    }))
-                                    .child(
-                                        div()
-                                            .text_size(px(FontSize::TITLE_2))
-                                            .text_color(Text::TERTIARY)
-                                            .child("+"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(FontSize::SM))
-                                            .text_color(Text::TERTIARY)
-                                            .child("New Project"),
-                                    ),
-                            )
-                            // Sample project cards
-                            .children(sample_projects.iter().enumerate().map(|(i, (name, _color))| {
-                                div()
-                                    .id(format!("card-project-{}", i))
                                     .flex()
                                     .flex_col()
                                     .w(px(HomeLayout::CARD_WIDTH as f32))
@@ -374,19 +483,23 @@ impl AppRoot {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.open_editor(cx);
                                     }))
-                                    // Thumbnail area (top 80%)
+                                    // Thumbnail area: dashed-style placeholder with + icon
                                     .child(
                                         div()
                                             .flex_1()
-                                            .bg(Background::PROMINENT)
                                             .flex()
                                             .items_center()
                                             .justify_center()
-                                            .text_color(Text::MUTED)
-                                            .text_size(px(FontSize::DISPLAY))
-                                            .child("▶"),
+                                            .border_1()
+                                            .border_color(BorderColors::SUBTLE)
+                                            .child(
+                                                div()
+                                                    .text_size(px(FontSize::TITLE_2))
+                                                    .text_color(Text::MUTED)
+                                                    .child("+"),
+                                            ),
                                     )
-                                    // Name strip (bottom)
+                                    // Name strip
                                     .child(
                                         div()
                                             .flex()
@@ -399,13 +512,76 @@ impl AppRoot {
                                             .child(
                                                 div()
                                                     .text_size(px(FontSize::SM))
-                                                    .text_color(Text::PRIMARY)
-                                                    .child(name.to_string()),
+                                                    .text_color(Text::TERTIARY)
+                                                    .child("New Project"),
                                             ),
-                                    )
-                            })),
+                                    ),
+                            )
+                            // (user projects would populate here)
+                            .child(project_card("proj-0", "My Film",   0.60, cx))
                     ),
             )
+            // WelcomeOverlay — shown on first launch until dismissed (Swift: WelcomeOverlayView)
+            .when(!welcome_dismissed, |el| {
+                el.child(
+                    div()
+                        .id("welcome-overlay")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.60 })
+                        .child(
+                            div()
+                                .id("welcome-card")
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(Spacing::MD))
+                                .px(px(48.0))
+                                .py(px(40.0))
+                                .rounded(px(Radius::LG))
+                                .bg(Background::SURFACE)
+                                .border_1()
+                                .border_color(BorderColors::SUBTLE)
+                                .child(
+                                    div()
+                                        .text_size(px(FontSize::TITLE_2))
+                                        .text_color(Text::PRIMARY)
+                                        .child("Welcome to Fronda"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(FontSize::SM))
+                                        .text_color(Text::SECONDARY)
+                                        .child("The cross-platform video editor."),
+                                )
+                                .child(
+                                    div()
+                                        .id("welcome-get-started")
+                                        .px(px(Spacing::XL))
+                                        .py(px(Spacing::SM))
+                                        .rounded(px(Radius::SM))
+                                        .bg(gpui::Hsla { h: 0.56, s: 1.0, l: 0.55, a: 1.0 })
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.welcome_dismissed = true;
+                                            cx.notify();
+                                        }))
+                                        .child(
+                                            div()
+                                                .text_size(px(FontSize::SM))
+                                                .text_color(Text::PRIMARY)
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child("Get Started"),
+                                        ),
+                                ),
+                        ),
+                )
+            })
     }
 }
 

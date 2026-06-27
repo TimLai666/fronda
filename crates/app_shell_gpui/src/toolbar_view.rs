@@ -6,7 +6,7 @@
 use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text};
 use crate::toolbar_model::{ToolMode, ToolbarState};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, Hsla, IntoElement,
+    div, prelude::*, px, svg, App, Context, FocusHandle, Focusable, Hsla, IntoElement,
     InteractiveElement, ParentElement, Render, Styled, Window,
 };
 
@@ -55,6 +55,29 @@ const TOOL_ACTIVE_BG: Hsla = Hsla {
 };
 
 /// 24×24 toolbar button with hover-highlight support.
+/// `icon_path` is a path like "icons/undo.svg" served by FrondaAssets.
+fn tool_btn_svg(id: &str, icon_path: &'static str, active: bool, enabled: bool) -> gpui::Stateful<gpui::Div> {
+    let color = if !enabled {
+        Text::MUTED
+    } else if active {
+        Text::PRIMARY
+    } else {
+        Text::SECONDARY
+    };
+    div()
+        .id(id.to_string())
+        .w(px(24.0))
+        .h(px(24.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(Radius::XS_SM))
+        .cursor_pointer()
+        .bg(if active { TOOL_ACTIVE_BG } else { Background::RAISED })
+        .child(svg().path(icon_path).w(px(14.0)).h(px(14.0)).text_color(color))
+}
+
+/// 24×24 toolbar button with a text glyph (fallback when no SVG is available).
 fn tool_btn(id: &str, glyph: &str, active: bool, enabled: bool) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id.to_string())
@@ -116,11 +139,11 @@ impl Render for ToolbarView {
                     .flex_row()
                     .gap(px(Spacing::SM))
                     .child(
-                        tool_btn("btn-undo", "↩", false, can_undo)
+                        tool_btn_svg("btn-undo", "icons/undo.svg", false, can_undo)
                             .on_click(cx.listener(|_, _, _, _| {})),
                     )
                     .child(
-                        tool_btn("btn-redo", "↪", false, can_redo)
+                        tool_btn_svg("btn-redo", "icons/redo.svg", false, can_redo)
                             .on_click(cx.listener(|_, _, _, _| {})),
                     ),
             )
@@ -133,13 +156,13 @@ impl Render for ToolbarView {
                     .flex_row()
                     .gap(px(Spacing::SM))
                     .child(
-                        tool_btn("btn-pointer", "▷", pointer_active, true)
+                        tool_btn_svg("btn-pointer", "icons/cursor.svg", pointer_active, true)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.set_tool_mode(ToolMode::Pointer, cx);
                             })),
                     )
                     .child(
-                        tool_btn("btn-razor", "✂", razor_active, true)
+                        tool_btn_svg("btn-razor", "icons/razor.svg", razor_active, true)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.set_tool_mode(ToolMode::Razor, cx);
                             })),
@@ -153,9 +176,12 @@ impl Render for ToolbarView {
                     .flex()
                     .flex_row()
                     .gap(px(Spacing::SM))
-                    .child(tool_btn("btn-split", "⊞", false, true))
-                    .child(tool_btn("btn-trim-start", "[", false, true))
-                    .child(tool_btn("btn-trim-end", "]", false, true)),
+                    .child(tool_btn_svg("btn-split", "icons/split.svg", false, true)
+                        .on_click(cx.listener(|_, _, _, _| {})))
+                    .child(tool_btn("btn-trim-start", "[", false, true)
+                        .on_click(cx.listener(|_, _, _, _| {})))
+                    .child(tool_btn("btn-trim-end", "]", false, true)
+                        .on_click(cx.listener(|_, _, _, _| {}))),
             )
             // ── Divider ──
             .child(toolbar_sep())
@@ -172,6 +198,8 @@ impl Render for ToolbarView {
                     .cursor_pointer()
                     .text_color(Text::SECONDARY)
                     .text_size(px(FontSize::MD_LG))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .on_click(cx.listener(|_, _, _, _| {}))
                     .child("T"),
             )
             // ── Spacer ──
