@@ -42,19 +42,18 @@ impl Focusable for MediaPanelView {
 }
 
 /// Tab button: 26px square (Swift: IconSize.lg = 26).
-///
-/// Active bg = white@10% (Opacity::SOFT), matching Swift HoverHighlight(isActive: true).
-/// No left-edge capsule — Swift uses rounded-rect fill only.
+/// Active: white@10% bg + 2.5px left-edge capsule in BorderColors::PRIMARY
+/// (Swift: HoverHighlight(isActive) + Capsule overlay on leading edge).
 fn tab_btn(id: &str, label: &str, is_active: bool) -> gpui::Stateful<gpui::Div> {
     let btn_size = IconSize::LG; // 26px
     let bg = if is_active {
-        // white@10% matches Swift Opacity.soft (isActive, !isHovered)
         gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.10 }
     } else {
-        gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 } // clear
+        gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 }
     };
     div()
         .id(id.to_string())
+        .relative()
         .w(px(btn_size))
         .h(px(btn_size))
         .flex()
@@ -66,6 +65,19 @@ fn tab_btn(id: &str, label: &str, is_active: bool) -> gpui::Stateful<gpui::Div> 
         .text_color(if is_active { Text::PRIMARY } else { Text::TERTIARY })
         .text_size(px(FontSize::SM_MD))
         .child(label.to_string())
+        // Left-edge accent capsule (Swift: Capsule overlay at topLeading)
+        .when(is_active, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(5.0))
+                    .w(px(2.5))
+                    .h(px(16.0))
+                    .rounded_full()
+                    .bg(BorderColors::PRIMARY),
+            )
+        })
 }
 
 /// Media library empty state — shown when no assets exist.

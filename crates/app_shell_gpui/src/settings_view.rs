@@ -871,15 +871,13 @@ impl Render for SettingsView {
             div().into_any_element()
         };
 
-        // Sidebar (220px, matching Swift)
+        // Sidebar (220px, matching Swift — no explicit border_r, bg contrast creates separation)
         let mut sidebar = div()
             .flex()
             .flex_col()
             .w(px(220.0))
             .h_full()
             .bg(Background::SURFACE)
-            .border_r_1()
-            .border_color(BorderColors::PRIMARY)
             .child(identity_strip)
             .py(px(Spacing::MD));
 
@@ -957,7 +955,8 @@ impl Render for SettingsView {
             .child(
                 div()
                     .text_color(Text::PRIMARY)
-                    .text_size(px(FontSize::XL))
+                    .text_size(px(FontSize::TITLE_2))
+                    .font_weight(gpui::FontWeight::THIN)
                     .child(active_tab.label()),
             )
             .child(pane_content);

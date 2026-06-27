@@ -226,15 +226,13 @@ impl Render for HelpView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.model.active_tab;
 
-        // Sidebar: 220px wide, matching Swift frame(width: 220)
+        // Sidebar: 220px wide, matching Swift frame(width: 220) — no explicit border_r
         let mut sidebar = div()
             .flex()
             .flex_col()
             .w(px(220.0))
             .h_full()
             .bg(Background::SURFACE)
-            .border_r_1()
-            .border_color(BorderColors::PRIMARY)
             .px(px(Spacing::SM_MD))
             .py(px(Spacing::MD))
             .gap(px(Spacing::XXS));

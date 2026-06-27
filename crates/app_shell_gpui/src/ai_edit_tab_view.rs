@@ -19,6 +19,8 @@ pub struct AiEditTabState {
     pub use_trimmed_portion: bool,
     pub place_audio_on_timeline: bool,
     pub is_video: bool,
+    /// GEN-5 analog: whether the Upscale model picker dropdown is open.
+    pub show_upscale_picker: bool,
 }
 
 impl Default for AiEditTabState {
@@ -30,9 +32,16 @@ impl Default for AiEditTabState {
             use_trimmed_portion: true,
             place_audio_on_timeline: true,
             is_video: true,
+            show_upscale_picker: false,
         }
     }
 }
+
+const UPSCALE_MODELS: &[(&str, &str)] = &[
+    ("Topaz Video AI", "2× / 4×"),
+    ("Frame Interpolation", "60 fps"),
+    ("Magnific", "4×"),
+];
 
 pub struct AiEditTabView {
     pub state: AiEditTabState,
@@ -180,6 +189,7 @@ impl Render for AiEditTabView {
         let trimmed = self.state.use_trimmed_portion;
         let place_audio = self.state.place_audio_on_timeline;
         let is_video = self.state.is_video;
+        let show_upscale_picker = self.state.show_upscale_picker;
 
         div()
             .track_focus(&self.focus_handle.clone())
@@ -219,7 +229,73 @@ impl Render for AiEditTabView {
                             .child(section_header_collapsible("AI Enhance", enhance_exp)),
                     )
                     .when(enhance_exp, |el| {
-                        el.child(action_row("✦", "Upscale", "Enhance resolution with AI", "Upscale", true))
+                        // Upscale row — trigger button opens model picker dropdown (Swift: Menu)
+                        let upscale_trigger = div()
+                            .id("upscale-trigger")
+                            .px(px(Spacing::SM))
+                            .py(px(Spacing::XXS))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(BorderColors::PRIMARY)
+                            .text_color(Text::SECONDARY)
+                            .text_size(px(FontSize::XS))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.show_upscale_picker = !this.state.show_upscale_picker;
+                                cx.notify();
+                            }))
+                            .child("Upscale ⌄");
+                        let upscale_row = div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(0.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_start()
+                                    .gap(px(Spacing::SM))
+                                    .w_full()
+                                    .child(div().w(px(20.0)).pt(px(2.0)).text_color(Text::SECONDARY).text_size(px(FontSize::MD)).child("✦"))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .gap(px(Spacing::XXS))
+                                            .child(div().text_color(Text::PRIMARY).text_size(px(FontSize::SM)).child("Upscale"))
+                                            .child(div().text_color(Text::TERTIARY).text_size(px(FontSize::XS)).child("Enhance resolution with AI")),
+                                    )
+                                    .child(upscale_trigger),
+                            )
+                            .when(show_upscale_picker, |el| {
+                                let mut dropdown = div()
+                                    .ml(px(28.0))
+                                    .mt(px(Spacing::XXS))
+                                    .rounded(px(crate::theme::Radius::SM))
+                                    .border_1()
+                                    .border_color(BorderColors::SUBTLE)
+                                    .bg(crate::theme::Background::RAISED)
+                                    .overflow_hidden()
+                                    .flex()
+                                    .flex_col();
+                                for (model, detail) in UPSCALE_MODELS {
+                                    dropdown = dropdown.child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(px(Spacing::SM))
+                                            .px(px(Spacing::SM_MD))
+                                            .py(px(Spacing::XS))
+                                            .cursor_pointer()
+                                            .child(div().flex_1().text_color(Text::PRIMARY).text_size(px(FontSize::SM)).child(model.to_string()))
+                                            .child(div().text_color(Text::MUTED).text_size(px(FontSize::XXS)).child(detail.to_string())),
+                                    );
+                                }
+                                el.child(dropdown)
+                            });
+                        el.child(upscale_row)
                           .child(action_row("★", "Edit", "Transform with a prompt or motion reference", "Edit", true))
                           .child(action_row("↺", "Rerun", "Regenerate with the same parameters", "Rerun", true))
                           .when(is_video, |el2| {
