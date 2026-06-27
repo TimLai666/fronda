@@ -18,6 +18,34 @@ impl TrackKind {
     }
 }
 
+/// A single clip on a track — positional model for rendering.
+#[derive(Debug, Clone)]
+pub struct ClipSlot {
+    pub id: String,
+    pub track_id: String,
+    pub start_frame: i64,
+    pub duration_frames: i64,
+    pub label: String,
+}
+
+impl ClipSlot {
+    pub fn new(
+        id: impl Into<String>,
+        track_id: impl Into<String>,
+        start_frame: i64,
+        duration_frames: i64,
+        label: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            track_id: track_id.into(),
+            start_frame,
+            duration_frames,
+            label: label.into(),
+        }
+    }
+}
+
 /// A single timeline track row (header model).
 #[derive(Debug, Clone)]
 pub struct TrackRow {
@@ -68,6 +96,7 @@ pub const ZOOM_MAX: f32 = 40.0;
 #[derive(Debug, Clone)]
 pub struct TimelineState {
     pub tracks: Vec<TrackRow>,
+    pub clips: Vec<ClipSlot>,
     /// Current zoom (pixels per frame). UIX-007.
     pub zoom_scale: f32,
     /// Horizontal scroll offset in pixels.
@@ -86,11 +115,12 @@ impl TimelineState {
     pub fn new() -> Self {
         Self {
             tracks: Vec::new(),
+            clips: Vec::new(),
             zoom_scale: DEFAULT_PIXELS_PER_FRAME,
             scroll_x: 0.0,
             scroll_y: 0.0,
-            playhead_frame: 0,
-            total_frames: 0,
+            playhead_frame: 30,
+            total_frames: 600,
             fps: 30,
         }
     }
@@ -99,6 +129,13 @@ impl TimelineState {
         self.tracks = vec![
             TrackRow::new("video-1", TrackKind::Video, "Video 1"),
             TrackRow::new("audio-1", TrackKind::Audio, "Audio 1"),
+        ];
+        self.clips = vec![
+            ClipSlot::new("clip-1", "video-1", 0, 150, "Scene 01"),
+            ClipSlot::new("clip-2", "video-1", 160, 120, "Interview"),
+            ClipSlot::new("clip-3", "video-1", 290, 90, "B-Roll"),
+            ClipSlot::new("clip-4", "audio-1", 0, 270, "Music Track"),
+            ClipSlot::new("clip-5", "audio-1", 280, 200, "Voice Over"),
         ];
         self
     }

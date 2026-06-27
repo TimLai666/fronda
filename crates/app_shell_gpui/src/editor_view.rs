@@ -5,32 +5,6 @@ use crate::theme::{Background, BorderColors, Layout, Text};
 use crate::toolbar_view::ToolbarView;
 use gpui::{div, px, Entity, IntoElement, ParentElement, Styled};
 
-/// Debug background for panes without a real view yet.
-fn placeholder_bg(id: PaneId) -> gpui::Hsla {
-    match id {
-        PaneId::Media => gpui::Hsla {
-            h: 210.0_f32 / 360.0_f32,
-            s: 0.1,
-            l: 0.15,
-            a: 1.0,
-        },
-        PaneId::Preview => Background::BASE,
-        PaneId::Inspector => gpui::Hsla {
-            h: 210.0_f32 / 360.0_f32,
-            s: 0.1,
-            l: 0.15,
-            a: 1.0,
-        },
-        PaneId::Timeline => gpui::Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.12,
-            a: 1.0,
-        },
-        PaneId::Agent => Background::SURFACE,
-    }
-}
-
 /// Human-readable label for each pane.
 fn pane_label(id: PaneId) -> &'static str {
     match id {
@@ -45,12 +19,17 @@ fn pane_label(id: PaneId) -> &'static str {
 /// A placeholder pane div — background color + centered label.
 fn pane_div(id: PaneId) -> impl IntoElement {
     let label = pane_label(id);
+    let bg = match id {
+        PaneId::Preview => Background::BASE,
+        PaneId::Timeline => Background::SURFACE,
+        _ => Background::SURFACE,
+    };
     div()
         .id(format!("pane-{}", label.to_lowercase()))
         .flex()
         .items_center()
         .justify_center()
-        .bg(placeholder_bg(id))
+        .bg(bg)
         .w_full()
         .h_full()
         .text_color(Text::MUTED)
@@ -117,14 +96,29 @@ fn media_panel_content(contents: &PaneContents) -> gpui::AnyElement {
 
 // ── Layout builders ──
 
-/// Default preset: media | preview + toolbar + timeline + agent | inspector.
+/// Default preset: [Agent left?] | Media | Preview + Toolbar + Timeline | Inspector
+///
+/// Agent panel is a LEFT column sibling to the rest (matches Swift layout).
 fn build_default(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement {
     let mut root = div().id("layout-default").flex().flex_row().size_full();
 
+    // Agent panel: LEFT column (240px min, Swift: AGENT_PANEL_MIN=240)
+    if layout.is_visible(PaneId::Agent) {
+        root = root.child(
+            div()
+                .w(px(Layout::AGENT_PANEL_MIN))
+                .h_full()
+                .border_r_1()
+                .border_color(BorderColors::PRIMARY)
+                .child(agent_content(contents)),
+        );
+    }
+
+    // Media panel: 500px default (Layout::MEDIA_PANEL_DEFAULT)
     if layout.is_visible(PaneId::Media) {
         root = root.child(
             div()
-                .w(px(250.0_f32))
+                .w(px(Layout::MEDIA_PANEL_DEFAULT))
                 .h_full()
                 .border_r_1()
                 .border_color(BorderColors::PRIMARY)
@@ -132,6 +126,7 @@ fn build_default(layout: &PaneLayout, contents: &PaneContents) -> impl IntoEleme
         );
     }
 
+    // Center column: Preview + Toolbar + Timeline
     let mut center = div().flex().flex_col().flex_1().h_full();
 
     if layout.is_visible(PaneId::Preview) {
@@ -144,33 +139,26 @@ fn build_default(layout: &PaneLayout, contents: &PaneContents) -> impl IntoEleme
         );
     }
 
-    // Toolbar sits between Preview and Timeline (UIX-001).
+    // Toolbar between Preview and Timeline (UIX-001)
     center = center.child(toolbar_content(contents));
 
     if layout.is_visible(PaneId::Timeline) {
         center = center.child(
             div()
                 .h(px(200.0_f32))
-                .border_b_1()
+                .border_t_1()
                 .border_color(BorderColors::PRIMARY)
                 .child(pane_div(PaneId::Timeline)),
         );
     }
 
-    if layout.is_visible(PaneId::Agent) {
-        center = center.child(
-            div()
-                .h(px(150.0_f32))
-                .child(agent_content(contents)),
-        );
-    }
-
     root = root.child(center);
 
+    // Inspector: Layout::INSPECTOR_DEFAULT = 260px
     if layout.is_visible(PaneId::Inspector) {
         root = root.child(
             div()
-                .w(px(280.0_f32))
+                .w(px(Layout::INSPECTOR_DEFAULT))
                 .h_full()
                 .border_l_1()
                 .border_color(BorderColors::PRIMARY)
@@ -208,44 +196,17 @@ fn build_media(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement
     root
 }
 
-/// Vertical preset: preview / agent / timeline / media / inspector stacked.
+/// Vertical preset (Swift: Media+Inspector stacked left / Toolbar+Timeline left | Preview right).
 fn build_vertical(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement {
-    let mut root = div().id("layout-vertical").flex().flex_col().size_full();
+    let mut root = div().id("layout-vertical").flex().flex_row().size_full();
 
-    if layout.is_visible(PaneId::Preview) {
-        root = root.child(
-            div()
-                .flex_1()
-                .border_b_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(pane_div(PaneId::Preview)),
-        );
-    }
-
-    if layout.is_visible(PaneId::Agent) {
-        root = root.child(
-            div()
-                .h(px(200.0_f32))
-                .border_b_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(agent_content(contents)),
-        );
-    }
-
-    if layout.is_visible(PaneId::Timeline) {
-        root = root.child(
-            div()
-                .h(px(200.0_f32))
-                .border_b_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(pane_div(PaneId::Timeline)),
-        );
-    }
+    // Left stack: media + inspector (stacked vertically)
+    let mut left = div().flex().flex_col().w(px(300.0)).h_full();
 
     if layout.is_visible(PaneId::Media) {
-        root = root.child(
+        left = left.child(
             div()
-                .h(px(150.0_f32))
+                .flex_1()
                 .border_b_1()
                 .border_color(BorderColors::PRIMARY)
                 .child(media_panel_content(contents)),
@@ -253,10 +214,39 @@ fn build_vertical(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElem
     }
 
     if layout.is_visible(PaneId::Inspector) {
+        left = left.child(
+            div()
+                .h(px(240.0))
+                .child(pane_div(PaneId::Inspector)),
+        );
+    }
+
+    root = root.child(
+        left.border_r_1()
+            .border_color(BorderColors::PRIMARY),
+    );
+
+    // Right: Preview fills remaining space
+    if layout.is_visible(PaneId::Preview) {
         root = root.child(
             div()
-                .h(px(150.0_f32))
-                .child(pane_div(PaneId::Inspector)),
+                .flex_1()
+                .h_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex_1()
+                        .child(pane_div(PaneId::Preview)),
+                )
+                .child(toolbar_content(contents))
+                .child(
+                    div()
+                        .h(px(180.0))
+                        .border_t_1()
+                        .border_color(BorderColors::PRIMARY)
+                        .child(pane_div(PaneId::Timeline)),
+                ),
         );
     }
 
@@ -275,12 +265,6 @@ pub fn render_pane_layout(layout: &PaneLayout, contents: &PaneContents) -> impl 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn is_supported_extension_works() {
-        assert!(app_contract::focus_router::is_supported_extension("mp4"));
-        assert!(!app_contract::focus_router::is_supported_extension("exe"));
-    }
 
     #[test]
     fn pane_label_covers_all_ids() {

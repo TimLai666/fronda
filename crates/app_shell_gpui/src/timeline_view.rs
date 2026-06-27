@@ -3,12 +3,14 @@
 //! Covers UIX-009 (track sizes), UIX-010 (layout constants), from spec 07.
 
 use crate::theme::{
-    Background, BorderColors, BorderWidth, Layout, Spacing, Text, TrackColor,
+    Accent, Background, BorderColors, BorderWidth, FontSize, Radius, Spacing, Text, TrackColor,
 };
-use crate::timeline_model::{TimelineState, TrackKind, DEFAULT_PIXELS_PER_FRAME, RULER_HEIGHT, TRACK_HEADER_WIDTH};
+use crate::timeline_model::{
+    TimelineState, TrackKind, RULER_HEIGHT, TRACK_HEADER_WIDTH,
+};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement,
-    InteractiveElement, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, InteractiveElement,
+    ParentElement, Render, Styled, Window,
 };
 
 /// Timeline panel gpui entity.
@@ -45,18 +47,26 @@ impl Focusable for TimelineView {
 impl Render for TimelineView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let tracks = self.state.tracks.clone();
+        let clips = self.state.clips.clone();
         let zoom = self.state.zoom_scale;
         let total_frames = self.state.total_frames;
         let fps = self.state.fps;
         let playhead_frame = self.state.playhead_frame;
+        let scroll_x = self.state.scroll_x;
+
+        let playhead_x = playhead_frame as f32 * zoom - scroll_x;
+        let has_video = tracks.iter().any(|t| t.kind == TrackKind::Video);
+        let has_audio = tracks.iter().any(|t| t.kind == TrackKind::Audio);
+        let show_zone_divider = has_video && has_audio;
 
         div()
             .id("timeline")
+            .relative()
             .flex()
             .flex_col()
             .size_full()
             .bg(Background::SURFACE)
-            // ── Top: ruler row ──
+            // ── Ruler row ──
             .child(
                 div()
                     .id("ruler-row")
@@ -66,7 +76,6 @@ impl Render for TimelineView {
                     .w_full()
                     .border_b_1()
                     .border_color(BorderColors::PRIMARY)
-                    // Track header spacer (aligns with track headers below)
                     .child(
                         div()
                             .w(px(TRACK_HEADER_WIDTH))
@@ -75,23 +84,24 @@ impl Render for TimelineView {
                             .border_color(BorderColors::PRIMARY)
                             .bg(Background::RAISED),
                     )
-                    // Ruler content
                     .child(
                         div()
                             .id("ruler")
                             .flex_1()
                             .h_full()
                             .overflow_hidden()
+                            .relative()
                             .bg(Background::RAISED)
+                            .child(ruler_timecodes(total_frames, fps, zoom, scroll_x))
+                            // Playhead in ruler
                             .child(
                                 div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_end()
+                                    .absolute()
+                                    .top_0()
+                                    .left(px(playhead_x))
+                                    .w(px(BorderWidth::MEDIUM))
                                     .h_full()
-                                    .px(px(Spacing::XS))
-                                    .text_color(Text::MUTED)
-                                    .child(ruler_timecodes(total_frames, fps, zoom)),
+                                    .bg(Accent::TIMECODE),
                             ),
                     ),
             )
@@ -114,11 +124,17 @@ impl Render for TimelineView {
                             .border_r_1()
                             .border_color(BorderColors::PRIMARY)
                             .bg(Background::RAISED)
-                            .children(tracks.iter().map(|track| {
+                            .children(tracks.iter().enumerate().map(|(i, track)| {
                                 let color = match track.kind {
                                     TrackKind::Video => TrackColor::VIDEO,
                                     TrackKind::Audio => TrackColor::AUDIO,
                                 };
+                                let is_first_audio = track.kind == TrackKind::Audio
+                                    && i > 0
+                                    && tracks
+                                        .get(i - 1)
+                                        .map(|t| t.kind == TrackKind::Video)
+                                        .unwrap_or(false);
                                 div()
                                     .id(format!("header-{}", track.id))
                                     .w_full()
@@ -128,66 +144,119 @@ impl Render for TimelineView {
                                     .items_center()
                                     .border_b_1()
                                     .border_color(BorderColors::SUBTLE)
-                                    // Color strip (left 4px)
-                                    .child(
-                                        div()
-                                            .w(px(4.0))
-                                            .h_full()
-                                            .bg(color),
-                                    )
-                                    // Track label
+                                    .when(is_first_audio && show_zone_divider, |el| {
+                                        el.border_t_2()
+                                            .border_color(BorderColors::DIVIDER)
+                                    })
+                                    // Color strip: 3px to match Swift
+                                    .child(div().w(px(3.0)).h_full().bg(color))
                                     .child(
                                         div()
                                             .flex_1()
                                             .px(px(Spacing::XS))
                                             .text_color(Text::SECONDARY)
+                                            .text_size(px(FontSize::SM))
                                             .child(track.label.clone()),
                                     )
-                                    // Mute/hide buttons placeholder
                                     .child(
                                         div()
                                             .flex()
                                             .flex_row()
                                             .gap(px(Spacing::XXS))
                                             .px(px(Spacing::XXS))
+                                            .text_size(px(FontSize::XS))
                                             .text_color(Text::MUTED)
-                                            .child("M")
-                                            .child("H"),
+                                            .child("m")
+                                            .child("h"),
                                     )
                             })),
                     )
-                    // Scrollable clip area
+                    // Clip canvas
                     .child(
                         div()
                             .id("clip-canvas")
                             .flex_1()
                             .h_full()
                             .overflow_hidden()
+                            .relative()
                             .bg(Background::SURFACE)
                             .child(
                                 div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom_0()
                                     .flex()
                                     .flex_col()
-                                    .w_full()
-                                    .children(tracks.iter().map(|track| {
+                                    .children(tracks.iter().enumerate().map(|(i, track)| {
+                                        let color = match track.kind {
+                                            TrackKind::Video => TrackColor::VIDEO,
+                                            TrackKind::Audio => TrackColor::AUDIO,
+                                        };
+                                        let is_first_audio = track.kind == TrackKind::Audio
+                                            && i > 0
+                                            && tracks
+                                                .get(i - 1)
+                                                .map(|t| t.kind == TrackKind::Video)
+                                                .unwrap_or(false);
+                                        let track_clips: Vec<_> = clips
+                                            .iter()
+                                            .filter(|c| c.track_id == track.id)
+                                            .collect();
+                                        let track_height = track.height;
                                         div()
-                                            .id(format!("track-lane-{}", track.id))
+                                            .id(format!("lane-{}", track.id))
                                             .w_full()
-                                            .h(px(track.height))
+                                            .h(px(track_height))
                                             .border_b_1()
                                             .border_color(BorderColors::SUBTLE)
+                                            .relative()
                                             .bg(Background::SURFACE)
-                                            // Playhead indicator placeholder
-                                            .child(
+                                            .when(is_first_audio && show_zone_divider, |el| {
+                                                el.border_t_2()
+                                                    .border_color(BorderColors::DIVIDER)
+                                            })
+                                            .children(track_clips.iter().map(|clip| {
+                                                let clip_x =
+                                                    clip.start_frame as f32 * zoom - scroll_x;
+                                                let clip_w =
+                                                    (clip.duration_frames as f32 * zoom).max(4.0);
+                                                let mut bg = color;
+                                                bg.a = 0.22;
                                                 div()
+                                                    .id(format!("clip-{}", clip.id))
                                                     .absolute()
-                                                    .top(px(0.0))
-                                                    .left(px(playhead_frame as f32 * zoom))
-                                                    .w(px(BorderWidth::THIN))
-                                                    .h_full()
-                                                    .bg(crate::theme::Accent::TIMECODE),
-                                            )
+                                                    .top(px(1.0))
+                                                    .left(px(clip_x))
+                                                    .w(px(clip_w))
+                                                    .h(px(track_height - 2.0))
+                                                    .rounded(px(Radius::XS))
+                                                    .bg(bg)
+                                                    .border_1()
+                                                    .border_color(color)
+                                                    .overflow_hidden()
+                                                    .child(
+                                                        div()
+                                                            .px(px(Spacing::XS))
+                                                            .pt(px(Spacing::XXS))
+                                                            .text_size(px(FontSize::SM))
+                                                            .text_color(Text::PRIMARY)
+                                                            .child(clip.label.clone()),
+                                                    )
+                                            }))
                                     })),
+                            )
+                            // Playhead line over clip area
+                            .child(
+                                div()
+                                    .id("playhead-line")
+                                    .absolute()
+                                    .top_0()
+                                    .left(px(playhead_x))
+                                    .w(px(BorderWidth::MEDIUM))
+                                    .h_full()
+                                    .bg(Accent::TIMECODE),
                             ),
                     ),
             )
@@ -195,31 +264,41 @@ impl Render for TimelineView {
 }
 
 /// Generate ruler tick labels for visible timecodes.
-fn ruler_timecodes(total_frames: i64, fps: i64, zoom: f32) -> impl IntoElement {
+fn ruler_timecodes(
+    total_frames: i64,
+    fps: i64,
+    zoom: f32,
+    scroll_x: f32,
+) -> impl IntoElement {
     let fps = fps.max(1);
-    // Show a tick every N frames such that ticks are ~80px apart
     let tick_spacing_px = 80.0_f32;
     let frames_per_tick = ((tick_spacing_px / zoom).round() as i64).max(1);
-
-    // Round to a nice interval (1, 5, 10, 30, 60, 120, ...)
     let frames_per_tick = round_to_nice_interval(frames_per_tick, fps);
 
-    let mut root = div().id("ruler-ticks").flex().flex_row().items_end().h_full();
+    let start_frame = (scroll_x / zoom) as i64;
+    let start_tick = (start_frame / frames_per_tick).max(0) * frames_per_tick;
 
-    let mut frame = 0i64;
-    while frame <= total_frames.max(0) {
-        let x = frame as f32 * zoom;
+    let mut root = div()
+        .id("ruler-ticks")
+        .relative()
+        .w_full()
+        .h_full();
+
+    let visible_frames = (1200.0_f32 / zoom) as i64 + frames_per_tick * 2;
+    let mut frame = start_tick;
+    while frame <= (start_tick + visible_frames).min(total_frames + frames_per_tick) {
+        let x = frame as f32 * zoom - scroll_x;
         let secs = frame / fps;
         let mins = secs / 60;
-        let remaining_secs = secs % 60;
-        let label = format!("{mins}:{remaining_secs:02}");
-
+        let rem = secs % 60;
+        let label = format!("{mins}:{rem:02}");
         root = root.child(
             div()
                 .absolute()
                 .left(px(x))
-                .bottom(px(2.0))
+                .bottom(px(3.0))
                 .text_color(Text::MUTED)
+                .text_size(px(FontSize::XS))
                 .child(label),
         );
         frame += frames_per_tick;

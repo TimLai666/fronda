@@ -74,8 +74,16 @@ impl PlaybackState {
 
     /// Returns current position as HH:MM:SS:FF timecode string.
     pub fn format_timecode(&self) -> String {
-        let fps = self.fps.max(1);
-        let frame = self.active_frame;
+        Self::frames_to_tc(self.active_frame, self.fps)
+    }
+
+    /// Returns total duration as timecode string.
+    pub fn format_total(&self) -> String {
+        Self::frames_to_tc(self.total_frames, self.fps)
+    }
+
+    fn frames_to_tc(frame: i64, fps: i64) -> String {
+        let fps = fps.max(1);
         let ff = frame % fps;
         let total_seconds = frame / fps;
         let ss = total_seconds % 60;

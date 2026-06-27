@@ -270,8 +270,60 @@ impl Layout {
 pub struct Shadow;
 impl Shadow {
     pub const SM_BLUR: f32 = 1.0;
+    pub const SM_Y: f32 = 0.5;
+    pub const SM_COLOR_OPACITY: f32 = 0.3;
     pub const MD_BLUR: f32 = 4.0;
+    pub const MD_Y: f32 = 2.0;
+    pub const MD_COLOR_OPACITY: f32 = 0.3;
     pub const LG_BLUR: f32 = 24.0;
+    pub const LG_Y: f32 = 8.0;
+    pub const LG_COLOR_OPACITY: f32 = 0.25;
+}
+
+/// Status / semantic colors.
+pub struct Status;
+impl Status {
+    /// Error red — h≈0°, s=0.60, l=0.45 (Swift: #E54F4F).
+    pub const ERROR: Hsla = Hsla {
+        h: 0.0,
+        s: 0.60,
+        l: 0.45,
+        a: 1.0,
+    };
+}
+
+/// Component size constants (matching Swift `ComponentSize`).
+pub struct ComponentSize;
+impl ComponentSize {
+    pub const PROJECT_CARD_WIDTH: f32 = 150.0;
+    pub const PROJECT_CARD_HEIGHT: f32 = 120.0;
+    pub const CAPTION_PREVIEW_MAX_HEIGHT: f32 = 150.0;
+    pub const TOOL_IMAGE_PREVIEW_MAX_HEIGHT: f32 = 50.0;
+    pub const UPDATE_OVERLAY_WIDTH: f32 = 640.0;
+}
+
+/// Window size constants (matching Swift window defaults).
+pub struct WindowSize;
+impl WindowSize {
+    pub const HOME_DEFAULT_W: f32 = 1200.0;
+    pub const HOME_DEFAULT_H: f32 = 800.0;
+    pub const HOME_MIN_W: f32 = 760.0;
+    pub const HOME_MIN_H: f32 = 480.0;
+    pub const PROJECT_DEFAULT_W: f32 = 1600.0;
+    pub const PROJECT_DEFAULT_H: f32 = 1000.0;
+    pub const PROJECT_MIN_W: f32 = 960.0;
+    pub const PROJECT_MIN_H: f32 = 600.0;
+    pub const PROJECT_TITLEBAR_TRAILING_WIDTH: f32 = 280.0;
+}
+
+/// Generation panel size constants (matching Swift `GenerationPanel`).
+pub struct GenerationPanel;
+impl GenerationPanel {
+    pub const MEDIA_AREA_MIN_HEIGHT: f32 = 120.0;
+    pub const LOADING_HEIGHT: f32 = 180.0;
+    pub const PROMPT_MIN_HEIGHT: f32 = 40.0;
+    pub const REFERENCE_TILE_WIDTH: f32 = 80.0;
+    pub const REFERENCE_TILE_HEIGHT: f32 = 56.0;
 }
 
 #[cfg(test)]

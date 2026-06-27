@@ -3,7 +3,7 @@
 /// Matches PreviewContainerView.swift layout.
 
 use crate::preview_model::PlaybackState;
-use crate::theme::{Background, BorderColors, FontSize, Layout, Spacing, Text};
+use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Spacing, Text};
 use gpui::{
     div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, InteractiveElement,
     ParentElement, Render, Styled, Window,
@@ -54,11 +54,32 @@ impl Focusable for PreviewView {
     }
 }
 
+/// Transport button: 32×28px matching Swift frame(width:32, height:28).
+fn transport_btn(
+    id: &str,
+    glyph: &str,
+    highlight: bool,
+) -> impl IntoElement {
+    div()
+        .id(id.to_string())
+        .w(px(32.0))
+        .h(px(28.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .rounded(px(4.0))
+        .text_color(if highlight { Text::PRIMARY } else { Text::SECONDARY })
+        .text_size(px(FontSize::MD))
+        .child(glyph.to_string())
+}
+
 impl Render for PreviewView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let timecode = self.state.format_timecode();
         let is_playing = self.state.is_playing;
         let fraction = self.state.playhead_fraction();
+        let current_tc = self.state.format_timecode();
+        let total_tc = self.state.format_total();
 
         div()
             .id("preview-panel")
@@ -66,7 +87,7 @@ impl Render for PreviewView {
             .flex_col()
             .size_full()
             .bg(Background::BASE)
-            // ── Panel header (tab bar) ──
+            // ── Header tab bar ──
             .child(
                 div()
                     .id("preview-header")
@@ -76,14 +97,40 @@ impl Render for PreviewView {
                     .w_full()
                     .h(px(Layout::PANEL_HEADER_HEIGHT))
                     .px(px(Spacing::MD))
+                    .gap(px(Spacing::XS))
                     .bg(Background::RAISED)
                     .border_b_1()
                     .border_color(BorderColors::PRIMARY)
+                    // Nav chevrons
                     .child(
                         div()
-                            .px(px(Spacing::SM))
-                            .py(px(Spacing::XXS))
-                            .rounded(px(4.0))
+                            .w(px(18.0))
+                            .h(px(22.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(Text::MUTED)
+                            .text_size(px(FontSize::SM))
+                            .child("<"),
+                    )
+                    .child(
+                        div()
+                            .w(px(18.0))
+                            .h(px(22.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(Text::MUTED)
+                            .text_size(px(FontSize::SM))
+                            .child(">"),
+                    )
+                    // Active tab label with bottom underline
+                    .child(
+                        div()
+                            .px(px(Spacing::XS))
+                            .pb(px(2.0))
+                            .border_b(px(1.5))
+                            .border_color(Text::PRIMARY)
                             .text_color(Text::PRIMARY)
                             .text_size(px(FontSize::SM))
                             .child("Timeline"),
@@ -106,25 +153,38 @@ impl Render for PreviewView {
                             .child("Preview"),
                     ),
             )
-            // ── Scrub bar ──
+            // ── Scrub bar: 12px height matching Swift ──
             .child(
                 div()
                     .id("preview-scrub")
                     .relative()
                     .w_full()
-                    .h(px(Spacing::XS))
+                    .h(px(12.0))
                     .bg(BorderColors::SUBTLE)
+                    .cursor_pointer()
+                    // Progress fill
                     .child(
                         div()
                             .absolute()
                             .top_0()
                             .left_0()
                             .h_full()
-                            .w(px((fraction * Layout::PREVIEW_MIN_WIDTH as f64) as f32))
+                            .w(px((fraction as f32) * Layout::PREVIEW_MIN_WIDTH))
                             .bg(BorderColors::DIVIDER),
+                    )
+                    // Thumb indicator
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(3.0))
+                            .left(px((fraction as f32) * Layout::PREVIEW_MIN_WIDTH - 3.0))
+                            .w(px(6.0))
+                            .h(px(6.0))
+                            .rounded_full()
+                            .bg(Text::PRIMARY),
                     ),
             )
-            // ── Transport bar ──
+            // ── Transport bar: 36px height matching Swift ──
             .child(
                 div()
                     .id("preview-transport")
@@ -132,119 +192,91 @@ impl Render for PreviewView {
                     .flex_row()
                     .items_center()
                     .w_full()
-                    .h(px(Spacing::XXL + Spacing::LG_XL))
+                    .h(px(36.0))
                     .px(px(Spacing::MD))
                     .bg(Background::RAISED)
                     .border_t_1()
                     .border_color(BorderColors::PRIMARY)
-                    // Left: timecode
+                    // Left: timecode — orange accent for current, tertiary for separator and total
                     .child(
                         div()
                             .flex()
                             .flex_1()
+                            .flex_row()
                             .items_center()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_color(Accent::TIMECODE)
+                                    .text_size(px(FontSize::SM))
+                                    .child(current_tc),
+                            )
                             .child(
                                 div()
                                     .text_color(Text::TERTIARY)
-                                    .text_size(px(FontSize::XS))
-                                    .child(timecode),
+                                    .text_size(px(FontSize::SM))
+                                    .child("/"),
+                            )
+                            .child(
+                                div()
+                                    .text_color(Text::SECONDARY)
+                                    .text_size(px(FontSize::SM))
+                                    .child(total_tc),
                             ),
                     )
-                    // Center: navigation buttons
+                    // Center: 5 transport buttons
                     .child(
                         div()
                             .flex()
                             .flex_row()
                             .items_center()
-                            .gap(px(Spacing::SM))
+                            .gap(px(Spacing::XS))
                             .child(
-                                div()
-                                    .id("btn-go-start")
-                                    .w(px(Spacing::XL_XXL))
-                                    .h(px(Spacing::XL_XXL))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .text_color(Text::SECONDARY)
-                                    .text_size(px(FontSize::SM))
+                                transport_btn("btn-go-start", "|<", false)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.go_to_start(cx);
-                                    }))
-                                    .child("|<"),
+                                    })),
                             )
                             .child(
-                                div()
-                                    .id("btn-step-back")
-                                    .w(px(Spacing::XL_XXL))
-                                    .h(px(Spacing::XL_XXL))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .text_color(Text::SECONDARY)
-                                    .text_size(px(FontSize::SM))
+                                transport_btn("btn-step-back", "<<", false)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.step_backward(cx);
-                                    }))
-                                    .child("<<"),
+                                    })),
                             )
                             .child(
-                                div()
-                                    .id("btn-play")
-                                    .w(px(Spacing::XL_XXL))
-                                    .h(px(Spacing::XL_XXL))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .text_color(Text::PRIMARY)
-                                    .text_size(px(FontSize::MD))
+                                transport_btn("btn-play", if is_playing { "⏸" } else { "▶" }, true)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.toggle_play(cx);
-                                    }))
-                                    .child(if is_playing { "⏸" } else { "▶" }),
+                                    })),
                             )
                             .child(
-                                div()
-                                    .id("btn-step-fwd")
-                                    .w(px(Spacing::XL_XXL))
-                                    .h(px(Spacing::XL_XXL))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .text_color(Text::SECONDARY)
-                                    .text_size(px(FontSize::SM))
+                                transport_btn("btn-step-fwd", ">>", false)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.step_forward(cx);
-                                    }))
-                                    .child(">>"),
+                                    })),
                             )
                             .child(
-                                div()
-                                    .id("btn-go-end")
-                                    .w(px(Spacing::XL_XXL))
-                                    .h(px(Spacing::XL_XXL))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .text_color(Text::SECONDARY)
-                                    .text_size(px(FontSize::SM))
+                                transport_btn("btn-go-end", ">|", false)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.go_to_end(cx);
-                                    }))
-                                    .child(">|"),
+                                    })),
                             ),
                     )
-                    // Right: zoom level placeholder
+                    // Right: zoom / aspect info
                     .child(
                         div()
                             .flex()
                             .flex_1()
+                            .flex_row()
                             .justify_end()
                             .items_center()
+                            .gap(px(Spacing::SM))
+                            .child(
+                                div()
+                                    .text_color(Text::MUTED)
+                                    .text_size(px(FontSize::XS))
+                                    .child("16:9"),
+                            )
                             .child(
                                 div()
                                     .text_color(Text::MUTED)

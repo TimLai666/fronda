@@ -10,6 +10,7 @@ use crate::home_view::{HomeColors, HomeView};
 use crate::media_panel_view::MediaPanelView;
 use crate::menu;
 use crate::pane::{LayoutPreset, PaneId, PaneLayout};
+use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Text};
 use crate::toolbar_view::ToolbarView;
 use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
@@ -146,7 +147,6 @@ impl AppRoot {
             | menu::MenuAction::KeyboardShortcuts
             | menu::MenuAction::McpInstructions
             | menu::MenuAction::SendFeedback => {}
-            // Playback actions (KEY-001, Issue #164) — delegated to editor/timeline
             menu::MenuAction::PlayPause
             | menu::MenuAction::PlayBackward
             | menu::MenuAction::PauseJkl
@@ -155,13 +155,11 @@ impl AppRoot {
             | menu::MenuAction::StepFrameForward
             | menu::MenuAction::SkipFramesBackward
             | menu::MenuAction::SkipFramesForward => {}
-            // Marking actions (Issue #164)
             menu::MenuAction::MarkIn
             | menu::MenuAction::MarkOut
             | menu::MenuAction::ClearMarkIn
             | menu::MenuAction::ClearMarkOut
             | menu::MenuAction::ClearMarks => {}
-            // Timeline zoom (Issue #164)
             menu::MenuAction::TimelineZoomIn
             | menu::MenuAction::TimelineZoomOut
             | menu::MenuAction::TimelineFitToWindow => {}
@@ -170,51 +168,148 @@ impl AppRoot {
         cx.notify();
     }
 
-    /// Render the Home screen with inline click handlers on action cards.
+    /// A sidebar navigation button row.
+    fn sidebar_row(icon: &str, label: &str) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .w_full()
+            .h(px(32.0))
+            .px(px(Spacing::SM_MD))
+            .gap(px(Spacing::SM_MD))
+            .rounded(px(Radius::SM))
+            .cursor_pointer()
+            .child(
+                div()
+                    .text_color(Text::TERTIARY)
+                    .text_size(px(FontSize::MD))
+                    .child(icon.to_string()),
+            )
+            .child(
+                div()
+                    .text_color(Text::SECONDARY)
+                    .text_size(px(FontSize::SM))
+                    .child(label.to_string()),
+            )
+    }
+
+    /// Render the Home screen: sidebar (220px) + content area.
     fn render_home(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        // Sample project card data
+        let sample_projects: &[(&str, &str)] = &[
+            ("My Film", "#3a7bd5"),
+            ("Commercial", "#6c63ff"),
+            ("Documentary", "#43b89c"),
+        ];
+
         div()
             .id("fronda-home")
             .track_focus(&self.home.focus_handle.clone())
             .flex()
-            .flex_col()
+            .flex_row()
             .size_full()
             .bg(HomeColors::BACKGROUND)
-            // ── Heading ──
+            // ── Left sidebar (220px) ──
             .child(
                 div()
+                    .id("home-sidebar")
                     .flex()
                     .flex_col()
-                    .items_center()
-                    .pt(px(HomeLayout::HEADING_TOP as f32))
-                    .child(
-                        div()
-                            .text_xl()
-                            .child("Fronda")
-                            .text_color(HomeColors::TEXT_PRIMARY),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .child("Palmier Pro compatibility baseline")
-                            .text_color(HomeColors::TEXT_SECONDARY),
-                    ),
-            )
-            // ── Action cards ──
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .pt(px(HomeLayout::SECTION_TOP as f32))
+                    .w(px(220.0))
+                    .h_full()
+                    .bg(Background::SURFACE)
+                    .border_r_1()
+                    .border_color(BorderColors::PRIMARY)
+                    .px(px(Spacing::SM_MD))
+                    .py(px(Spacing::MD))
+                    .gap(px(Spacing::XXS))
+                    // App identity
                     .child(
                         div()
                             .flex()
                             .flex_row()
-                            .gap(px(HomeLayout::CARD_GAP as f32))
-                            // New Project
+                            .items_center()
+                            .w_full()
+                            .h(px(40.0))
+                            .mb(px(Spacing::SM_MD))
                             .child(
                                 div()
-                                    .id("action-new-project")
+                                    .text_color(Text::PRIMARY)
+                                    .text_size(px(FontSize::MD_LG))
+                                    .child("Fronda"),
+                            ),
+                    )
+                    // Nav items
+                    .child(
+                        Self::sidebar_row("⊕", "New Project")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_editor(cx);
+                            })),
+                    )
+                    .child(
+                        Self::sidebar_row("▲", "Open Project")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_editor(cx);
+                            })),
+                    )
+                    // Spacer
+                    .child(div().flex_1())
+                    // Bottom: Settings
+                    .child(Self::sidebar_row("⚙", "Settings")),
+            )
+            // ── Content area ──
+            .child(
+                div()
+                    .id("home-content")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .h_full()
+                    .bg(HomeColors::BACKGROUND)
+                    // Greeting
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .px(px(HomeLayout::CARD_GAP as f32 * 2.0))
+                            .pt(px(HomeLayout::HEADING_TOP as f32))
+                            .pb(px(Spacing::XL))
+                            .child(
+                                div()
+                                    .text_size(px(FontSize::TITLE_2))
+                                    .text_color(HomeColors::TEXT_PRIMARY)
+                                    .child("Welcome to Fronda"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(FontSize::SM_MD))
+                                    .text_color(HomeColors::TEXT_SECONDARY)
+                                    .child("Palmier Pro compatibility baseline"),
+                            ),
+                    )
+                    // "My Projects" label
+                    .child(
+                        div()
+                            .px(px(HomeLayout::CARD_GAP as f32 * 2.0))
+                            .pb(px(Spacing::SM))
+                            .text_size(px(FontSize::SM_MD))
+                            .text_color(HomeColors::TEXT_SECONDARY)
+                            .child("My Projects"),
+                    )
+                    // Project grid
+                    .child(
+                        div()
+                            .id("project-grid")
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .px(px(HomeLayout::CARD_GAP as f32 * 2.0))
+                            .gap(px(HomeLayout::CARD_GAP as f32))
+                            // New project card
+                            .child(
+                                div()
+                                    .id("card-new-project")
                                     .flex()
                                     .flex_col()
                                     .items_center()
@@ -222,41 +317,73 @@ impl AppRoot {
                                     .w(px(HomeLayout::CARD_WIDTH as f32))
                                     .h(px(HomeLayout::CARD_HEIGHT as f32))
                                     .bg(HomeColors::CARD_BG)
-                                    .rounded(px(8.0))
+                                    .rounded(px(Radius::MD_LG))
+                                    .border_1()
+                                    .border_color(BorderColors::SUBTLE)
                                     .cursor_pointer()
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                    .on_click(cx.listener(|this, _, _, cx| {
                                         this.open_editor(cx);
                                     }))
                                     .child(
                                         div()
-                                            .text_sm()
-                                            .child("New Project")
-                                            .text_color(HomeColors::TEXT_PRIMARY),
+                                            .text_size(px(FontSize::TITLE_2))
+                                            .text_color(HomeColors::TEXT_SECONDARY)
+                                            .child("+"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(FontSize::SM))
+                                            .text_color(HomeColors::TEXT_SECONDARY)
+                                            .child("New Project"),
                                     ),
                             )
-                            // Open Project
-                            .child(
+                            // Sample project cards
+                            .children(sample_projects.iter().enumerate().map(|(i, (name, _color))| {
                                 div()
-                                    .id("action-open-project")
+                                    .id(format!("card-project-{}", i))
                                     .flex()
                                     .flex_col()
-                                    .items_center()
-                                    .justify_center()
                                     .w(px(HomeLayout::CARD_WIDTH as f32))
                                     .h(px(HomeLayout::CARD_HEIGHT as f32))
                                     .bg(HomeColors::CARD_BG)
-                                    .rounded(px(8.0))
+                                    .rounded(px(Radius::MD_LG))
+                                    .border_1()
+                                    .border_color(BorderColors::SUBTLE)
+                                    .overflow_hidden()
                                     .cursor_pointer()
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                    .on_click(cx.listener(|this, _, _, cx| {
                                         this.open_editor(cx);
                                     }))
+                                    // Thumbnail area (top 80%)
                                     .child(
                                         div()
-                                            .text_sm()
-                                            .child("Open Project")
-                                            .text_color(HomeColors::TEXT_PRIMARY),
-                                    ),
-                            ),
+                                            .flex_1()
+                                            .bg(Background::PROMINENT)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_color(Text::MUTED)
+                                            .text_size(px(FontSize::DISPLAY))
+                                            .child("▶"),
+                                    )
+                                    // Name strip (bottom)
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .w_full()
+                                            .h(px(24.0))
+                                            .px(px(Spacing::SM_MD))
+                                            .bg(HomeColors::CARD_BG)
+                                            .child(
+                                                div()
+                                                    .text_size(px(FontSize::SM))
+                                                    .text_color(HomeColors::TEXT_PRIMARY)
+                                                    .child(name.to_string()),
+                                            ),
+                                    )
+                            })),
                     ),
             )
     }
@@ -297,14 +424,11 @@ impl Render for AppRoot {
     }
 }
 
-/// Create and open the initial window (WIN-001: 960×640 default).
-///
-/// Shifts the window down so the title bar is comfortably visible on Windows.
+/// Create and open the initial window.
 pub fn open_main_window(cx: &mut App) {
     let cfg = WindowConfig::for_home();
     let size = size(px(cfg.default_width as f32), px(cfg.default_height as f32));
     let mut bounds = Bounds::centered(None, size, cx);
-    // Shift down so the title bar stays visible on Windows
     bounds.origin.y = bounds.origin.y + px(220.0);
 
     cx.open_window(

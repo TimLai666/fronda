@@ -1,9 +1,11 @@
 /// Inspector panel gpui view — tab bar + collapsible sections.
 ///
-/// Matches InspectorView.swift layout.
+/// Matches InspectorView.swift layout with real property rows.
 
 use crate::inspector_model::{InspectorState, InspectorTab};
-use crate::theme::{Background, BorderColors, FontSize, Layout, Radius, Spacing, Text};
+use crate::theme::{
+    Accent, Background, BorderColors, FontSize, Layout, Radius, Spacing, Text,
+};
 use gpui::{
     div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, InteractiveElement,
     ParentElement, Render, Styled, Window,
@@ -44,6 +46,57 @@ impl Focusable for InspectorView {
     }
 }
 
+/// A label/value property row matching Swift inspector rows.
+fn prop_row(label: &str, value: &str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .w_full()
+        .px(px(Spacing::LG))
+        .h(px(22.0))
+        .child(
+            div()
+                .flex_1()
+                .text_color(Text::SECONDARY)
+                .text_size(px(FontSize::XS))
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .text_color(Text::TERTIARY)
+                .text_size(px(FontSize::XS))
+                .child(value.to_string()),
+        )
+}
+
+/// Collapsible section header: uppercase xxs/muted text + expand chevron.
+fn section_header(label: &str, expanded: bool) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .w_full()
+        .px(px(Spacing::LG))
+        .h(px(28.0))
+        .border_t_1()
+        .border_color(BorderColors::SUBTLE)
+        .cursor_pointer()
+        .child(
+            div()
+                .flex_1()
+                .text_color(Text::MUTED)
+                .text_size(px(FontSize::XXS))
+                .child(label.to_uppercase()),
+        )
+        .child(
+            div()
+                .text_color(Text::MUTED)
+                .text_size(px(FontSize::XS))
+                .child(if expanded { "▾" } else { "▸" }),
+        )
+}
+
 impl Render for InspectorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active_tab = self.state.active_tab.clone();
@@ -76,17 +129,17 @@ impl Render for InspectorView {
                             .child("Inspector"),
                     ),
             )
-            // ── Tab bar ──
+            // ── Tab bar: underline style, not fill ──
             .child(
                 div()
                     .id("inspector-tabs")
                     .flex()
                     .flex_row()
-                    .items_center()
+                    .items_end()
                     .w_full()
-                    .px(px(Spacing::SM))
-                    .py(px(Spacing::XS))
-                    .gap(px(Spacing::XS))
+                    .px(px(Spacing::LG))
+                    .pt(px(Spacing::XS))
+                    .gap(px(Spacing::MD_LG))
                     .bg(Background::SURFACE)
                     .border_b_1()
                     .border_color(BorderColors::SUBTLE)
@@ -95,20 +148,19 @@ impl Render for InspectorView {
                         let tab_clone = tab.clone();
                         div()
                             .id(tab.label())
-                            .px(px(Spacing::SM))
-                            .py(px(Spacing::XXS))
-                            .rounded(px(Radius::XS_SM))
+                            .pb(px(Spacing::XS))
                             .cursor_pointer()
-                            .bg(if is_active { BorderColors::PRIMARY } else { Background::SURFACE })
                             .text_color(if is_active { Text::PRIMARY } else { Text::MUTED })
                             .text_size(px(FontSize::XS))
+                            .border_b(px(if is_active { 1.5 } else { 0.0 }))
+                            .border_color(Text::PRIMARY)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.select_tab(tab_clone.clone(), cx);
                             }))
                             .child(tab.label())
                     })),
             )
-            // ── Tab content area ──
+            // ── Scrollable content ──
             .child(
                 div()
                     .id("inspector-content")
@@ -116,112 +168,114 @@ impl Render for InspectorView {
                     .flex_col()
                     .flex_1()
                     .w_full()
-                    .overflow_hidden()
-                    // Tab label placeholder
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .px(px(Spacing::MD))
-                            .py(px(Spacing::SM))
-                            .text_color(Text::MUTED)
-                            .text_size(px(FontSize::SM))
-                            .child(active_tab.label()),
-                    )
+                    .overflow_y_scroll()
                     // Volume section
                     .child(
                         div()
-                            .id("inspector-volume-section")
+                            .id("section-volume")
                             .flex()
                             .flex_col()
                             .w_full()
-                            .border_t_1()
-                            .border_color(BorderColors::SUBTLE)
-                            // Collapsible header
                             .child(
                                 div()
-                                    .id("inspector-volume-header")
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
                                     .w_full()
-                                    .px(px(Spacing::MD))
-                                    .h(px(Spacing::XXL))
-                                    .cursor_pointer()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.toggle_volume(cx);
                                     }))
-                                    .child(
-                                        div()
-                                            .text_color(Text::SECONDARY)
-                                            .text_size(px(FontSize::SM))
-                                            .child(if volume_expanded { "▾ Volume" } else { "▸ Volume" }),
-                                    ),
+                                    .child(section_header("Volume", volume_expanded)),
                             )
-                            // Volume slider placeholder (visible when expanded)
                             .when(volume_expanded, |el| {
-                                el.child(
-                                    div()
-                                        .id("inspector-volume-content")
-                                        .flex()
-                                        .items_center()
-                                        .px(px(Spacing::MD))
-                                        .py(px(Spacing::SM))
-                                        .child(
-                                            div()
-                                                .w_full()
-                                                .h(px(Spacing::XS))
-                                                .rounded(px(Radius::XS))
-                                                .bg(BorderColors::PRIMARY),
-                                        ),
-                                )
+                                el.child(prop_row("Volume", "100%"))
+                                    .child(prop_row("Fade In", "0.0s"))
+                                    .child(prop_row("Fade Out", "0.0s"))
                             }),
                     )
                     // Transform section
                     .child(
                         div()
-                            .id("inspector-transform-section")
+                            .id("section-transform")
                             .flex()
                             .flex_col()
                             .w_full()
-                            .border_t_1()
-                            .border_color(BorderColors::SUBTLE)
-                            // Collapsible header
                             .child(
                                 div()
-                                    .id("inspector-transform-header")
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
                                     .w_full()
-                                    .px(px(Spacing::MD))
-                                    .h(px(Spacing::XXL))
-                                    .cursor_pointer()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.toggle_transform(cx);
                                     }))
-                                    .child(
-                                        div()
-                                            .text_color(Text::SECONDARY)
-                                            .text_size(px(FontSize::SM))
-                                            .child(if transform_expanded { "▾ Transform" } else { "▸ Transform" }),
-                                    ),
+                                    .child(section_header("Transform", transform_expanded)),
                             )
-                            // Transform content placeholder (visible when expanded)
                             .when(transform_expanded, |el| {
-                                el.child(
-                                    div()
-                                        .id("inspector-transform-content")
-                                        .px(px(Spacing::MD))
-                                        .py(px(Spacing::SM))
-                                        .child(
-                                            div()
-                                                .text_color(Text::MUTED)
-                                                .text_size(px(FontSize::XS))
-                                                .child("Position · Scale · Rotation"),
-                                        ),
-                                )
+                                el.child(prop_row("Position X", "0.0"))
+                                    .child(prop_row("Position Y", "0.0"))
+                                    .child(prop_row("Scale", "100%"))
+                                    .child(prop_row("Rotation", "0°"))
+                                    .child(prop_row("Opacity", "100%"))
                             }),
+                    )
+                    // Blending section
+                    .child(
+                        div()
+                            .id("section-blend")
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .child(section_header("Blending", false)),
+                    )
+                    // Speed section
+                    .child(
+                        div()
+                            .id("section-speed")
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .child(section_header("Speed", false)),
+                    )
+                    // Project metadata section
+                    .child(
+                        div()
+                            .id("section-project")
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .child(section_header("Project", true))
+                            .child(prop_row("Name", "Untitled"))
+                            .child(prop_row("Resolution", "1920×1080"))
+                            .child(prop_row("Frame Rate", "30 fps"))
+                            .child(prop_row("Duration", "0:20")),
+                    )
+                    // Format section
+                    .child(
+                        div()
+                            .id("section-format")
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .child(section_header("Format", true))
+                            .child(prop_row("Aspect Ratio", "16:9"))
+                            .child(prop_row("Color Space", "sRGB")),
+                    )
+                    // AI Edit footer badge
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_end()
+                            .w_full()
+                            .px(px(Spacing::LG))
+                            .py(px(Spacing::MD))
+                            .child(
+                                div()
+                                    .px(px(Spacing::SM))
+                                    .py(px(Spacing::XXS))
+                                    .rounded(px(Radius::XS_SM))
+                                    .border_1()
+                                    .border_color(BorderColors::SUBTLE)
+                                    .text_size(px(FontSize::XXS))
+                                    .text_color(Accent::PRIMARY)
+                                    .child("AI EDIT"),
+                            ),
                     ),
             )
     }
