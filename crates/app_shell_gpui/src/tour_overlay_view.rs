@@ -10,9 +10,9 @@
 //! Scrim: semi-transparent black (Opacity::STRONG) covers the full screen.
 //! Spotlight step would additionally show a gradient border cutout (not implemented here).
 
-use crate::theme::{Accent, Background, BorderColors, FontSize, Opacity, Radius, Spacing, Text};
+use crate::theme::{Accent, Background, BorderColors, BorderWidth, FontSize, Opacity, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable, IntoElement,
+    div, prelude::*, px, relative, App, ClickEvent, Context, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, Styled, Window,
 };
 
@@ -29,6 +29,9 @@ pub struct TourOverlayState {
     pub title: String,
     pub instruction: String,
     pub visible: bool,
+    /// Normalized (0..=1) rect to spotlight: (left, top, right, bottom).
+    /// Used only for Spotlight steps to cut out the scrim around the target UI element.
+    pub spotlight_rect: Option<(f32, f32, f32, f32)>,
 }
 
 impl Default for TourOverlayState {
@@ -38,6 +41,7 @@ impl Default for TourOverlayState {
             title: "Welcome to Fronda".to_string(),
             instruction: "A cross-platform video editor built with Rust and gpui.".to_string(),
             visible: true,
+            spotlight_rect: None,
         }
     }
 }
@@ -212,14 +216,46 @@ fn outro_card(title: &str, instruction: &str) -> impl IntoElement {
         )
 }
 
+/// Spotlight scrim: 4 dark bands leaving a rect cutout with an accent border.
+fn spotlight_scrim(rect: (f32, f32, f32, f32)) -> impl IntoElement {
+    let (l, t, r, b) = rect;
+    let cw = r - l;
+    let ch = b - t;
+    let dim = gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: Opacity::STRONG };
+    div()
+        .size_full()
+        .relative()
+        // Top band
+        .child(div().absolute().top(relative(0.0)).left(relative(0.0)).w(relative(1.0)).h(relative(t)).bg(dim))
+        // Bottom band
+        .child(div().absolute().top(relative(b)).left(relative(0.0)).w(relative(1.0)).h(relative(1.0 - b)).bg(dim))
+        // Left band (middle row)
+        .child(div().absolute().top(relative(t)).left(relative(0.0)).w(relative(l)).h(relative(ch)).bg(dim))
+        // Right band (middle row)
+        .child(div().absolute().top(relative(t)).left(relative(r)).w(relative(1.0 - r)).h(relative(ch)).bg(dim))
+        // Accent border around cutout (approximates Swift gradient border)
+        .child(
+            div()
+                .absolute()
+                .top(relative(t))
+                .left(relative(l))
+                .w(relative(cw))
+                .h(relative(ch))
+                .border(px(BorderWidth::MEDIUM))
+                .border_color(Accent::PRIMARY)
+                .rounded(px(Radius::SM)),
+        )
+}
+
 impl Render for TourOverlayView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let visible = self.state.visible;
         let title = self.state.title.clone();
         let instruction = self.state.instruction.clone();
         let card_kind = self.state.card.clone();
+        let spotlight = self.state.spotlight_rect;
 
-        let scrim = div()
+        let full_scrim = div()
             .id("tour-overlay")
             .track_focus(&self.focus_handle.clone())
             .size_full()
@@ -241,13 +277,40 @@ impl Render for TourOverlayView {
             .when(visible, |el| {
                 match &card_kind {
                     TourCardKind::Intro => el.child(
-                        scrim.child(intro_card(&title, &instruction))
+                        full_scrim.child(intro_card(&title, &instruction))
                     ),
-                    TourCardKind::Spotlight { step, total } => el.child(
-                        scrim.child(callout_card(*step, *total, &title, &instruction))
-                    ),
+                    TourCardKind::Spotlight { step, total } => {
+                        let s = *step; let tot = *total;
+                        if let Some(rect) = spotlight {
+                            // Spotlight mode: 4-band scrim with cutout + callout card
+                            el.child(
+                                div()
+                                    .id("tour-spotlight-layer")
+                                    .size_full()
+                                    .absolute()
+                                    .top(px(0.0))
+                                    .left(px(0.0))
+                                    .relative()
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.state.visible = false;
+                                        cx.notify();
+                                    }))
+                                    .child(spotlight_scrim(rect))
+                                    // Callout card anchored at top-right of spotlight
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .top(relative(rect.1))
+                                            .left(relative(rect.2 + 0.01))
+                                            .child(callout_card(s, tot, &title, &instruction)),
+                                    )
+                            )
+                        } else {
+                            el.child(full_scrim.child(callout_card(s, tot, &title, &instruction)))
+                        }
+                    },
                     TourCardKind::Outro => el.child(
-                        scrim.child(outro_card(&title, &instruction))
+                        full_scrim.child(outro_card(&title, &instruction))
                     ),
                 }
             })

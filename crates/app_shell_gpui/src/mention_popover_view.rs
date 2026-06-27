@@ -115,7 +115,30 @@ fn tab_pill(label: &'static str, is_active: bool) -> impl IntoElement {
         .child(label)
 }
 
+/// Color-coded thumbnail for each media type (approximates per-asset thumbnail).
+fn media_thumbnail(media_type: &str) -> impl IntoElement {
+    let (hue, icon) = match media_type {
+        "Video" => (0.097_f32, "▶"),
+        "Audio" => (0.60_f32, "♫"),
+        "Image" => (0.35_f32, "⬜"),
+        _ => (0.0_f32, "▣"),
+    };
+    div()
+        .w(px(32.0))
+        .h(px(24.0))
+        .rounded(px(Radius::XS))
+        .bg(gpui::Hsla { h: hue, s: 0.45, l: 0.18, a: 1.0 })
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_shrink_0()
+        .text_color(gpui::Hsla { h: hue, s: 0.65, l: 0.65, a: 1.0 })
+        .text_size(px(FontSize::XXS))
+        .child(icon)
+}
+
 fn candidate_row(c: &MentionCandidate) -> impl IntoElement {
+    let mt = c.media_type.as_ref();
     div()
         .flex()
         .flex_row()
@@ -125,21 +148,8 @@ fn candidate_row(c: &MentionCandidate) -> impl IntoElement {
         .px(px(Spacing::SM_MD))
         .py(px(Spacing::XS))
         .cursor_pointer()
-        // Thumbnail placeholder
-        .child(
-            div()
-                .w(px(32.0))
-                .h(px(24.0))
-                .rounded(px(Radius::XS))
-                .bg(Background::SURFACE)
-                .flex()
-                .items_center()
-                .justify_center()
-                .flex_shrink_0()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::XXS))
-                .child("▣"),
-        )
+        // Color-coded thumbnail (type-based hue + icon)
+        .child(media_thumbnail(mt))
         // Name
         .child(
             div()
