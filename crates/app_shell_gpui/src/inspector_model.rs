@@ -1,33 +1,34 @@
-/// Inspector panel tabs matching InspectorView.swift.
+/// Inspector panel tabs matching Swift InspectorView.ClipTab.
+///
+/// Swift shows exactly 4 clip tabs: Text / Video / Audio / AI Edit.
+/// Speed and Transform are collapsible sections within Video tab, not separate tabs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InspectorTab {
-    Video,
-    Audio,
-    Speed,
+    /// Swift ClipTab.text — text clip properties
     Text,
-    Transform,
+    /// Swift ClipTab.video — visual clip: Volume, Transform, Playback
+    Video,
+    /// Swift ClipTab.audio — audio clip: Volume, Speed
+    Audio,
+    /// Swift ClipTab.ai — AI editing
     AiEdit,
 }
 
 impl InspectorTab {
     pub fn label(&self) -> &'static str {
         match self {
+            InspectorTab::Text => "Text",
             InspectorTab::Video => "Video",
             InspectorTab::Audio => "Audio",
-            InspectorTab::Speed => "Speed",
-            InspectorTab::Text => "Text",
-            InspectorTab::Transform => "Transform",
             InspectorTab::AiEdit => "AI Edit",
         }
     }
 
     pub fn all_tabs() -> &'static [InspectorTab] {
         &[
+            InspectorTab::Text,
             InspectorTab::Video,
             InspectorTab::Audio,
-            InspectorTab::Speed,
-            InspectorTab::Text,
-            InspectorTab::Transform,
             InspectorTab::AiEdit,
         ]
     }
@@ -126,7 +127,8 @@ mod tests {
 
     #[test]
     fn all_tabs_count() {
-        assert_eq!(InspectorTab::all_tabs().len(), 6);
+        // Swift ClipTab has exactly 4 tabs: Text / Video / Audio / AI Edit
+        assert_eq!(InspectorTab::all_tabs().len(), 4);
     }
 
     #[test]
@@ -139,7 +141,7 @@ mod tests {
     #[test]
     fn all_tabs_order() {
         let tabs = InspectorTab::all_tabs();
-        assert_eq!(tabs[0], InspectorTab::Video);
-        assert_eq!(tabs[5], InspectorTab::AiEdit);
+        assert_eq!(tabs[0], InspectorTab::Text);
+        assert_eq!(tabs[3], InspectorTab::AiEdit);
     }
 }
