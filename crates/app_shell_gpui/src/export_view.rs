@@ -26,6 +26,8 @@ pub struct ExportView {
     // UI-only selection state (not in model)
     selected_codec: usize,     // 0=H.264, 1=H.265, 2=ProRes
     selected_resolution: usize, // 0=720p, 1=1080p, 2=2K, 3=4K, 4=Match
+    selected_fps: usize,        // 0=24, 1=30, 2=60
+    output_path: String,
 }
 
 impl ExportView {
@@ -35,6 +37,8 @@ impl ExportView {
             focus_handle: cx.focus_handle(),
             selected_codec: 0,
             selected_resolution: 1,
+            selected_fps: 1,
+            output_path: "~/Desktop/Export.mp4".to_string(),
         }
     }
 }
@@ -110,6 +114,9 @@ impl Render for ExportView {
 
         let codec_labels = ["H.264", "H.265", "ProRes"];
         let res_labels = ["720p", "1080p", "2K", "4K", "Match Timeline"];
+        let fps_labels = ["24 fps", "30 fps", "60 fps"];
+        let selected_fps = self.selected_fps;
+        let output_path = self.output_path.clone();
 
         div()
             .id("export-sheet")
@@ -268,6 +275,63 @@ impl Render for ExportView {
                                                     cx.notify();
                                                 }))
                                             })),
+                                    )
+                                    // Frame rate section
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(Spacing::XS))
+                                            .child(option_label("Frame Rate"))
+                                            .children(fps_labels.iter().enumerate().map(|(i, label)| {
+                                                let is_sel = selected_fps == i;
+                                                picker_option(&format!("fps-{i}"), label, is_sel)
+                                                    .on_click(cx.listener(move |this, _: &ClickEvent, _: &mut Window, cx| {
+                                                        this.selected_fps = i;
+                                                        cx.notify();
+                                                    }))
+                                            })),
+                                    )
+                                    // Output destination row
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(Spacing::XS))
+                                            .child(option_label("Save To"))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_row()
+                                                    .items_center()
+                                                    .gap(px(Spacing::XS))
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .px(px(Spacing::SM))
+                                                            .py(px(Spacing::XS))
+                                                            .rounded(px(crate::theme::Radius::SM))
+                                                            .border_1()
+                                                            .border_color(BorderColors::SUBTLE)
+                                                            .bg(Background::BASE)
+                                                            .text_color(Text::TERTIARY)
+                                                            .text_size(px(FontSize::XS))
+                                                            .child(output_path),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("btn-export-browse")
+                                                            .px(px(Spacing::SM))
+                                                            .py(px(Spacing::XS))
+                                                            .rounded(px(crate::theme::Radius::SM))
+                                                            .border_1()
+                                                            .border_color(BorderColors::SUBTLE)
+                                                            .cursor_pointer()
+                                                            .text_color(Text::SECONDARY)
+                                                            .text_size(px(FontSize::XS))
+                                                            .child("Browse…"),
+                                                    ),
+                                            ),
                                     )
                                     .into_any_element(),
                                 ExportMode::Xml => div()
@@ -447,6 +511,10 @@ impl Render for ExportView {
                             .border_1()
                             .border_color(BorderColors::PRIMARY)
                             .cursor_pointer()
+                            .on_click(cx.listener(|this, _: &ClickEvent, _: &mut Window, cx| {
+                                this.model.settings_expanded = true;
+                                cx.notify();
+                            }))
                             .child(
                                 div()
                                     .text_size(px(FontSize::SM))

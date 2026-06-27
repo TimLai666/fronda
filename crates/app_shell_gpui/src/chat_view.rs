@@ -386,8 +386,9 @@ impl ChatView {
             .text_color(Text::PRIMARY)
             .text_size(px(FontSize::SM_MD));
 
-        // Text block
+        // Text block — with inline markdown rendering (bold, code, headers, line breaks)
         if !msg.text.is_empty() {
+            let text_content = render_md_text(&text, FontSize::SM_MD).into_any_element();
             body = body.child(
                 div()
                     .when(is_user, |el| {
@@ -396,7 +397,7 @@ impl ChatView {
                             .rounded(px(Radius::LG))
                             .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.08 })
                     })
-                    .child(text),
+                    .child(text_content),
             );
         }
 
@@ -1072,6 +1073,144 @@ fn truncate_title(text: &str) -> String {
     } else {
         format!("{}…", &trimmed[..39])
     }
+}
+
+/// Basic markdown renderer — handles: # headers, **bold**, `code`, blank-line paragraphs.
+/// gpui can't mix inline styles in a single text node, so this returns a flex-col of lines.
+fn render_md_text(text: &str, base_size: f32) -> impl IntoElement {
+    let mut col = div().flex().flex_col().gap(px(4.0));
+    let mut in_code_block = false;
+    let mut code_block_lines: Vec<String> = Vec::new();
+
+    let flush_code_block = |lines: &mut Vec<String>| -> gpui::AnyElement {
+        let block = lines.join("\n");
+        lines.clear();
+        div()
+            .px(px(8.0))
+            .py(px(6.0))
+            .rounded(px(4.0))
+            .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.35 })
+            .text_color(Text::SECONDARY)
+            .text_size(px(base_size - 1.0))
+            .child(block)
+            .into_any_element()
+    };
+
+    for raw_line in text.lines() {
+        // Code fence toggle
+        if raw_line.trim_start().starts_with("```") {
+            if in_code_block {
+                in_code_block = false;
+                col = col.child(flush_code_block(&mut code_block_lines));
+            } else {
+                in_code_block = true;
+            }
+            continue;
+        }
+        if in_code_block {
+            code_block_lines.push(raw_line.to_string());
+            continue;
+        }
+
+        // Heading
+        let (line_text, is_h1, is_h2) = if raw_line.starts_with("# ") {
+            (&raw_line[2..], true, false)
+        } else if raw_line.starts_with("## ") {
+            (&raw_line[3..], false, true)
+        } else {
+            (raw_line, false, false)
+        };
+
+        let font_size = if is_h1 { base_size + 4.0 } else if is_h2 { base_size + 2.0 } else { base_size };
+        let weight = if is_h1 || is_h2 { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL };
+
+        // Inline segments: split on **bold** and `code`
+        let segments = parse_inline(line_text);
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_baseline()
+            .gap(px(0.0));
+        for seg in segments {
+            row = match seg {
+                InlineSeg::Plain(s) => row.child(
+                    div()
+                        .text_color(Text::PRIMARY)
+                        .text_size(px(font_size))
+                        .font_weight(weight)
+                        .child(s),
+                ),
+                InlineSeg::Bold(s) => row.child(
+                    div()
+                        .text_color(Text::PRIMARY)
+                        .text_size(px(font_size))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child(s),
+                ),
+                InlineSeg::Code(s) => row.child(
+                    div()
+                        .px(px(3.0))
+                        .rounded(px(3.0))
+                        .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.08 })
+                        .text_color(Text::SECONDARY)
+                        .text_size(px(font_size - 1.0))
+                        .child(s),
+                ),
+            };
+        }
+        col = col.child(row);
+    }
+    // Flush unclosed code block
+    if in_code_block && !code_block_lines.is_empty() {
+        col = col.child(flush_code_block(&mut code_block_lines));
+    }
+    col
+}
+
+enum InlineSeg { Plain(String), Bold(String), Code(String) }
+
+fn parse_inline(s: &str) -> Vec<InlineSeg> {
+    let mut segs = Vec::new();
+    let mut rest = s;
+    while !rest.is_empty() {
+        if let Some(bold_start) = rest.find("**") {
+            let code_start = rest.find('`').unwrap_or(usize::MAX);
+            if code_start < bold_start {
+                // code comes first
+                if code_start > 0 { segs.push(InlineSeg::Plain(rest[..code_start].to_string())); }
+                let inner = &rest[code_start + 1..];
+                if let Some(code_end) = inner.find('`') {
+                    segs.push(InlineSeg::Code(inner[..code_end].to_string()));
+                    rest = &inner[code_end + 1..];
+                } else {
+                    segs.push(InlineSeg::Plain(rest.to_string())); break;
+                }
+            } else {
+                // bold comes first
+                if bold_start > 0 { segs.push(InlineSeg::Plain(rest[..bold_start].to_string())); }
+                let inner = &rest[bold_start + 2..];
+                if let Some(bold_end) = inner.find("**") {
+                    segs.push(InlineSeg::Bold(inner[..bold_end].to_string()));
+                    rest = &inner[bold_end + 2..];
+                } else {
+                    segs.push(InlineSeg::Plain(rest.to_string())); break;
+                }
+            }
+        } else if let Some(code_start) = rest.find('`') {
+            if code_start > 0 { segs.push(InlineSeg::Plain(rest[..code_start].to_string())); }
+            let inner = &rest[code_start + 1..];
+            if let Some(code_end) = inner.find('`') {
+                segs.push(InlineSeg::Code(inner[..code_end].to_string()));
+                rest = &inner[code_end + 1..];
+            } else {
+                segs.push(InlineSeg::Plain(rest.to_string())); break;
+            }
+        } else {
+            segs.push(InlineSeg::Plain(rest.to_string())); break;
+        }
+    }
+    segs
 }
 
 /// Three animated pulsing dots (Swift: ThinkingDots) — staggered opacity loop at 900ms.
