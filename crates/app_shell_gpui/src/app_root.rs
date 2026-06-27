@@ -14,6 +14,7 @@ use crate::pane::{LayoutPreset, PaneId, PaneLayout};
 use crate::preview_view::PreviewView;
 use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Text};
 use crate::timeline_view::TimelineView;
+use crate::titlebar_view::TitleBarView;
 use crate::toolbar_view::ToolbarView;
 use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
@@ -37,6 +38,7 @@ pub struct AppRoot {
     pane_layout: PaneLayout,
     home: HomeView,
     /// Editor panel entities — created lazily on first open_editor() call.
+    titlebar_view: Option<Entity<TitleBarView>>,
     chat_view: Option<Entity<ChatView>>,
     toolbar_view: Option<Entity<ToolbarView>>,
     media_panel_view: Option<Entity<MediaPanelView>>,
@@ -53,6 +55,7 @@ impl AppRoot {
             active_screen: ActiveScreen::Home,
             pane_layout: PaneLayout::new(),
             home: HomeView::new(handle),
+            titlebar_view: None,
             chat_view: None,
             toolbar_view: None,
             media_panel_view: None,
@@ -66,6 +69,7 @@ impl AppRoot {
     pub fn open_editor(&mut self, cx: &mut Context<Self>) {
         self.active_screen = ActiveScreen::Editor;
         if self.chat_view.is_none() {
+            self.titlebar_view = Some(cx.new(|cx| TitleBarView::new(cx)));
             self.chat_view = Some(cx.new(|cx| ChatView::new(cx)));
             self.toolbar_view = Some(cx.new(|cx| ToolbarView::new(cx)));
             self.media_panel_view = Some(cx.new(|cx| MediaPanelView::new(cx)));
@@ -422,8 +426,17 @@ impl Render for AppRoot {
                     self.inspector_view.clone(),
                 );
                 div()
+                    .flex()
+                    .flex_col()
                     .size_full()
-                    .child(editor_view::render_pane_layout(&layout, &contents))
+                    // Custom title bar (TitleBarLeadingView + TitleBarTrailingView)
+                    .when_some(self.titlebar_view.clone(), |el, tb| el.child(tb))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .child(editor_view::render_pane_layout(&layout, &contents)),
+                    )
                     .into_any_element()
             }
         };

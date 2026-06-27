@@ -1,4 +1,6 @@
 #[cfg(feature = "desktop-app")]
+pub mod account_view;
+#[cfg(feature = "desktop-app")]
 pub mod agent_panel_view;
 #[cfg(feature = "desktop-app")]
 pub mod app_root;
@@ -39,6 +41,8 @@ pub mod timeline_view;
 pub mod settings_view;
 #[cfg(feature = "desktop-app")]
 pub mod theme;
+#[cfg(feature = "desktop-app")]
+pub mod titlebar_view;
 pub mod toolbar_model;
 #[cfg(feature = "desktop-app")]
 pub mod toolbar_view;

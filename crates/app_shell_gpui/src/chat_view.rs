@@ -247,7 +247,9 @@ impl ChatView {
         bar
     }
 
-    /// Plain-text message layout matching Swift LazyVStack — no bubble backgrounds.
+    /// Message layout matching Swift AgentMessageView:
+    ///   - User:      right-aligned bubble, white@Opacity.faint (0.08), Radius.lg
+    ///   - Assistant: left-aligned text, no fill
     fn render_message(msg: &ChatMessage) -> impl IntoElement {
         let status_icon = match &msg.status {
             MessageStatus::Failed(_) => " ⚠",
@@ -255,7 +257,6 @@ impl ChatView {
             _ => "",
         };
 
-        let role = role_label(&msg.role).to_string();
         let text = msg.text.clone() + status_icon;
         let is_user = matches!(msg.role, ChatRole::User);
 
@@ -265,36 +266,50 @@ impl ChatView {
                 role_label(&msg.role)
             )))
             .flex()
-            .flex_col()
+            .flex_row()
             .w_full()
             .px(px(Spacing::LG_XL))
             .mb(px(Spacing::XL))
-            // Role label (xxs, muted)
-            .child(
-                div()
-                    .mb(px(Spacing::XXS))
-                    .text_color(Text::MUTED)
-                    .text_size(px(FontSize::XXS))
-                    .child(role),
-            )
-            // Message text — user messages optionally right-aligned
+            // Push user messages to the right (Swift: HStack { Spacer(minLength:48) ... })
+            .when(is_user, |el| {
+                el.child(div().flex_1().min_w(px(48.0)))
+            })
             .child(
                 div()
                     .text_color(Text::PRIMARY)
                     .text_size(px(FontSize::SM_MD))
                     .when(is_user, |el| {
-                        el.px(px(Spacing::MD))
+                        el.px(px(Spacing::LG))
                             .py(px(Spacing::SM_MD))
-                            .rounded(px(Radius::MD))
+                            .rounded(px(Radius::LG))
                             .bg(Hsla {
                                 h: 0.0,
                                 s: 0.0,
                                 l: 1.0,
-                                a: 0.06,
+                                a: 0.08, // Opacity::FAINT
                             })
                     })
                     .child(text),
             )
+    }
+
+    /// Streaming "thinking dots" indicator (Swift: ThinkingDots — 3 circles, text.tertiary).
+    fn render_thinking_indicator() -> impl IntoElement {
+        div()
+            .id("chat-thinking")
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(5.0))
+            .px(px(Spacing::LG_XL))
+            .pb(px(Spacing::MD))
+            .children((0..3).map(|_| {
+                div()
+                    .w(px(5.0))
+                    .h(px(5.0))
+                    .rounded_full()
+                    .bg(Text::TERTIARY)
+            }))
     }
 
     /// Starter prompts shown when no messages exist.
@@ -509,6 +524,11 @@ impl Render for ChatView {
             for msg in &self.model.messages {
                 messages_div = messages_div.child(Self::render_message(msg));
             }
+        }
+
+        // Thinking dots shown while streaming (Swift: ThinkingDots when isStreaming)
+        if self.model.is_agent_running {
+            messages_div = messages_div.child(Self::render_thinking_indicator());
         }
 
         // ── Mention picker ──
