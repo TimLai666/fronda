@@ -1033,4 +1033,37 @@ mod tests {
         assert!(!json.contains("padding"), "default padding must be omitted: {json}");
         assert!(!json.contains("corner_radius"), "default corner_radius must be omitted: {json}");
     }
+
+    // ── Issue #39: Transcription language ────────────────────────────────────
+
+    #[test]
+    fn issue_039_transcription_language_defaults_to_none() {
+        let t = Timeline::default();
+        assert!(t.transcription_language.is_none());
+    }
+
+    #[test]
+    fn issue_039_transcription_language_can_be_set() {
+        let mut t = Timeline::default();
+        t.transcription_language = Some("zh-TW".into());
+        assert_eq!(t.transcription_language.as_deref(), Some("zh-TW"));
+    }
+
+    #[test]
+    fn issue_039_transcription_language_serialized_when_set() {
+        let mut t = Timeline::default();
+        t.transcription_language = Some("ja".into());
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains("\"transcriptionLanguage\":\"ja\""), "json={json}");
+    }
+
+    #[test]
+    fn issue_039_transcription_language_omitted_when_none() {
+        let t = Timeline::default();
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(
+            !json.contains("transcriptionLanguage"),
+            "None transcriptionLanguage must be omitted: {json}"
+        );
+    }
 }

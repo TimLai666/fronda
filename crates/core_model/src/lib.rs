@@ -19,10 +19,12 @@ pub use media_manifest::{
     GenerationInput, MediaFolder, MediaManifest, MediaManifestEntry, MediaSource,
 };
 pub use project_registry::{ProjectEntry, ProjectRegistry};
-pub use shape_style::{Arrowhead, Endpoints, Fill, Point2d, Rgba, ShapeKind, ShapeStyle, Stroke};
+pub use shape_style::{
+    Arrowhead, Endpoints, Fill, Point2d, Rgba, ShapeAnimationPreset, ShapeKind, ShapeStyle, Stroke,
+};
 pub use timeline::{
-    AnimPair, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, TextAlignment,
-    TextFill, TextRgba, TextShadow, TextStyle, Timeline, Track, Transform,
+    AnimPair, BlendMode, ChromaKey, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack,
+    TextAlignment, TextFill, TextRgba, TextShadow, TextStyle, Timeline, Track, Transform,
 };
 
 pub const PROJECT_EXTENSION: &str = "palmier";

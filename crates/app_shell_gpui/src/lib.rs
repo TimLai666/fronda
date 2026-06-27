@@ -11,6 +11,7 @@ pub mod export_model;
 pub mod export_view;
 #[cfg(feature = "desktop-app")]
 pub mod feedback_view;
+pub mod multi_session;
 #[cfg(feature = "desktop-app")]
 pub mod help_view;
 pub mod home_model;
