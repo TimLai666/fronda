@@ -5,7 +5,7 @@
 
 use crate::generation_view::GenerationView;
 use crate::media_panel_model::{MediaPanelState, MediaPanelTab};
-use crate::theme::{Background, BorderColors, FontSize, IconSize, Layout, MediaPanel, Radius, Spacing, Text};
+use crate::theme::{Accent, Background, BorderColors, FontSize, IconSize, Layout, MediaPanel, Radius, Spacing, Text};
 use gpui::{
     div, prelude::*, px, App, Context, Entity, FocusHandle, Focusable, IntoElement,
     InteractiveElement, ParentElement, Render, Styled, Window,
@@ -68,74 +68,148 @@ fn tab_btn(id: &str, label: &str, is_active: bool) -> impl IntoElement {
         .child(label.to_string())
 }
 
-/// Media content tab: search bar + drop zone.
-fn media_tab_content() -> impl IntoElement {
+/// Media library empty state — shown when no assets exist.
+fn media_empty_state() -> impl IntoElement {
     div()
         .flex()
         .flex_col()
-        .size_full()
-        // Search bar
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap(px(Spacing::SM))
         .child(
             div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .w_full()
-                .h(px(28.0))
-                .px(px(Spacing::SM))
-                .bg(Background::RAISED)
-                .border_b_1()
-                .border_color(BorderColors::SUBTLE)
-                .child(
-                    div()
-                        .text_color(Text::MUTED)
-                        .text_size(px(FontSize::SM))
-                        .child("⌕ Search media…"),
-                ),
-        )
-        // Drop zone
-        .child(
-            div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .flex_col()
-                .gap(px(Spacing::SM))
                 .text_color(Text::MUTED)
                 .text_size(px(FontSize::SM))
-                .child("Drop media here")
-                .child(
-                    div()
-                        .text_size(px(FontSize::XS))
-                        .text_color(Text::MUTED)
-                        .child("or click Import"),
-                ),
+                .child("Drop media here"),
         )
-        // Import button
+        .child(
+            div()
+                .text_color(Text::MUTED)
+                .text_size(px(FontSize::XS))
+                .child("or click Import"),
+        )
+}
+
+/// Media toolbar row — matches Swift MediaTab.actionsRow + searchControlsRow.
+fn media_toolbar() -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(Spacing::XS))
+        .px(px(Spacing::SM))
+        .pt(px(Spacing::SM))
+        .pb(px(Spacing::XS))
+        .bg(Background::SURFACE)
+        .border_b_1()
+        .border_color(BorderColors::SUBTLE)
+        // Actions row: Import + Generate
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
-                .justify_center()
-                .w_full()
-                .h(px(36.0))
-                .border_t_1()
-                .border_color(BorderColors::SUBTLE)
-                .bg(Background::RAISED)
+                .gap(px(Spacing::XS))
+                .h(px(Layout::PANEL_HEADER_HEIGHT))
+                // Import button
                 .child(
                     div()
-                        .px(px(Spacing::MD))
-                        .py(px(Spacing::XS))
+                        .id("btn-import-media")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(Spacing::XS))
+                        .px(px(Spacing::SM))
+                        .h(px(24.0))
                         .rounded(px(Radius::SM))
                         .border_1()
-                        .border_color(BorderColors::PRIMARY)
+                        .border_color(BorderColors::SUBTLE)
+                        .cursor_pointer()
                         .text_color(Text::SECONDARY)
                         .text_size(px(FontSize::SM))
+                        .child("+ Import"),
+                )
+                // Generate button (filled, AI gradient approximated as Accent::PRIMARY)
+                .child(
+                    div()
+                        .id("btn-generate-media")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(Spacing::XS))
+                        .px(px(Spacing::SM))
+                        .h(px(24.0))
+                        .rounded(px(Radius::SM))
+                        .bg(Accent::PRIMARY)
                         .cursor_pointer()
-                        .child("Import Media"),
+                        .text_color(Background::BASE)
+                        .text_size(px(FontSize::SM))
+                        .child("✦ Generate"),
                 ),
+        )
+        // Search + display controls row
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(Spacing::XS))
+                .h(px(Layout::PANEL_HEADER_HEIGHT))
+                // Search field
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .flex_1()
+                        .px(px(Spacing::SM))
+                        .h(px(22.0))
+                        .rounded(px(Radius::SM))
+                        .border_1()
+                        .border_color(BorderColors::SUBTLE)
+                        .bg(Background::RAISED)
+                        .text_color(Text::MUTED)
+                        .text_size(px(FontSize::SM))
+                        .child("⌕ Search"),
+                )
+                // View mode icon button
+                .child(
+                    div()
+                        .w(px(22.0))
+                        .h(px(22.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_color(Text::TERTIARY)
+                        .text_size(px(FontSize::SM))
+                        .child("⊞"),
+                )
+                // Sort icon button
+                .child(
+                    div()
+                        .w(px(22.0))
+                        .h(px(22.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_color(Text::TERTIARY)
+                        .text_size(px(FontSize::SM))
+                        .child("↕"),
+                ),
+        )
+        // Breadcrumb / context bar
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(Spacing::XS))
+                .h(px(20.0))
+                .text_color(Text::MUTED)
+                .text_size(px(FontSize::XS))
+                .child("Library"),
         )
 }
 
@@ -295,10 +369,17 @@ impl Render for MediaPanelView {
                             .flex()
                             .flex_col()
                             .size_full()
-                            // Generation panel embedded at top of media tab (Swift: GenerationView)
-                            .child(generation_entity)
-                            // Drop zone / grid below
-                            .child(media_tab_content())
+                            // Toolbar at top (Import + Generate + Search + View controls)
+                            .child(media_toolbar())
+                            // Library grid / empty state (flex-1, scrollable)
+                            .child(media_empty_state())
+                            // GenerationView anchored to BOTTOM (Swift: .frame(alignment:.bottom))
+                            .child(
+                                div()
+                                    .border_t_1()
+                                    .border_color(BorderColors::SUBTLE)
+                                    .child(generation_entity),
+                            )
                             .into_any_element(),
                         MediaPanelTab::Captions => captions_tab_content().into_any_element(),
                         MediaPanelTab::Music => music_tab_content().into_any_element(),
