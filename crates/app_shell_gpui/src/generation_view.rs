@@ -4,10 +4,11 @@
 //! Uses GenerationPanel theme constants for all sizing.
 
 use crate::theme::{
-    Accent, Background, BorderColors, FontSize, GenerationPanel, Radius, Spacing, Text,
+    Accent, Background, BorderColors, FontSize, GenerationPanel, Opacity, Radius, Spacing, Text,
+    TrackColor,
 };
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable, Hsla,
+    div, prelude::*, px, svg, App, ClickEvent, Context, FocusHandle, Focusable, Hsla,
     InteractiveElement, ParentElement, Render, Styled, Window,
 };
 
@@ -28,6 +29,22 @@ impl GenerationType {
         }
     }
 
+    pub fn icon_path(&self) -> &'static str {
+        match self {
+            Self::Video => "icons/video.svg",
+            Self::Image => "icons/photo.svg",
+            Self::Audio => "icons/waveform.svg",
+        }
+    }
+
+    pub fn accent_color(&self) -> Hsla {
+        match self {
+            Self::Video => TrackColor::VIDEO,
+            Self::Image => TrackColor::IMAGE,
+            Self::Audio => TrackColor::AUDIO,
+        }
+    }
+
     pub fn all() -> &'static [Self] {
         &[Self::Video, Self::Image, Self::Audio]
     }
@@ -41,6 +58,10 @@ pub struct GenerationState {
     pub is_generating: bool,
     /// Credits remaining (None = signed out / unknown).
     pub credits_remaining: Option<u32>,
+    /// GEN-4: Video ref mode — true = First/Last frames, false = single Reference.
+    pub use_first_last: bool,
+    /// GEN-5: whether the model picker dropdown is open.
+    pub show_model_picker: bool,
 }
 
 impl Default for GenerationState {
@@ -50,6 +71,8 @@ impl Default for GenerationState {
             prompt: String::new(),
             is_generating: false,
             credits_remaining: Some(1_250),
+            use_first_last: true,
+            show_model_picker: false,
         }
     }
 }
@@ -76,37 +99,45 @@ impl Focusable for GenerationView {
 }
 
 /// A reference media tile (first frame, last frame, or image reference).
+/// Label is displayed *above* the tile (matches Swift layout: Text(label) before the tile RoundedRectangle).
 fn ref_tile(label: &str) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .items_center()
-        .justify_center()
-        .w(px(GenerationPanel::REFERENCE_TILE_WIDTH))
-        .h(px(GenerationPanel::REFERENCE_TILE_HEIGHT))
-        .rounded(px(Radius::SM))
-        .border_1()
-        .border_color(BorderColors::SUBTLE)
-        .bg(Background::RAISED)
         .gap(px(Spacing::XXS))
-        .cursor_pointer()
         .child(
             div()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::MD))
-                .child("+"),
+                .text_color(Text::TERTIARY)
+                .text_size(px(FontSize::XXS))
+                .child(label.to_string()),
         )
         .child(
             div()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::XXS))
-                .child(label.to_string()),
+                .w(px(GenerationPanel::REFERENCE_TILE_WIDTH))
+                .h(px(GenerationPanel::REFERENCE_TILE_HEIGHT))
+                .rounded(px(Radius::SM))
+                .border_1()
+                .border_color(BorderColors::SUBTLE)
+                .bg(Background::RAISED)
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .child(
+                    div()
+                        .text_color(Text::MUTED)
+                        .text_size(px(FontSize::MD))
+                        .child("+"),
+                ),
         )
 }
 
 impl Render for GenerationView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.state.selected_type;
+        let use_first_last = self.state.use_first_last;
+        let show_model_picker = self.state.show_model_picker;
         let prompt_text = if self.state.prompt.is_empty() {
             "Describe what to generate…".to_string()
         } else {
@@ -130,7 +161,28 @@ impl Render for GenerationView {
             .flex()
             .flex_col()
             .size_full()
+            // aiGradientDark approximation: white(0.06)→white(0.11) gradient; avg ≈ SURFACE
             .bg(Background::SURFACE)
+            .rounded(px(Radius::LG))
+            .overflow_hidden()
+            // ── Resize handle (Swift: resizeHandle — 24×2 capsule, white@soft, cursor ns-resize) ──
+            .child(
+                div()
+                    .id("gen-resize-handle")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w_full()
+                    .h(px(Spacing::MD))
+                    .cursor_ns_resize()
+                    .child(
+                        div()
+                            .w(px(24.0))
+                            .h(px(2.0))
+                            .rounded_full()
+                            .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::SOFT }),
+                    ),
+            )
             // ── Header: type tabs (left) + credit chip + activity + close (right) ──
             // Matches Swift: typeTabs · Spacer · CreditSummaryView(.compact) · ProjectActivityButton · xmark
             .child(
@@ -143,46 +195,62 @@ impl Render for GenerationView {
                     .gap(px(Spacing::XXS))
                     .border_b_1()
                     .border_color(BorderColors::SUBTLE)
-                    // Type tabs
-                    .children(GenerationType::all().iter().map(|gen_type| {
-                        let is_active = *gen_type == selected;
-                        let gt = *gen_type;
-                        div()
-                            .id(gpui::SharedString::from(format!(
-                                "gen-type-{}",
-                                gen_type.label()
-                            )))
-                            .px(px(Spacing::SM_MD))
-                            .h(px(24.0))
+                    // Type tabs — wrapped in pill container (Swift: typeTabs HStack with bg+strokeBorder)
+                    .child({
+                        let mut pill = div()
+                            .id("gen-type-pill")
                             .flex()
+                            .flex_row()
                             .items_center()
+                            .gap(px(Spacing::XXS))
+                            .px(px(Spacing::XXS))
+                            .py(px(Spacing::XXS))
                             .rounded(px(Radius::SM))
-                            .cursor_pointer()
-                            .bg(if is_active {
-                                active_tab_bg
-                            } else {
-                                Background::SURFACE
-                            })
-                            .on_click(cx.listener(
-                                move |this: &mut GenerationView,
-                                      _event: &ClickEvent,
-                                      _window: &mut Window,
-                                      cx: &mut Context<GenerationView>| {
-                                    this.state.selected_type = gt;
-                                    cx.notify();
-                                },
-                            ))
-                            .child(
+                            .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::SUBTLE })
+                            .border_1()
+                            .border_color(Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::FAINT });
+                        for gen_type in GenerationType::all() {
+                            let is_active = *gen_type == selected;
+                            let gt = *gen_type;
+                            let icon_path = gen_type.icon_path();
+                            let accent = gen_type.accent_color();
+                            let icon_color = if is_active { accent } else { Text::TERTIARY };
+                            let text_color = if is_active { Text::PRIMARY } else { Text::TERTIARY };
+                            pill = pill.child(
                                 div()
-                                    .text_size(px(FontSize::SM))
-                                    .text_color(if is_active {
-                                        Text::PRIMARY
-                                    } else {
-                                        Text::TERTIARY
-                                    })
-                                    .child(gen_type.label()),
-                            )
-                    }))
+                                    .id(gpui::SharedString::from(format!(
+                                        "gen-type-{}",
+                                        gen_type.label()
+                                    )))
+                                    .px(px(Spacing::SM_MD))
+                                    .h(px(22.0))
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(Spacing::XS))
+                                    .rounded(px(Radius::XS_SM))
+                                    .cursor_pointer()
+                                    .bg(if is_active { active_tab_bg } else { Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 } })
+                                    .on_click(cx.listener(
+                                        move |this: &mut GenerationView,
+                                              _event: &ClickEvent,
+                                              _window: &mut Window,
+                                              cx: &mut Context<GenerationView>| {
+                                            this.state.selected_type = gt;
+                                            cx.notify();
+                                        },
+                                    ))
+                                    .child(svg().path(icon_path).w(px(11.0)).h(px(11.0)).text_color(icon_color))
+                                    .child(
+                                        div()
+                                            .text_size(px(FontSize::SM))
+                                            .text_color(text_color)
+                                            .child(gen_type.label()),
+                                    )
+                            );
+                        }
+                        pill
+                    })
                     // Spacer
                     .child(div().flex_1())
                     // Credit chip (CreditSummaryView.compact) — only when credits available
@@ -245,26 +313,87 @@ impl Render for GenerationView {
                             .child("✕"),
                     ),
             )
-            // ── Reference tiles area (first frame, last frame) ──
+            // ── Reference tiles area ──
             .child(
                 div()
                     .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(Spacing::SM))
+                    .flex_col()
                     .px(px(Spacing::MD))
                     .py(px(Spacing::SM_MD))
+                    .gap(px(Spacing::XS))
                     .min_h(px(GenerationPanel::MEDIA_AREA_MIN_HEIGHT))
+                    // GEN-4: segmented toggle for Video type (First/Last vs Reference)
                     .when(selected == GenerationType::Video, |el| {
-                        el.child(ref_tile("First Frame"))
-                            .child(ref_tile("Last Frame"))
+                        let seg_bg: Hsla = Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.06 };
+                        let active_seg: Hsla = Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.14 };
+                        el.child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(1.0))
+                                .rounded(px(Radius::XS_SM))
+                                .bg(seg_bg)
+                                .p(px(1.0))
+                                .child(
+                                    div()
+                                        .id("gen-seg-first-last")
+                                        .px(px(Spacing::SM))
+                                        .h(px(20.0))
+                                        .flex()
+                                        .items_center()
+                                        .rounded(px(Radius::XS))
+                                        .cursor_pointer()
+                                        .bg(if use_first_last { active_seg } else { Hsla { h:0.0,s:0.0,l:0.0,a:0.0 } })
+                                        .text_size(px(FontSize::XXS))
+                                        .text_color(if use_first_last { Text::PRIMARY } else { Text::MUTED })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.state.use_first_last = true;
+                                            cx.notify();
+                                        }))
+                                        .child("First / Last"),
+                                )
+                                .child(
+                                    div()
+                                        .id("gen-seg-reference")
+                                        .px(px(Spacing::SM))
+                                        .h(px(20.0))
+                                        .flex()
+                                        .items_center()
+                                        .rounded(px(Radius::XS))
+                                        .cursor_pointer()
+                                        .bg(if !use_first_last { active_seg } else { Hsla { h:0.0,s:0.0,l:0.0,a:0.0 } })
+                                        .text_size(px(FontSize::XXS))
+                                        .text_color(if !use_first_last { Text::PRIMARY } else { Text::MUTED })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.state.use_first_last = false;
+                                            cx.notify();
+                                        }))
+                                        .child("Reference"),
+                                ),
+                        )
                     })
-                    .when(selected == GenerationType::Image, |el| {
-                        el.child(ref_tile("Reference"))
-                    })
-                    .when(selected == GenerationType::Audio, |el| {
-                        el.child(ref_tile("Video Source"))
-                    }),
+                    // Tile row
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Spacing::SM))
+                            .when(selected == GenerationType::Video && use_first_last, |el| {
+                                el.child(ref_tile("First Frame"))
+                                    .child(ref_tile("Last Frame"))
+                            })
+                            .when(selected == GenerationType::Video && !use_first_last, |el| {
+                                el.child(ref_tile("Reference"))
+                            })
+                            .when(selected == GenerationType::Image, |el| {
+                                el.child(ref_tile("Reference"))
+                            })
+                            .when(selected == GenerationType::Audio, |el| {
+                                el.child(ref_tile("Video Source"))
+                            }),
+                    ),
             )
             // ── Prompt input ──
             .child(
@@ -292,7 +421,7 @@ impl Render for GenerationView {
                             })
                             .child(prompt_text),
                     )
-                    // Footer row: model badge + generate button
+                    // Footer row: gear + model picker + generate button
                     .child(
                         div()
                             .flex()
@@ -301,17 +430,55 @@ impl Render for GenerationView {
                             .px(px(Spacing::SM_MD))
                             .pb(px(Spacing::SM_MD))
                             .pt(px(Spacing::XXS))
+                            .gap(px(Spacing::XS))
+                            // GEN-6: Settings gear button
                             .child(
                                 div()
-                                    .flex_1()
+                                    .id("btn-gen-settings")
+                                    .w(px(20.0))
+                                    .h(px(20.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(Radius::XS))
+                                    .cursor_pointer()
                                     .text_color(Text::MUTED)
-                                    .text_size(px(FontSize::XXS))
-                                    .child(match selected {
-                                        GenerationType::Video => "Sora · 5s · 1080p",
-                                        GenerationType::Image => "Flux Pro",
-                                        GenerationType::Audio => "Udio · 30s",
-                                    }),
+                                    .text_size(px(FontSize::SM))
+                                    .on_click(cx.listener(|_, _, _, _| {}))
+                                    .child("⚙"),
                             )
+                            // GEN-5: Model picker button — tappable label + chevron
+                            .child(
+                                div()
+                                    .id("btn-gen-model-picker")
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(2.0))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.state.show_model_picker = !this.state.show_model_picker;
+                                        cx.notify();
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_color(Text::MUTED)
+                                            .text_size(px(FontSize::XXS))
+                                            .child(match selected {
+                                                GenerationType::Video => "Sora · 5s · 1080p",
+                                                GenerationType::Image => "Flux Pro",
+                                                GenerationType::Audio => "Udio · 30s",
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(Text::MUTED)
+                                            .text_size(px(FontSize::XXS))
+                                            .child("⌄"),
+                                    ),
+                            )
+                            .child(div().flex_1())
+                            // Generate button
                             .child(
                                 div()
                                     .id("btn-generate")
@@ -347,7 +514,47 @@ impl Render for GenerationView {
                                             .child(if is_generating { "◼" } else { "✦" }),
                                     ),
                             ),
-                    ),
+                    )
+                    // GEN-5: Model picker dropdown — appears inside the prompt box when open
+                    .when(show_model_picker, |el| {
+                        el.child(
+                            div()
+                                .id("gen-model-picker-dropdown")
+                                .border_t_1()
+                                .border_color(BorderColors::SUBTLE)
+                                .flex()
+                                .flex_col()
+                                .overflow_hidden()
+                                .child(model_picker_row("Sora 1.5", "5s · 1080p"))
+                                .child(model_picker_row("Sora 1.0", "5s · 720p"))
+                                .child(model_picker_row("Runway Gen-3", "10s · 720p")),
+                        )
+                    }),
             )
     }
+}
+
+/// A single row in the model picker dropdown.
+fn model_picker_row(name: &str, detail: &str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .px(px(Spacing::SM_MD))
+        .py(px(Spacing::XS))
+        .gap(px(Spacing::SM))
+        .cursor_pointer()
+        .child(
+            div()
+                .flex_1()
+                .text_color(Text::PRIMARY)
+                .text_size(px(FontSize::SM))
+                .child(name.to_string()),
+        )
+        .child(
+            div()
+                .text_color(Text::MUTED)
+                .text_size(px(FontSize::XXS))
+                .child(detail.to_string()),
+        )
 }

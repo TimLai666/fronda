@@ -4,6 +4,28 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Status of a tool call within an assistant message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum ToolCallStatus {
+    #[default]
+    Running,
+    Done,
+    Failed,
+}
+
+/// A single tool invocation within an assistant message (Swift: AgentMessage block .toolUse).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub name: String,
+    pub status: ToolCallStatus,
+    /// Pretty-printed JSON of the tool's input arguments (Swift: inputJSON).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_json: Option<String>,
+    /// Output text returned by the tool (Swift: resultText).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_text: Option<String>,
+}
+
 /// A single chat message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -11,6 +33,9 @@ pub struct ChatMessage {
     pub text: String,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub status: MessageStatus,
+    /// Tool calls emitted by this assistant message (empty for user messages).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// Chat participant role.
@@ -91,6 +116,7 @@ impl ChatPanelModel {
             text,
             timestamp: chrono::Utc::now(),
             status: MessageStatus::Sent,
+            tool_calls: Vec::new(),
         });
     }
 
@@ -296,6 +322,7 @@ mod tests {
             text: "Hello".into(),
             timestamp: chrono::Utc::now(),
             status: MessageStatus::Sent,
+            tool_calls: Vec::new(),
         };
         assert_eq!(msg.role, ChatRole::User);
         assert_eq!(msg.text, "Hello");
@@ -309,6 +336,7 @@ mod tests {
             text: "Error".into(),
             timestamp: chrono::Utc::now(),
             status: MessageStatus::Failed("timeout".into()),
+            tool_calls: Vec::new(),
         };
         match &msg.status {
             MessageStatus::Failed(reason) => assert_eq!(reason, "timeout"),

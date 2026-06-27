@@ -3,14 +3,22 @@
 //! Implements CHAT-001 through CHAT-010.
 //! Requires the `desktop-app` feature (gpui).
 
-use app_contract::chat_model::{ChatMessage, ChatPanelModel, ChatRole, MessageStatus};
+use app_contract::chat_model::{ChatMessage, ChatPanelModel, ChatRole, MessageStatus, ToolCallStatus};
 use app_contract::mention_picker::{MentionCandidate, MentionCategory, MentionPickerState};
 use app_contract::session_manager::SessionManager;
 use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable, Hsla,
-    InteractiveElement, KeyDownEvent, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, Animation, AnimationExt as _, App, ClickEvent, Context, FocusHandle,
+    Focusable, Hsla, InteractiveElement, KeyDownEvent, ParentElement, Render, Styled, Window,
 };
+use std::time::Duration;
+use std::collections::HashSet;
+
+const AVAILABLE_MODELS: &[&str] = &[
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+];
 
 /// Role label for display.
 fn role_label(role: &ChatRole) -> &'static str {
@@ -40,6 +48,14 @@ pub struct ChatView {
     session_mgr: SessionManager,
     mention_picker: MentionPickerState,
     shift_held: bool,
+    /// Index into AVAILABLE_MODELS (Swift: editor.agentService.selectedModel).
+    selected_model_idx: usize,
+    /// Whether the model picker dropdown is visible.
+    model_picker_open: bool,
+    /// Whether the chat history popover is visible (Swift: showHistory).
+    history_open: bool,
+    /// Set of tool-row keys that are expanded: "{msg_idx}-{tool_idx}".
+    expanded_tool_rows: HashSet<String>,
 }
 
 impl ChatView {
@@ -90,6 +106,10 @@ impl ChatView {
             session_mgr: SessionManager::new(),
             mention_picker: MentionPickerState::new(mention_candidates),
             shift_held: false,
+            selected_model_idx: 1, // claude-sonnet-4-6 as default
+            model_picker_open: false,
+            history_open: false,
+            expanded_tool_rows: HashSet::new(),
         }
     }
 
@@ -141,42 +161,43 @@ impl ChatView {
 
     // ── Render helpers ──
 
+    /// Tab bar — matches Swift AgentPanelView.floatingTabBar.
+    /// Layout: [session tabs w/ close × per tab] [+] [spacer] [⏱ history]
     fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.session_mgr.sessions.len();
         let active_idx = self.session_mgr.active_index;
+        let history_open = self.history_open;
+        let sessions: Vec<(usize, String, bool)> = self.session_mgr.sessions.iter().enumerate()
+            .map(|(i, s)| (i, s.title.clone(), i == active_idx))
+            .collect();
+        let multi = sessions.len() > 1;
 
         let mut bar = div()
             .id("chat-tab-bar")
             .flex()
             .flex_row()
-            .items_end()
-            .px(px(Spacing::MD_LG))
-            .pt(px(Spacing::XS))
-            .gap(px(Spacing::LG))
+            .items_center()
+            .px(px(Spacing::SM_MD))
+            .h(px(crate::theme::Layout::PANEL_HEADER_HEIGHT))
+            .gap(px(Spacing::XXS))
             .bg(Background::SURFACE)
             .border_b_1()
             .border_color(BorderColors::SUBTLE);
 
-        for (i, session) in self.session_mgr.sessions.iter().enumerate() {
-            let is_active = i == active_idx;
-            let title = session.title.clone();
-
-            let tab = div()
+        // Session tabs — each with optional × close button
+        for (i, title, is_active) in sessions {
+            let mut tab = div()
                 .id(gpui::SharedString::from(format!("chat-tab-{i}")))
                 .flex()
                 .flex_row()
                 .items_center()
-                .pb(px(Spacing::XS))
+                .h_full()
+                .px(px(Spacing::SM))
                 .gap(px(Spacing::XS))
                 .cursor_pointer()
-                // Bottom underline when active (no fill, just underline — matches Swift)
                 .border_b(px(if is_active { 1.5 } else { 0.0 }))
                 .border_color(Text::PRIMARY)
                 .on_click(cx.listener(
-                    move |this: &mut ChatView,
-                          _event: &ClickEvent,
-                          _window: &mut Window,
-                          cx: &mut Context<ChatView>| {
+                    move |this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
                         this.session_mgr.select_tab(i);
                         cx.notify();
                     },
@@ -185,112 +206,355 @@ impl ChatView {
                     div()
                         .text_color(if is_active { Text::PRIMARY } else { Text::MUTED })
                         .text_size(px(FontSize::SM))
+                        .font_weight(if is_active { gpui::FontWeight::MEDIUM } else { gpui::FontWeight::NORMAL })
                         .child(title),
                 );
+
+            if multi {
+                tab = tab.child(
+                    div()
+                        .id(gpui::SharedString::from(format!("chat-tab-close-{i}")))
+                        .w(px(12.0))
+                        .h(px(12.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(Text::MUTED)
+                        .text_size(px(FontSize::XXS))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
+                            this.session_mgr.close_tab(i);
+                            cx.notify();
+                        }))
+                        .child("×"),
+                );
+            }
 
             bar = bar.child(tab);
         }
 
-        // New tab + button
+        // + new tab button
         bar = bar.child(
             div()
                 .id("chat-new-tab")
+                .w(px(20.0))
+                .h(px(20.0))
                 .flex()
                 .items_center()
                 .justify_center()
-                .pb(px(Spacing::XS))
                 .cursor_pointer()
-                .on_click(cx.listener(
-                    |this: &mut ChatView,
-                     _event: &ClickEvent,
-                     _window: &mut Window,
-                     cx: &mut Context<ChatView>| {
-                        this.session_mgr.new_tab();
-                        cx.notify();
-                    },
-                ))
-                .child(
-                    div()
-                        .text_size(px(FontSize::MD_LG))
-                        .text_color(Text::MUTED)
-                        .child("+"),
-                ),
+                .rounded(px(Radius::XS))
+                .text_color(Text::TERTIARY)
+                .text_size(px(FontSize::MD))
+                .on_click(cx.listener(|this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
+                    this.session_mgr.new_tab();
+                    cx.notify();
+                }))
+                .child("+"),
         );
 
-        if count > 1 {
-            let close_tab_idx = active_idx;
-            bar = bar.child(
-                div().flex_1().flex().justify_end().child(
-                    div()
-                        .id("chat-close-tab")
-                        .pb(px(Spacing::XS))
-                        .cursor_pointer()
-                        .on_click(cx.listener(
-                            move |this: &mut ChatView,
-                                  _event: &ClickEvent,
-                                  _window: &mut Window,
-                                  cx: &mut Context<ChatView>| {
-                                this.session_mgr.close_tab(close_tab_idx);
-                                cx.notify();
-                            },
-                        ))
-                        .child(
-                            div()
-                                .text_size(px(FontSize::XS))
-                                .text_color(Text::MUTED)
-                                .child("✕"),
-                        ),
-                ),
-            );
-        }
+        // Spacer
+        bar = bar.child(div().flex_1());
+
+        // History button (Swift: historyButton, clock.arrow.circlepath)
+        bar = bar.child(
+            div()
+                .id("chat-history-btn")
+                .w(px(20.0))
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .rounded(px(Radius::XS))
+                .bg(if history_open {
+                    Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.08 }
+                } else {
+                    Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 }
+                })
+                .text_color(if history_open { Text::PRIMARY } else { Text::TERTIARY })
+                .text_size(px(FontSize::XS))
+                .on_click(cx.listener(|this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
+                    this.history_open = !this.history_open;
+                    cx.notify();
+                }))
+                .child("⏱"),
+        );
 
         bar
     }
 
+    /// Chat history popover — rendered as an absolute overlay when history_open = true.
+    fn render_history_popover(&self) -> impl IntoElement {
+        let session_entries: Vec<(String, String, bool)> = self.session_mgr.sessions.iter().enumerate()
+            .map(|(i, s)| (
+                s.title.clone(),
+                "now".to_string(),
+                i == self.session_mgr.active_index,
+            ))
+            .collect();
+
+        let mut list = div()
+            .id("chat-history-popover")
+            .absolute()
+            .top(px(crate::theme::Layout::PANEL_HEADER_HEIGHT + 2.0))
+            .right(px(Spacing::SM_MD))
+            .w(px(260.0))
+            .bg(Background::RAISED)
+            .border_1()
+            .border_color(BorderColors::PRIMARY)
+            .rounded(px(Radius::MD))
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .max_h(px(300.0))
+            .overflow_y_scroll();
+
+        if session_entries.is_empty() {
+            list = list.child(
+                div()
+                    .p(px(Spacing::MD))
+                    .text_color(Text::MUTED)
+                    .text_size(px(FontSize::XS))
+                    .child("No conversations yet"),
+            );
+        } else {
+            for (title, time, is_current) in session_entries {
+                let active_bg = Hsla { h: Accent::PRIMARY.h, s: Accent::PRIMARY.s, l: Accent::PRIMARY.l, a: 0.15 };
+                list = list.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(Spacing::SM_MD))
+                        .w_full()
+                        .px(px(Spacing::MD))
+                        .py(px(6.0))
+                        .cursor_pointer()
+                        .bg(if is_current { active_bg } else { Background::BASE })
+                        .child(
+                            div()
+                                .flex_col()
+                                .flex()
+                                .flex_1()
+                                .gap(px(Spacing::XXS))
+                                .child(
+                                    div()
+                                        .text_color(Text::PRIMARY)
+                                        .text_size(px(FontSize::XS))
+                                        .child(title),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(Text::TERTIARY)
+                                        .text_size(px(9.0))
+                                        .child(time),
+                                ),
+                        )
+                        .when(!is_current, |el| {
+                            el.child(
+                                div()
+                                    .text_color(Text::MUTED)
+                                    .text_size(px(FontSize::XS))
+                                    .child("🗑"),
+                            )
+                        }),
+                );
+            }
+        }
+
+        list
+    }
+
     /// Message layout matching Swift AgentMessageView:
     ///   - User:      right-aligned bubble, white@Opacity.faint (0.08), Radius.lg
-    ///   - Assistant: left-aligned text, no fill
-    fn render_message(msg: &ChatMessage) -> impl IntoElement {
-        let status_icon = match &msg.status {
+    ///   - Assistant: left-aligned text + ToolRunRow items + copy button
+    fn render_message(&self, idx: usize, msg: &ChatMessage, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_sending = matches!(&msg.status, MessageStatus::Sending);
+        let failed_suffix = match &msg.status {
             MessageStatus::Failed(_) => " ⚠",
-            MessageStatus::Sending => " ⋯",
             _ => "",
         };
-
-        let text = msg.text.clone() + status_icon;
+        let text = msg.text.clone() + failed_suffix;
         let is_user = matches!(msg.role, ChatRole::User);
+        let tool_calls = msg.tool_calls.clone();
+
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(Spacing::SM))
+            .text_color(Text::PRIMARY)
+            .text_size(px(FontSize::SM_MD));
+
+        // Text block
+        if !msg.text.is_empty() {
+            body = body.child(
+                div()
+                    .when(is_user, |el| {
+                        el.px(px(Spacing::LG))
+                            .py(px(Spacing::SM_MD))
+                            .rounded(px(Radius::LG))
+                            .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.08 })
+                    })
+                    .child(text),
+            );
+        }
+
+        // Animated thinking dots for Sending status (Swift: ThinkingDotsView)
+        if is_sending && !is_user {
+            body = body.child(thinking_dots());
+        }
+
+        // Tool call rows (Swift: ToolRunRow) — assistant only, collapsible
+        if !is_user {
+            for (ti, tc) in tool_calls.iter().enumerate() {
+                let key = format!("{idx}-{ti}");
+                let is_expanded = self.expanded_tool_rows.contains(&key);
+                let key_click = key.clone();
+                let status_glyph = match tc.status {
+                    ToolCallStatus::Running => "⋯",
+                    ToolCallStatus::Done    => "✓",
+                    ToolCallStatus::Failed  => "✕",
+                };
+                let status_color = match tc.status {
+                    ToolCallStatus::Running => Text::MUTED,
+                    ToolCallStatus::Done    => Text::TERTIARY,
+                    ToolCallStatus::Failed  => gpui::Hsla { h: 0.0, s: 0.85, l: 0.55, a: 1.0 },
+                };
+                let name = tc.name.clone();
+                let chevron = if is_expanded { "▾" } else { "▸" };
+
+                let row_header = div()
+                    .id(gpui::SharedString::from(format!("tool-row-{idx}-{ti}")))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(Spacing::SM))
+                    .px(px(Spacing::SM_MD))
+                    .py(px(Spacing::XS))
+                    .rounded(px(Radius::SM))
+                    .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.04 })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
+                        if this.expanded_tool_rows.contains(&key_click) {
+                            this.expanded_tool_rows.remove(&key_click);
+                        } else {
+                            this.expanded_tool_rows.insert(key_click.clone());
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_color(status_color)
+                            .text_size(px(FontSize::SM))
+                            .child(status_glyph),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(Text::TERTIARY)
+                            .text_size(px(FontSize::SM))
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .text_color(Text::MUTED)
+                            .text_size(px(FontSize::XS))
+                            .child(chevron),
+                    );
+
+                let mut tool_wrap = div()
+                    .id(gpui::SharedString::from(format!("tool-wrap-{idx}-{ti}")))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(Radius::SM))
+                    .overflow_hidden()
+                    .child(row_header);
+
+                if is_expanded {
+                    let mut detail = div()
+                        .px(px(Spacing::SM_MD))
+                        .py(px(Spacing::XS))
+                        .flex()
+                        .flex_col()
+                        .gap(px(Spacing::XS))
+                        .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.02 });
+                    // Input args (Swift: argsSection with pretty-printed JSON)
+                    if let Some(ref args) = tc.input_json {
+                        detail = detail
+                            .child(div().text_color(Text::MUTED).text_size(px(FontSize::XXS)).child("INPUT"))
+                            .child(
+                                div()
+                                    .px(px(Spacing::SM))
+                                    .py(px(Spacing::XS))
+                                    .rounded(px(Radius::XS))
+                                    .bg(Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.3 })
+                                    .text_color(Text::TERTIARY)
+                                    .text_size(px(FontSize::XS))
+                                    .child(args.clone()),
+                            );
+                    }
+                    // Output (Swift: resultSection)
+                    if let Some(ref result) = tc.result_text {
+                        detail = detail
+                            .child(div().text_color(Text::MUTED).text_size(px(FontSize::XXS)).child("OUTPUT"))
+                            .child(
+                                div()
+                                    .px(px(Spacing::SM))
+                                    .py(px(Spacing::XS))
+                                    .rounded(px(Radius::XS))
+                                    .bg(Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.3 })
+                                    .text_color(Text::SECONDARY)
+                                    .text_size(px(FontSize::XS))
+                                    .child(result.clone()),
+                            );
+                    } else if tc.input_json.is_none() {
+                        detail = detail.child(
+                            div().text_color(Text::MUTED).text_size(px(FontSize::XS)).child("(no output)"),
+                        );
+                    }
+                    tool_wrap = tool_wrap.child(detail);
+                }
+
+                body = body.child(tool_wrap);
+            }
+
+            // Copy button below assistant text (Swift: CopyMessageButton, visible on hover)
+            if !msg.text.is_empty() {
+                body = body.child(
+                    div()
+                        .id(gpui::SharedString::from(format!("chat-copy-{idx}")))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(Spacing::XS))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|_, _, _, _| { /* copy to clipboard */ }))
+                        .child(
+                            div()
+                                .text_color(Text::MUTED)
+                                .text_size(px(FontSize::XS))
+                                .child("⎘"),
+                        )
+                        .child(
+                            div()
+                                .text_color(Text::MUTED)
+                                .text_size(px(FontSize::XS))
+                                .child("Copy"),
+                        ),
+                );
+            }
+        }
 
         div()
-            .id(gpui::SharedString::from(format!(
-                "chat-msg-{}",
-                role_label(&msg.role)
-            )))
+            .id(gpui::SharedString::from(format!("chat-msg-{idx}")))
             .flex()
             .flex_row()
             .w_full()
             .px(px(Spacing::LG_XL))
             .mb(px(Spacing::XL))
-            // Push user messages to the right (Swift: HStack { Spacer(minLength:48) ... })
-            .when(is_user, |el| {
-                el.child(div().flex_1().min_w(px(48.0)))
-            })
-            .child(
-                div()
-                    .text_color(Text::PRIMARY)
-                    .text_size(px(FontSize::SM_MD))
-                    .when(is_user, |el| {
-                        el.px(px(Spacing::LG))
-                            .py(px(Spacing::SM_MD))
-                            .rounded(px(Radius::LG))
-                            .bg(Hsla {
-                                h: 0.0,
-                                s: 0.0,
-                                l: 1.0,
-                                a: 0.08, // Opacity::FAINT
-                            })
-                    })
-                    .child(text),
-            )
+            .when(is_user, |el| el.child(div().flex_1().min_w(px(48.0))))
+            .child(body)
     }
 
     /// Streaming "thinking dots" indicator (Swift: ThinkingDots — 3 circles, text.tertiary).
@@ -303,13 +567,7 @@ impl ChatView {
             .gap(px(5.0))
             .px(px(Spacing::LG_XL))
             .pb(px(Spacing::MD))
-            .children((0..3).map(|_| {
-                div()
-                    .w(px(5.0))
-                    .h(px(5.0))
-                    .rounded_full()
-                    .bg(Text::TERTIARY)
-            }))
+            .child(thinking_dots())
     }
 
     /// Starter prompts shown when no messages exist.
@@ -320,7 +578,16 @@ impl ChatView {
             .flex_col()
             .gap(px(Spacing::XS))
             .px(px(Spacing::LG_XL))
-            .py(px(Spacing::MD));
+            .py(px(Spacing::MD))
+            // Heading: "Ask anything, or start with:" (matches Swift empty-state header)
+            .child(
+                div()
+                    .pb(px(Spacing::XS))
+                    .text_size(px(FontSize::SM_MD))
+                    .text_color(Text::SECONDARY)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child("Ask anything, or start with:"),
+            );
 
         for (icon, label) in STARTER_PROMPTS {
             col = col.child(
@@ -339,14 +606,14 @@ impl ChatView {
                     .cursor_pointer()
                     .child(
                         div()
-                            .text_color(Text::SECONDARY)
+                            .text_color(Text::TERTIARY)  // icon: tertiary (matches Swift .tertiaryColor)
                             .text_size(px(FontSize::SM_MD))
                             .child(icon.to_string()),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .text_color(Text::SECONDARY)
+                            .text_color(Text::PRIMARY)  // label: primary (matches Swift .primaryColor)
                             .text_size(px(FontSize::SM))
                             .child(label.to_string()),
                     ),
@@ -521,8 +788,9 @@ impl Render for ChatView {
         if is_empty {
             messages_div = messages_div.child(self.render_starter_prompts());
         } else {
-            for msg in &self.model.messages {
-                messages_div = messages_div.child(Self::render_message(msg));
+            let messages_snapshot: Vec<ChatMessage> = self.model.messages.clone();
+            for (idx, msg) in messages_snapshot.iter().enumerate() {
+                messages_div = messages_div.child(self.render_message(idx, msg, cx));
             }
         }
 
@@ -530,6 +798,10 @@ impl Render for ChatView {
         if self.model.is_agent_running {
             messages_div = messages_div.child(Self::render_thinking_indicator());
         }
+
+        // ── Model picker dropdown (Swift: ModelPickerMenu) ──
+        let model_picker_open = self.model_picker_open;
+        let selected_model_idx = self.selected_model_idx;
 
         // ── Mention picker ──
         let picker = self.render_mention_picker(cx);
@@ -657,7 +929,7 @@ impl Render for ChatView {
                                     .child(input_text),
                             ),
                     )
-                    // Bottom bar: model info + send button
+                    // Bottom bar: model picker + send button
                     .child(
                         div()
                             .flex()
@@ -667,15 +939,116 @@ impl Render for ChatView {
                             .pb(px(Spacing::SM_MD))
                             .pt(px(Spacing::XXS))
                             .child(
+                                // Model picker button (Swift: ModelPickerButton)
                                 div()
-                                    .flex_1()
-                                    .text_color(Text::MUTED)
-                                    .text_size(px(FontSize::XS))
-                                    .child("claude-sonnet"),
+                                    .id("model-picker-btn")
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(Spacing::XXS))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.model_picker_open = !this.model_picker_open;
+                                        cx.notify();
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_color(Text::MUTED)
+                                            .text_size(px(FontSize::XS))
+                                            .child(AVAILABLE_MODELS[self.selected_model_idx]),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(Text::MUTED)
+                                            .text_size(px(FontSize::XXS))
+                                            .child("▾"),
+                                    ),
                             )
+                            .child(div().flex_1())
                             .child(send_btn),
                     ),
             );
+
+        // Build model dropdown if open
+        let mut model_dropdown = div()
+            .id("model-picker-dropdown-wrap")
+            .absolute()
+            .bottom(px(4.0))
+            .left(px(Spacing::MD_LG))
+            .bg(Background::RAISED)
+            .border_1()
+            .border_color(BorderColors::SUBTLE)
+            .rounded(px(Radius::SM))
+            .flex()
+            .flex_col()
+            .py(px(Spacing::XS));
+        for (mi, model_name) in AVAILABLE_MODELS.iter().enumerate() {
+            let is_selected = mi == selected_model_idx;
+            model_dropdown = model_dropdown.child(
+                div()
+                    .id(gpui::SharedString::from(format!("model-opt-{mi}")))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(Spacing::SM))
+                    .px(px(Spacing::MD))
+                    .py(px(Spacing::XS))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected_model_idx = mi;
+                        this.model_picker_open = false;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_color(if is_selected { Accent::PRIMARY } else { Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.0 } })
+                            .text_size(px(FontSize::XS))
+                            .child("✓"),
+                    )
+                    .child(
+                        div()
+                            .text_color(if is_selected { Text::PRIMARY } else { Text::SECONDARY })
+                            .text_size(px(FontSize::SM))
+                            .child(*model_name),
+                    ),
+            );
+        }
+
+        // Wrap the input footer in a relative container so the dropdown can float above it
+        let footer_container = div()
+            .id("chat-footer-wrap")
+            .relative()
+            .when(model_picker_open, |el| el.child(model_dropdown))
+            .child(input_footer);
+
+        // Tab bar height for padding compensation (matches Layout::PANEL_HEADER_HEIGHT).
+        let tab_h = crate::theme::Layout::PANEL_HEADER_HEIGHT;
+        let history_open = self.history_open;
+        let tab_bar = self.render_tab_bar(cx);
+
+        // Messages area with top padding so content isn't hidden under the floating tab bar.
+        let padded_messages = messages_div.pt(px(tab_h));
+
+        // ZStack-style: messages behind, tab bar floating on top (Swift: ZStack(alignment:.top)).
+        let messages_zone = div()
+            .id("chat-messages-zone")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .relative()
+            .child(padded_messages)
+            .child(
+                div()
+                    .id("chat-tab-bar-float")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w_full()
+                    .child(tab_bar),
+            )
+            .when(history_open, |el| {
+                el.child(self.render_history_popover())
+            });
 
         // ── Full layout ──
         div()
@@ -686,10 +1059,9 @@ impl Render for ChatView {
             .flex_col()
             .size_full()
             .bg(Background::SURFACE)
-            .child(self.render_tab_bar(cx))
-            .child(messages_div)
+            .child(messages_zone)
             .child(picker)
-            .child(input_footer)
+            .child(footer_container)
     }
 }
 
@@ -700,4 +1072,29 @@ fn truncate_title(text: &str) -> String {
     } else {
         format!("{}…", &trimmed[..39])
     }
+}
+
+/// Three animated pulsing dots (Swift: ThinkingDots) — staggered opacity loop at 900ms.
+fn thinking_dots() -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(3.0))
+        .children((0u32..3).map(|i| {
+            div()
+                .w(px(5.0))
+                .h(px(5.0))
+                .rounded_full()
+                .bg(Text::TERTIARY)
+                .with_animation(
+                    format!("thinking-dot-{i}"),
+                    Animation::new(Duration::from_millis(900)).repeat(),
+                    move |el, delta| {
+                        let phase = (delta + i as f32 / 3.0) % 1.0;
+                        let a: f32 = if phase < 1.0 / 3.0 { 1.0 } else { 0.25 };
+                        el.opacity(a)
+                    },
+                )
+        }))
 }
