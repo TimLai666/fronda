@@ -93,6 +93,52 @@ fn corner_handle(left_frac: f32, top_frac: f32) -> impl IntoElement {
         .border_color(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.40 })
 }
 
+/// Mid-edge handle (resize one axis).
+fn edge_handle(left_frac: f32, top_frac: f32) -> impl IntoElement {
+    let sz = HANDLE_SIZE * 0.75;
+    div()
+        .absolute()
+        .left(relative(left_frac))
+        .top(relative(top_frac))
+        .w(px(sz))
+        .h(px(sz))
+        .rounded(px(1.5))
+        .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::STRONG })
+        .border_1()
+        .border_color(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.40 })
+}
+
+/// Rotation handle: small circle above top-center, connected by a stem line.
+fn rotation_handle(top_center_x: f32, top_frac: f32) -> impl IntoElement {
+    let stem_h = 0.04; // 4% of canvas height
+    let handle_r = 5.0;
+    div()
+        .absolute()
+        .left(relative(top_center_x))
+        .top(relative(top_frac - stem_h - 0.015))
+        .flex()
+        .flex_col()
+        .items_center()
+        // Stem line
+        .child(
+            div()
+                .w(px(1.0))
+                .h(relative(stem_h))
+                .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::STRONG }),
+        )
+        // Circle handle
+        .child(
+            div()
+                .w(px(handle_r * 2.0))
+                .h(px(handle_r * 2.0))
+                .rounded_full()
+                .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::STRONG })
+                .border_1()
+                .border_color(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.40 })
+                .cursor_pointer(),
+        )
+}
+
 /// Vertical center snap guide (pink).
 fn snap_guide_v() -> impl IntoElement {
     div()
@@ -130,6 +176,9 @@ impl Render for TransformOverlayView {
         let right = cx + w / 2.0;
         let bottom = cy + h / 2.0;
 
+        let mid_x = cx;
+        let mid_y = cy;
+
         div()
             .id("transform-overlay")
             .track_focus(&self.focus_handle.clone())
@@ -137,11 +186,18 @@ impl Render for TransformOverlayView {
             .relative()
             // Bounding box border
             .child(bbox_border(cx, cy, w, h))
-            // Corner handles — offset by half handle size so they center on the corner
+            // Corner handles
             .child(corner_handle(left, top))
             .child(corner_handle(right, top))
             .child(corner_handle(left, bottom))
             .child(corner_handle(right, bottom))
+            // Mid-edge handles (top, bottom, left, right)
+            .child(edge_handle(mid_x, top))
+            .child(edge_handle(mid_x, bottom))
+            .child(edge_handle(left, mid_y))
+            .child(edge_handle(right, mid_y))
+            // Rotation handle above top-center
+            .child(rotation_handle(mid_x, top))
             // Snap guides
             .when(show_snap, |el| {
                 el.child(snap_guide_v()).child(snap_guide_h())
