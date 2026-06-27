@@ -20,6 +20,8 @@ use gpui::{
 pub struct InspectorView {
     pub state: InspectorState,
     pub has_clip_selected: bool,
+    /// True when a media asset in the library panel is selected (Swift: Source mode).
+    pub has_media_asset_selected: bool,
     ai_edit_view: Entity<AiEditTabView>,
     keyframes_view: Entity<KeyframesView>,
     focus_handle: FocusHandle,
@@ -30,6 +32,7 @@ impl InspectorView {
         Self {
             state: InspectorState::new(),
             has_clip_selected: false,
+            has_media_asset_selected: false,
             ai_edit_view: cx.new(|cx| AiEditTabView::new(cx)),
             keyframes_view: cx.new(|cx| KeyframesView::new(cx)),
             focus_handle: cx.focus_handle(),
@@ -193,6 +196,45 @@ fn text_tab_content() -> impl IntoElement {
         .child(prop_row("Alignment", "Center"))
 }
 
+/// Source mode — displayed when a media asset (not timeline clip) is selected.
+/// Matches Swift InspectorView.assetDetailsContent.
+fn source_media_content(name: &str, media_type: &str) -> impl IntoElement {
+    use crate::theme::FontSize as FS;
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .pt(px(Spacing::MD))
+        .px(px(Spacing::LG))
+        .gap(px(Spacing::XL))
+        // Asset identity header: name (large semibold)
+        .child(
+            div()
+                .text_color(Text::PRIMARY)
+                .text_size(px(FS::MD_LG))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(name.to_string()),
+        )
+        // File section
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(Spacing::XXS))
+                .child(
+                    div()
+                        .text_color(Text::MUTED)
+                        .text_size(px(FS::XXS))
+                        .child("FILE"),
+                )
+                .child(prop_row("Type", media_type))
+                .child(prop_row("Dimensions", "1920 × 1080"))
+                .child(prop_row("Duration", "0:10"))
+                .child(prop_row("Size", "42.3 MB"))
+                .child(prop_row("Path", "~/Movies/clip.mp4")),
+        )
+}
+
 fn keyframes_btn(id: &str, active: bool) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id.to_string())
@@ -216,8 +258,9 @@ impl Render for InspectorView {
         let kf_visible = self.state.keyframes_visible;
         let has_clip = self.has_clip_selected;
 
-        let title = if has_clip { "Inspector" } else { "Timeline" };
-        let icon = if has_clip { "G" } else { "i" };
+        let has_asset = self.has_media_asset_selected;
+        let title = if has_asset { "Source" } else if has_clip { "Inspector" } else { "Timeline" };
+        let icon = if has_asset { "◈" } else if has_clip { "⊙" } else { "i" };
 
         let ai_edit_entity = self.ai_edit_view.clone();
         let kf_entity = self.keyframes_view.clone();
@@ -264,7 +307,10 @@ impl Render for InspectorView {
                     .flex_1()
                     .w_full()
                     .overflow_y_scroll()
-                    .when(!has_clip, |el| el.child(project_metadata_content()))
+                    .when(!has_clip && !has_asset, |el| el.child(project_metadata_content()))
+                    .when(has_asset, |el| {
+                        el.child(source_media_content("Interview A-roll", "Video"))
+                    })
                     .when(has_clip, |el| {
                         el
                             // Tab bar
