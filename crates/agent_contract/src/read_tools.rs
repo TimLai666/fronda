@@ -1046,6 +1046,8 @@ mod tests {
                             shape_style: None,
                             stroke_progress_track: None,
                             compound_timeline_id: None,
+                            blend_mode: Default::default(),
+                            chroma_key: None,
                         },
                         Clip {
                             id: "clip-002".into(),
@@ -1079,6 +1081,8 @@ mod tests {
                             shape_style: None,
                             stroke_progress_track: None,
                             compound_timeline_id: None,
+                            blend_mode: Default::default(),
+                            chroma_key: None,
                         },
                     ],
                 },
@@ -1120,6 +1124,8 @@ mod tests {
                         shape_style: None,
                         stroke_progress_track: None,
                         compound_timeline_id: None,
+                        blend_mode: Default::default(),
+                        chroma_key: None,
                     }],
                 },
             ],
@@ -1960,6 +1966,8 @@ mod tests {
             shape_style: None,
             stroke_progress_track: None,
             compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
         }
     }
 

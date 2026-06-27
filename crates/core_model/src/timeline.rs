@@ -73,6 +73,8 @@ fn default_text_background() -> TextFill {
     TextFill {
         enabled: false,
         color: default_shadow_color(),
+        padding: None,
+        corner_radius: None,
     }
 }
 
@@ -85,7 +87,13 @@ fn default_text_border() -> TextFill {
             b: 0.0,
             a: 1.0,
         },
+        padding: None,
+        corner_radius: None,
     }
+}
+
+fn is_blend_mode_normal(m: &BlendMode) -> bool {
+    *m == BlendMode::Normal
 }
 
 fn default_font_weight() -> f64 {
@@ -141,6 +149,56 @@ impl ClipType {
     /// Returns true for audio clip types.
     pub fn is_audio(&self) -> bool {
         matches!(self, Self::Audio)
+    }
+}
+
+/// Per-clip blend mode (Issue #98 — compositor blend modes).
+///
+/// Applied when compositing this clip over the layers below it.
+/// Default is `Normal` (standard alpha compositing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum BlendMode {
+    /// Standard alpha compositing (default).
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    SoftLight,
+    HardLight,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
+impl BlendMode {
+    pub fn all() -> &'static [BlendMode] {
+        &[
+            BlendMode::Normal,
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::SoftLight,
+            BlendMode::HardLight,
+            BlendMode::Darken,
+            BlendMode::Lighten,
+            BlendMode::ColorDodge,
+            BlendMode::ColorBurn,
+            BlendMode::Difference,
+            BlendMode::Exclusion,
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ]
     }
 }
 
@@ -366,6 +424,12 @@ pub struct TextFill {
     pub enabled: bool,
     #[serde(default)]
     pub color: TextRgba,
+    /// Padding around the text in pixels (Issue #18 — caption background styling).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<f64>,
+    /// Corner radius for the background pill/rounded rect (Issue #18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_radius: Option<f64>,
 }
 
 impl Default for TextFill {
@@ -373,6 +437,8 @@ impl Default for TextFill {
         Self {
             enabled: false,
             color: TextRgba::default(),
+            padding: None,
+            corner_radius: None,
         }
     }
 }
@@ -428,6 +494,59 @@ impl Default for TextStyle {
             variable_font_axes: None,
             letter_spacing: None,
             line_height: None,
+        }
+    }
+}
+
+/// Chroma-key (green-screen) removal settings for a clip (Issue #97).
+///
+/// The key color is specified as a normalized RGB triplet (0.0–1.0 per channel).
+/// `tolerance` controls how wide a hue range is keyed out (0.0–1.0).
+/// `spill_suppression` reduces color fringing from the key (0.0–1.0).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChromaKey {
+    pub enabled: bool,
+    /// Key color red component (0.0–1.0).
+    pub key_r: f64,
+    /// Key color green component (0.0–1.0).
+    pub key_g: f64,
+    /// Key color blue component (0.0–1.0).
+    pub key_b: f64,
+    /// Hue tolerance (0.0–1.0). Higher = more of the range is removed.
+    #[serde(default = "default_chroma_tolerance")]
+    pub tolerance: f64,
+    /// Spill suppression (0.0–1.0).
+    #[serde(default)]
+    pub spill_suppression: f64,
+}
+
+fn default_chroma_tolerance() -> f64 {
+    0.1
+}
+
+impl ChromaKey {
+    /// Green-screen preset (pure green key, tolerance 0.1).
+    pub fn green_screen() -> Self {
+        Self {
+            enabled: true,
+            key_r: 0.0,
+            key_g: 1.0,
+            key_b: 0.0,
+            tolerance: 0.1,
+            spill_suppression: 0.0,
+        }
+    }
+
+    /// Blue-screen preset.
+    pub fn blue_screen() -> Self {
+        Self {
+            enabled: true,
+            key_r: 0.0,
+            key_g: 0.0,
+            key_b: 1.0,
+            tolerance: 0.1,
+            spill_suppression: 0.0,
         }
     }
 }
@@ -493,6 +612,13 @@ pub struct Clip {
     /// Double-clicking opens the nested timeline; dissolving flattens it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compound_timeline_id: Option<String>,
+    /// Compositing blend mode for this clip (Issue #98).
+    /// Default `Normal` = standard alpha compositing. Omitted from JSON when Normal.
+    #[serde(default, skip_serializing_if = "is_blend_mode_normal")]
+    pub blend_mode: BlendMode,
+    /// Chroma-key / green-screen removal config (Issue #97).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chroma_key: Option<ChromaKey>,
 }
 
 impl Track {
@@ -770,5 +896,141 @@ mod tests {
         let t = Timeline::default();
         let json = serde_json::to_string(&t).unwrap();
         assert!(!json.contains("compoundTimelines"), "json={json}");
+    }
+
+    // ── Issue #98: Blend modes ────────────────────────────────────────────────
+
+    #[test]
+    fn issue_098_blend_mode_default_is_normal() {
+        assert_eq!(BlendMode::default(), BlendMode::Normal);
+    }
+
+    #[test]
+    fn issue_098_blend_mode_all_has_16_variants() {
+        assert_eq!(BlendMode::all().len(), 16);
+    }
+
+    #[test]
+    fn issue_098_clip_default_blend_mode_omitted_from_json() {
+        // Normal blend mode must not be serialized (skip_serializing_if)
+        let clip_json = r#"{"id":"c1","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":30}"#;
+        let clip: Clip = serde_json::from_str(clip_json).unwrap();
+        assert_eq!(clip.blend_mode, BlendMode::Normal);
+        let out = serde_json::to_string(&clip).unwrap();
+        assert!(!out.contains("blendMode"), "Normal blend mode must be omitted: {out}");
+    }
+
+    #[test]
+    fn issue_098_non_normal_blend_mode_serialized() {
+        let mut clip = Clip {
+            id: "c1".into(),
+            media_ref: "m".into(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: 0,
+            duration_frames: 30,
+            trim_start_frame: 0,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            opacity: 1.0,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+            effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
+            compound_timeline_id: None,
+            blend_mode: BlendMode::Multiply,
+            chroma_key: None,
+        };
+        let json = serde_json::to_string(&clip).unwrap();
+        assert!(json.contains("\"blendMode\":\"multiply\""), "Multiply must be serialized: {json}");
+    }
+
+    // ── Issue #97: Chroma key ─────────────────────────────────────────────────
+
+    #[test]
+    fn issue_097_chroma_key_green_screen_preset() {
+        let ck = ChromaKey::green_screen();
+        assert!(ck.enabled);
+        assert!((ck.key_g - 1.0).abs() < 1e-9, "green channel must be 1.0");
+        assert!((ck.key_r).abs() < 1e-9);
+        assert!((ck.key_b).abs() < 1e-9);
+    }
+
+    #[test]
+    fn issue_097_chroma_key_blue_screen_preset() {
+        let ck = ChromaKey::blue_screen();
+        assert!(ck.enabled);
+        assert!((ck.key_b - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn issue_097_chroma_key_serde_roundtrip() {
+        let ck = ChromaKey::green_screen();
+        let json = serde_json::to_string(&ck).unwrap();
+        let restored: ChromaKey = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.enabled, ck.enabled);
+        assert!((restored.key_g - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn issue_097_clip_chroma_key_none_omitted() {
+        let json = r#"{"id":"c1","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":30}"#;
+        let clip: Clip = serde_json::from_str(json).unwrap();
+        assert!(clip.chroma_key.is_none());
+        let out = serde_json::to_string(&clip).unwrap();
+        assert!(!out.contains("chromaKey"), "None chroma_key must be omitted: {out}");
+    }
+
+    // ── Issue #18: Caption background styling ────────────────────────────────
+
+    #[test]
+    fn issue_018_text_fill_padding_optional() {
+        let fill = TextFill {
+            enabled: true,
+            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
+            padding: Some(8.0),
+            corner_radius: None,
+        };
+        let json = serde_json::to_string(&fill).unwrap();
+        assert!(json.contains("\"padding\":8.0"), "padding must be serialized: {json}");
+        assert!(!json.contains("corner_radius"), "None corner_radius must be omitted: {json}");
+    }
+
+    #[test]
+    fn issue_018_text_fill_corner_radius() {
+        let fill = TextFill {
+            enabled: true,
+            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
+            padding: Some(4.0),
+            corner_radius: Some(6.0),
+        };
+        let json = serde_json::to_string(&fill).unwrap();
+        assert!(json.contains("\"corner_radius\":6.0"), "corner_radius must be serialized: {json}");
+    }
+
+    #[test]
+    fn issue_018_text_fill_default_has_no_padding_or_corner() {
+        let fill = TextFill::default();
+        assert!(fill.padding.is_none());
+        assert!(fill.corner_radius.is_none());
+        let json = serde_json::to_string(&fill).unwrap();
+        assert!(!json.contains("padding"), "default padding must be omitted: {json}");
+        assert!(!json.contains("corner_radius"), "default corner_radius must be omitted: {json}");
     }
 }

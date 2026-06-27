@@ -362,6 +362,8 @@ pub fn apply_ripple_insert_with_split(timeline: &mut Timeline, plan: RippleInser
             shape_style: None,
             stroke_progress_track: None,
             compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
         });
         offset += spec.duration_frames;
     }

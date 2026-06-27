@@ -625,6 +625,8 @@ mod tests {
             shape_style: None,
             stroke_progress_track: None,
             compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
         };
         let a1 = Clip {
             id: "a1".into(),
@@ -658,6 +660,8 @@ mod tests {
             shape_style: None,
             stroke_progress_track: None,
             compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
         };
         Timeline {
             fps: 30,
@@ -852,6 +856,8 @@ mod tests {
             shape_style: None,
             stroke_progress_track: None,
             compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
         }
     }
 
@@ -889,6 +895,8 @@ mod tests {
             shape_style: None,
             stroke_progress_track: None,
             compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
         };
         let video = Clip {
             id: "v1".into(),
@@ -985,6 +993,8 @@ mod tests {
             shape_style: None,
             stroke_progress_track: None,
             compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
         };
         let v2 = Clip {
             id: "v2".into(),

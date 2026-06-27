@@ -489,6 +489,8 @@ pub fn link_audio_for_placed_clips(
             shape_style: None,
             stroke_progress_track: None,
             compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
         });
     }
     sort_clips(&mut timeline.tracks[audio_track_index]);

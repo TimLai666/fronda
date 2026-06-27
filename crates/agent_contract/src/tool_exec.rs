@@ -625,6 +625,8 @@ impl ToolExecutor {
                 shape_style: None,
                 stroke_progress_track: None,
                 compound_timeline_id: None,
+                blend_mode: Default::default(),
+                chroma_key: None,
             })
             .collect();
 
@@ -738,6 +740,8 @@ impl ToolExecutor {
                         shape_style: None,
                         stroke_progress_track: None,
                         compound_timeline_id: None,
+                        blend_mode: Default::default(),
+                        chroma_key: None,
                     })
                     .collect();
 
@@ -1466,6 +1470,8 @@ impl ToolExecutor {
                 shape_style: None,
                 stroke_progress_track: None,
                 compound_timeline_id: None,
+                blend_mode: Default::default(),
+                chroma_key: None,
             };
             let clip_id = clip.id.clone();
             created_ids.push(clip_id);
@@ -1572,6 +1578,8 @@ impl ToolExecutor {
                 shape_style: Some(shape_style),
                 stroke_progress_track: None,
                 compound_timeline_id: None,
+                blend_mode: Default::default(),
+                chroma_key: None,
             };
             let clip_id = clip.id.clone();
             created_ids.push(clip_id);
@@ -2771,6 +2779,8 @@ mod tests {
                 shape_style: None,
                 stroke_progress_track: None,
                 compound_timeline_id: None,
+                blend_mode: Default::default(),
+                chroma_key: None,
             }],
         });
         let mut exec = ToolExecutor::new(timeline, manifest);

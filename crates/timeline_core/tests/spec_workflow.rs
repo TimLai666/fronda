@@ -40,6 +40,8 @@ fn clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
         shape_style: None,
         stroke_progress_track: None,
         compound_timeline_id: None,
+        blend_mode: Default::default(),
+        chroma_key: None,
     }
 }
 
@@ -76,6 +78,8 @@ fn audio_clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
         shape_style: None,
         stroke_progress_track: None,
         compound_timeline_id: None,
+        blend_mode: Default::default(),
+        chroma_key: None,
     }
 }
 

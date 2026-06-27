@@ -54,6 +54,8 @@ fn make_single_clip_timeline() -> Timeline {
                 shape_style: None,
                 stroke_progress_track: None,
                 compound_timeline_id: None,
+                blend_mode: Default::default(),
+                chroma_key: None,
             }],
         }],
     }
@@ -92,6 +94,8 @@ fn make_base_clip() -> Clip {
         shape_style: None,
         stroke_progress_track: None,
         compound_timeline_id: None,
+        blend_mode: Default::default(),
+        chroma_key: None,
     }
 }
 

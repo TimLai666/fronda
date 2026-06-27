@@ -335,6 +335,8 @@ mod tests {
             volume_track: None,
             effects: None,
             compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
         }
     }
 

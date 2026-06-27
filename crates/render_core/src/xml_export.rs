@@ -397,6 +397,8 @@ mod tests {
                     shape_style: None,
                     stroke_progress_track: None,
                     compound_timeline_id: None,
+                    blend_mode: Default::default(),
+                    chroma_key: None,
                 }],
             }],
             settings_configured: true,
@@ -602,6 +604,8 @@ mod tests {
                 shape_style: None,
                 stroke_progress_track: None,
                 compound_timeline_id: None,
+                blend_mode: Default::default(),
+                chroma_key: None,
             }],
         });
         let xml = XmlExport::export(&timeline);

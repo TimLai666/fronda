@@ -435,3 +435,41 @@ fn issue_058_timeout_is_thirty_seconds() {
         "Issue #58: default timeout is 30 s"
     );
 }
+
+// ── Issue #122: Expose MCP server to local network ──────────────────────────
+
+#[test]
+fn issue_122_loopback_config_is_loopback_only() {
+    let config = McpConfig::default();
+    assert!(config.is_loopback_only(), "default config must be loopback-only");
+}
+
+#[test]
+fn issue_122_network_config_not_loopback() {
+    let config = McpConfig::with_network_access("0.0.0.0", 19789, "secret-token");
+    assert!(!config.is_loopback_only());
+}
+
+#[test]
+fn issue_122_network_config_without_token_fails_validate() {
+    let config = McpConfig {
+        host: "0.0.0.0".into(),
+        port: 19789,
+        auth_token: None,
+        ..Default::default()
+    };
+    assert!(config.validate().is_err(), "network access without auth_token must be rejected");
+}
+
+#[test]
+fn issue_122_network_config_with_token_passes_validate() {
+    let config = McpConfig::with_network_access("0.0.0.0", 19789, "my-secret");
+    assert!(config.validate().is_ok());
+    assert_eq!(config.auth_token.as_deref(), Some("my-secret"));
+}
+
+#[test]
+fn issue_122_loopback_without_token_passes_validate() {
+    let config = McpConfig::default();
+    assert!(config.validate().is_ok(), "loopback does not need auth_token");
+}

@@ -55,6 +55,8 @@ fn comprehensive_timeline() -> Timeline {
         shape_style: None,
         stroke_progress_track: None,
         compound_timeline_id: None,
+        blend_mode: Default::default(),
+        chroma_key: None,
     };
 
     // Second video on a separate visual track (to test reversal)
@@ -90,6 +92,8 @@ fn comprehensive_timeline() -> Timeline {
         shape_style: None,
         stroke_progress_track: None,
         compound_timeline_id: None,
+        blend_mode: Default::default(),
+        chroma_key: None,
     };
 
     // Audio clip linked to v1 (same link group)
@@ -125,6 +129,8 @@ fn comprehensive_timeline() -> Timeline {
         shape_style: None,
         stroke_progress_track: None,
         compound_timeline_id: None,
+        blend_mode: Default::default(),
+        chroma_key: None,
     };
 
     // Text clip (should NOT appear in XML output - XML-013)
@@ -160,6 +166,8 @@ fn comprehensive_timeline() -> Timeline {
         shape_style: None,
         stroke_progress_track: None,
         compound_timeline_id: None,
+        blend_mode: Default::default(),
+        chroma_key: None,
     };
 
     // Unresolved clip (empty media_ref, should be skipped - XML-012)
