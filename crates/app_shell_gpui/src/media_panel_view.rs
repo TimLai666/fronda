@@ -45,7 +45,7 @@ impl Focusable for MediaPanelView {
 ///
 /// Active bg = white@10% (Opacity::SOFT), matching Swift HoverHighlight(isActive: true).
 /// No left-edge capsule — Swift uses rounded-rect fill only.
-fn tab_btn(id: &str, label: &str, is_active: bool) -> impl IntoElement {
+fn tab_btn(id: &str, label: &str, is_active: bool) -> gpui::Stateful<gpui::Div> {
     let btn_size = IconSize::LG; // 26px
     let bg = if is_active {
         // white@10% matches Swift Opacity.soft (isActive, !isHovered)

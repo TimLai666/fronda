@@ -139,6 +139,7 @@ impl Render for ProjectActivityView {
                     .into_any_element()
             } else {
                 div()
+                    .id("project-activity-scroll")
                     .flex()
                     .flex_col()
                     .gap(px(Spacing::XXS))

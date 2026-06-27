@@ -299,6 +299,7 @@ impl Render for InspectorView {
             // ── Conditional body ──
             .child(
                 div()
+                    .id("inspector-scroll")
                     .flex()
                     .flex_col()
                     .flex_1()

@@ -6,7 +6,7 @@
 use app_contract::chat_model::{ChatMessage, ChatPanelModel, ChatRole, MessageStatus};
 use app_contract::mention_picker::{MentionCandidate, MentionCategory, MentionPickerState};
 use app_contract::session_manager::SessionManager;
-use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Radius, Spacing, Text};
+use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
 use gpui::{
     div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable, Hsla,
     InteractiveElement, KeyDownEvent, ParentElement, Render, Styled, Window,

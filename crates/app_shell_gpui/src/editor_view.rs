@@ -6,7 +6,7 @@ use crate::preview_view::PreviewView;
 use crate::theme::{Background, BorderColors, Layout, Text};
 use crate::timeline_view::TimelineView;
 use crate::toolbar_view::ToolbarView;
-use gpui::{div, px, Entity, IntoElement, ParentElement, Styled};
+use gpui::{div, prelude::*, px, Entity, IntoElement, ParentElement, Styled};
 
 /// Human-readable label for each pane.
 fn pane_label(id: PaneId) -> &'static str {

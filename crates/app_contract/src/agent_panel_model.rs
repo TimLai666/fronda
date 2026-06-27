@@ -17,6 +17,7 @@ pub struct AgentPanelModel {
     pub mcp_status: McpServerStatus,
     pub mention_query: String,
     pub show_mention_picker: bool,
+    pub available_tools: Vec<String>,
 }
 
 impl Default for AgentPanelModel {
@@ -25,6 +26,7 @@ impl Default for AgentPanelModel {
             mcp_status: McpServerStatus::Stopped,
             mention_query: String::new(),
             show_mention_picker: false,
+            available_tools: Vec::new(),
         }
     }
 }

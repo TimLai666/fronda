@@ -185,8 +185,9 @@ impl AppRoot {
     }
 
     /// A sidebar navigation button row.
-    fn sidebar_row(icon: &str, label: &str) -> impl IntoElement {
+    fn sidebar_row(id: &str, icon: &str, label: &str) -> gpui::Stateful<gpui::Div> {
         div()
+            .id(id.to_string())
             .flex()
             .flex_row()
             .items_center()
@@ -258,13 +259,13 @@ impl AppRoot {
                     )
                     // Nav items
                     .child(
-                        Self::sidebar_row("⊕", "New Project")
+                        Self::sidebar_row("sidebar-new-project", "⊕", "New Project")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_editor(cx);
                             })),
                     )
                     .child(
-                        Self::sidebar_row("▲", "Open Project")
+                        Self::sidebar_row("sidebar-open-project", "▲", "Open Project")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_editor(cx);
                             })),
@@ -272,7 +273,7 @@ impl AppRoot {
                     // Spacer
                     .child(div().flex_1())
                     // Bottom: Settings
-                    .child(Self::sidebar_row("⚙", "Settings")),
+                    .child(Self::sidebar_row("sidebar-settings", "⚙", "Settings")),
             )
             // ── Content area ──
             .child(

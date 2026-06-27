@@ -55,7 +55,7 @@ const TOOL_ACTIVE_BG: Hsla = Hsla {
 };
 
 /// 24×24 toolbar button with hover-highlight support.
-fn tool_btn(id: &str, glyph: &str, active: bool, enabled: bool) -> impl IntoElement {
+fn tool_btn(id: &str, glyph: &str, active: bool, enabled: bool) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id.to_string())
         .w(px(24.0))

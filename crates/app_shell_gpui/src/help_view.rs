@@ -120,14 +120,14 @@ fn shortcut_column(groups: &[(&str, &[(&str, &str)])]) -> impl IntoElement {
                             .w(px(118.0))
                             .text_color(Text::PRIMARY)
                             .text_size(px(FontSize::XXS))
-                            .child(*shortcut),
+                            .child(shortcut.to_string()),
                     )
                     // Description: 11pt, SECONDARY
                     .child(
                         div()
                             .text_color(Text::SECONDARY)
                             .text_size(px(11.0))
-                            .child(*desc),
+                            .child(desc.to_string()),
                     ),
             );
         }
@@ -142,6 +142,7 @@ fn shortcuts_pane() -> impl IntoElement {
     let right = &SHORTCUT_GROUPS[4..];
 
     div()
+        .id("shortcuts-pane-scroll")
         .flex_1()
         .overflow_y_scroll()
         .child(

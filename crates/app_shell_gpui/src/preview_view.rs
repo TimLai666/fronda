@@ -59,7 +59,7 @@ fn transport_btn(
     id: &str,
     glyph: &str,
     highlight: bool,
-) -> impl IntoElement {
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id.to_string())
         .w(px(32.0))

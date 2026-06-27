@@ -18,7 +18,7 @@ fn status_dot(status: &McpServerStatus) -> Hsla {
             l: 0.44,
             a: 1.0,
         },
-        McpServerStatus::Starting { .. } => Hsla {
+        McpServerStatus::Starting => Hsla {
             h: 42.0 / 360.0,
             s: 0.90,
             l: 0.48,
@@ -164,6 +164,7 @@ impl Render for AgentPanelView {
             .child(header)
             .child(
                 div()
+                    .id("agent-panel-scroll")
                     .flex()
                     .flex_col()
                     .flex_1()

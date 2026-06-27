@@ -9,6 +9,7 @@
 #![cfg(feature = "desktop-app")]
 
 use gpui::*;
+use gpui::prelude::*;
 
 use crate::export_model::{ExportMode, ExportViewModel};
 use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};

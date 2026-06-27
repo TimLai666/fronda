@@ -122,6 +122,7 @@ impl Render for ChatHistoryView {
                     .into_any_element()
             } else {
                 div()
+                    .id("chat-sessions-scroll")
                     .flex()
                     .flex_col()
                     .max_h(px(360.0))
