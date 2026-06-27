@@ -1,7 +1,10 @@
 use crate::chat_view::ChatView;
+use crate::inspector_view::InspectorView;
 use crate::media_panel_view::MediaPanelView;
 use crate::pane::{LayoutPreset, PaneId, PaneLayout};
+use crate::preview_view::PreviewView;
 use crate::theme::{Background, BorderColors, Layout, Text};
+use crate::timeline_view::TimelineView;
 use crate::toolbar_view::ToolbarView;
 use gpui::{div, px, Entity, IntoElement, ParentElement, Styled};
 
@@ -42,6 +45,9 @@ pub struct PaneContents {
     pub agent_chat: Option<Entity<ChatView>>,
     pub toolbar: Option<Entity<ToolbarView>>,
     pub media_panel: Option<Entity<MediaPanelView>>,
+    pub preview: Option<Entity<PreviewView>>,
+    pub timeline: Option<Entity<TimelineView>>,
+    pub inspector: Option<Entity<InspectorView>>,
 }
 
 impl PaneContents {
@@ -49,11 +55,17 @@ impl PaneContents {
         chat: Option<Entity<ChatView>>,
         toolbar: Option<Entity<ToolbarView>>,
         media_panel: Option<Entity<MediaPanelView>>,
+        preview: Option<Entity<PreviewView>>,
+        timeline: Option<Entity<TimelineView>>,
+        inspector: Option<Entity<InspectorView>>,
     ) -> Self {
         Self {
             agent_chat: chat,
             toolbar,
             media_panel,
+            preview,
+            timeline,
+            inspector,
         }
     }
 }
@@ -92,6 +104,30 @@ fn media_panel_content(contents: &PaneContents) -> gpui::AnyElement {
         .clone()
         .map(|e| e.into_any_element())
         .unwrap_or_else(|| pane_div(PaneId::Media).into_any_element())
+}
+
+fn preview_content(contents: &PaneContents) -> gpui::AnyElement {
+    contents
+        .preview
+        .clone()
+        .map(|e| e.into_any_element())
+        .unwrap_or_else(|| pane_div(PaneId::Preview).into_any_element())
+}
+
+fn timeline_content(contents: &PaneContents) -> gpui::AnyElement {
+    contents
+        .timeline
+        .clone()
+        .map(|e| e.into_any_element())
+        .unwrap_or_else(|| pane_div(PaneId::Timeline).into_any_element())
+}
+
+fn inspector_content(contents: &PaneContents) -> gpui::AnyElement {
+    contents
+        .inspector
+        .clone()
+        .map(|e| e.into_any_element())
+        .unwrap_or_else(|| pane_div(PaneId::Inspector).into_any_element())
 }
 
 // ── Layout builders ──
@@ -135,7 +171,7 @@ fn build_default(layout: &PaneLayout, contents: &PaneContents) -> impl IntoEleme
                 .flex_1()
                 .border_b_1()
                 .border_color(BorderColors::PRIMARY)
-                .child(pane_div(PaneId::Preview)),
+                .child(preview_content(contents)),
         );
     }
 
@@ -148,7 +184,7 @@ fn build_default(layout: &PaneLayout, contents: &PaneContents) -> impl IntoEleme
                 .h(px(200.0_f32))
                 .border_t_1()
                 .border_color(BorderColors::PRIMARY)
-                .child(pane_div(PaneId::Timeline)),
+                .child(timeline_content(contents)),
         );
     }
 
@@ -162,7 +198,7 @@ fn build_default(layout: &PaneLayout, contents: &PaneContents) -> impl IntoEleme
                 .h_full()
                 .border_l_1()
                 .border_color(BorderColors::PRIMARY)
-                .child(pane_div(PaneId::Inspector)),
+                .child(inspector_content(contents)),
         );
     }
 
@@ -189,7 +225,7 @@ fn build_media(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement
             div()
                 .flex_1()
                 .h_full()
-                .child(pane_div(PaneId::Preview)),
+                .child(preview_content(contents)),
         );
     }
 
@@ -217,7 +253,7 @@ fn build_vertical(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElem
         left = left.child(
             div()
                 .h(px(240.0))
-                .child(pane_div(PaneId::Inspector)),
+                .child(inspector_content(contents)),
         );
     }
 
@@ -237,7 +273,7 @@ fn build_vertical(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElem
                 .child(
                     div()
                         .flex_1()
-                        .child(pane_div(PaneId::Preview)),
+                        .child(preview_content(contents)),
                 )
                 .child(toolbar_content(contents))
                 .child(
@@ -245,7 +281,7 @@ fn build_vertical(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElem
                         .h(px(180.0))
                         .border_t_1()
                         .border_color(BorderColors::PRIMARY)
-                        .child(pane_div(PaneId::Timeline)),
+                        .child(timeline_content(contents)),
                 ),
         );
     }
@@ -277,9 +313,12 @@ mod tests {
 
     #[test]
     fn pane_contents_fields_are_optional() {
-        let c = PaneContents::new(None, None, None);
+        let c = PaneContents::new(None, None, None, None, None, None);
         assert!(c.agent_chat.is_none());
         assert!(c.toolbar.is_none());
         assert!(c.media_panel.is_none());
+        assert!(c.preview.is_none());
+        assert!(c.timeline.is_none());
+        assert!(c.inspector.is_none());
     }
 }

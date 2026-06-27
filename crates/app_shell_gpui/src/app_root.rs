@@ -7,10 +7,13 @@ use crate::chat_view::ChatView;
 use crate::editor_view;
 use crate::home_model::HomeLayout;
 use crate::home_view::HomeView;
+use crate::inspector_view::InspectorView;
 use crate::media_panel_view::MediaPanelView;
 use crate::menu;
 use crate::pane::{LayoutPreset, PaneId, PaneLayout};
+use crate::preview_view::PreviewView;
 use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Text};
+use crate::timeline_view::TimelineView;
 use crate::toolbar_view::ToolbarView;
 use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
@@ -33,10 +36,13 @@ pub struct AppRoot {
     active_screen: ActiveScreen,
     pane_layout: PaneLayout,
     home: HomeView,
-    /// Editor panel entities, created when first entering the editor.
+    /// Editor panel entities — created lazily on first open_editor() call.
     chat_view: Option<Entity<ChatView>>,
     toolbar_view: Option<Entity<ToolbarView>>,
     media_panel_view: Option<Entity<MediaPanelView>>,
+    preview_view: Option<Entity<PreviewView>>,
+    timeline_view: Option<Entity<TimelineView>>,
+    inspector_view: Option<Entity<InspectorView>>,
 }
 
 impl AppRoot {
@@ -50,6 +56,9 @@ impl AppRoot {
             chat_view: None,
             toolbar_view: None,
             media_panel_view: None,
+            preview_view: None,
+            timeline_view: None,
+            inspector_view: None,
         }
     }
 
@@ -60,6 +69,9 @@ impl AppRoot {
             self.chat_view = Some(cx.new(|cx| ChatView::new(cx)));
             self.toolbar_view = Some(cx.new(|cx| ToolbarView::new(cx)));
             self.media_panel_view = Some(cx.new(|cx| MediaPanelView::new(cx)));
+            self.preview_view = Some(cx.new(|cx| PreviewView::new(cx)));
+            self.timeline_view = Some(cx.new(|cx| TimelineView::new(cx)));
+            self.inspector_view = Some(cx.new(|cx| InspectorView::new(cx)));
         }
         cx.notify();
     }
@@ -405,6 +417,9 @@ impl Render for AppRoot {
                     self.chat_view.clone(),
                     self.toolbar_view.clone(),
                     self.media_panel_view.clone(),
+                    self.preview_view.clone(),
+                    self.timeline_view.clone(),
+                    self.inspector_view.clone(),
                 );
                 div()
                     .size_full()
