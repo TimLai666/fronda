@@ -93,15 +93,29 @@ impl Render for TimelineView {
                             .relative()
                             .bg(Background::RAISED)
                             .child(ruler_timecodes(total_frames, fps, zoom, scroll_x))
-                            // Playhead in ruler
+                            // Playhead in ruler: triangle head + thin line
                             .child(
                                 div()
                                     .absolute()
                                     .top_0()
                                     .left(px(playhead_x))
-                                    .w(px(BorderWidth::MEDIUM))
-                                    .h_full()
-                                    .bg(Accent::TIMECODE),
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    // Triangle head ▼ at top of ruler
+                                    .child(
+                                        div()
+                                            .text_color(Accent::TIMECODE)
+                                            .text_size(px(FontSize::XS))
+                                            .child("▾"),
+                                    )
+                                    // Hairline below
+                                    .child(
+                                        div()
+                                            .w(px(BorderWidth::MEDIUM))
+                                            .flex_1()
+                                            .bg(Accent::TIMECODE),
+                                    ),
                             ),
                     ),
             )
