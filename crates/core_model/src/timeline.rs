@@ -703,4 +703,72 @@ mod tests {
         assert_eq!(timeline.seconds_to_frames(1.0), 60);
         assert_eq!(timeline.seconds_to_frames(0.5), 30);
     }
+
+    // ── Issue #50: variable fonts ─────────────────────────────────────────────
+
+    #[test]
+    fn issue_050_textstyle_default_has_no_variable_axes() {
+        let style = TextStyle::default();
+        assert!(style.variable_font_axes.is_none());
+        assert!(style.letter_spacing.is_none());
+        assert!(style.line_height.is_none());
+    }
+
+    #[test]
+    fn issue_050_textstyle_variable_axes_roundtrip() {
+        let mut style = TextStyle::default();
+        let mut axes = std::collections::HashMap::new();
+        axes.insert("wdth".to_string(), 100.0_f64);
+        axes.insert("GRAD".to_string(), 0.0_f64);
+        style.variable_font_axes = Some(axes.clone());
+        style.letter_spacing = Some(1.5);
+        style.line_height = Some(1.2);
+
+        let json = serde_json::to_string(&style).unwrap();
+        let restored: TextStyle = serde_json::from_str(&json).unwrap();
+
+        let axes_restored = restored.variable_font_axes.unwrap();
+        assert!((axes_restored["wdth"] - 100.0).abs() < 1e-9);
+        assert!((axes_restored["GRAD"] - 0.0).abs() < 1e-9);
+        assert!((restored.letter_spacing.unwrap() - 1.5).abs() < 1e-9);
+        assert!((restored.line_height.unwrap() - 1.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn issue_050_textstyle_without_variable_axes_skips_field() {
+        let style = TextStyle::default();
+        let json = serde_json::to_string(&style).unwrap();
+        // None fields should not appear in JSON
+        assert!(!json.contains("variableFontAxes"), "json={json}");
+        assert!(!json.contains("letterSpacing"), "json={json}");
+        assert!(!json.contains("lineHeight"), "json={json}");
+    }
+
+    // ── Issue #155: compound clips ────────────────────────────────────────────
+
+    #[test]
+    fn issue_155_timeline_default_has_empty_compound_timelines() {
+        let t = Timeline::default();
+        assert!(t.compound_timelines.is_empty());
+    }
+
+    #[test]
+    fn issue_155_compound_timelines_roundtrip() {
+        let mut t = Timeline::default();
+        let mut nested = Timeline::default();
+        nested.fps = 24;
+        t.compound_timelines.insert("ct-1".to_string(), Box::new(nested));
+
+        let json = serde_json::to_string(&t).unwrap();
+        let restored: Timeline = serde_json::from_str(&json).unwrap();
+        assert!(restored.compound_timelines.contains_key("ct-1"));
+        assert_eq!(restored.compound_timelines["ct-1"].fps, 24);
+    }
+
+    #[test]
+    fn issue_155_empty_compound_timelines_not_serialized() {
+        let t = Timeline::default();
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(!json.contains("compoundTimelines"), "json={json}");
+    }
 }

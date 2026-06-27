@@ -1,6 +1,7 @@
 //! Integration tests for composition plan specification items.
 //!
-//! PRV-004, PRV-005, RND-001, RND-007, RND-010.
+//! PRV-004, PRV-005, RND-001, RND-007, RND-010,
+//! SAV-004, SAV-005, SAV-009, RND-013, PRV-012, PRV-013.
 
 use core_model::{Clip, ClipType, Crop, Interpolation, Timeline, Track, Transform};
 use render_core::{CompositionPlan, DetailedCompositionPlan, RenderResolution};
@@ -14,6 +15,7 @@ fn make_single_clip_timeline() -> Timeline {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        compound_timelines: std::collections::HashMap::new(),
         tracks: vec![Track {
             id: "v1".into(),
             r#type: ClipType::Video,
@@ -51,6 +53,7 @@ fn make_single_clip_timeline() -> Timeline {
                 effects: None,
                 shape_style: None,
                 stroke_progress_track: None,
+                compound_timeline_id: None,
             }],
         }],
     }
@@ -88,6 +91,7 @@ fn make_base_clip() -> Clip {
         effects: None,
         shape_style: None,
         stroke_progress_track: None,
+        compound_timeline_id: None,
     }
 }
 
@@ -291,6 +295,7 @@ fn rnd_010_non_overlapping_clips_produce_no_warnings() {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        compound_timelines: std::collections::HashMap::new(),
         tracks: vec![Track {
             id: "v".into(),
             r#type: ClipType::Video,
@@ -336,6 +341,7 @@ fn rnd_010_overlapping_visual_clips_produce_warnings() {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        compound_timelines: std::collections::HashMap::new(),
         tracks: vec![Track {
             id: "v".into(),
             r#type: ClipType::Video,
@@ -354,5 +360,194 @@ fn rnd_010_overlapping_visual_clips_produce_warnings() {
     assert!(
         !validation.warnings.is_empty(),
         "overlapping clips should produce warnings"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SAV-004: Clip trim is propagated into CompositionClip
+// ---------------------------------------------------------------------------
+#[test]
+fn sav_004_trim_propagated_to_composition_clip() {
+    let mut timeline = make_single_clip_timeline();
+    // Modify the clip to have non-zero trim values
+    timeline.tracks[0].clips[0].trim_start_frame = 10;
+    timeline.tracks[0].clips[0].trim_end_frame = 5;
+    let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let clip = &plan.tracks[0].clips[0];
+    assert_eq!(
+        clip.source_trim_start, 10,
+        "SAV-004: source_trim_start must reflect clip.trim_start_frame"
+    );
+    assert_eq!(
+        clip.source_trim_end, 5,
+        "SAV-004: source_trim_end must reflect clip.trim_end_frame"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SAV-005: Clip speed is propagated into CompositionClip
+// ---------------------------------------------------------------------------
+#[test]
+fn sav_005_speed_propagated_to_composition_clip() {
+    let mut timeline = make_single_clip_timeline();
+    timeline.tracks[0].clips[0].speed = 2.0;
+    let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let clip = &plan.tracks[0].clips[0];
+    assert!(
+        (clip.speed - 2.0).abs() < 1e-9,
+        "SAV-005: speed must be 2.0, got {}",
+        clip.speed
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SAV-009: Trim and speed together flow into DetailedCompositionPlan
+// ---------------------------------------------------------------------------
+#[test]
+fn sav_009_trim_and_speed_in_detailed_plan() {
+    let mut timeline = make_single_clip_timeline();
+    timeline.tracks[0].clips[0].trim_start_frame = 15;
+    timeline.tracks[0].clips[0].trim_end_frame = 3;
+    timeline.tracks[0].clips[0].speed = 0.5;
+    let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    // The plan has one video clip in the main track; confirm trim+speed flow through
+    assert!(!detailed.plan.tracks.is_empty(), "plan must have tracks");
+    let vc = &detailed.plan.tracks[0].clips[0];
+    assert_eq!(vc.source_trim_start, 15, "SAV-009: trim_start must flow through");
+    assert_eq!(vc.source_trim_end, 3, "SAV-009: trim_end must flow through");
+    assert!((vc.speed - 0.5).abs() < 1e-9, "SAV-009: speed must flow through");
+}
+
+// ---------------------------------------------------------------------------
+// RND-013: Opacity value is faithfully propagated into CompositionClip
+// ---------------------------------------------------------------------------
+#[test]
+fn rnd_013_opacity_propagated() {
+    let mut timeline = make_single_clip_timeline();
+    timeline.tracks[0].clips[0].opacity = 0.5;
+    let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let clip = &plan.tracks[0].clips[0];
+    assert!(
+        (clip.opacity - 0.5).abs() < 1e-9,
+        "RND-013: opacity=0.5 must propagate; got {}",
+        clip.opacity
+    );
+}
+
+#[test]
+fn rnd_013_full_opacity_stays_one() {
+    let timeline = make_single_clip_timeline();
+    let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let clip = &plan.tracks[0].clips[0];
+    assert!(
+        (clip.opacity - 1.0).abs() < 1e-9,
+        "RND-013: default opacity must be 1.0"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// PRV-012: image_clips in DetailedCompositionPlan
+// ---------------------------------------------------------------------------
+fn make_image_timeline() -> Timeline {
+    Timeline {
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        settings_configured: true,
+        selected_clip_ids: std::collections::HashSet::new(),
+        transcription_language: None,
+        compound_timelines: std::collections::HashMap::new(),
+        tracks: vec![Track {
+            id: "v1".into(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            clips: vec![Clip {
+                id: "img-1".into(),
+                media_ref: "ref-img".into(),
+                media_type: ClipType::Image,
+                source_clip_type: ClipType::Image,
+                ..make_base_clip()
+            }],
+        }],
+    }
+}
+
+#[test]
+fn prv_012_image_clips_in_detailed_plan() {
+    let timeline = make_image_timeline();
+    let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    assert_eq!(
+        detailed.image_clips.len(),
+        1,
+        "PRV-012: DetailedCompositionPlan.image_clips must contain 1 image clip"
+    );
+    assert_eq!(detailed.image_clips[0].clip_id, "img-1");
+}
+
+#[test]
+fn prv_012_video_clip_not_in_image_clips() {
+    let timeline = make_single_clip_timeline();
+    let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    assert!(
+        detailed.image_clips.is_empty(),
+        "PRV-012: video clip must not appear in image_clips"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// PRV-013: lottie_clips in DetailedCompositionPlan
+// ---------------------------------------------------------------------------
+fn make_lottie_timeline() -> Timeline {
+    Timeline {
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        settings_configured: true,
+        selected_clip_ids: std::collections::HashSet::new(),
+        transcription_language: None,
+        compound_timelines: std::collections::HashMap::new(),
+        tracks: vec![Track {
+            id: "v1".into(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            clips: vec![Clip {
+                id: "lottie-1".into(),
+                media_ref: "ref-lottie".into(),
+                media_type: ClipType::Lottie,
+                source_clip_type: ClipType::Lottie,
+                ..make_base_clip()
+            }],
+        }],
+    }
+}
+
+#[test]
+fn prv_013_lottie_clips_in_detailed_plan() {
+    let timeline = make_lottie_timeline();
+    let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    assert_eq!(
+        detailed.lottie_clips.len(),
+        1,
+        "PRV-013: DetailedCompositionPlan.lottie_clips must contain 1 lottie clip"
+    );
+    assert_eq!(detailed.lottie_clips[0].clip_id, "lottie-1");
+}
+
+#[test]
+fn prv_013_image_clip_not_in_lottie_clips() {
+    let timeline = make_image_timeline();
+    let plan = CompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    assert!(
+        detailed.lottie_clips.is_empty(),
+        "PRV-013: image clip must not appear in lottie_clips"
     );
 }

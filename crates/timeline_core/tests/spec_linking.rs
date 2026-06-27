@@ -37,6 +37,7 @@ fn clip(id: &str, media_type: ClipType, start_frame: i64, duration_frames: i64) 
         effects: None,
         shape_style: None,
         stroke_progress_track: None,
+        compound_timeline_id: None,
     }
 }
 
@@ -71,6 +72,7 @@ fn timeline(tracks: Vec<Track>) -> Timeline {
         selected_clip_ids: std::collections::HashSet::new(),
         tracks,
         transcription_language: None,
+        compound_timelines: std::collections::HashMap::new(),
     }
 }
 

@@ -396,11 +396,13 @@ mod tests {
                     effects: None,
                     shape_style: None,
                     stroke_progress_track: None,
+                    compound_timeline_id: None,
                 }],
             }],
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
         }
     }
 
@@ -599,6 +601,7 @@ mod tests {
                 effects: None,
                 shape_style: None,
                 stroke_progress_track: None,
+                compound_timeline_id: None,
             }],
         });
         let xml = XmlExport::export(&timeline);

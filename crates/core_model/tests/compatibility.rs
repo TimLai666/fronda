@@ -620,6 +620,7 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
                             },
                         ],
                     }),
+                    compound_timeline_id: None,
                 }],
             },
             Track {
@@ -672,10 +673,12 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
                     effects: None,
                     shape_style: None,
                     stroke_progress_track: None,
+                    compound_timeline_id: None,
                 }],
             },
         ],
         transcription_language: Some("en-US".to_string()),
+        compound_timelines: std::collections::HashMap::new(),
     };
 
     // Round-trip through JSON

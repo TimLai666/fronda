@@ -54,6 +54,7 @@ fn comprehensive_timeline() -> Timeline {
         effects: None,
         shape_style: None,
         stroke_progress_track: None,
+        compound_timeline_id: None,
     };
 
     // Second video on a separate visual track (to test reversal)
@@ -88,6 +89,7 @@ fn comprehensive_timeline() -> Timeline {
         effects: None,
         shape_style: None,
         stroke_progress_track: None,
+        compound_timeline_id: None,
     };
 
     // Audio clip linked to v1 (same link group)
@@ -122,6 +124,7 @@ fn comprehensive_timeline() -> Timeline {
         effects: None,
         shape_style: None,
         stroke_progress_track: None,
+        compound_timeline_id: None,
     };
 
     // Text clip (should NOT appear in XML output - XML-013)
@@ -156,6 +159,7 @@ fn comprehensive_timeline() -> Timeline {
         effects: None,
         shape_style: None,
         stroke_progress_track: None,
+        compound_timeline_id: None,
     };
 
     // Unresolved clip (empty media_ref, should be skipped - XML-012)
@@ -173,6 +177,7 @@ fn comprehensive_timeline() -> Timeline {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        compound_timelines: std::collections::HashMap::new(),
         tracks: vec![
             Track {
                 id: "v-track".into(),

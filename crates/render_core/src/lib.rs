@@ -624,6 +624,7 @@ mod tests {
             effects: None,
             shape_style: None,
             stroke_progress_track: None,
+            compound_timeline_id: None,
         };
         let a1 = Clip {
             id: "a1".into(),
@@ -656,6 +657,7 @@ mod tests {
             effects: None,
             shape_style: None,
             stroke_progress_track: None,
+            compound_timeline_id: None,
         };
         Timeline {
             fps: 30,
@@ -664,6 +666,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
             tracks: vec![
                 Track {
                     id: "v-track".into(),
@@ -848,6 +851,7 @@ mod tests {
             effects: None,
             shape_style: None,
             stroke_progress_track: None,
+            compound_timeline_id: None,
         }
     }
 
@@ -884,6 +888,7 @@ mod tests {
             effects: None,
             shape_style: None,
             stroke_progress_track: None,
+            compound_timeline_id: None,
         };
         let video = Clip {
             id: "v1".into(),
@@ -901,6 +906,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
             tracks: vec![
                 Track {
                     id: "v-track".into(),
@@ -978,6 +984,7 @@ mod tests {
             effects: None,
             shape_style: None,
             stroke_progress_track: None,
+            compound_timeline_id: None,
         };
         let v2 = Clip {
             id: "v2".into(),
@@ -995,6 +1002,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "v".into(),
                 r#type: ClipType::Video,
@@ -1045,6 +1053,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "a".into(),
                 r#type: ClipType::Audio,
@@ -1096,6 +1105,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "a".into(),
                 r#type: ClipType::Audio,
@@ -1597,6 +1607,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "v-track".into(),
                 r#type: ClipType::Video,
@@ -1635,6 +1646,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "a-track".into(),
                 r#type: ClipType::Audio,

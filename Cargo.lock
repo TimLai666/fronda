@@ -1851,6 +1851,7 @@ dependencies = [
  "chrono",
  "fronda-core-model",
  "proptest",
+ "render_core",
  "serde",
  "serde_json",
  "uuid",

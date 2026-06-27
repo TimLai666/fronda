@@ -334,6 +334,7 @@ mod tests {
             crop_track: None,
             volume_track: None,
             effects: None,
+            compound_timeline_id: None,
         }
     }
 
@@ -345,6 +346,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: Default::default(),
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
             tracks: vec![
                 make_video_track(vec![
                     simple_clip("v1", ClipType::Video, 0, 100),

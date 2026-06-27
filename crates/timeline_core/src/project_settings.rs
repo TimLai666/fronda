@@ -214,6 +214,7 @@ mod tests {
             effects: None,
             shape_style: None,
             stroke_progress_track: None,
+            compound_timeline_id: None,
         }
     }
 
@@ -243,6 +244,7 @@ mod tests {
             selected_clip_ids: std::collections::HashSet::new(),
             tracks,
             transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
         }
     }
 

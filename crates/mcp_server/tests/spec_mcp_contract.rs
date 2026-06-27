@@ -230,7 +230,7 @@ fn json_rpc_tools_list_response_format() {
         .pointer("/result/tools")
         .and_then(|v| v.as_array())
         .unwrap();
-    assert_eq!(tools_arr.len(), 51);
+    assert_eq!(tools_arr.len(), 54);
 
     // Each tool entry has required fields
     for tool_val in tools_arr {
@@ -414,5 +414,24 @@ fn json_rpc_tools_call_error_response_format() {
     assert_eq!(
         json.pointer("/result/content/0/text"),
         Some(&serde_json::json!("Missing required argument: clipId"))
+    );
+}
+
+// ── Issue #58: MCP server must not freeze on runaway tool calls ───────────────
+
+#[test]
+fn issue_058_timeout_constant_exists_and_reasonable() {
+    let t = mcp_server::MCP_TOOL_EXECUTION_TIMEOUT_MS;
+    // Must be between 5 seconds and 5 minutes
+    assert!(t >= 5_000, "timeout must be at least 5 s; got {t} ms");
+    assert!(t <= 300_000, "timeout must be at most 5 min; got {t} ms");
+}
+
+#[test]
+fn issue_058_timeout_is_thirty_seconds() {
+    assert_eq!(
+        mcp_server::MCP_TOOL_EXECUTION_TIMEOUT_MS,
+        30_000,
+        "Issue #58: default timeout is 30 s"
     );
 }

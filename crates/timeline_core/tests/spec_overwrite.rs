@@ -39,6 +39,7 @@ fn clip(
         effects: None,
         shape_style: None,
         stroke_progress_track: None,
+        compound_timeline_id: None,
     }
 }
 
@@ -58,6 +59,7 @@ fn timeline(clips: Vec<Clip>) -> Timeline {
             clips,
         }],
         transcription_language: None,
+        compound_timelines: std::collections::HashMap::new(),
     }
 }
 

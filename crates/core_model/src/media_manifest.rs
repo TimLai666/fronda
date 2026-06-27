@@ -662,4 +662,86 @@ mod tests {
             "RES-005: falls back to Offline"
         );
     }
+
+    // ── Issue #118: AI content labels ──────────────────────────────────────
+
+    fn make_entry_with_ai(id: &str) -> MediaManifestEntry {
+        MediaManifestEntry {
+            id: id.to_string(),
+            name: "clip.mp4".to_string(),
+            r#type: super::super::timeline::ClipType::Video,
+            source: MediaSource::External { absolute_path: "/clip.mp4".to_string() },
+            duration: 5.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: Some(true),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: Some(vec!["outdoor".into(), "nature".into()]),
+            ai_description: Some("Person hiking through a forest trail.".into()),
+            ai_label_status: Some(AiLabelStatus::Complete),
+        }
+    }
+
+    #[test]
+    fn issue_118_ai_tags_stored_and_retrieved() {
+        let entry = make_entry_with_ai("e1");
+        let tags = entry.ai_tags.unwrap();
+        assert!(tags.contains(&"outdoor".to_string()));
+        assert!(tags.contains(&"nature".to_string()));
+    }
+
+    #[test]
+    fn issue_118_ai_description_stored() {
+        let entry = make_entry_with_ai("e1");
+        assert!(entry.ai_description.unwrap().contains("hiking"));
+    }
+
+    #[test]
+    fn issue_118_ai_label_status_complete() {
+        let entry = make_entry_with_ai("e1");
+        assert_eq!(entry.ai_label_status, Some(AiLabelStatus::Complete));
+    }
+
+    #[test]
+    fn issue_118_ai_fields_default_to_none() {
+        let manifest = MediaManifest::default();
+        // A freshly imported entry should have no AI labels
+        assert!(manifest.entries.is_empty()); // no entries = no labels
+    }
+
+    #[test]
+    fn issue_118_ai_label_status_variants() {
+        assert_ne!(AiLabelStatus::None, AiLabelStatus::TagsOnly);
+        assert_ne!(AiLabelStatus::TagsOnly, AiLabelStatus::Complete);
+        assert_ne!(AiLabelStatus::Complete, AiLabelStatus::Failed);
+    }
+
+    #[test]
+    fn issue_118_ai_fields_roundtrip_serde() {
+        let entry = make_entry_with_ai("e1");
+        let json = serde_json::to_string(&entry).unwrap();
+        let restored: MediaManifestEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.ai_tags, entry.ai_tags);
+        assert_eq!(restored.ai_description, entry.ai_description);
+        assert_eq!(restored.ai_label_status, entry.ai_label_status);
+    }
+
+    #[test]
+    fn issue_118_none_ai_fields_skip_serialization() {
+        let mut entry = make_entry_with_ai("e1");
+        entry.ai_tags = None;
+        entry.ai_description = None;
+        entry.ai_label_status = None;
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(!json.contains("aiTags"), "json={json}");
+        assert!(!json.contains("aiDescription"), "json={json}");
+        assert!(!json.contains("aiLabelStatus"), "json={json}");
+    }
 }

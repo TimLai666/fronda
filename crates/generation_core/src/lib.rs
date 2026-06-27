@@ -7,6 +7,7 @@
 //! Pure state machine with no platform dependencies.
 
 pub mod backend_config;
+pub mod export_panel;
 pub mod generation_payload;
 
 use core_model::GenerationInput;

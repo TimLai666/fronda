@@ -1,6 +1,8 @@
 # Palmier Pro fork / Fronda rewrite
 
-Current runnable baseline: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation. The Rust rewrite is named `Fronda`. Current runtime target is macOS 26 only, arm64 only. Non-sandboxed Developer ID app.
+Current runnable baseline: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation. The Rust rewrite is named `Fronda`.
+
+The Swift baseline targets macOS 26, arm64 only, non-sandboxed Developer ID. **Fronda (the Rust rewrite) is cross-platform** — it builds and runs on macOS, Windows, and Linux. UI is built with `gpui-ce` and must visually match the Swift version exactly. UI work does not require a macOS machine; develop and verify on any platform using gpui.
 
 ## Build
 

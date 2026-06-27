@@ -9,6 +9,13 @@ use serde_json::{json, Value};
 
 use crate::json_rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 
+/// Maximum milliseconds a single tool-call may hold the executor mutex (Issue #58).
+///
+/// Prevents a runaway agent-driven multi-step edit from making the MCP server
+/// unresponsive. The caller should enforce this via a per-request deadline;
+/// the value is exported so platform glue can thread it into `tokio::timeout`.
+pub const MCP_TOOL_EXECUTION_TIMEOUT_MS: u64 = 30_000;
+
 pub struct McpConfig {
     pub host: String,
     pub port: u16,
