@@ -40,6 +40,8 @@ pub mod timeline_model;
 #[cfg(feature = "desktop-app")]
 pub mod timeline_view;
 #[cfg(feature = "desktop-app")]
+pub mod settings_mismatch_view;
+#[cfg(feature = "desktop-app")]
 pub mod settings_view;
 #[cfg(feature = "desktop-app")]
 pub mod theme;
