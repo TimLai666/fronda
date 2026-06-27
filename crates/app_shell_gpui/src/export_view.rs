@@ -11,7 +11,7 @@
 use gpui::*;
 
 use crate::export_model::{ExportMode, ExportViewModel};
-use crate::theme::{Background, BorderColors, Spacing, Text};
+use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
 
 /// Export sheet view.
 pub struct ExportView {
@@ -27,8 +27,7 @@ impl ExportView {
 }
 
 impl Render for ExportView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let stage = self.model.panel.stage.clone();
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let can_start = self.model.can_start_export();
         let mode = self.model.mode;
 
@@ -56,13 +55,13 @@ impl Render for ExportView {
                             .child(
                                 // Panel header
                                 div()
-                                    .px(Spacing::XL)
-                                    .py(Spacing::MD)
+                                    .px(px(Spacing::XL))
+                                    .py(px(Spacing::MD))
                                     .border_b_1()
                                     .border_color(BorderColors::PRIMARY)
                                     .child(
                                         div()
-                                            .text_sm()
+                                            .text_size(px(FontSize::SM_MD))
                                             .text_color(Text::PRIMARY)
                                             .child("Export"),
                                     ),
@@ -72,23 +71,23 @@ impl Render for ExportView {
                                 div()
                                     .flex()
                                     .flex_col()
-                                    .gap(Spacing::XS)
-                                    .px(Spacing::LG)
-                                    .py(Spacing::MD)
+                                    .gap(px(Spacing::XS))
+                                    .px(px(Spacing::LG))
+                                    .py(px(Spacing::MD))
                                     .children(ExportMode::all().iter().map(|m| {
                                         let selected = *m == mode;
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap(Spacing::SM)
-                                            .px(Spacing::SM)
-                                            .py(Spacing::XS)
-                                            .rounded(px(4.0))
-                                            .when(selected, |el| el.bg(Background::SELECTED))
+                                            .gap(px(Spacing::SM))
+                                            .px(px(Spacing::SM))
+                                            .py(px(Spacing::XS))
+                                            .rounded(px(Radius::XS_SM))
+                                            .when(selected, |el| el.bg(BorderColors::PRIMARY))
                                             .cursor_pointer()
                                             .child(
                                                 div()
-                                                    .text_xs()
+                                                    .text_size(px(FontSize::SM))
                                                     .text_color(if selected {
                                                         Text::PRIMARY
                                                     } else {
@@ -110,7 +109,7 @@ impl Render for ExportView {
                             .bg(Background::BASE)
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(px(FontSize::SM))
                                     .text_color(Text::MUTED)
                                     .child("Preview"),
                             ),
@@ -123,23 +122,23 @@ impl Render for ExportView {
                     .flex()
                     .items_center()
                     .justify_end()
-                    .px(Spacing::LG)
-                    .gap(Spacing::MD)
+                    .px(px(Spacing::LG))
+                    .gap(px(Spacing::MD))
                     .border_t_1()
                     .border_color(BorderColors::PRIMARY)
                     .bg(Background::RAISED)
                     // Cancel button
                     .child(
                         div()
-                            .px(Spacing::MD)
-                            .py(Spacing::XS)
-                            .rounded(px(4.0))
+                            .px(px(Spacing::MD))
+                            .py(px(Spacing::XS))
+                            .rounded(px(Radius::XS_SM))
                             .border_1()
-                            .border_color(BorderColors::SECONDARY)
+                            .border_color(BorderColors::PRIMARY)
                             .cursor_pointer()
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(px(FontSize::SM))
                                     .text_color(Text::SECONDARY)
                                     .child("Cancel"),
                             ),
@@ -147,19 +146,23 @@ impl Render for ExportView {
                     // Export button
                     .child(
                         div()
-                            .px(Spacing::MD)
-                            .py(Spacing::XS)
-                            .rounded(px(4.0))
+                            .px(px(Spacing::MD))
+                            .py(px(Spacing::XS))
+                            .rounded(px(Radius::XS_SM))
                             .bg(if can_start {
-                                Background::ACCENT
+                                Accent::PRIMARY
                             } else {
-                                Background::OVERLAY
+                                Background::PROMINENT
                             })
                             .cursor_pointer()
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(Text::PRIMARY)
+                                    .text_size(px(FontSize::SM))
+                                    .text_color(if can_start {
+                                        Background::BASE
+                                    } else {
+                                        Text::MUTED
+                                    })
                                     .child("Export"),
                             ),
                     ),

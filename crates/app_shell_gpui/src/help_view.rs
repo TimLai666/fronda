@@ -3,51 +3,11 @@
 //! Requires the `desktop-app` feature (gpui).
 
 use app_contract::help_model::{HelpTab, HelpViewModel};
+use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, Hsla, InteractiveElement,
+    div, prelude::*, px, App, Context, FocusHandle, Focusable,
     ParentElement, Render, Styled, Window,
 };
-
-/// Colors for the help view.
-pub struct HelpColors;
-impl HelpColors {
-    pub const BACKGROUND: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.07,
-        a: 1.0,
-    };
-    pub const TAB_BG: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.12,
-        a: 1.0,
-    };
-    pub const TAB_ACTIVE_BG: Hsla = Hsla {
-        h: 210.0 / 360.0,
-        s: 0.5,
-        l: 0.2,
-        a: 1.0,
-    };
-    pub const TEXT_PRIMARY: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 1.0,
-        a: 1.0,
-    };
-    pub const TEXT_SECONDARY: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 1.0,
-        a: 0.62,
-    };
-    pub const SIDEBAR_BG: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.1,
-        a: 1.0,
-    };
-}
 
 /// gpui Help view component.
 #[derive(Debug, Clone)]
@@ -74,65 +34,90 @@ impl Focusable for HelpView {
 
 impl Render for HelpView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut sidebar = div().flex().flex_col().gap(px(4.0)).w(px(220.0));
+        let active = self.model.active_tab;
+
+        let mut sidebar = div()
+            .flex()
+            .flex_col()
+            .w(px(200.0))
+            .h_full()
+            .bg(Background::SURFACE)
+            .border_r_1()
+            .border_color(BorderColors::PRIMARY)
+            .py(px(Spacing::MD))
+            .gap(px(Spacing::XXS));
 
         for tab in HelpTab::ALL {
             let is_active = self.model.active_tab == *tab;
-            let bg = if is_active {
-                HelpColors::TAB_ACTIVE_BG
-            } else {
-                HelpColors::TAB_BG
-            };
-            let color = if is_active {
-                HelpColors::TEXT_PRIMARY
-            } else {
-                HelpColors::TEXT_SECONDARY
-            };
-
             sidebar = sidebar.child(
                 div()
                     .id(gpui::SharedString::from(format!(
                         "help-tab-{}",
                         tab.label()
                     )))
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .rounded(px(4.0))
-                    .bg(bg)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .w_full()
+                    .h(px(32.0))
+                    .px(px(Spacing::MD_LG))
+                    .rounded(px(Radius::SM))
                     .cursor_pointer()
-                    .child(div().text_sm().child(tab.label()).text_color(color)),
+                    .bg(if is_active {
+                        BorderColors::PRIMARY
+                    } else {
+                        Background::SURFACE
+                    })
+                    .child(
+                        div()
+                            .text_size(px(FontSize::SM))
+                            .text_color(if is_active { Text::PRIMARY } else { Text::SECONDARY })
+                            .child(tab.label()),
+                    ),
             );
         }
 
-        let content = match self.model.active_tab {
-            HelpTab::Shortcuts => div().flex_1().child(
-                div().px(px(16.0)).py(px(16.0)).child(
+        let content = match active {
+            HelpTab::Shortcuts => div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .px(px(Spacing::XL))
+                .py(px(Spacing::XL))
+                .gap(px(Spacing::MD))
+                .child(
                     div()
-                        .text_sm()
-                        .child("Keyboard Shortcuts")
-                        .text_color(HelpColors::TEXT_PRIMARY),
-                ),
-            ),
-            HelpTab::Mcp => div().flex_1().child(
-                div()
-                    .px(px(16.0))
-                    .py(px(16.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .child("MCP Server")
-                            .text_color(HelpColors::TEXT_PRIMARY),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .child(format!("Endpoint: {}", self.model.mcp_endpoint()))
-                            .text_color(HelpColors::TEXT_SECONDARY),
-                    ),
-            ),
+                        .text_size(px(FontSize::MD_LG))
+                        .text_color(Text::PRIMARY)
+                        .child("Keyboard Shortcuts"),
+                )
+                .child(
+                    div()
+                        .text_size(px(FontSize::SM))
+                        .text_color(Text::TERTIARY)
+                        .child("Common shortcuts for editing and navigation."),
+                )
+                .into_any_element(),
+            HelpTab::Mcp => div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .px(px(Spacing::XL))
+                .py(px(Spacing::XL))
+                .gap(px(Spacing::MD))
+                .child(
+                    div()
+                        .text_size(px(FontSize::MD_LG))
+                        .text_color(Text::PRIMARY)
+                        .child("MCP Server"),
+                )
+                .child(
+                    div()
+                        .text_size(px(FontSize::SM))
+                        .text_color(Text::TERTIARY)
+                        .child(format!("Endpoint: {}", self.model.mcp_endpoint())),
+                )
+                .into_any_element(),
         };
 
         div()
@@ -141,8 +126,8 @@ impl Render for HelpView {
             .flex()
             .flex_row()
             .size_full()
-            .bg(HelpColors::BACKGROUND)
-            .child(div().bg(HelpColors::SIDEBAR_BG).child(sidebar))
+            .bg(Background::BASE)
+            .child(sidebar)
             .child(content)
     }
 }

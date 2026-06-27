@@ -3,33 +3,11 @@
 //! Requires the `desktop-app` feature (gpui).
 
 use app_contract::feedback_model::FeedbackViewModel;
+use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, Hsla, InteractiveElement,
+    div, prelude::*, px, App, Context, FocusHandle, Focusable,
     ParentElement, Render, Styled, Window,
 };
-
-/// Colors for the feedback view.
-pub struct FeedbackColors;
-impl FeedbackColors {
-    pub const BACKGROUND: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.07,
-        a: 1.0,
-    };
-    pub const TEXT_PRIMARY: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 1.0,
-        a: 1.0,
-    };
-    pub const TEXT_SECONDARY: Hsla = Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 1.0,
-        a: 0.62,
-    };
-}
 
 /// gpui Feedback view component.
 #[derive(Debug, Clone)]
@@ -63,21 +41,58 @@ impl Render for FeedbackView {
             .flex()
             .flex_col()
             .size_full()
-            .bg(FeedbackColors::BACKGROUND)
-            .px(px(16.0))
-            .py(px(16.0))
+            .bg(Background::SURFACE)
+            .px(px(Spacing::LG_XL))
+            .py(px(Spacing::LG_XL))
+            .gap(px(Spacing::MD_LG))
             .child(
                 div()
-                    .text_sm()
-                    .child("Send Feedback")
-                    .text_color(FeedbackColors::TEXT_PRIMARY)
-                    .mb(px(12.0)),
+                    .text_size(px(FontSize::MD_LG))
+                    .text_color(Text::PRIMARY)
+                    .child("Send Feedback"),
             )
             .child(
                 div()
-                    .text_xs()
-                    .child("Describe your experience or report an issue.")
-                    .text_color(FeedbackColors::TEXT_SECONDARY),
+                    .text_size(px(FontSize::SM))
+                    .text_color(Text::TERTIARY)
+                    .child("Describe your experience or report an issue."),
+            )
+            // Textarea area
+            .child(
+                div()
+                    .flex_1()
+                    .rounded(px(Radius::SM))
+                    .border_1()
+                    .border_color(BorderColors::SUBTLE)
+                    .bg(Background::RAISED)
+                    .p(px(Spacing::SM_MD))
+                    .child(
+                        div()
+                            .text_size(px(FontSize::SM))
+                            .text_color(Text::MUTED)
+                            .child("Your feedback…"),
+                    ),
+            )
+            // Footer: Send button
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_end()
+                    .child(
+                        div()
+                            .px(px(Spacing::MD_LG))
+                            .py(px(Spacing::SM))
+                            .rounded(px(Radius::SM))
+                            .bg(BorderColors::PRIMARY)
+                            .cursor_pointer()
+                            .child(
+                                div()
+                                    .text_size(px(FontSize::SM))
+                                    .text_color(Text::PRIMARY)
+                                    .child("Send"),
+                            ),
+                    ),
             )
     }
 }
