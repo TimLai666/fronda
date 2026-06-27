@@ -36,18 +36,20 @@ impl Focusable for MediaPanelView {
     }
 }
 
-/// Tab button: 26px square (Swift: IconSize.lg = 26) with active indicator strip.
+/// Tab button: 26px square (Swift: IconSize.lg = 26).
+///
+/// Active bg = white@10% (Opacity::SOFT), matching Swift HoverHighlight(isActive: true).
+/// No left-edge capsule — Swift uses rounded-rect fill only.
 fn tab_btn(id: &str, label: &str, is_active: bool) -> impl IntoElement {
-    let btn_size = IconSize::LG; // 26px — matches Swift
-    // Active bg: white@6% (Opacity::HINT), inactive: transparent
+    let btn_size = IconSize::LG; // 26px
     let bg = if is_active {
-        gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.06 }
+        // white@10% matches Swift Opacity.soft (isActive, !isHovered)
+        gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.10 }
     } else {
-        Background::RAISED
+        gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 } // clear
     };
     div()
         .id(id.to_string())
-        .relative()
         .w(px(btn_size))
         .h(px(btn_size))
         .flex()
@@ -58,19 +60,6 @@ fn tab_btn(id: &str, label: &str, is_active: bool) -> impl IntoElement {
         .bg(bg)
         .text_color(if is_active { Text::PRIMARY } else { Text::TERTIARY })
         .text_size(px(FontSize::SM_MD))
-        // Active indicator: 2×18px capsule on left edge (Swift: Capsule().frame(width:2,height:18))
-        .when(is_active, |el| {
-            el.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(px((btn_size - 18.0) / 2.0))
-                    .w(px(2.0))
-                    .h(px(18.0))
-                    .rounded_full()
-                    .bg(BorderColors::PRIMARY),
-            )
-        })
         .child(label.to_string())
 }
 

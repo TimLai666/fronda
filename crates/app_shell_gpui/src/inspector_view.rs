@@ -47,6 +47,8 @@ impl Focusable for InspectorView {
 }
 
 /// A label/value property row matching Swift inspector rows.
+///
+/// Swift uses FontSize.sm for both label and value.
 fn prop_row(label: &str, value: &str) -> impl IntoElement {
     div()
         .flex()
@@ -59,13 +61,13 @@ fn prop_row(label: &str, value: &str) -> impl IntoElement {
             div()
                 .flex_1()
                 .text_color(Text::SECONDARY)
-                .text_size(px(FontSize::XS))
+                .text_size(px(FontSize::SM))
                 .child(label.to_string()),
         )
         .child(
             div()
                 .text_color(Text::TERTIARY)
-                .text_size(px(FontSize::XS))
+                .text_size(px(FontSize::SM))
                 .child(value.to_string()),
         )
 }
@@ -151,7 +153,7 @@ impl Render for InspectorView {
                             .pb(px(Spacing::XS))
                             .cursor_pointer()
                             .text_color(if is_active { Text::PRIMARY } else { Text::MUTED })
-                            .text_size(px(FontSize::XS))
+                            .text_size(px(FontSize::SM))
                             .border_b(px(if is_active { 1.5 } else { 0.0 }))
                             .border_color(Text::PRIMARY)
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -190,7 +192,7 @@ impl Render for InspectorView {
                                     .child(prop_row("Fade Out", "0.0s"))
                             }),
                     )
-                    // Transform section
+                    // Transform section (Swift: Position, Scale, Rotation, Opacity, Crop, Flip)
                     .child(
                         div()
                             .id("section-transform")
@@ -206,32 +208,25 @@ impl Render for InspectorView {
                                     .child(section_header("Transform", transform_expanded)),
                             )
                             .when(transform_expanded, |el| {
-                                el.child(prop_row("Position X", "0.0"))
-                                    .child(prop_row("Position Y", "0.0"))
+                                el.child(prop_row("Position", "0, 0"))
                                     .child(prop_row("Scale", "100%"))
                                     .child(prop_row("Rotation", "0°"))
                                     .child(prop_row("Opacity", "100%"))
+                                    .child(prop_row("Crop", "None"))
+                                    .child(prop_row("Flip", "None"))
                             }),
                     )
-                    // Blending section
+                    // Playback section (Swift: Speed row)
                     .child(
                         div()
-                            .id("section-blend")
+                            .id("section-playback")
                             .flex()
                             .flex_col()
                             .w_full()
-                            .child(section_header("Blending", false)),
+                            .child(section_header("Playback", true))
+                            .child(prop_row("Speed", "100%")),
                     )
-                    // Speed section
-                    .child(
-                        div()
-                            .id("section-speed")
-                            .flex()
-                            .flex_col()
-                            .w_full()
-                            .child(section_header("Speed", false)),
-                    )
-                    // Project metadata section
+                    // Project metadata section (Swift: Name, Path, Resolution, Frame Rate, Aspect Ratio, Duration)
                     .child(
                         div()
                             .id("section-project")
@@ -242,9 +237,10 @@ impl Render for InspectorView {
                             .child(prop_row("Name", "Untitled"))
                             .child(prop_row("Resolution", "1920×1080"))
                             .child(prop_row("Frame Rate", "30 fps"))
+                            .child(prop_row("Aspect Ratio", "16:9"))
                             .child(prop_row("Duration", "0:20")),
                     )
-                    // Format section
+                    // Format section (Swift: Resolution, Frame Rate, Aspect Ratio, Duration)
                     .child(
                         div()
                             .id("section-format")
@@ -252,8 +248,10 @@ impl Render for InspectorView {
                             .flex_col()
                             .w_full()
                             .child(section_header("Format", true))
+                            .child(prop_row("Resolution", "1920×1080"))
+                            .child(prop_row("Frame Rate", "30 fps"))
                             .child(prop_row("Aspect Ratio", "16:9"))
-                            .child(prop_row("Color Space", "sRGB")),
+                            .child(prop_row("Duration", "0:20")),
                     )
                     // AI Edit footer badge
                     .child(
