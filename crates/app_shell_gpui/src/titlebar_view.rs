@@ -18,6 +18,8 @@ use gpui::{
 pub struct TitleBarState {
     pub project_name: SharedString,
     pub agent_panel_visible: bool,
+    /// Update badge: None = no update, Some(version) = update available.
+    pub update_version: Option<SharedString>,
 }
 
 impl Default for TitleBarState {
@@ -25,6 +27,7 @@ impl Default for TitleBarState {
         Self {
             project_name: "Untitled Project".into(),
             agent_panel_visible: true,
+            update_version: None,
         }
     }
 }
@@ -123,7 +126,7 @@ impl Render for TitleBarView {
                     .text_size(px(FontSize::SM))
                     .child(project_name.to_string()),
             )
-            // ── Trailing: Export button + account avatar ──
+            // ── Trailing: update badge + Export button + account avatar ──
             .child(
                 div()
                     .flex()
@@ -131,6 +134,39 @@ impl Render for TitleBarView {
                     .items_center()
                     .px(px(Spacing::SM_MD))
                     .gap(px(Spacing::SM))
+                    // Update badge — visible only when update_version is Some (Swift UpdateBadgeView)
+                    .when_some(self.state.update_version.clone(), |el, ver| {
+                        el.child(
+                            div()
+                                .id("badge-update")
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(0.0))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(BorderColors::SUBTLE)
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .px(px(Spacing::SM))
+                                        .py(px(Spacing::XXS))
+                                        .text_color(Text::PRIMARY)
+                                        .text_size(px(FontSize::XS))
+                                        .cursor_pointer()
+                                        .child(format!("Update v{ver}")),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(Spacing::XS))
+                                        .py(px(Spacing::XXS))
+                                        .text_color(Text::TERTIARY)
+                                        .text_size(px(FontSize::XS))
+                                        .cursor_pointer()
+                                        .child("✕"),
+                                ),
+                        )
+                    })
                     // Export button (matches TitleBarTrailingView)
                     .child(
                         div()

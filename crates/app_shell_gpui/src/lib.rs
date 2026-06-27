@@ -34,6 +34,8 @@ pub mod preview_guides;
 pub mod preview_model;
 #[cfg(feature = "desktop-app")]
 pub mod preview_view;
+#[cfg(feature = "desktop-app")]
+pub mod project_activity_view;
 pub mod timeline_model;
 #[cfg(feature = "desktop-app")]
 pub mod timeline_view;
