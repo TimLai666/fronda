@@ -41,6 +41,7 @@ pub struct InspectorState {
     pub transform_expanded: bool,
     pub volume_expanded: bool,
     pub speed_expanded: bool,
+    pub keyframes_visible: bool,
 }
 
 impl Default for InspectorState {
@@ -56,6 +57,7 @@ impl InspectorState {
             transform_expanded: true,
             volume_expanded: true,
             speed_expanded: false,
+            keyframes_visible: false,
         }
     }
 
@@ -69,6 +71,10 @@ impl InspectorState {
 
     pub fn toggle_volume(&mut self) {
         self.volume_expanded = !self.volume_expanded;
+    }
+
+    pub fn toggle_keyframes(&mut self) {
+        self.keyframes_visible = !self.keyframes_visible;
     }
 
     pub fn toggle_speed(&mut self) {

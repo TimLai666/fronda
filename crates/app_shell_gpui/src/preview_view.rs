@@ -1,16 +1,23 @@
-/// Preview panel gpui view — canvas + scrub bar + transport controls.
+﻿/// Preview panel gpui view — canvas + scrub bar + transport controls.
 ///
 /// Matches PreviewContainerView.swift layout.
+/// TransformOverlayView and CropOverlayView are layered on top of the canvas.
 
+use crate::crop_overlay_view::CropOverlayView;
 use crate::preview_model::PlaybackState;
 use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Spacing, Text};
+use crate::transform_overlay_view::TransformOverlayView;
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, InteractiveElement,
-    ParentElement, Render, Styled, Window,
+    div, prelude::*, px, App, Context, Entity, FocusHandle, Focusable, IntoElement,
+    InteractiveElement, ParentElement, Render, Styled, Window,
 };
 
 pub struct PreviewView {
     pub state: PlaybackState,
+    pub show_transform_overlay: bool,
+    pub show_crop_overlay: bool,
+    transform_overlay: Entity<TransformOverlayView>,
+    crop_overlay: Entity<CropOverlayView>,
     focus_handle: FocusHandle,
 }
 
@@ -18,6 +25,10 @@ impl PreviewView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             state: PlaybackState::new(),
+            show_transform_overlay: false,
+            show_crop_overlay: false,
+            transform_overlay: cx.new(|cx| TransformOverlayView::new(cx)),
+            crop_overlay: cx.new(|cx| CropOverlayView::new(cx)),
             focus_handle: cx.focus_handle(),
         }
     }
@@ -54,12 +65,7 @@ impl Focusable for PreviewView {
     }
 }
 
-/// Transport button: 32×28px matching Swift frame(width:32, height:28).
-fn transport_btn(
-    id: &str,
-    glyph: &str,
-    highlight: bool,
-) -> gpui::Stateful<gpui::Div> {
+fn transport_btn(id: &str, glyph: &str, highlight: bool) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id.to_string())
         .w(px(32.0))
@@ -80,6 +86,11 @@ impl Render for PreviewView {
         let fraction = self.state.playhead_fraction();
         let current_tc = self.state.format_timecode();
         let total_tc = self.state.format_total();
+        let show_transform = self.show_transform_overlay;
+        let show_crop = self.show_crop_overlay;
+
+        let transform_entity = self.transform_overlay.clone();
+        let crop_entity = self.crop_overlay.clone();
 
         div()
             .id("preview-panel")
@@ -87,7 +98,7 @@ impl Render for PreviewView {
             .flex_col()
             .size_full()
             .bg(Background::BASE)
-            // ── Header tab bar ──
+            // Header tab bar
             .child(
                 div()
                     .id("preview-header")
@@ -101,7 +112,6 @@ impl Render for PreviewView {
                     .bg(Background::RAISED)
                     .border_b_1()
                     .border_color(BorderColors::PRIMARY)
-                    // Nav chevrons (Swift: goBackPreviewTab / goForwardPreviewTab)
                     .child(
                         div()
                             .id("preview-back")
@@ -130,7 +140,6 @@ impl Render for PreviewView {
                             .on_click(cx.listener(|_, _, _, _| {}))
                             .child(">"),
                     )
-                    // Active tab label with bottom underline
                     .child(
                         div()
                             .px(px(Spacing::XS))
@@ -142,7 +151,7 @@ impl Render for PreviewView {
                             .child("Timeline"),
                     ),
             )
-            // ── Canvas area ──
+            // Canvas area (relative so overlays can stack absolutely)
             .child(
                 div()
                     .id("preview-canvas")
@@ -151,15 +160,39 @@ impl Render for PreviewView {
                     .items_center()
                     .justify_center()
                     .w_full()
+                    .relative()
                     .bg(Background::BASE)
+                    // Placeholder text
                     .child(
                         div()
                             .text_color(Text::MUTED)
                             .text_size(px(FontSize::SM))
                             .child("Preview"),
-                    ),
+                    )
+                    // Transform overlay — shown when select tool + clip selected
+                    .when(show_transform, |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .child(transform_entity),
+                        )
+                    })
+                    // Crop overlay — shown when crop tool + clip selected
+                    .when(show_crop, |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .child(crop_entity),
+                        )
+                    }),
             )
-            // ── Scrub bar: 12px height matching Swift ──
+            // Scrub bar
             .child(
                 div()
                     .id("preview-scrub")
@@ -168,7 +201,6 @@ impl Render for PreviewView {
                     .h(px(12.0))
                     .bg(BorderColors::SUBTLE)
                     .cursor_pointer()
-                    // Progress fill
                     .child(
                         div()
                             .absolute()
@@ -178,7 +210,6 @@ impl Render for PreviewView {
                             .w(px((fraction as f32) * Layout::PREVIEW_MIN_WIDTH))
                             .bg(BorderColors::DIVIDER),
                     )
-                    // Thumb indicator
                     .child(
                         div()
                             .absolute()
@@ -190,7 +221,7 @@ impl Render for PreviewView {
                             .bg(Text::PRIMARY),
                     ),
             )
-            // ── Transport bar: 36px height matching Swift ──
+            // Transport bar
             .child(
                 div()
                     .id("preview-transport")
@@ -203,7 +234,6 @@ impl Render for PreviewView {
                     .bg(Background::RAISED)
                     .border_t_1()
                     .border_color(BorderColors::PRIMARY)
-                    // Left: timecode — orange accent for current, tertiary for separator and total
                     .child(
                         div()
                             .flex()
@@ -230,7 +260,6 @@ impl Render for PreviewView {
                                     .child(total_tc),
                             ),
                     )
-                    // Center: 5 transport buttons
                     .child(
                         div()
                             .flex()
@@ -250,7 +279,7 @@ impl Render for PreviewView {
                                     })),
                             )
                             .child(
-                                transport_btn("btn-play", if is_playing { "⏸" } else { "▶" }, true)
+                                transport_btn("btn-play", if is_playing { "||" } else { ">" }, true)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.toggle_play(cx);
                                     })),
@@ -268,7 +297,6 @@ impl Render for PreviewView {
                                     })),
                             ),
                     )
-                    // Right: zoom / aspect info
                     .child(
                         div()
                             .flex()

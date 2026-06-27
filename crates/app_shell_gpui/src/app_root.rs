@@ -4,6 +4,7 @@
 //! and PRJ-014 (close project → Home).
 
 use crate::chat_view::ChatView;
+use crate::tour_overlay_view::TourOverlayView;
 use crate::editor_view;
 use crate::home_model::HomeLayout;
 use crate::home_view::HomeView;
@@ -45,6 +46,7 @@ pub struct AppRoot {
     preview_view: Option<Entity<PreviewView>>,
     timeline_view: Option<Entity<TimelineView>>,
     inspector_view: Option<Entity<InspectorView>>,
+    tour_overlay: Entity<TourOverlayView>,
 }
 
 impl AppRoot {
@@ -62,6 +64,7 @@ impl AppRoot {
             preview_view: None,
             timeline_view: None,
             inspector_view: None,
+            tour_overlay: cx.new(|cx| TourOverlayView::new(cx)),
         }
     }
 
@@ -442,6 +445,8 @@ impl Render for AppRoot {
             }
         };
 
+        let tour = self.tour_overlay.clone();
+
         div()
             .id("fronda-root")
             .track_focus(&self.focus_handle.clone())
@@ -449,7 +454,17 @@ impl Render for AppRoot {
             .flex()
             .flex_col()
             .size_full()
+            .relative()
             .child(content)
+            // Tour overlay stacks on top of everything at launch
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .child(tour),
+            )
     }
 }
 
