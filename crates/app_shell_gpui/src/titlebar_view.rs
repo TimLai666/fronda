@@ -50,14 +50,15 @@ impl TitleBarView {
     }
 
     /// Returns the color of the chat-bubble icon.
-    /// Swift uses aiGradient (monochrome silver shimmer); we approximate with white at
-    /// full opacity when panel is open, or at reduced opacity when closed.
+    /// Swift uses aiGradient (monochrome silver shimmer: white→0.78→0.60→white).
+    /// We approximate with l=0.78 (mid-point silver) at full opacity when panel is
+    /// open, or dimmed when closed — closer to the gradient's average tone than pure white.
     fn agent_icon_color(&self) -> Hsla {
         Hsla {
             h: 0.0,
             s: 0.0,
-            l: 1.0,
-            a: if self.state.agent_panel_visible { 1.0 } else { Opacity::STRONG },
+            l: if self.state.agent_panel_visible { 0.78 } else { 0.50 },
+            a: 1.0,
         }
     }
 }
