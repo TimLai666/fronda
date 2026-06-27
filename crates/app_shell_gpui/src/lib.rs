@@ -5,6 +5,8 @@ pub mod agent_panel_view;
 #[cfg(feature = "desktop-app")]
 pub mod app_root;
 #[cfg(feature = "desktop-app")]
+pub mod chat_history_view;
+#[cfg(feature = "desktop-app")]
 pub mod chat_view;
 #[cfg(feature = "desktop-app")]
 pub mod editor_view;

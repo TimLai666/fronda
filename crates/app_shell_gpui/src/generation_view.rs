@@ -39,6 +39,8 @@ pub struct GenerationState {
     pub selected_type: GenerationType,
     pub prompt: String,
     pub is_generating: bool,
+    /// Credits remaining (None = signed out / unknown).
+    pub credits_remaining: Option<u32>,
 }
 
 impl Default for GenerationState {
@@ -47,6 +49,7 @@ impl Default for GenerationState {
             selected_type: GenerationType::Video,
             prompt: String::new(),
             is_generating: false,
+            credits_remaining: Some(1_250),
         }
     }
 }
@@ -111,6 +114,7 @@ impl Render for GenerationView {
         };
         let is_placeholder = self.state.prompt.is_empty();
         let is_generating = self.state.is_generating;
+        let credits = self.state.credits_remaining;
 
         // Active tab bg matches HoverHighlight(isActive: true)
         let active_tab_bg: Hsla = Hsla {
@@ -127,17 +131,19 @@ impl Render for GenerationView {
             .flex_col()
             .size_full()
             .bg(Background::SURFACE)
-            // ── Type picker tabs ──
+            // ── Header: type tabs (left) + credit chip + activity + close (right) ──
+            // Matches Swift: typeTabs · Spacer · CreditSummaryView(.compact) · ProjectActivityButton · xmark
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .px(px(Spacing::SM_MD))
+                    .px(px(Spacing::SM))
                     .py(px(Spacing::XS))
                     .gap(px(Spacing::XXS))
                     .border_b_1()
                     .border_color(BorderColors::SUBTLE)
+                    // Type tabs
                     .children(GenerationType::all().iter().map(|gen_type| {
                         let is_active = *gen_type == selected;
                         let gt = *gen_type;
@@ -176,7 +182,68 @@ impl Render for GenerationView {
                                     })
                                     .child(gen_type.label()),
                             )
-                    })),
+                    }))
+                    // Spacer
+                    .child(div().flex_1())
+                    // Credit chip (CreditSummaryView.compact) — only when credits available
+                    .when_some(credits, |el, c| {
+                        el.child(
+                            div()
+                                .id("credit-chip")
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(Spacing::XS))
+                                .px(px(Spacing::SM))
+                                .py(px(Spacing::XXS))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(BorderColors::SUBTLE)
+                                .cursor_pointer()
+                                .child(
+                                    div()
+                                        .text_color(Accent::PRIMARY)
+                                        .text_size(px(FontSize::SM))
+                                        .child("$"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(Accent::PRIMARY)
+                                        .text_size(px(FontSize::XS))
+                                        .child(format!("{c}")),
+                                ),
+                        )
+                    })
+                    // Project activity icon button
+                    .child(
+                        div()
+                            .id("btn-gen-activity")
+                            .w(px(22.0))
+                            .h(px(22.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(Radius::XS))
+                            .cursor_pointer()
+                            .text_color(Text::TERTIARY)
+                            .text_size(px(FontSize::XS))
+                            .child("≡"),
+                    )
+                    // Close button (xmark)
+                    .child(
+                        div()
+                            .id("btn-gen-close")
+                            .w(px(22.0))
+                            .h(px(22.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(Radius::XS))
+                            .cursor_pointer()
+                            .text_color(Text::TERTIARY)
+                            .text_size(px(FontSize::XXS))
+                            .child("✕"),
+                    ),
             )
             // ── Reference tiles area (first frame, last frame) ──
             .child(
