@@ -3,24 +3,29 @@
 //! Covers UIX-011 (panel widths), THM-017 (tab rail width formula),
 //! and the MediaPanelView from 07-ui-port-spec.md.
 
+use crate::generation_view::GenerationView;
 use crate::media_panel_model::{MediaPanelState, MediaPanelTab};
 use crate::theme::{Background, BorderColors, FontSize, IconSize, Layout, MediaPanel, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, InteractiveElement,
-    ParentElement, Render, Styled, Window,
+    div, prelude::*, px, App, Context, Entity, FocusHandle, Focusable, IntoElement,
+    InteractiveElement, ParentElement, Render, Styled, Window,
 };
 
 /// Media panel gpui entity.
 pub struct MediaPanelView {
     pub state: MediaPanelState,
     focus_handle: FocusHandle,
+    /// AI generation panel embedded in the media tab (Swift: GenerationView).
+    pub generation: Entity<GenerationView>,
 }
 
 impl MediaPanelView {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let gen = cx.new(|cx| GenerationView::new(cx));
         Self {
             state: MediaPanelState::new(),
             focus_handle: cx.focus_handle(),
+            generation: gen,
         }
     }
 
@@ -222,6 +227,7 @@ impl Render for MediaPanelView {
         let media_active = active == MediaPanelTab::Media;
         let captions_active = active == MediaPanelTab::Captions;
         let music_active = active == MediaPanelTab::Music;
+        let generation_entity = self.generation.clone();
 
         div()
             .id("media-panel")
@@ -285,7 +291,15 @@ impl Render for MediaPanelView {
                     .h_full()
                     .bg(Background::SURFACE)
                     .child(match active {
-                        MediaPanelTab::Media => media_tab_content().into_any_element(),
+                        MediaPanelTab::Media => div()
+                            .flex()
+                            .flex_col()
+                            .size_full()
+                            // Generation panel embedded at top of media tab (Swift: GenerationView)
+                            .child(generation_entity)
+                            // Drop zone / grid below
+                            .child(media_tab_content())
+                            .into_any_element(),
                         MediaPanelTab::Captions => captions_tab_content().into_any_element(),
                         MediaPanelTab::Music => music_tab_content().into_any_element(),
                     }),
