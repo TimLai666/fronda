@@ -20,9 +20,29 @@ use crate::toolbar_view::ToolbarView;
 use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
 use gpui::{
-    div, prelude::*, px, size, svg, App, Bounds, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, KeyDownEvent, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, size, svg, App, Bounds, Context, DragMoveEvent, Entity, FocusHandle,
+    Focusable, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, Window,
+    WindowBounds, WindowOptions,
 };
+
+/// Drag token for timeline panel resize.
+#[derive(Debug, Clone)]
+struct TimelineResizeDrag;
+
+/// Invisible drag preview.
+struct TimelineResizePreview;
+impl gpui::Render for TimelineResizePreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+        div()
+    }
+}
+
+/// Timeline resize drag session.
+#[derive(Debug, Clone)]
+struct TimelineResizeDragSession {
+    start_y: f32,
+    start_height: f32,
+}
 
 /// Which screen the app is showing.
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +60,9 @@ pub struct AppRoot {
     home: HomeView,
     samples_expanded: bool,
     welcome_dismissed: bool,
+    /// Timeline panel height in pixels (draggable).
+    timeline_height: f32,
+    timeline_resize_drag: Option<TimelineResizeDragSession>,
     /// Editor panel entities — created lazily on first open_editor() call.
     titlebar_view: Option<Entity<TitleBarView>>,
     chat_view: Option<Entity<ChatView>>,
@@ -69,6 +92,8 @@ impl AppRoot {
             timeline_view: None,
             inspector_view: None,
             tour_overlay: cx.new(|cx| TourOverlayView::new(cx)),
+            timeline_height: 200.0,
+            timeline_resize_drag: None,
         }
     }
 
@@ -605,6 +630,31 @@ impl Render for AppRoot {
                     self.timeline_view.clone(),
                     self.inspector_view.clone(),
                 );
+                let tl_height = self.timeline_height;
+
+                // Resize handle: 5px draggable strip between toolbar and timeline
+                let resize_handle = div()
+                    .id("timeline-resize-handle")
+                    .w_full()
+                    .h(px(5.0))
+                    .bg(crate::theme::BorderColors::PRIMARY)
+                    .cursor_ns_resize()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this: &mut AppRoot, e: &MouseDownEvent, _, _| {
+                            this.timeline_resize_drag = Some(TimelineResizeDragSession {
+                                start_y: e.position.y.as_f32(),
+                                start_height: this.timeline_height,
+                            });
+                        }),
+                    )
+                    .on_drag(TimelineResizeDrag, |_, _, _, cx| {
+                        cx.new(|_| TimelineResizePreview)
+                    })
+                    .into_any_element();
+
+                let weak = cx.entity().downgrade();
+
                 div()
                     .flex()
                     .flex_col()
@@ -615,7 +665,21 @@ impl Render for AppRoot {
                         div()
                             .flex()
                             .flex_1()
-                            .child(editor_view::render_pane_layout(&layout, &contents)),
+                            // Global handler for timeline resize drag
+                            .on_drag_move::<TimelineResizeDrag>(move |event: &DragMoveEvent<TimelineResizeDrag>, _, cx: &mut App| {
+                                let _ = weak.update(cx, |this: &mut AppRoot, inner_cx| {
+                                    if let Some(ref session) = this.timeline_resize_drag {
+                                        let dy = event.event.position.y.as_f32() - session.start_y;
+                                        // Drag UP increases timeline height (timeline is below)
+                                        let new_h = (session.start_height - dy)
+                                            .clamp(crate::theme::Layout::TIMELINE_MIN_HEIGHT,
+                                                   crate::theme::Layout::TIMELINE_MAX_HEIGHT);
+                                        this.timeline_height = new_h;
+                                        inner_cx.notify();
+                                    }
+                                });
+                            })
+                            .child(editor_view::render_pane_layout(&layout, &contents, tl_height, resize_handle)),
                     )
                     .into_any_element()
             }

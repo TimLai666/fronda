@@ -6,7 +6,7 @@ use crate::preview_view::PreviewView;
 use crate::theme::{Background, BorderColors, Layout, Text};
 use crate::timeline_view::TimelineView;
 use crate::toolbar_view::ToolbarView;
-use gpui::{div, prelude::*, px, Entity, IntoElement, ParentElement, Styled};
+use gpui::{div, prelude::*, px, AnyElement, Entity, IntoElement, ParentElement, Styled};
 
 /// Human-readable label for each pane.
 fn pane_label(id: PaneId) -> &'static str {
@@ -135,7 +135,7 @@ fn inspector_content(contents: &PaneContents) -> gpui::AnyElement {
 /// Default preset: [Agent left?] | Media | Preview + Toolbar + Timeline | Inspector
 ///
 /// Agent panel is a LEFT column sibling to the rest (matches Swift layout).
-fn build_default(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement {
+fn build_default(layout: &PaneLayout, contents: &PaneContents, timeline_height: f32, resize_handle: AnyElement) -> impl IntoElement {
     let mut root = div().id("layout-default").flex().flex_row().size_full();
 
     // Agent panel: LEFT column (240px min, Swift: AGENT_PANEL_MIN=240)
@@ -181,10 +181,18 @@ fn build_default(layout: &PaneLayout, contents: &PaneContents) -> impl IntoEleme
     if layout.is_visible(PaneId::Timeline) {
         center = center.child(
             div()
-                .h(px(200.0_f32))
-                .border_t_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(timeline_content(contents)),
+                .flex()
+                .flex_col()
+                .h(px(timeline_height))
+                // Resize handle: 5px draggable strip at top of timeline slot
+                .child(resize_handle)
+                .child(
+                    div()
+                        .flex_1()
+                        .border_t_1()
+                        .border_color(BorderColors::PRIMARY)
+                        .child(timeline_content(contents)),
+                ),
         );
     }
 
@@ -290,9 +298,14 @@ fn build_vertical(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElem
 }
 
 /// Render the full editor pane layout.
-pub fn render_pane_layout(layout: &PaneLayout, contents: &PaneContents) -> impl IntoElement {
+pub fn render_pane_layout(
+    layout: &PaneLayout,
+    contents: &PaneContents,
+    timeline_height: f32,
+    resize_handle: AnyElement,
+) -> impl IntoElement {
     match layout.preset {
-        LayoutPreset::Default => build_default(layout, contents).into_any_element(),
+        LayoutPreset::Default => build_default(layout, contents, timeline_height, resize_handle).into_any_element(),
         LayoutPreset::Media => build_media(layout, contents).into_any_element(),
         LayoutPreset::Vertical => build_vertical(layout, contents).into_any_element(),
     }

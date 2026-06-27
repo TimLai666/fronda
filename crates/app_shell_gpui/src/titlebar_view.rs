@@ -6,7 +6,7 @@
 //! macOS has a native NSToolbar; the gpui cross-platform version uses a 28px strip.
 
 use crate::pane::{PaneId, PaneLayout};
-use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text};
+use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Radius, Spacing, Text};
 use gpui::Hsla;
 use gpui::{
     div, prelude::*, px, svg, App, ClickEvent, Context, FocusHandle, Focusable,
