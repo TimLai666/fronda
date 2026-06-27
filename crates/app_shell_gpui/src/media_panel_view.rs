@@ -8,8 +8,26 @@ use crate::media_panel_model::{MediaPanelState, MediaPanelTab};
 use crate::theme::{Accent, Background, BorderColors, FontSize, IconSize, Layout, MediaPanel, Radius, Spacing, Text};
 use gpui::{
     div, prelude::*, px, App, Context, Entity, FocusHandle, Focusable, IntoElement,
-    InteractiveElement, ParentElement, Render, Styled, Window,
+    InteractiveElement, ParentElement, Render, SharedString, Styled, Window,
 };
+
+/// Simple tooltip capsule for tab buttons.
+struct TabTooltip {
+    label: SharedString,
+}
+
+impl Render for TabTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(Spacing::SM))
+            .py(px(Spacing::XXS))
+            .rounded(px(Radius::SM))
+            .bg(Background::PROMINENT)
+            .text_color(Text::PRIMARY)
+            .text_size(px(FontSize::XS))
+            .child(self.label.clone())
+    }
+}
 
 /// Media panel gpui entity.
 pub struct MediaPanelView {
@@ -496,19 +514,28 @@ impl Render for MediaPanelView {
                                 tab_btn("tab-media", "M", media_active)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.select_tab(MediaPanelTab::Media, cx);
-                                    })),
+                                    }))
+                                    .tooltip(|_, cx| {
+                                        cx.new(|_| TabTooltip { label: "Media".into() }).into()
+                                    }),
                             )
                             .child(
                                 tab_btn("tab-captions", "C", captions_active)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.select_tab(MediaPanelTab::Captions, cx);
-                                    })),
+                                    }))
+                                    .tooltip(|_, cx| {
+                                        cx.new(|_| TabTooltip { label: "Captions".into() }).into()
+                                    }),
                             )
                             .child(
                                 tab_btn("tab-music", "♪", music_active)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.select_tab(MediaPanelTab::Music, cx);
-                                    })),
+                                    }))
+                                    .tooltip(|_, cx| {
+                                        cx.new(|_| TabTooltip { label: "Music".into() }).into()
+                                    }),
                             ),
                     )
                     // Hairline border separator
