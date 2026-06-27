@@ -19,5 +19,8 @@ desktop-app = ["dep:gpui", "dep:gpui_platform"]
 
 [dependencies]
 app_contract = { package = "fronda-app-contract", path = "../app_contract" }
+generation_core = { package = "fronda-generation-core", path = "../generation_core" }
 gpui = { git = "https://github.com/gpui-ce/gpui-ce", optional = true }
 gpui_platform = { git = "https://github.com/gpui-ce/gpui-ce", optional = true }
+render_core = { path = "../render_core" }
+serde = { workspace = true }

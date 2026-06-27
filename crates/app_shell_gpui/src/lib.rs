@@ -6,6 +6,9 @@ pub mod app_root;
 pub mod chat_view;
 #[cfg(feature = "desktop-app")]
 pub mod editor_view;
+pub mod export_model;
+#[cfg(feature = "desktop-app")]
+pub mod export_view;
 #[cfg(feature = "desktop-app")]
 pub mod feedback_view;
 #[cfg(feature = "desktop-app")]

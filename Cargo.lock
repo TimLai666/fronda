@@ -1826,8 +1826,11 @@ name = "fronda-app-shell-gpui"
 version = "0.1.0"
 dependencies = [
  "fronda-app-contract",
+ "fronda-generation-core",
  "gpui",
  "gpui_platform",
+ "render_core",
+ "serde",
 ]
 
 [[package]]
