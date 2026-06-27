@@ -12,7 +12,7 @@ use crate::ai_edit_tab_view::AiEditTabView;
 use crate::inspector_model::{InspectorState, InspectorTab};
 use crate::keyframes_view::KeyframesView;
 use crate::theme::{
-    Accent, Background, BorderColors, FontSize, Layout, Spacing, Text,
+    Accent, Background, BorderColors, FontSize, Layout, Radius, Spacing, Text,
 };
 use gpui::{
     div, prelude::*, px, App, Context, DragMoveEvent, Entity, FocusHandle, Focusable,
@@ -477,6 +477,47 @@ impl Render for InspectorView {
             .child(speed_row);
 
         // Text tab size row
+        // Alignment toggle row: 4 icon buttons (≡ left, center, right, justify)
+        let align_row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(px(28.0))
+            .px(px(Spacing::SM_MD))
+            .gap(px(Spacing::XS))
+            .child(
+                div()
+                    .flex_1()
+                    .text_color(Text::TERTIARY)
+                    .text_size(px(FontSize::SM))
+                    .child("Alignment"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(Spacing::XXS))
+                    .children(["⬛", "⬜", "⬛", "⬛"].iter().enumerate().map(|(i, glyph)| {
+                        let icons = ["text.alignleft", "text.aligncenter", "text.alignright", "text.justify"];
+                        let labels = ["◀▌", "▌◀▶▌", "▌▶", "≡"];
+                        let active = i == 1; // center is default active
+                        let _ = glyph; let _ = icons;
+                        div()
+                            .id(format!("align-btn-{i}"))
+                            .w(px(22.0))
+                            .h(px(20.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(Radius::XS))
+                            .bg(if active { BorderColors::SUBTLE } else { Background::SURFACE })
+                            .cursor_pointer()
+                            .text_size(px(FontSize::XXS))
+                            .text_color(if active { Text::PRIMARY } else { Text::TERTIARY })
+                            .child(labels[i])
+                    })),
+            );
+
         let text_size_section = div()
             .flex()
             .flex_col()
@@ -487,7 +528,7 @@ impl Render for InspectorView {
             .child(prop_row("Font", "System"))
             .child(text_size_row)
             .child(prop_row("Color", "White"))
-            .child(prop_row("Alignment", "Center"));
+            .child(align_row);
 
         div()
             .id("inspector-panel")
