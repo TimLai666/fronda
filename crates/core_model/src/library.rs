@@ -170,4 +170,48 @@ mod tests {
         assert_eq!(restored.events.len(), 1);
         assert_eq!(restored.events[0].projects.len(), 1);
     }
+
+    // ── Issue #156: Library hierarchy ────────────────────────────────────────
+
+    #[test]
+    fn issue_156_library_has_unique_id() {
+        let a = Library::new("A");
+        let b = Library::new("B");
+        assert_ne!(a.id, b.id, "each Library must get a unique ID");
+    }
+
+    #[test]
+    fn issue_156_event_added_to_library() {
+        let mut lib = Library::new("My Lib");
+        assert_eq!(lib.events.len(), 0);
+        lib.add_event(Event::new("Commercials"));
+        assert_eq!(lib.events.len(), 1);
+        assert_eq!(lib.events[0].name, "Commercials");
+    }
+
+    #[test]
+    fn issue_156_project_added_to_event() {
+        let mut event = Event::new("Feature Films");
+        assert_eq!(event.projects.len(), 0);
+        event.add_project(ProjectRef::new("My Film", "/films/my.palmier"));
+        assert_eq!(event.projects.len(), 1);
+        assert_eq!(event.projects[0].path, "/films/my.palmier");
+    }
+
+    #[test]
+    fn issue_156_library_new_has_no_events() {
+        let lib = Library::new("Empty");
+        assert!(lib.events.is_empty(), "new Library must have no events");
+        let json = serde_json::to_string(&lib).unwrap();
+        // events field is present but empty array — just confirm valid JSON
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["name"], "Empty");
+    }
+
+    #[test]
+    fn issue_156_project_ref_version_label_optional() {
+        let p = ProjectRef::new("Rough Cut", "/cut.palmier");
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("versionLabel"), "None versionLabel must be omitted: {json}");
+    }
 }

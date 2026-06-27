@@ -216,4 +216,50 @@ mod tests {
             assert!(!fmt.display_name().is_empty(), "{fmt:?} has no display name");
         }
     }
+
+    // ── Issue #154: XML import model ─────────────────────────────────────────
+
+    #[test]
+    fn issue_154_xmeml_detected_from_extension() {
+        assert!(matches!(
+            XmlImportFormat::from_extension("xml"),
+            Some(XmlImportFormat::Xmeml)
+        ));
+    }
+
+    #[test]
+    fn issue_154_fcpxml_detected_from_extension() {
+        assert!(matches!(
+            XmlImportFormat::from_extension("fcpxml"),
+            Some(XmlImportFormat::Fcpxml)
+        ));
+    }
+
+    #[test]
+    fn issue_154_unknown_extension_returns_none() {
+        assert!(XmlImportFormat::from_extension("mov").is_none());
+    }
+
+    #[test]
+    fn issue_154_import_request_from_path_defaults() {
+        let req = XmlImportRequest::from_path("/proj/edit.xml");
+        assert_eq!(req.path, "/proj/edit.xml");
+        // default: don't override project fps from the imported file
+        assert!(!req.preserve_project_fps);
+    }
+
+    #[test]
+    fn issue_154_validate_empty_path_is_error() {
+        let req = XmlImportRequest { path: String::new(), ..XmlImportRequest::from_path("x.xml") };
+        assert!(validate_xml_import(&req).is_err());
+    }
+
+    #[test]
+    fn issue_154_premiere_xml_detected_from_content() {
+        let content = r#"<?xml version="1.0"?><PremiereData Version="3"></PremiereData>"#;
+        assert!(matches!(
+            XmlImportFormat::from_xml_content(content),
+            Some(XmlImportFormat::PremiereXml)
+        ));
+    }
 }
