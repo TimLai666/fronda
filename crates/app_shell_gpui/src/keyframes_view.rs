@@ -8,12 +8,13 @@
 //!
 //! Diamond markers (◇) are placed at frame-fraction positions in each lane.
 
-use crate::theme::{Background, BorderColors, FontSize, Spacing, Text};
+use crate::theme::{Accent, Background, BorderColors, FontSize, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, relative, App, Context, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, Styled, Window,
+    div, px, relative, App, Context, FocusHandle, Focusable, IntoElement,
+    InteractiveElement, ParentElement, Render, Styled, Window,
 };
 
+const NAV_H: f32 = 24.0;
 const RULER_H: f32 = 18.0;
 const STRIP_H: f32 = 14.0;
 const ROW_H: f32 = 22.0;
@@ -68,6 +69,73 @@ impl Focusable for KeyframesView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+fn nav_toolbar() -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .w_full()
+        .h(px(NAV_H))
+        .bg(Background::RAISED)
+        .border_b_1()
+        .border_color(BorderColors::SUBTLE)
+        .px(px(Spacing::SM))
+        .gap(px(Spacing::XS))
+        // Prev keyframe
+        .child(
+            div()
+                .id("kf-nav-prev")
+                .w(px(20.0))
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(crate::theme::Radius::XS))
+                .cursor_pointer()
+                .text_color(Text::TERTIARY)
+                .text_size(px(FontSize::SM_MD))
+                .child("‹"),
+        )
+        // Add keyframe
+        .child(
+            div()
+                .id("kf-nav-add")
+                .w(px(20.0))
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(crate::theme::Radius::XS))
+                .cursor_pointer()
+                .text_color(Accent::PRIMARY)
+                .text_size(px(FontSize::XS))
+                .child("◆"),
+        )
+        // Next keyframe
+        .child(
+            div()
+                .id("kf-nav-next")
+                .w(px(20.0))
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(crate::theme::Radius::XS))
+                .cursor_pointer()
+                .text_color(Text::TERTIARY)
+                .text_size(px(FontSize::SM_MD))
+                .child("›"),
+        )
+        .child(div().flex_1())
+        // Done / close label
+        .child(
+            div()
+                .text_color(Text::MUTED)
+                .text_size(px(FontSize::XXS))
+                .child("Keyframes"),
+        )
 }
 
 fn ruler_strip() -> impl IntoElement {
@@ -156,7 +224,7 @@ impl Render for KeyframesView {
         let name = self.state.clip_name.clone();
         let playhead_frac = self.state.playhead_fraction;
         let lanes = self.state.lanes.clone();
-        let panel_h = RULER_H + STRIP_H + (lanes.len() as f32 * ROW_H);
+        let panel_h = NAV_H + RULER_H + STRIP_H + (lanes.len() as f32 * ROW_H);
 
         div()
             .id("keyframes-panel")
@@ -167,6 +235,7 @@ impl Render for KeyframesView {
             .h(px(panel_h))
             .relative()
             .bg(Background::SURFACE)
+            .child(nav_toolbar())
             .child(ruler_strip())
             .child(clip_strip(&name, hue))
             .children(lanes.iter().map(|lane| lane_row(lane, hue)))

@@ -9,8 +9,8 @@ use crate::timeline_model::{
     TimelineState, TrackKind, RULER_HEIGHT, TRACK_HEADER_WIDTH,
 };
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, InteractiveElement,
-    ParentElement, Render, Styled, Window,
+    div, prelude::*, px, svg, App, Context, FocusHandle, Focusable, IntoElement,
+    InteractiveElement, ParentElement, Render, Styled, Window,
 };
 
 /// Timeline panel gpui entity.
@@ -158,16 +158,27 @@ impl Render for TimelineView {
                                             .text_size(px(FontSize::SM))
                                             .child(track.label.clone()),
                                     )
+                                    // Mute / hide icon buttons (Swift: speaker.slash + eye.slash)
                                     .child(
                                         div()
                                             .flex()
                                             .flex_row()
                                             .gap(px(Spacing::XXS))
                                             .px(px(Spacing::XXS))
-                                            .text_size(px(FontSize::XS))
-                                            .text_color(Text::MUTED)
-                                            .child("m")
-                                            .child("h"),
+                                            .child(
+                                                svg()
+                                                    .path("icons/speaker_slash.svg")
+                                                    .w(px(10.0))
+                                                    .h(px(10.0))
+                                                    .text_color(Text::MUTED),
+                                            )
+                                            .child(
+                                                svg()
+                                                    .path("icons/eye_slash.svg")
+                                                    .w(px(10.0))
+                                                    .h(px(10.0))
+                                                    .text_color(Text::MUTED),
+                                            ),
                                     )
                             })),
                     )

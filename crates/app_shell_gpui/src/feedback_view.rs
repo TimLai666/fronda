@@ -8,9 +8,10 @@
 use app_contract::feedback_model::FeedbackViewModel;
 use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable,
-    InteractiveElement, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, Animation, AnimationExt as _, App, ClickEvent, Context, FocusHandle,
+    Focusable, InteractiveElement, ParentElement, Render, Styled, Window,
 };
+use std::time::Duration;
 
 /// gpui Feedback view component.
 #[derive(Debug, Clone)]
@@ -285,6 +286,10 @@ impl FeedbackView {
                         .px(px(Spacing::MD_LG))
                         .py(px(Spacing::SM))
                         .rounded_full()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(Spacing::XS))
                         .bg(if can_submit { Accent::PRIMARY } else { Background::PROMINENT })
                         .cursor_pointer()
                         .on_click(cx.listener(|this: &mut FeedbackView, _: &ClickEvent, _: &mut Window, cx: &mut Context<FeedbackView>| {
@@ -295,7 +300,8 @@ impl FeedbackView {
                         }))
                         .text_color(if can_submit { Background::BASE } else { Text::MUTED })
                         .text_size(px(FontSize::SM))
-                        .child(if is_sending { "Sending…" } else { "Send" }),
+                        .when(is_sending, |el| el.child(sending_spinner()))
+                        .child(if is_sending { "Sending" } else { "Send" }),
                 ),
         );
 
@@ -364,6 +370,22 @@ impl FeedbackView {
                     ),
             )
     }
+}
+
+fn sending_spinner() -> impl gpui::IntoElement {
+    div().flex().flex_row().items_center().gap(px(2.0))
+        .children((0u32..3).map(|i| {
+            div().w(px(4.0)).h(px(4.0)).rounded_full().bg(Background::BASE)
+                .with_animation(
+                    format!("send-dot-{i}"),
+                    Animation::new(Duration::from_millis(900)).repeat(),
+                    move |el, delta| {
+                        let phase = (delta + i as f32 / 3.0) % 1.0;
+                        let a: f32 = if phase < 1.0 / 3.0 { 1.0 } else { 0.25 };
+                        el.opacity(a)
+                    },
+                )
+        }))
 }
 
 impl Focusable for FeedbackView {
