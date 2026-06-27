@@ -280,85 +280,182 @@ fn media_toolbar() -> impl IntoElement {
         )
 }
 
-/// Captions tab: empty with placeholder.
+fn section_label(text: &str) -> impl IntoElement {
+    div()
+        .text_color(Text::MUTED)
+        .text_size(px(FontSize::XXS))
+        .child(text.to_uppercase())
+}
+
+fn row_value(label: &str, value: &str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .h(px(28.0))
+        .px(px(Spacing::MD_LG))
+        .child(
+            div()
+                .flex_1()
+                .text_color(Text::TERTIARY)
+                .text_size(px(FontSize::SM))
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .text_color(Text::SECONDARY)
+                .text_size(px(FontSize::SM))
+                .child(value.to_string()),
+        )
+}
+
+fn generate_btn(id: &str) -> impl IntoElement {
+    use crate::theme::Accent;
+    div()
+        .id(id.to_string())
+        .w_full()
+        .h(px(32.0))
+        .rounded(px(crate::theme::Radius::SM))
+        .bg(Accent::PRIMARY)
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .text_color(Background::BASE)
+        .text_size(px(FontSize::SM))
+        .child("Generate")
+}
+
+/// Captions tab: Source, Style, and Placement sections + Generate button.
 fn captions_tab_content() -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .size_full()
-        // Header with add button
+        .bg(Background::SURFACE)
         .child(
             div()
+                .id("captions-scroll")
                 .flex()
-                .flex_row()
-                .items_center()
-                .w_full()
-                .h(px(Layout::PANEL_HEADER_HEIGHT))
-                .px(px(Spacing::MD))
-                .bg(Background::RAISED)
-                .border_b_1()
-                .border_color(BorderColors::SUBTLE)
-                .child(
-                    div()
-                        .flex_1()
-                        .text_color(Text::SECONDARY)
-                        .text_size(px(FontSize::SM))
-                        .child("Captions"),
-                )
-                .child(
-                    div()
-                        .text_color(Text::MUTED)
-                        .text_size(px(FontSize::MD))
-                        .cursor_pointer()
-                        .child("+"),
-                ),
-        )
-        // Empty state
-        .child(
-            div()
-                .flex()
+                .flex_col()
                 .flex_1()
-                .items_center()
-                .justify_center()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::SM))
-                .child("No captions"),
+                .overflow_y_scroll()
+                .px(px(Spacing::LG_XL))
+                .py(px(Spacing::MD))
+                .gap(px(Spacing::LG))
+                // Source section
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(Spacing::XS))
+                        .child(section_label("Source"))
+                        .child(row_value("Input", "Auto"))
+                )
+                // Style section
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(Spacing::XS))
+                        .child(section_label("Style"))
+                        .child(row_value("Font Size", "36"))
+                        .child(row_value("Case", "Auto"))
+                        .child(row_value("Censor Profanity", "Off"))
+                )
+                // Placement
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(Spacing::XS))
+                        .child(section_label("Placement"))
+                        .child(row_value("Position", "Bottom Center"))
+                )
+        )
+        // Generate bar at bottom (matches Swift generateBar)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .px(px(Spacing::LG_XL))
+                .py(px(Spacing::SM_MD))
+                .border_t_1()
+                .border_color(BorderColors::SUBTLE)
+                .bg(Background::RAISED)
+                .child(generate_btn("btn-gen-captions")),
         )
 }
 
-/// Music tab: empty with placeholder.
+/// Music tab: Source, Model, Prompt, Duration + Generate button.
 fn music_tab_content() -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .size_full()
+        .bg(Background::SURFACE)
         .child(
             div()
+                .id("music-scroll")
                 .flex()
-                .flex_row()
-                .items_center()
-                .w_full()
-                .h(px(Layout::PANEL_HEADER_HEIGHT))
-                .px(px(Spacing::MD))
-                .bg(Background::RAISED)
-                .border_b_1()
-                .border_color(BorderColors::SUBTLE)
+                .flex_col()
+                .flex_1()
+                .overflow_y_scroll()
+                .px(px(Spacing::LG_XL))
+                .py(px(Spacing::MD))
+                .gap(px(Spacing::LG))
+                // Source section
                 .child(
                     div()
-                        .text_color(Text::SECONDARY)
-                        .text_size(px(FontSize::SM))
-                        .child("Music"),
-                ),
+                        .flex()
+                        .flex_col()
+                        .gap(px(Spacing::XS))
+                        .child(section_label("Source"))
+                        .child(row_value("Input", "Video to Music"))
+                        .child(row_value("Video", "Whole timeline"))
+                )
+                // Model
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(Spacing::XS))
+                        .child(section_label("Model"))
+                        .child(row_value("Model", "ElevenLabs Music ⌄"))
+                )
+                // Prompt area
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(Spacing::XS))
+                        .child(section_label("Prompt"))
+                        .child(
+                            div()
+                                .h(px(80.0))
+                                .rounded(px(crate::theme::Radius::SM))
+                                .border_1()
+                                .border_color(BorderColors::SUBTLE)
+                                .bg(Background::RAISED)
+                                .px(px(Spacing::SM_MD))
+                                .py(px(Spacing::SM))
+                                .text_color(Text::MUTED)
+                                .text_size(px(FontSize::SM))
+                                .child("Describe the music…"),
+                        )
+                )
         )
+        // Generate bar at bottom
         .child(
             div()
                 .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::SM))
-                .child("No music tracks"),
+                .flex_col()
+                .px(px(Spacing::LG_XL))
+                .py(px(Spacing::SM_MD))
+                .border_t_1()
+                .border_color(BorderColors::SUBTLE)
+                .bg(Background::RAISED)
+                .child(generate_btn("btn-gen-music")),
         )
 }
 
