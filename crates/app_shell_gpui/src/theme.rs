@@ -316,6 +316,20 @@ impl WindowSize {
     pub const PROJECT_TITLEBAR_TRAILING_WIDTH: f32 = 280.0;
 }
 
+/// Letter-spacing constants (matching Swift `AppTheme.Tracking`).
+///
+/// Values are approximate point-per-em equivalents; gpui exposes letter spacing
+/// via `Styled::letter_spacing(px(f32))` where positive = wider, negative = tighter.
+pub struct Tracking;
+impl Tracking {
+    /// Tight — used in welcome title (Swift: AppTheme.Tracking.tight ≈ -0.5pt).
+    pub const TIGHT: f32 = -0.5;
+    /// Wide — used in section headers (Swift: AppTheme.Tracking.wide ≈ 1.5pt).
+    pub const WIDE: f32 = 1.5;
+    /// Normal — no letter spacing adjustment (default).
+    pub const NORMAL: f32 = 0.0;
+}
+
 /// Generation panel size constants (matching Swift `GenerationPanel`).
 pub struct GenerationPanel;
 impl GenerationPanel {

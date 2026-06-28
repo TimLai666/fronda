@@ -76,6 +76,7 @@ fn session_row(entry: &ChatSessionEntry) -> impl IntoElement {
                     div()
                         .text_color(Text::PRIMARY)
                         .text_size(px(FontSize::XS))
+                        .when(is_current, |el| el.font_weight(gpui::FontWeight::SEMIBOLD))
                         .child(entry.title.clone()),
                 )
                 .child(

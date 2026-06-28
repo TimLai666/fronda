@@ -12,6 +12,7 @@ pub mod keyframes_view;
 pub mod mention_popover_view;
 #[cfg(feature = "desktop-app")]
 pub mod tour_overlay_view;
+#[cfg(feature = "desktop-app")]
 pub mod update_overlay_view;
 #[cfg(feature = "desktop-app")]
 pub mod transform_overlay_view;

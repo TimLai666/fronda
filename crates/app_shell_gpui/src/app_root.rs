@@ -45,6 +45,17 @@ struct TimelineResizeDragSession {
     start_height: f32,
 }
 
+/// A recently opened project entry (Swift: ProjectRegistry.Entry).
+#[derive(Debug, Clone)]
+pub struct RecentProject {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Hue (0.0..=1.0) for the placeholder thumbnail color.
+    pub hue: f32,
+    /// Relative time string, e.g. "2h ago".
+    pub last_modified: &'static str,
+}
+
 /// Which screen the app is showing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActiveScreen {
@@ -61,6 +72,10 @@ pub struct AppRoot {
     home: HomeView,
     samples_expanded: bool,
     welcome_dismissed: bool,
+    /// Recent projects list (Swift: ProjectRegistry.sortedEntries).
+    recent_projects: Vec<RecentProject>,
+    /// True when a user is signed in (controls sidebar Sign in button).
+    is_signed_in: bool,
     /// Timeline panel height in pixels (draggable).
     timeline_height: f32,
     timeline_resize_drag: Option<TimelineResizeDragSession>,
@@ -86,6 +101,12 @@ impl AppRoot {
             home: HomeView::new(handle),
             samples_expanded: true,
             welcome_dismissed: false,
+            recent_projects: vec![
+                RecentProject { id: "proj-1", name: "My Film",       hue: 0.60, last_modified: "2h ago" },
+                RecentProject { id: "proj-2", name: "Product Ad",    hue: 0.10, last_modified: "Yesterday" },
+                RecentProject { id: "proj-3", name: "Travel Vlog",   hue: 0.35, last_modified: "3 days ago" },
+            ],
+            is_signed_in: false,
             titlebar_view: None,
             chat_view: None,
             toolbar_view: None,
@@ -251,6 +272,8 @@ impl AppRoot {
     /// Render the Home screen: sidebar (220px) + content area.
     fn render_home(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let samples_expanded = self.samples_expanded;
+        let is_signed_in = self.is_signed_in;
+        let recent_projects = self.recent_projects.clone();
 
         // Sample project card data (Swift: SampleProjectsStrip items)
         let sample_cards: &[(&str, f32)] = &[
@@ -355,6 +378,35 @@ impl AppRoot {
                             })),
                     )
                     .child(div().flex_1())
+                    // "Sign in with Google" — shown when not signed in (Swift: HomeSidebar)
+                    .when(!is_signed_in, |el| {
+                        el.child(
+                            div()
+                                .id("sidebar-sign-in")
+                                .w_full()
+                                .px(px(crate::theme::Spacing::SM))
+                                .py(px(crate::theme::Spacing::XS))
+                                .mb(px(crate::theme::Spacing::XS))
+                                .rounded(px(crate::theme::Radius::SM))
+                                .border_1()
+                                .border_color(crate::theme::BorderColors::SUBTLE)
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(crate::theme::Spacing::XS))
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this: &mut AppRoot, _, _, cx| {
+                                    this.is_signed_in = true;
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .text_size(px(crate::theme::FontSize::SM))
+                                        .text_color(crate::theme::Text::SECONDARY)
+                                        .child("Sign in"),
+                                ),
+                        )
+                    })
                     .child(Self::sidebar_row_svg("sidebar-settings", "icons/gear.svg", "Settings")),
             )
             // ── Content area ──
@@ -545,8 +597,10 @@ impl AppRoot {
                                             ),
                                     ),
                             )
-                            // (user projects would populate here)
-                            .child(project_card("proj-0", "My Film",   0.60, cx))
+                            // Recent projects (from registry)
+                            .children(recent_projects.iter().map(|p| {
+                                project_card(p.id, p.name, p.hue, cx)
+                            }))
                     ),
             )
             // WelcomeOverlay — shown on first launch until dismissed (Swift: WelcomeOverlayView)

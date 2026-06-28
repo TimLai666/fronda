@@ -38,8 +38,12 @@ pub struct SettingsView {
     // Agent
     mcp_running: bool,
     mcp_enabled: bool,
+    /// True when the user has stored an Anthropic API key (AgentPane SecureField state).
+    has_stored_api_key: bool,
     // Storage
     search_enabled: bool,
+    /// Size in bytes of locally cached ML model (None = no model downloaded).
+    pub model_bytes: Option<u64>,
 }
 
 impl SettingsView {
@@ -66,7 +70,9 @@ impl SettingsView {
             audio_models_on: [true, false],
             mcp_running: true,
             mcp_enabled: true,
+            has_stored_api_key: false,
             search_enabled: true,
+            model_bytes: None,
         }
     }
 }
@@ -574,7 +580,7 @@ fn pane_models(image_on: &[bool; 3], video_on: &[bool; 3], audio_on: &[bool; 2])
 
 // ── Agent pane ────────────────────────────────────────────────────────────────
 
-fn pane_agent(mcp_running: bool, mcp_enabled: bool) -> impl IntoElement {
+fn pane_agent(mcp_running: bool, mcp_enabled: bool, has_stored_api_key: bool) -> impl IntoElement {
     let dot_color = if mcp_running {
         gpui::Hsla { h: 0.33, s: 0.70, l: 0.45, a: 1.0 } // green
     } else {
@@ -594,20 +600,69 @@ fn pane_agent(mcp_running: bool, mcp_enabled: bool) -> impl IntoElement {
                 .child(section_title("Anthropic API Key"))
                 .child(body_text("Use your own API key for AI chat. Stored in your keychain."))
                 .child(link_text("Get API key →"))
+                // Key field row — stored key shows masked value + Remove; empty shows placeholder + Save
                 .child(
                     div()
                         .flex()
                         .flex_row()
                         .items_center()
-                        .px(px(Spacing::SM_MD))
-                        .h(px(32.0))
-                        .rounded(px(Radius::SM))
-                        .border_1()
-                        .border_color(BorderColors::SUBTLE)
-                        .bg(Background::RAISED)
-                        .text_color(Text::MUTED)
-                        .text_size(px(FontSize::SM))
-                        .child("sk-ant-···"),
+                        .gap(px(Spacing::XS))
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .px(px(Spacing::SM_MD))
+                                .h(px(32.0))
+                                .rounded(px(Radius::SM))
+                                .border_1()
+                                .border_color(BorderColors::SUBTLE)
+                                .bg(Background::RAISED)
+                                .text_size(px(FontSize::SM))
+                                .when(has_stored_api_key, |el| {
+                                    el.text_color(Text::SECONDARY).child("sk-ant-api-03-···")
+                                })
+                                .when(!has_stored_api_key, |el| {
+                                    el.text_color(Text::MUTED).child("Paste your API key")
+                                }),
+                        )
+                        // Save button (only when no key stored)
+                        .when(!has_stored_api_key, |el| {
+                            el.child(
+                                div()
+                                    .id("btn-api-key-save")
+                                    .px(px(Spacing::SM_MD))
+                                    .h(px(32.0))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(Radius::SM))
+                                    .bg(Accent::PRIMARY)
+                                    .cursor_pointer()
+                                    .text_color(Background::BASE)
+                                    .text_size(px(FontSize::SM))
+                                    .child("Save"),
+                            )
+                        })
+                        // Remove (trash) button — only when key is stored
+                        .when(has_stored_api_key, |el| {
+                            el.child(
+                                div()
+                                    .id("btn-api-key-remove")
+                                    .w(px(32.0))
+                                    .h(px(32.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(Radius::SM))
+                                    .border_1()
+                                    .border_color(BorderColors::SUBTLE)
+                                    .cursor_pointer()
+                                    .text_color(Text::MUTED)
+                                    .text_size(px(FontSize::SM))
+                                    .child("🗑"),
+                            )
+                        }),
                 ),
         )
         .child(divider())
@@ -660,7 +715,14 @@ fn pane_agent(mcp_running: bool, mcp_enabled: bool) -> impl IntoElement {
 
 // ── Storage pane ──────────────────────────────────────────────────────────────
 
-fn pane_storage(search_enabled: bool) -> impl IntoElement {
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1_024 { format!("{bytes} B") }
+    else if bytes < 1_048_576 { format!("{:.1} KB", bytes as f64 / 1_024.0) }
+    else if bytes < 1_073_741_824 { format!("{:.1} MB", bytes as f64 / 1_048_576.0) }
+    else { format!("{:.2} GB", bytes as f64 / 1_073_741_824.0) }
+}
+
+fn pane_storage(search_enabled: bool, model_bytes: Option<u64>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -791,6 +853,54 @@ fn pane_storage(search_enabled: bool) -> impl IntoElement {
                         ),
                 ),
         )
+        // ML model row — shown only when a model is downloaded (Swift: modelBytes > 0)
+        .when_some(model_bytes, |el, mb| {
+            el.child(divider())
+              .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(Spacing::SM_MD))
+                    .child(section_title("ML Model"))
+                    .child(body_text("Visual search embedding model downloaded to disk."))
+                    .child(
+                        div()
+                            .rounded(px(Radius::SM))
+                            .border_1()
+                            .border_color(BorderColors::SUBTLE)
+                            .bg(Background::RAISED)
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .px(px(Spacing::MD_LG))
+                                    .py(px(Spacing::SM_MD))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_color(Text::SECONDARY)
+                                            .text_size(px(FontSize::XS))
+                                            .child(format!("Model  {}", format_bytes(mb))),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("btn-remove-model")
+                                            .px(px(Spacing::SM_MD))
+                                            .py(px(Spacing::XXS))
+                                            .rounded(px(Radius::XS_SM))
+                                            .border_1()
+                                            .border_color(BorderColors::SUBTLE)
+                                            .cursor_pointer()
+                                            .text_color(Text::SECONDARY)
+                                            .text_size(px(FontSize::XS))
+                                            .child("Remove model"),
+                                    ),
+                            ),
+                    ),
+              )
+        })
 }
 
 // ── Sidebar tab icon ──────────────────────────────────────────────────────────
@@ -931,14 +1041,16 @@ impl Render for SettingsView {
         let audio_on = self.audio_models_on;
         let mcp_running = self.mcp_running;
         let mcp_enabled = self.mcp_enabled;
+        let has_stored_api_key = self.has_stored_api_key;
         let search_enabled = self.search_enabled;
+        let model_bytes = self.model_bytes;
 
         let pane_content: gpui::AnyElement = match active_tab {
             SettingsTab::Account => pane_account(is_loading, is_signed_in, is_paid).into_any_element(),
             SettingsTab::General => pane_general(notifications_on, privacy_on).into_any_element(),
             SettingsTab::Models => pane_models(&image_on, &video_on, &audio_on).into_any_element(),
-            SettingsTab::Agent => pane_agent(mcp_running, mcp_enabled).into_any_element(),
-            SettingsTab::Storage => pane_storage(search_enabled).into_any_element(),
+            SettingsTab::Agent => pane_agent(mcp_running, mcp_enabled, has_stored_api_key).into_any_element(),
+            SettingsTab::Storage => pane_storage(search_enabled, model_bytes).into_any_element(),
         };
 
         let content = div()

@@ -4,8 +4,9 @@
 /// TransformOverlayView and CropOverlayView are layered on top of the canvas.
 
 use crate::crop_overlay_view::CropOverlayView;
+use crate::preview_guides::{ViewerGuide, ViewerGuideState};
 use crate::preview_model::PlaybackState;
-use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Radius, Spacing, Text};
+use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text};
 use crate::transform_overlay_view::TransformOverlayView;
 use gpui::{
     div, prelude::*, px, svg, App, Context, Entity, FocusHandle, Focusable, IntoElement,
@@ -49,6 +50,10 @@ pub struct PreviewView {
     /// Open tabs (Swift: editor.previewTabs). Timeline is always index 0.
     pub preview_tabs: Vec<PreviewTabItem>,
     pub active_tab_idx: usize,
+    /// Active viewer guides (safe zones, format bars). Matches Swift ViewerGuideState.
+    pub guide_state: ViewerGuideState,
+    /// Whether the guides dropdown menu is open.
+    pub show_guide_menu: bool,
     transform_overlay: Entity<TransformOverlayView>,
     crop_overlay: Entity<CropOverlayView>,
     focus_handle: FocusHandle,
@@ -63,6 +68,8 @@ impl PreviewView {
             canvas_overlay: CanvasOverlay::None,
             preview_tabs: vec![PreviewTabItem::Timeline],
             active_tab_idx: 0,
+            guide_state: ViewerGuideState::new(),
+            show_guide_menu: false,
             transform_overlay: cx.new(|cx| TransformOverlayView::new(cx)),
             crop_overlay: cx.new(|cx| CropOverlayView::new(cx)),
             focus_handle: cx.focus_handle(),
@@ -143,6 +150,85 @@ impl Focusable for PreviewView {
     }
 }
 
+/// Renders safe-zone / format-bar guide overlays over the canvas.
+/// Matches Swift ViewerGuideOverlay rendering (border rects for safe zones,
+/// solid bands for format reference bars).
+fn viewer_guide_overlay(guides: &[ViewerGuide]) -> impl IntoElement {
+    const GUIDE_COLOR: gpui::Hsla = gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.40 };
+    const BAR_COLOR: gpui::Hsla = gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.50 };
+
+    let mut root = div()
+        .id("guide-overlay")
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .overflow_hidden();
+
+    for guide in guides {
+        match guide {
+            ViewerGuide::ActionSafe => {
+                root = root.child(
+                    div()
+                        .absolute()
+                        .top(px(10.0)).left(px(10.0))
+                        .right(px(10.0)).bottom(px(10.0))
+                        .border_1()
+                        .border_color(GUIDE_COLOR),
+                );
+            }
+            ViewerGuide::TitleSafe => {
+                root = root.child(
+                    div()
+                        .absolute()
+                        .top(px(20.0)).left(px(20.0))
+                        .right(px(20.0)).bottom(px(20.0))
+                        .border_1()
+                        .border_color(GUIDE_COLOR),
+                );
+            }
+            ViewerGuide::Center => {
+                root = root
+                    .child(
+                        div()
+                            .absolute().top_0().bottom_0()
+                            .left(gpui::relative(0.5))
+                            .w(px(1.0)).bg(GUIDE_COLOR),
+                    )
+                    .child(
+                        div()
+                            .absolute().left_0().right_0()
+                            .top(gpui::relative(0.5))
+                            .h(px(1.0)).bg(GUIDE_COLOR),
+                    );
+            }
+            ViewerGuide::Wide => {
+                root = root
+                    .child(div().absolute().top_0().left_0().right_0().h(px(40.0)).bg(BAR_COLOR))
+                    .child(div().absolute().bottom_0().left_0().right_0().h(px(40.0)).bg(BAR_COLOR));
+            }
+            ViewerGuide::Square => {
+                root = root
+                    .child(div().absolute().top_0().bottom_0().left_0().w(px(30.0)).bg(BAR_COLOR))
+                    .child(div().absolute().top_0().bottom_0().right_0().w(px(30.0)).bg(BAR_COLOR));
+            }
+            ViewerGuide::Portrait => {
+                root = root
+                    .child(div().absolute().top_0().bottom_0().left_0().w(px(80.0)).bg(BAR_COLOR))
+                    .child(div().absolute().top_0().bottom_0().right_0().w(px(80.0)).bg(BAR_COLOR));
+            }
+            ViewerGuide::Scope => {
+                root = root.child(
+                    div()
+                        .absolute().left_0().right_0().bottom(px(12.0))
+                        .h(px(1.0)).bg(GUIDE_COLOR),
+                );
+            }
+        }
+    }
+    root
+}
+
 fn transport_btn_svg(id: &str, icon_path: &'static str, highlight: bool) -> gpui::Stateful<gpui::Div> {
     let color = if highlight { Text::PRIMARY } else { Text::SECONDARY };
     div()
@@ -194,6 +280,9 @@ impl Render for PreviewView {
 
         let transform_entity = self.transform_overlay.clone();
         let crop_entity = self.crop_overlay.clone();
+        let active_guides: Vec<ViewerGuide> = self.guide_state.active_guides().to_vec();
+        let any_guides = !active_guides.is_empty();
+        let show_guide_menu = self.show_guide_menu;
 
         div()
             .id("preview-panel")
@@ -423,6 +512,10 @@ impl Render for PreviewView {
                                 .size_full()
                                 .child(crop_entity),
                         )
+                    })
+                    // Viewer guide overlays — safe zones + format reference bars
+                    .when(any_guides, |el| {
+                        el.child(viewer_guide_overlay(&active_guides))
                     }),
             )
             // Scrub bar
@@ -547,6 +640,24 @@ impl Render for PreviewView {
                             .child(settings_badge("badge-fps", "24 fps"))
                             .child(settings_badge("badge-quality", "HD"))
                             .child(settings_badge("badge-fit", "Fit"))
+                            // Guides toggle (Swift: guideMenuButton — shows/hides ViewerGuideMenu)
+                            .child(
+                                div()
+                                    .id("btn-guides")
+                                    .w(px(24.0))
+                                    .h(px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(Radius::XS))
+                                    .cursor_pointer()
+                                    .bg(if any_guides { Accent::PRIMARY.opacity(Opacity::MUTED) } else { Background::SURFACE })
+                                    .border_1()
+                                    .border_color(if any_guides { Accent::PRIMARY } else { BorderColors::SUBTLE })
+                                    .text_size(px(FontSize::XS))
+                                    .text_color(if any_guides { Accent::PRIMARY } else { Text::MUTED })
+                                    .child("⊞"),
+                            )
                             // Capture frame button (Swift: captureFrameButton → camera SF symbol)
                             .child(
                                 transport_btn_svg("btn-capture-frame", "icons/camera.svg", false),
