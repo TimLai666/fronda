@@ -155,7 +155,7 @@ Scope sources:
 
 ## Upstream change tracking
 
-- `Upstream #7`: The search pipeline must support CLIP-style visual search: frame sampling → SIGLIP embedding → text tokenization → FAISS-style index → query. The search model lifecycle (SRCH-001–028) defines the behavior contract. For the Rust rewrite, the search/indexing implementation may use different on-device models or APIs, but must preserve the cache identity rules (path + mtime + file size), result grouping (Moments/Spoken/Files), and observable failure states.
+- `Upstream #7`: The search pipeline must support CLIP-style visual search: frame sampling → SIGLIP embedding → text tokenization → FAISS-style index → query. The search model lifecycle (SRCH-001–028) defines the behavior contract. In Fronda, the search/indexing implementation may use different on-device models or APIs, but must preserve the cache identity rules (path + mtime + file size), result grouping (Moments/Spoken/Files), and observable failure states.
 
 - `Upstream #26`: The chat/agent system should implement conversation prefix caching for Anthropic API requests to reduce cost and latency. The Rust chat system should cache the system prompt + conversation prefix.
 
@@ -179,5 +179,5 @@ Scope sources:
 
 ## Migration decisions to record explicitly
 
-- `Decision:` Search/indexing and transcription are currently tightly coupled to the existing on-device model/toolchain. The Rust rewrite may swap implementations, but should preserve cache identity rules, result grouping, and observable failure states.
-- `Decision:` Account, updater, notifications, and some help flows are currently macOS-biased. The Rust rewrite should preserve user-facing states and workflows while deciding which behaviors stay macOS-only and which become cross-platform abstractions.
+- `Decision:` Search/indexing and transcription are currently tightly coupled to the existing on-device model/toolchain. Fronda may swap implementations, but should preserve cache identity rules, result grouping, and observable failure states.
+- `Decision:` Account, updater, notifications, and some help flows are currently macOS-biased. Fronda should preserve user-facing states and workflows while deciding which behaviors stay macOS-only and which become cross-platform abstractions.

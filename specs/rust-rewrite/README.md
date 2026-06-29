@@ -1,4 +1,4 @@
-# Rust Rewrite Spec Baseline
+# Fronda Compatibility Spec Baseline
 
 This folder is the compatibility baseline for the Fronda Rust codebase. It captures the observable contract that Fronda preserves from the inherited Swift/AppKit/SwiftUI/AVFoundation implementation unless a spec records an intentional change.
 

@@ -36,7 +36,7 @@ Scope sources:
 - [x] `MED-011`: Reopening a project must rebuild `mediaAssets` from the manifest, including assets whose files are currently missing.
 - [x] `MED-012`: Missing media must remain represented as offline assets instead of disappearing from the media library.
 - [x] `MED-013`: `clipDisplayLabel` uses text content for text clips, generation placeholder name for generating assets, and resolver display name otherwise.
-- [x] `MED-014`: `isMediaOffline` and `isMediaUnprocessable` remain distinct states in the Rust rewrite.
+- [x] `MED-014`: `isMediaOffline` and `isMediaUnprocessable` remain distinct states in Fronda.
 
 ## B. Directory import and project-internal media creation
 
@@ -185,6 +185,6 @@ Scope sources:
 
 ## Migration decisions to record explicitly
 
-- `Decision:` The current app keeps normal imported files external instead of ingesting them into the project. The Rust rewrite should preserve this unless there is an explicit ingest/import-mode product change.
-- `Decision:` Batch relink is currently filename-only and not type-safe. The Rust rewrite should decide whether to preserve that loose behavior for compatibility or tighten it with better diagnostics.
-- `Decision:` Deleting project-internal assets currently removes them from the library but does not necessarily garbage-collect orphaned files in `media/`. The Rust rewrite should decide whether to keep this behavior or add safe cleanup/migration logic.
+- `Decision:` The current app keeps normal imported files external instead of ingesting them into the project. Fronda should preserve this unless there is an explicit ingest/import-mode product change.
+- `Decision:` Batch relink is currently filename-only and not type-safe. Fronda should decide whether to preserve that loose behavior for compatibility or tighten it with better diagnostics.
+- `Decision:` Deleting project-internal assets currently removes them from the library but does not necessarily garbage-collect orphaned files in `media/`. Fronda should decide whether to keep this behavior or add safe cleanup/migration logic.

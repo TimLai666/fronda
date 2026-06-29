@@ -20,7 +20,7 @@ Scope sources:
 - [x] `CORE-002`: `video`, `image`, `text`, and `lottie` are all treated as **visual** clip types.
 - [x] `CORE-003`: Track compatibility is strict: audio is compatible only with audio, while all visual types are mutually compatible.
 - [x] `CORE-004`: Project time is frame-based. Timeline math and persistence use integer project frames, not seconds.
-- [x] `CORE-005`: Any source-seconds-to-frame mapping in the rewrite must be computed against the **project fps**, not the source file's native fps.
+- [x] `CORE-005`: Any source-seconds-to-frame mapping in Fronda must be computed against the **project fps**, not the source file's native fps.
 
 ## B. Project package contract
 
@@ -106,7 +106,7 @@ Scope sources:
 ## F. Project settings and fps/resolution retiming
 
 - [x] `PCFG-001`: Timeline settings are `fps`, `width`, `height`, and `settingsConfigured`.
-- [x] `PCFG-002`: When fps changes, the rewrite must rescale:
+- [x] `PCFG-002`: When fps changes, Fronda must rescale:
   - `currentFrame`
   - `sourcePlayheadFrame`
   - clip `startFrame`
@@ -135,7 +135,7 @@ These upstream PRs define behavior Fronda must eventually match. Spec entries be
 
 - `Upstream #62`: The `Timeline` model must support optional `lut: LUTRef?` and `primaries: PrimaryGrade?` fields for project-level color grading. The serialized project format (`.palmier` / `project.json`) must round-trip these fields. `LUTRef` includes `kind`, `lookID`, `cubeName`, `cubeDimension`, `cubeBase64` (inline base64-encoded .cube file), and `intensity`. `PrimaryGrade` includes `temperature`, `tint`, `exposure`, `contrast`, `saturation`, `vibrance`, `highlights`, `shadows` (all -100..100 range). `GradeCurve` stores `master`, `red`, `green`, `blue` curves as `[(x, y)]` points.
 
-- `Upstream #46`: The `Clip` model should eventually support an optional `shapeStyle: ShapeStyle?` field and `ClipType::Shape` variant for shape annotations. `ShapeStyle` includes `kind`, `stroke`, `fill`, `cornerRadius`, `arrowhead`. This is deferred until the shape-annotation feature is explicitly planned for the rewrite.
+- `Upstream #46`: The `Clip` model should eventually support an optional `shapeStyle: ShapeStyle?` field and `ClipType::Shape` variant for shape annotations. `ShapeStyle` includes `kind`, `stroke`, `fill`, `cornerRadius`, `arrowhead`. This is deferred until the shape-annotation feature is explicitly planned for Fronda.
 
 - `Upstream #105`: The file-type allowlist for media import must include `.aifc` (AIFF-C) and `.flac` extensions for audio, matching `ClipType::audio` handling. Simple extension mapping, no data-model change.
 

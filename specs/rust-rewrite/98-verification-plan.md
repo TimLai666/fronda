@@ -43,7 +43,7 @@ The current `gpui-ce` shell now lives in:
 
 That is still only early wave-3 coverage, not full product verification. But it now includes executable checks for link-group indexing/expansion, linked move delta propagation, ripple-range merging, ripple push helpers, ripple validation guards, ripple workflow planning (multi-track delete, gap delete, sync-lock, link-partner clear), timing propagation partners, and trim-value computation, which means Fronda's compatibility baseline is no longer purely documentary.
 
-## B. Tracking rules for the rewrite
+## B. Tracking rules for Fronda
 
 The numbered spec docs remain the source of truth for acceptance requirements.
 
@@ -134,7 +134,7 @@ These are the highest-value checks to land early even if the corresponding subsy
 10. transcript cache and transcript search fixtures
 11. generation placeholder → upload → result lifecycle tests
 12. app-shell notification / changelog / update badge state tests
-13. AppTheme / design-token snapshots for the rewrite shell
+13. AppTheme / design-token snapshots for the Fronda shell
 14. editor pane layout / maximize / restore tests under `gpui-ce`
 15. menu / shortcut routing tests under `gpui-ce`
 16. drag/drop tests only where event routing itself is the contract

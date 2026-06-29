@@ -149,7 +149,7 @@ Scope sources:
 
 ## Upstream change tracking
 
-These upstream PRs define behavior the Rust rewrite must eventually match. Bug fixes (must-fix) are listed first, followed by feature additions.
+These upstream PRs define behavior Fronda must eventually match. Bug fixes (must-fix) are listed first, followed by feature additions.
 
 - `Upstream #115`: `writePosition` (or equivalent commit-position logic) must guard fallback transform writes behind an `else` — when `positionTrack isActive`, only keyframes are updated and `transform.centerX/Y` must be left untouched. Without this guard, clearing position animation leaves stale keyframe values in the static transform.
   \- Implemented in `write_position()` with `#[test] write_position_with_active_keyframe_writes_keyframe_only` verifying static transform is unchanged.
@@ -163,11 +163,11 @@ These upstream PRs define behavior the Rust rewrite must eventually match. Bug f
 
 - `Upstream #108`: The preview engine must not pause playback when the timeline is modified by an agent/MCP edit. An `isApplyingAgentEdit` guard suppresses the `pause()` call that normally fires on `notifyTimelineChanged()`. Playback resumes from the same position after the edit. This is a preview-engine contract, not a Swift/AVFoundation detail; the Rust `VideoEngine` equivalent must implement the same guard.
 
-- `Upstream #46`: (Deferred) Shape annotations require a `ClipType::Shape` variant, `Clip.shapeStyle: Option<ShapeStyle>`, and 17 animation presets (fade, pop, draw-on, shake, spin, slide-in/out, etc.) compilable to keyframe sequences. See `01-foundation-and-project-model.md` for data-model requirements. Not yet planned for Rust rewrite.
+- `Upstream #46`: (Deferred) Shape annotations require a `ClipType::Shape` variant, `Clip.shapeStyle: Option<ShapeStyle>`, and 17 animation presets (fade, pop, draw-on, shake, spin, slide-in/out, etc.) compilable to keyframe sequences. See `01-foundation-and-project-model.md` for data-model requirements. Not yet planned for Fronda.
 
 - `Upstream #119`: The Rust timeline engine must support audio waveform alignment for multi-camera syncing. An `AudioSyncCorrelator` should compute RMS-based cross-correlation between two audio clips and report a frame-level sync offset. The correlation algorithm (RMS envelope extraction → correlation → peak detection) is pure math and belongs in `timeline_core` or a new `audio_core` crate.
 
-- `Upstream #8` (effects engine): The visual compositor must support a per-clip ordered `effects: Vec<Effect>` stack that replaces the stock passthrough compositor when any clip has active effects. The `Effect` model includes: `exposure`, `contrast`, `brightness`, `saturation`, `hue`, `temperature`, `tint`, `highlights`, `shadows`, `whites`, `blacks`, `vibrance`, `sharpness`, `blur`, `vignette`, and `colorWheels` (shadows/midtones/highlights each with `hue`/`saturation`/`brightness`). `Effect` must support enable/disable toggle. The compositor must handle dual-pass rendering when both text overlays and effects are active: first bake color effects, then apply text overlays. This is the single most impactful upstream feature for the Rust rewrite — the entire composition pipeline architecture must accommodate it. The `render_core` crate's `CompositionPlan` should eventually include an `effects_pipeline` field that describes the ordered effect chain.
+- `Upstream #8` (effects engine): The visual compositor must support a per-clip ordered `effects: Vec<Effect>` stack that replaces the stock passthrough compositor when any clip has active effects. The `Effect` model includes: `exposure`, `contrast`, `brightness`, `saturation`, `hue`, `temperature`, `tint`, `highlights`, `shadows`, `whites`, `blacks`, `vibrance`, `sharpness`, `blur`, `vignette`, and `colorWheels` (shadows/midtones/highlights each with `hue`/`saturation`/`brightness`). `Effect` must support enable/disable toggle. The compositor must handle dual-pass rendering when both text overlays and effects are active: first bake color effects, then apply text overlays. This is the single most impactful upstream feature for Fronda — the entire composition pipeline architecture must accommodate it. The `render_core` crate's `CompositionPlan` should eventually include an `effects_pipeline` field that describes the ordered effect chain.
 
 - `Upstream #35`: The compositor must handle rotation metadata correctly. Clips with non-zero rotation must not render as black frames. The Render engine must transform source frames by the clip's cumulative rotation before compositing.
 
@@ -187,5 +187,5 @@ These upstream PRs define behavior the Rust rewrite must eventually match. Bug f
 
 ## Migration decisions to record explicitly
 
-- `Decision:` The current Swift app has AppKit-specific split-view and titlebar behavior. The Rust rewrite should preserve pane semantics and layout presets even if exact native window mechanics differ under `gpui-ce`.
-- `Decision:` Some timeline interactions are today encoded partly in SwiftUI/AppKit event handling. The Rust rewrite should preserve user-visible behavior, but move as much timing/geometry math as possible into pure testable Rust modules.
+- `Decision:` The current Swift app has AppKit-specific split-view and titlebar behavior. Fronda should preserve pane semantics and layout presets even if exact native window mechanics differ under `gpui-ce`.
+- `Decision:` Some timeline interactions are today encoded partly in SwiftUI/AppKit event handling. Fronda should preserve user-visible behavior, but move as much timing/geometry math as possible into pure testable Rust modules.
