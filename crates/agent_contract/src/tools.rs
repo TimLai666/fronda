@@ -671,7 +671,10 @@ fn set_clip_noise_reduction() -> ToolDefinition {
                 "smoothing",
                 string("Temporal smoothing: 'low', 'medium', or 'high'. Default: 'medium'."),
             ),
-            ("enabled", boolean("Enable or disable the effect. Default: true.")),
+            (
+                "enabled",
+                boolean("Enable or disable the effect. Default: true."),
+            ),
         ]),
     }
 }
@@ -689,9 +692,7 @@ fn set_clip_audio_effects() -> ToolDefinition {
             ),
             (
                 "compressor",
-                object_any(
-                    "Optional compressor: {threshold_db, ratio, attack_ms, release_ms}",
-                ),
+                object_any("Optional compressor: {threshold_db, ratio, attack_ms, release_ms}"),
             ),
             (
                 "pitchShift",
@@ -748,10 +749,7 @@ fn dissolve_compound_clip() -> ToolDefinition {
         name: "dissolve_compound_clip",
         description: "Dissolve a compound clip back to its constituent clips on the timeline. \
             Issue #155.",
-        input_schema: object(&[(
-            "clipId",
-            string("Id of the compound clip to dissolve"),
-        )]),
+        input_schema: object(&[("clipId", string("Id of the compound clip to dissolve"))]),
     }
 }
 
@@ -790,7 +788,10 @@ fn save_clip_preset() -> ToolDefinition {
             Issue #157.",
         input_schema: object(&[
             ("clipId", string("Source clip id to capture settings from")),
-            ("name", string("Preset name (e.g. 'Outdoor warm', 'Interview tight')")),
+            (
+                "name",
+                string("Preset name (e.g. 'Outdoor warm', 'Interview tight')"),
+            ),
         ]),
     }
 }

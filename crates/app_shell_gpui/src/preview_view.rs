@@ -1,16 +1,17 @@
-﻿/// Preview panel gpui view — canvas + scrub bar + transport controls.
+/// Preview panel gpui view — canvas + scrub bar + transport controls.
 ///
 /// Matches PreviewContainerView.swift layout.
 /// TransformOverlayView and CropOverlayView are layered on top of the canvas.
-
 use crate::crop_overlay_view::CropOverlayView;
 use crate::preview_guides::{ViewerGuide, ViewerGuideState};
 use crate::preview_model::PlaybackState;
-use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text};
+use crate::theme::{
+    Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text,
+};
 use crate::transform_overlay_view::TransformOverlayView;
 use gpui::{
-    div, prelude::*, px, svg, App, Context, Entity, FocusHandle, Focusable, IntoElement,
-    InteractiveElement, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, svg, App, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, Styled, Window,
 };
 
 /// Canvas overlay state — mirrors Swift PreviewView offline/generating/failed states.
@@ -89,7 +90,9 @@ impl PreviewView {
     }
 
     pub fn close_tab(&mut self, idx: usize, cx: &mut Context<Self>) {
-        if idx == 0 { return; } // Timeline is never closeable
+        if idx == 0 {
+            return;
+        } // Timeline is never closeable
         self.preview_tabs.remove(idx);
         if self.active_tab_idx >= self.preview_tabs.len() {
             self.active_tab_idx = self.preview_tabs.len().saturating_sub(1);
@@ -154,8 +157,18 @@ impl Focusable for PreviewView {
 /// Matches Swift ViewerGuideOverlay rendering (border rects for safe zones,
 /// solid bands for format reference bars).
 fn viewer_guide_overlay(guides: &[ViewerGuide]) -> impl IntoElement {
-    const GUIDE_COLOR: gpui::Hsla = gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.40 };
-    const BAR_COLOR: gpui::Hsla = gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.50 };
+    const GUIDE_COLOR: gpui::Hsla = gpui::Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 1.0,
+        a: 0.40,
+    };
+    const BAR_COLOR: gpui::Hsla = gpui::Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.0,
+        a: 0.50,
+    };
 
     let mut root = div()
         .id("guide-overlay")
@@ -171,8 +184,10 @@ fn viewer_guide_overlay(guides: &[ViewerGuide]) -> impl IntoElement {
                 root = root.child(
                     div()
                         .absolute()
-                        .top(px(10.0)).left(px(10.0))
-                        .right(px(10.0)).bottom(px(10.0))
+                        .top(px(10.0))
+                        .left(px(10.0))
+                        .right(px(10.0))
+                        .bottom(px(10.0))
                         .border_1()
                         .border_color(GUIDE_COLOR),
                 );
@@ -181,8 +196,10 @@ fn viewer_guide_overlay(guides: &[ViewerGuide]) -> impl IntoElement {
                 root = root.child(
                     div()
                         .absolute()
-                        .top(px(20.0)).left(px(20.0))
-                        .right(px(20.0)).bottom(px(20.0))
+                        .top(px(20.0))
+                        .left(px(20.0))
+                        .right(px(20.0))
+                        .bottom(px(20.0))
                         .border_1()
                         .border_color(GUIDE_COLOR),
                 );
@@ -191,37 +208,95 @@ fn viewer_guide_overlay(guides: &[ViewerGuide]) -> impl IntoElement {
                 root = root
                     .child(
                         div()
-                            .absolute().top_0().bottom_0()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
                             .left(gpui::relative(0.5))
-                            .w(px(1.0)).bg(GUIDE_COLOR),
+                            .w(px(1.0))
+                            .bg(GUIDE_COLOR),
                     )
                     .child(
                         div()
-                            .absolute().left_0().right_0()
+                            .absolute()
+                            .left_0()
+                            .right_0()
                             .top(gpui::relative(0.5))
-                            .h(px(1.0)).bg(GUIDE_COLOR),
+                            .h(px(1.0))
+                            .bg(GUIDE_COLOR),
                     );
             }
             ViewerGuide::Wide => {
                 root = root
-                    .child(div().absolute().top_0().left_0().right_0().h(px(40.0)).bg(BAR_COLOR))
-                    .child(div().absolute().bottom_0().left_0().right_0().h(px(40.0)).bg(BAR_COLOR));
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(40.0))
+                            .bg(BAR_COLOR),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(40.0))
+                            .bg(BAR_COLOR),
+                    );
             }
             ViewerGuide::Square => {
                 root = root
-                    .child(div().absolute().top_0().bottom_0().left_0().w(px(30.0)).bg(BAR_COLOR))
-                    .child(div().absolute().top_0().bottom_0().right_0().w(px(30.0)).bg(BAR_COLOR));
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(px(30.0))
+                            .bg(BAR_COLOR),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right_0()
+                            .w(px(30.0))
+                            .bg(BAR_COLOR),
+                    );
             }
             ViewerGuide::Portrait => {
                 root = root
-                    .child(div().absolute().top_0().bottom_0().left_0().w(px(80.0)).bg(BAR_COLOR))
-                    .child(div().absolute().top_0().bottom_0().right_0().w(px(80.0)).bg(BAR_COLOR));
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(px(80.0))
+                            .bg(BAR_COLOR),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right_0()
+                            .w(px(80.0))
+                            .bg(BAR_COLOR),
+                    );
             }
             ViewerGuide::Scope => {
                 root = root.child(
                     div()
-                        .absolute().left_0().right_0().bottom(px(12.0))
-                        .h(px(1.0)).bg(GUIDE_COLOR),
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom(px(12.0))
+                        .h(px(1.0))
+                        .bg(GUIDE_COLOR),
                 );
             }
         }
@@ -229,8 +304,16 @@ fn viewer_guide_overlay(guides: &[ViewerGuide]) -> impl IntoElement {
     root
 }
 
-fn transport_btn_svg(id: &str, icon_path: &'static str, highlight: bool) -> gpui::Stateful<gpui::Div> {
-    let color = if highlight { Text::PRIMARY } else { Text::SECONDARY };
+fn transport_btn_svg(
+    id: &str,
+    icon_path: &'static str,
+    highlight: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let color = if highlight {
+        Text::PRIMARY
+    } else {
+        Text::SECONDARY
+    };
     div()
         .id(id.to_string())
         .w(px(32.0))
@@ -240,7 +323,13 @@ fn transport_btn_svg(id: &str, icon_path: &'static str, highlight: bool) -> gpui
         .justify_center()
         .cursor_pointer()
         .rounded(px(4.0))
-        .child(svg().path(icon_path).w(px(14.0)).h(px(14.0)).text_color(color))
+        .child(
+            svg()
+                .path(icon_path)
+                .w(px(14.0))
+                .h(px(14.0))
+                .text_color(color),
+        )
 }
 
 fn settings_badge(id: &str, label: &str) -> gpui::Stateful<gpui::Div> {
@@ -274,7 +363,10 @@ impl Render for PreviewView {
         let tab_count = self.preview_tabs.len();
         let can_go_back = active_tab_idx > 0;
         let can_go_forward = active_tab_idx + 1 < tab_count;
-        let tabs: Vec<(usize, String, bool)> = self.preview_tabs.iter().enumerate()
+        let tabs: Vec<(usize, String, bool)> = self
+            .preview_tabs
+            .iter()
+            .enumerate()
             .map(|(i, t)| (i, t.display_name().to_string(), t.is_closeable()))
             .collect();
 
@@ -312,7 +404,11 @@ impl Render for PreviewView {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_color(if can_go_back { Text::SECONDARY } else { Text::MUTED })
+                            .text_color(if can_go_back {
+                                Text::SECONDARY
+                            } else {
+                                Text::MUTED
+                            })
                             .text_size(px(FontSize::SM))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.go_back(cx);
@@ -329,7 +425,11 @@ impl Render for PreviewView {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_color(if can_go_forward { Text::SECONDARY } else { Text::MUTED })
+                            .text_color(if can_go_forward {
+                                Text::SECONDARY
+                            } else {
+                                Text::MUTED
+                            })
                             .text_size(px(FontSize::SM))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.go_forward(cx);
@@ -355,7 +455,11 @@ impl Render for PreviewView {
                             }))
                             .child(
                                 div()
-                                    .text_color(if is_active { Text::PRIMARY } else { Text::SECONDARY })
+                                    .text_color(if is_active {
+                                        Text::PRIMARY
+                                    } else {
+                                        Text::SECONDARY
+                                    })
                                     .text_size(px(FontSize::SM))
                                     .font_weight(if is_active {
                                         gpui::FontWeight::SEMIBOLD
@@ -444,51 +548,72 @@ impl Render for PreviewView {
                         )
                     })
                     // Generating overlay (Swift: generation progress spinner)
-                    .when(matches!(canvas_overlay, CanvasOverlay::Generating { .. }), |el| {
-                        let pct = if let CanvasOverlay::Generating { progress_pct } = &canvas_overlay { *progress_pct } else { 0 };
-                        el.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(Spacing::MD))
-                                .child(
-                                    div()
-                                        .text_color(Accent::PRIMARY)
-                                        .text_size(px(FontSize::DISPLAY))
-                                        .child("✦"),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(Text::SECONDARY)
-                                        .text_size(px(FontSize::SM))
-                                        .child(format!("Generating… {}%", pct)),
-                                ),
-                        )
-                    })
+                    .when(
+                        matches!(canvas_overlay, CanvasOverlay::Generating { .. }),
+                        |el| {
+                            let pct = if let CanvasOverlay::Generating { progress_pct } =
+                                &canvas_overlay
+                            {
+                                *progress_pct
+                            } else {
+                                0
+                            };
+                            el.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap(px(Spacing::MD))
+                                    .child(
+                                        div()
+                                            .text_color(Accent::PRIMARY)
+                                            .text_size(px(FontSize::DISPLAY))
+                                            .child("✦"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(Text::SECONDARY)
+                                            .text_size(px(FontSize::SM))
+                                            .child(format!("Generating… {}%", pct)),
+                                    ),
+                            )
+                        },
+                    )
                     // Failed overlay (Swift: error badge)
-                    .when(matches!(canvas_overlay, CanvasOverlay::Failed { .. }), |el| {
-                        let msg = if let CanvasOverlay::Failed { message } = &canvas_overlay { message.clone() } else { String::new() };
-                        el.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(Spacing::SM))
-                                .child(
-                                    div()
-                                        .text_color(gpui::Hsla { h: 0.0, s: 0.85, l: 0.55, a: 1.0 })
-                                        .text_size(px(FontSize::MD_LG))
-                                        .child("Generation Failed"),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(Text::MUTED)
-                                        .text_size(px(FontSize::SM))
-                                        .child(msg),
-                                ),
-                        )
-                    })
+                    .when(
+                        matches!(canvas_overlay, CanvasOverlay::Failed { .. }),
+                        |el| {
+                            let msg = if let CanvasOverlay::Failed { message } = &canvas_overlay {
+                                message.clone()
+                            } else {
+                                String::new()
+                            };
+                            el.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap(px(Spacing::SM))
+                                    .child(
+                                        div()
+                                            .text_color(gpui::Hsla {
+                                                h: 0.0,
+                                                s: 0.85,
+                                                l: 0.55,
+                                                a: 1.0,
+                                            })
+                                            .text_size(px(FontSize::MD_LG))
+                                            .child("Generation Failed"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(Text::MUTED)
+                                            .text_size(px(FontSize::SM))
+                                            .child(msg),
+                                    ),
+                            )
+                        },
+                    )
                     // Transform overlay — shown when select tool + clip selected
                     .when(show_transform, |el| {
                         el.child(
@@ -605,12 +730,18 @@ impl Render for PreviewView {
                             .child(
                                 transport_btn_svg(
                                     "btn-play",
-                                    if is_playing { "icons/pause.svg" } else { "icons/play.svg" },
+                                    if is_playing {
+                                        "icons/pause.svg"
+                                    } else {
+                                        "icons/play.svg"
+                                    },
                                     true,
                                 )
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.toggle_play(cx);
-                                })),
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.toggle_play(cx);
+                                    },
+                                )),
                             )
                             .child(
                                 transport_btn_svg("btn-step-fwd", "icons/step_forward.svg", false)
@@ -649,17 +780,31 @@ impl Render for PreviewView {
                                     .justify_center()
                                     .rounded(px(Radius::XS))
                                     .cursor_pointer()
-                                    .bg(if any_guides { Accent::PRIMARY.opacity(Opacity::MUTED) } else { Background::SURFACE })
+                                    .bg(if any_guides {
+                                        Accent::PRIMARY.opacity(Opacity::MUTED)
+                                    } else {
+                                        Background::SURFACE
+                                    })
                                     .border_1()
-                                    .border_color(if any_guides { Accent::PRIMARY } else { BorderColors::SUBTLE })
+                                    .border_color(if any_guides {
+                                        Accent::PRIMARY
+                                    } else {
+                                        BorderColors::SUBTLE
+                                    })
                                     .text_size(px(FontSize::XS))
-                                    .text_color(if any_guides { Accent::PRIMARY } else { Text::MUTED })
+                                    .text_color(if any_guides {
+                                        Accent::PRIMARY
+                                    } else {
+                                        Text::MUTED
+                                    })
                                     .child("⊞"),
                             )
                             // Capture frame button (Swift: captureFrameButton → camera SF symbol)
-                            .child(
-                                transport_btn_svg("btn-capture-frame", "icons/camera.svg", false),
-                            ),
+                            .child(transport_btn_svg(
+                                "btn-capture-frame",
+                                "icons/camera.svg",
+                                false,
+                            )),
                     ),
             )
     }

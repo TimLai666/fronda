@@ -441,7 +441,10 @@ fn issue_058_timeout_is_thirty_seconds() {
 #[test]
 fn issue_122_loopback_config_is_loopback_only() {
     let config = McpConfig::default();
-    assert!(config.is_loopback_only(), "default config must be loopback-only");
+    assert!(
+        config.is_loopback_only(),
+        "default config must be loopback-only"
+    );
 }
 
 #[test]
@@ -458,7 +461,10 @@ fn issue_122_network_config_without_token_fails_validate() {
         auth_token: None,
         ..Default::default()
     };
-    assert!(config.validate().is_err(), "network access without auth_token must be rejected");
+    assert!(
+        config.validate().is_err(),
+        "network access without auth_token must be rejected"
+    );
 }
 
 #[test]
@@ -471,5 +477,8 @@ fn issue_122_network_config_with_token_passes_validate() {
 #[test]
 fn issue_122_loopback_without_token_passes_validate() {
     let config = McpConfig::default();
-    assert!(config.validate().is_ok(), "loopback does not need auth_token");
+    assert!(
+        config.validate().is_ok(),
+        "loopback does not need auth_token"
+    );
 }

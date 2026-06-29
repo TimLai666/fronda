@@ -1560,7 +1560,9 @@ mod tests {
             "properties": {"textBackground": {"enabled": true, "color": "#FF0000"}}
         });
         let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result.into_error().expect("textBackground must be rejected for non-text clips");
+        let err = result
+            .into_error()
+            .expect("textBackground must be rejected for non-text clips");
         assert!(err.contains("textBackground"), "err={err}");
     }
 
@@ -1571,7 +1573,9 @@ mod tests {
             "properties": {"textBackground": {"enabled": true, "color": "#FF0000"}}
         });
         let result = validate_set_clip_properties(&input, Some(vec!["text".to_string()]));
-        result.into_ok().expect("textBackground must be accepted for text clips");
+        result
+            .into_ok()
+            .expect("textBackground must be accepted for text clips");
     }
 
     #[test]
@@ -1581,7 +1585,9 @@ mod tests {
             "properties": {"textBorder": {"enabled": false, "color": "#000000"}}
         });
         let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result.into_error().expect("textBorder rejected for non-text");
+        let err = result
+            .into_error()
+            .expect("textBorder rejected for non-text");
         assert!(err.contains("textBorder"), "err={err}");
     }
 
@@ -1614,7 +1620,9 @@ mod tests {
             "properties": {"textBackground": "red"}
         });
         let result = validate_set_clip_properties(&input, None);
-        let err = result.into_error().expect("non-object textBackground must be rejected");
+        let err = result
+            .into_error()
+            .expect("non-object textBackground must be rejected");
         assert!(err.contains("textBackground"), "err={err}");
     }
 
@@ -1625,7 +1633,9 @@ mod tests {
             "properties": {"fontWeight": 700}
         });
         let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result.into_error().expect("fontWeight rejected for non-text");
+        let err = result
+            .into_error()
+            .expect("fontWeight rejected for non-text");
         assert!(err.contains("fontWeight"), "err={err}");
     }
 

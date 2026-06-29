@@ -3,11 +3,13 @@
 //! Covers UIX-001 (height 38), UIX-002 (button set), UIX-003 (V/C shortcuts),
 //! UIX-007 (zoom bounds).
 
-use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text};
+use crate::theme::{
+    Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text,
+};
 use crate::toolbar_model::{ToolMode, ToolbarState};
 use gpui::{
-    div, prelude::*, px, svg, App, Context, FocusHandle, Focusable, Hsla, IntoElement,
-    InteractiveElement, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, svg, App, Context, FocusHandle, Focusable, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Render, Styled, Window,
 };
 
 /// Toolbar gpui entity.
@@ -56,7 +58,12 @@ const TOOL_ACTIVE_BG: Hsla = Hsla {
 
 /// 24×24 toolbar button with hover-highlight support.
 /// `icon_path` is a path like "icons/undo.svg" served by FrondaAssets.
-fn tool_btn_svg(id: &str, icon_path: &'static str, active: bool, enabled: bool) -> gpui::Stateful<gpui::Div> {
+fn tool_btn_svg(
+    id: &str,
+    icon_path: &'static str,
+    active: bool,
+    enabled: bool,
+) -> gpui::Stateful<gpui::Div> {
     let color = if !enabled {
         Text::MUTED
     } else if active {
@@ -73,8 +80,18 @@ fn tool_btn_svg(id: &str, icon_path: &'static str, active: bool, enabled: bool) 
         .justify_center()
         .rounded(px(Radius::XS_SM))
         .cursor_pointer()
-        .bg(if active { TOOL_ACTIVE_BG } else { Background::RAISED })
-        .child(svg().path(icon_path).w(px(14.0)).h(px(14.0)).text_color(color))
+        .bg(if active {
+            TOOL_ACTIVE_BG
+        } else {
+            Background::RAISED
+        })
+        .child(
+            svg()
+                .path(icon_path)
+                .w(px(14.0))
+                .h(px(14.0))
+                .text_color(color),
+        )
 }
 
 /// 24×24 toolbar button with a text glyph (fallback when no SVG is available).
@@ -88,7 +105,11 @@ fn tool_btn(id: &str, glyph: &str, active: bool, enabled: bool) -> gpui::Statefu
         .justify_center()
         .rounded(px(Radius::XS_SM))
         .cursor_pointer()
-        .bg(if active { TOOL_ACTIVE_BG } else { Background::RAISED })
+        .bg(if active {
+            TOOL_ACTIVE_BG
+        } else {
+            Background::RAISED
+        })
         .text_color(if !enabled {
             Text::MUTED
         } else if active {
@@ -162,10 +183,11 @@ impl Render for ToolbarView {
                             })),
                     )
                     .child(
-                        tool_btn_svg("btn-razor", "icons/razor.svg", razor_active, true)
-                            .on_click(cx.listener(|this, _, _, cx| {
+                        tool_btn_svg("btn-razor", "icons/razor.svg", razor_active, true).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 this.set_tool_mode(ToolMode::Razor, cx);
-                            })),
+                            }),
+                        ),
                     ),
             )
             // ── Divider ──
@@ -176,12 +198,18 @@ impl Render for ToolbarView {
                     .flex()
                     .flex_row()
                     .gap(px(Spacing::SM))
-                    .child(tool_btn_svg("btn-split", "icons/split.svg", false, true)
-                        .on_click(cx.listener(|_, _, _, _| {})))
-                    .child(tool_btn("btn-trim-start", "[", false, true)
-                        .on_click(cx.listener(|_, _, _, _| {})))
-                    .child(tool_btn("btn-trim-end", "]", false, true)
-                        .on_click(cx.listener(|_, _, _, _| {}))),
+                    .child(
+                        tool_btn_svg("btn-split", "icons/split.svg", false, true)
+                            .on_click(cx.listener(|_, _, _, _| {})),
+                    )
+                    .child(
+                        tool_btn("btn-trim-start", "[", false, true)
+                            .on_click(cx.listener(|_, _, _, _| {})),
+                    )
+                    .child(
+                        tool_btn("btn-trim-end", "]", false, true)
+                            .on_click(cx.listener(|_, _, _, _| {})),
+                    ),
             )
             // ── Divider ──
             .child(toolbar_sep())

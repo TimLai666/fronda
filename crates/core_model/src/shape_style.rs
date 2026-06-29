@@ -169,7 +169,10 @@ impl ShapeAnimationPreset {
 
     /// Whether this preset uses a stroke-progress keyframe track.
     pub fn uses_stroke_progress(&self) -> bool {
-        matches!(self, ShapeAnimationPreset::DrawOn | ShapeAnimationPreset::DrawOff)
+        matches!(
+            self,
+            ShapeAnimationPreset::DrawOn | ShapeAnimationPreset::DrawOff
+        )
     }
 }
 

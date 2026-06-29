@@ -776,7 +776,11 @@ mod tests {
     #[test]
     fn trn_016_audio_extraction_config_caf_extension() {
         let cfg = AudioExtractionConfig::new_temp("/tmp", "abc123");
-        assert!(cfg.is_caf(), "output must be .caf, got: {}", cfg.output_path);
+        assert!(
+            cfg.is_caf(),
+            "output must be .caf, got: {}",
+            cfg.output_path
+        );
         assert!(cfg.output_path.contains("abc123"));
         assert!(cfg.preserve_source_format);
     }
@@ -784,10 +788,7 @@ mod tests {
     #[test]
     fn trn_016_audio_extraction_config_path_construction() {
         let cfg = AudioExtractionConfig::new_temp("/var/folders/tmp", "uuid-xyz");
-        assert_eq!(
-            cfg.output_path,
-            "/var/folders/tmp/palmier-stt-uuid-xyz.caf"
-        );
+        assert_eq!(cfg.output_path, "/var/folders/tmp/palmier-stt-uuid-xyz.caf");
     }
 
     #[test]

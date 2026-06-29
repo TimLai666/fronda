@@ -9,8 +9,8 @@ use crate::pane::{PaneId, PaneLayout};
 use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Radius, Spacing, Text};
 use gpui::Hsla;
 use gpui::{
-    div, prelude::*, px, svg, App, ClickEvent, Context, FocusHandle, Focusable,
-    InteractiveElement, ParentElement, Render, SharedString, Styled, Window,
+    div, prelude::*, px, svg, App, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
+    ParentElement, Render, SharedString, Styled, Window,
 };
 
 /// State carried by the title bar.
@@ -57,7 +57,11 @@ impl TitleBarView {
         Hsla {
             h: 0.0,
             s: 0.0,
-            l: if self.state.agent_panel_visible { 0.78 } else { 0.50 },
+            l: if self.state.agent_panel_visible {
+                0.78
+            } else {
+                0.50
+            },
             a: 1.0,
         }
     }
@@ -210,7 +214,9 @@ impl Render for TitleBarView {
                     // Signed out: white@soft circle + ⊙ person approximation.
                     .child({
                         let signed_in = self.state.account_initial.is_some();
-                        let initial_str = self.state.account_initial
+                        let initial_str = self
+                            .state
+                            .account_initial
                             .map(|c| c.to_string())
                             .unwrap_or_else(|| "⊙".to_string());
                         div()
@@ -219,16 +225,30 @@ impl Render for TitleBarView {
                             .h(px(22.0))
                             .rounded_full()
                             .bg(if signed_in {
-                                Hsla { h: Accent::PRIMARY.h, s: Accent::PRIMARY.s, l: Accent::PRIMARY.l, a: 0.5 }
+                                Hsla {
+                                    h: Accent::PRIMARY.h,
+                                    s: Accent::PRIMARY.s,
+                                    l: Accent::PRIMARY.l,
+                                    a: 0.5,
+                                }
                             } else {
-                                Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.12 }
+                                Hsla {
+                                    h: 0.0,
+                                    s: 0.0,
+                                    l: 1.0,
+                                    a: 0.12,
+                                }
                             })
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
                             .on_click(cx.listener(|_, _, _, _| {}))
-                            .text_color(if signed_in { Text::PRIMARY } else { Text::TERTIARY })
+                            .text_color(if signed_in {
+                                Text::PRIMARY
+                            } else {
+                                Text::TERTIARY
+                            })
                             .text_size(px(FontSize::XXS))
                             .child(initial_str)
                     }),

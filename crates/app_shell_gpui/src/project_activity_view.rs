@@ -5,8 +5,8 @@
 
 use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Window,
+    div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    Styled, Window,
 };
 
 /// A single AI generation log entry.

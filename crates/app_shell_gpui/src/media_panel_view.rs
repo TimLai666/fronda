@@ -5,10 +5,12 @@
 
 use crate::generation_view::GenerationView;
 use crate::media_panel_model::{MediaPanelState, MediaPanelTab};
-use crate::theme::{Accent, Background, BorderColors, FontSize, IconSize, Layout, MediaPanel, Radius, Spacing, Text};
+use crate::theme::{
+    Accent, Background, BorderColors, FontSize, IconSize, Layout, MediaPanel, Radius, Spacing, Text,
+};
 use gpui::{
-    div, prelude::*, px, App, Context, Entity, FocusHandle, Focusable, IntoElement,
-    InteractiveElement, ParentElement, Render, SharedString, Styled, Window,
+    div, prelude::*, px, App, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Window,
 };
 
 /// Simple tooltip capsule for tab buttons.
@@ -65,9 +67,19 @@ impl Focusable for MediaPanelView {
 fn tab_btn(id: &str, label: &str, is_active: bool) -> gpui::Stateful<gpui::Div> {
     let btn_size = IconSize::LG; // 26px
     let bg = if is_active {
-        gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.10 }
+        gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: 0.10,
+        }
     } else {
-        gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 }
+        gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: 0.0,
+        }
     };
     div()
         .id(id.to_string())
@@ -80,7 +92,11 @@ fn tab_btn(id: &str, label: &str, is_active: bool) -> gpui::Stateful<gpui::Div> 
         .rounded(px(Radius::SM))
         .cursor_pointer()
         .bg(bg)
-        .text_color(if is_active { Text::PRIMARY } else { Text::TERTIARY })
+        .text_color(if is_active {
+            Text::PRIMARY
+        } else {
+            Text::TERTIARY
+        })
         .text_size(px(FontSize::SM_MD))
         .child(label.to_string())
         // Left-edge accent capsule (Swift: Capsule overlay at topLeading)
@@ -135,11 +151,21 @@ fn demo_tile(id: &str, icon: &str, name: &str, hue: f32) -> impl IntoElement {
                 .w(px(80.0))
                 .h(px(60.0))
                 .rounded(px(Radius::XS_SM))
-                .bg(gpui::Hsla { h: hue, s: 0.35, l: 0.18, a: 1.0 })
+                .bg(gpui::Hsla {
+                    h: hue,
+                    s: 0.35,
+                    l: 0.18,
+                    a: 1.0,
+                })
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(gpui::Hsla { h: hue, s: 0.60, l: 0.65, a: 1.0 })
+                .text_color(gpui::Hsla {
+                    h: hue,
+                    s: 0.60,
+                    l: 0.65,
+                    a: 1.0,
+                })
                 .text_size(px(FontSize::LG))
                 .child(icon.to_string()),
         )
@@ -167,12 +193,12 @@ fn media_demo_grid() -> impl IntoElement {
                 .flex_wrap()
                 .gap(px(Spacing::SM_MD))
                 .p(px(Spacing::SM_MD))
-                .child(demo_tile("tile-0", "▶", "interview.mp4",  0.60))
-                .child(demo_tile("tile-1", "▶", "b-roll.mp4",     0.75))
-                .child(demo_tile("tile-2", "♪", "music.wav",      0.83))
+                .child(demo_tile("tile-0", "▶", "interview.mp4", 0.60))
+                .child(demo_tile("tile-1", "▶", "b-roll.mp4", 0.75))
+                .child(demo_tile("tile-2", "♪", "music.wav", 0.83))
                 .child(demo_tile("tile-3", "⬜", "title-card.png", 0.55))
-                .child(demo_tile("tile-4", "▶", "drone.mp4",      0.35))
-                .child(demo_tile("tile-5", "▶", "closeup.mp4",    0.06))
+                .child(demo_tile("tile-4", "▶", "drone.mp4", 0.35))
+                .child(demo_tile("tile-5", "▶", "closeup.mp4", 0.06)),
         )
 }
 
@@ -368,7 +394,7 @@ fn captions_tab_content() -> impl IntoElement {
                         .flex_col()
                         .gap(px(Spacing::XS))
                         .child(section_label("Source"))
-                        .child(row_value("Input", "Auto"))
+                        .child(row_value("Input", "Auto")),
                 )
                 // Style section
                 .child(
@@ -379,7 +405,7 @@ fn captions_tab_content() -> impl IntoElement {
                         .child(section_label("Style"))
                         .child(row_value("Font Size", "36"))
                         .child(row_value("Case", "Auto"))
-                        .child(row_value("Censor Profanity", "Off"))
+                        .child(row_value("Censor Profanity", "Off")),
                 )
                 // Placement
                 .child(
@@ -388,8 +414,8 @@ fn captions_tab_content() -> impl IntoElement {
                         .flex_col()
                         .gap(px(Spacing::XS))
                         .child(section_label("Placement"))
-                        .child(row_value("Position", "Bottom Center"))
-                )
+                        .child(row_value("Position", "Bottom Center")),
+                ),
         )
         // Generate bar at bottom (matches Swift generateBar)
         .child(
@@ -430,7 +456,7 @@ fn music_tab_content() -> impl IntoElement {
                         .gap(px(Spacing::XS))
                         .child(section_label("Source"))
                         .child(row_value("Input", "Video to Music"))
-                        .child(row_value("Video", "Whole timeline"))
+                        .child(row_value("Video", "Whole timeline")),
                 )
                 // Model
                 .child(
@@ -439,7 +465,7 @@ fn music_tab_content() -> impl IntoElement {
                         .flex_col()
                         .gap(px(Spacing::XS))
                         .child(section_label("Model"))
-                        .child(row_value("Model", "ElevenLabs Music ⌄"))
+                        .child(row_value("Model", "ElevenLabs Music ⌄")),
                 )
                 // Prompt area
                 .child(
@@ -460,8 +486,8 @@ fn music_tab_content() -> impl IntoElement {
                                 .text_color(Text::MUTED)
                                 .text_size(px(FontSize::SM))
                                 .child("Describe the music…"),
-                        )
-                )
+                        ),
+                ),
         )
         // Generate bar at bottom
         .child(
@@ -516,7 +542,10 @@ impl Render for MediaPanelView {
                                         this.select_tab(MediaPanelTab::Media, cx);
                                     }))
                                     .tooltip(|_, cx| {
-                                        cx.new(|_| TabTooltip { label: "Media".into() }).into()
+                                        cx.new(|_| TabTooltip {
+                                            label: "Media".into(),
+                                        })
+                                        .into()
                                     }),
                             )
                             .child(
@@ -525,7 +554,10 @@ impl Render for MediaPanelView {
                                         this.select_tab(MediaPanelTab::Captions, cx);
                                     }))
                                     .tooltip(|_, cx| {
-                                        cx.new(|_| TabTooltip { label: "Captions".into() }).into()
+                                        cx.new(|_| TabTooltip {
+                                            label: "Captions".into(),
+                                        })
+                                        .into()
                                     }),
                             )
                             .child(
@@ -534,17 +566,15 @@ impl Render for MediaPanelView {
                                         this.select_tab(MediaPanelTab::Music, cx);
                                     }))
                                     .tooltip(|_, cx| {
-                                        cx.new(|_| TabTooltip { label: "Music".into() }).into()
+                                        cx.new(|_| TabTooltip {
+                                            label: "Music".into(),
+                                        })
+                                        .into()
                                     }),
                             ),
                     )
                     // Hairline border separator
-                    .child(
-                        div()
-                            .w(px(1.0))
-                            .h_full()
-                            .bg(BorderColors::PRIMARY),
-                    ),
+                    .child(div().w(px(1.0)).h_full().bg(BorderColors::PRIMARY)),
             )
             // ── Tab content area ──
             .child(

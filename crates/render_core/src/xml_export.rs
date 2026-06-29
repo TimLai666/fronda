@@ -209,12 +209,7 @@ fn write_clip(xml: &mut String, clip: &Clip, fps: i64, timecode: Option<SourceTi
     writeln!(xml, "                <value>{:.6}</value>", clip.volume).ok();
     writeln!(xml, "              </volume>").ok();
     // XML-005: opacity
-    writeln!(
-        xml,
-        "              <opacity>{:.6}</opacity>",
-        clip.opacity
-    )
-    .ok();
+    writeln!(xml, "              <opacity>{:.6}</opacity>", clip.opacity).ok();
     // XML-007: fades
     if clip.fade_in_frames > 0 {
         writeln!(xml, "              <fadein>").ok();
@@ -247,11 +242,7 @@ fn write_clip(xml: &mut String, clip: &Clip, fps: i64, timecode: Option<SourceTi
     .ok();
     writeln!(xml, "                  <effecttype>motion</effecttype>").ok();
     writeln!(xml, "                  <parameter>").ok();
-    writeln!(
-        xml,
-        "                    <parameterid>scale</parameterid>"
-    )
-    .ok();
+    writeln!(xml, "                    <parameterid>scale</parameterid>").ok();
     writeln!(
         xml,
         "                    <value>{:.6}</value>",
@@ -273,11 +264,7 @@ fn write_clip(xml: &mut String, clip: &Clip, fps: i64, timecode: Option<SourceTi
     .ok();
     writeln!(xml, "                  </parameter>").ok();
     writeln!(xml, "                  <parameter>").ok();
-    writeln!(
-        xml,
-        "                    <parameterid>center</parameterid>"
-    )
-    .ok();
+    writeln!(xml, "                    <parameterid>center</parameterid>").ok();
     writeln!(
         xml,
         "                    <value>{:.6} {:.6}</value>",
@@ -313,12 +300,7 @@ fn write_clip(xml: &mut String, clip: &Clip, fps: i64, timecode: Option<SourceTi
     // File reference (XML-011)
     writeln!(xml, "              <file>").ok();
     writeln!(xml, "                <name>{}</name>", clip.media_ref).ok();
-    writeln!(
-        xml,
-        "                <pathurl>{}</pathurl>",
-        clip.media_ref
-    )
-    .ok();
+    writeln!(xml, "                <pathurl>{}</pathurl>", clip.media_ref).ok();
     writeln!(xml, "                <rate>").ok();
     writeln!(xml, "                  <timebase>{}</timebase>", fps).ok();
     writeln!(xml, "                </rate>").ok();

@@ -413,13 +413,20 @@ fn sav_009_trim_and_speed_in_detailed_plan() {
     timeline.tracks[0].clips[0].trim_start_frame = 15;
     timeline.tracks[0].clips[0].trim_end_frame = 3;
     timeline.tracks[0].clips[0].speed = 0.5;
-    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed =
+        DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
     // The plan has one video clip in the main track; confirm trim+speed flow through
     assert!(!detailed.plan.tracks.is_empty(), "plan must have tracks");
     let vc = &detailed.plan.tracks[0].clips[0];
-    assert_eq!(vc.source_trim_start, 15, "SAV-009: trim_start must flow through");
+    assert_eq!(
+        vc.source_trim_start, 15,
+        "SAV-009: trim_start must flow through"
+    );
     assert_eq!(vc.source_trim_end, 3, "SAV-009: trim_end must flow through");
-    assert!((vc.speed - 0.5).abs() < 1e-9, "SAV-009: speed must flow through");
+    assert!(
+        (vc.speed - 0.5).abs() < 1e-9,
+        "SAV-009: speed must flow through"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -481,7 +488,8 @@ fn make_image_timeline() -> Timeline {
 #[test]
 fn prv_012_image_clips_in_detailed_plan() {
     let timeline = make_image_timeline();
-    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed =
+        DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
     assert_eq!(
         detailed.image_clips.len(),
         1,
@@ -493,7 +501,8 @@ fn prv_012_image_clips_in_detailed_plan() {
 #[test]
 fn prv_012_video_clip_not_in_image_clips() {
     let timeline = make_single_clip_timeline();
-    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed =
+        DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
     assert!(
         detailed.image_clips.is_empty(),
         "PRV-012: video clip must not appear in image_clips"
@@ -532,7 +541,8 @@ fn make_lottie_timeline() -> Timeline {
 #[test]
 fn prv_013_lottie_clips_in_detailed_plan() {
     let timeline = make_lottie_timeline();
-    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed =
+        DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
     assert_eq!(
         detailed.lottie_clips.len(),
         1,
@@ -544,7 +554,8 @@ fn prv_013_lottie_clips_in_detailed_plan() {
 #[test]
 fn prv_013_image_clip_not_in_lottie_clips() {
     let timeline = make_image_timeline();
-    let detailed = DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
+    let detailed =
+        DetailedCompositionPlan::from_timeline(&timeline, RenderResolution::native(&timeline));
     assert!(
         detailed.lottie_clips.is_empty(),
         "PRV-013: image clip must not appear in lottie_clips"

@@ -65,7 +65,11 @@ impl McpConfig {
     ///
     /// Issue #122: use this to expose the MCP server to the local network
     /// (e.g. host = "0.0.0.0") with a bearer token for access control.
-    pub fn with_network_access(host: impl Into<String>, port: u16, auth_token: impl Into<String>) -> Self {
+    pub fn with_network_access(
+        host: impl Into<String>,
+        port: u16,
+        auth_token: impl Into<String>,
+    ) -> Self {
         Self {
             host: host.into(),
             port,

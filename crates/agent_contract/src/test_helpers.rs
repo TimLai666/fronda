@@ -34,8 +34,8 @@ pub fn make_clip(start_frame: i64, duration_frames: i64) -> Clip {
         effects: None,
         shape_style: None,
         stroke_progress_track: None,
-    compound_timeline_id: None,
-    blend_mode: Default::default(),
-    chroma_key: None,
+        compound_timeline_id: None,
+        blend_mode: Default::default(),
+        chroma_key: None,
     }
 }

@@ -110,7 +110,11 @@ fn tab_pill(label: &'static str, is_active: bool) -> impl IntoElement {
         } else {
             Background::SURFACE
         })
-        .text_color(if is_active { Text::PRIMARY } else { Text::MUTED })
+        .text_color(if is_active {
+            Text::PRIMARY
+        } else {
+            Text::MUTED
+        })
         .text_size(px(FontSize::XS))
         .child(label)
 }
@@ -127,12 +131,22 @@ fn media_thumbnail(media_type: &str) -> impl IntoElement {
         .w(px(32.0))
         .h(px(24.0))
         .rounded(px(Radius::XS))
-        .bg(gpui::Hsla { h: hue, s: 0.45, l: 0.18, a: 1.0 })
+        .bg(gpui::Hsla {
+            h: hue,
+            s: 0.45,
+            l: 0.18,
+            a: 1.0,
+        })
         .flex()
         .items_center()
         .justify_center()
         .flex_shrink_0()
-        .text_color(gpui::Hsla { h: hue, s: 0.65, l: 0.65, a: 1.0 })
+        .text_color(gpui::Hsla {
+            h: hue,
+            s: 0.65,
+            l: 0.65,
+            a: 1.0,
+        })
         .text_size(px(FontSize::XXS))
         .child(icon)
 }
@@ -180,8 +194,7 @@ impl Render for MentionPopoverView {
             .iter()
             .filter(|c| {
                 active_tab == MentionFilterTab::All
-                    || c.media_type.as_ref().to_lowercase()
-                        == active_tab.label().to_lowercase()
+                    || c.media_type.as_ref().to_lowercase() == active_tab.label().to_lowercase()
             })
             .cloned()
             .collect();
@@ -212,12 +225,17 @@ impl Render for MentionPopoverView {
                         let is_active = *t == active_tab;
                         let t_copy = *t;
                         div()
-                            .id(gpui::SharedString::from(format!("mention-tab-{}", t.label())))
+                            .id(gpui::SharedString::from(format!(
+                                "mention-tab-{}",
+                                t.label()
+                            )))
                             .cursor_pointer()
-                            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _: &mut Window, cx| {
-                                this.state.active_tab = t_copy;
-                                cx.notify();
-                            }))
+                            .on_click(cx.listener(
+                                move |this, _: &gpui::ClickEvent, _: &mut Window, cx| {
+                                    this.state.active_tab = t_copy;
+                                    cx.notify();
+                                },
+                            ))
                             .child(tab_pill(t.label(), is_active))
                     })),
             )

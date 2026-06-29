@@ -70,8 +70,7 @@ impl XmlImportRequest {
     pub fn from_path(path: impl Into<String>) -> Self {
         let path = path.into();
         let ext = path.rsplit('.').next().unwrap_or("");
-        let format = XmlImportFormat::from_extension(ext)
-            .unwrap_or(XmlImportFormat::Xmeml);
+        let format = XmlImportFormat::from_extension(ext).unwrap_or(XmlImportFormat::Xmeml);
         Self {
             path,
             format,
@@ -213,7 +212,10 @@ mod tests {
             XmlImportFormat::PremiereXml,
             XmlImportFormat::DavinciXml,
         ] {
-            assert!(!fmt.display_name().is_empty(), "{fmt:?} has no display name");
+            assert!(
+                !fmt.display_name().is_empty(),
+                "{fmt:?} has no display name"
+            );
         }
     }
 
@@ -250,7 +252,10 @@ mod tests {
 
     #[test]
     fn issue_154_validate_empty_path_is_error() {
-        let req = XmlImportRequest { path: String::new(), ..XmlImportRequest::from_path("x.xml") };
+        let req = XmlImportRequest {
+            path: String::new(),
+            ..XmlImportRequest::from_path("x.xml")
+        };
         assert!(validate_xml_import(&req).is_err());
     }
 

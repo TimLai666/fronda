@@ -61,7 +61,11 @@ mod tests {
     use super::*;
 
     fn make_emb(v: Vec<f32>) -> VisualEmbedding {
-        VisualEmbedding { entry_id: "x".into(), sample_index: 0, vector: v }
+        VisualEmbedding {
+            entry_id: "x".into(),
+            sample_index: 0,
+            vector: v,
+        }
     }
 
     #[test]

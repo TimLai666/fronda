@@ -73,7 +73,10 @@ pub enum DropAction {
     /// DRAG-008: Import file URLs into the currently active folder.
     ImportIntoCurrentFolder { file_paths: Vec<String> },
     /// DRAG-009: Import file URLs into a specific folder.
-    ImportIntoFolder { file_paths: Vec<String>, folder_id: String },
+    ImportIntoFolder {
+        file_paths: Vec<String>,
+        folder_id: String,
+    },
     /// The drop should be ignored (unsupported files, no-op targets, etc.).
     Noop,
 }
@@ -112,7 +115,9 @@ pub fn route_drop(
             if supported.is_empty() {
                 DropAction::Noop
             } else {
-                DropAction::ImportIntoCurrentFolder { file_paths: supported }
+                DropAction::ImportIntoCurrentFolder {
+                    file_paths: supported,
+                }
             }
         }
         DropTarget::MediaPanelFolder { folder_id } => {
@@ -294,12 +299,17 @@ mod tests {
     #[test]
     fn drag_009_finder_drop_to_folder_imports_into_folder() {
         let result = route_drop(
-            &DropTarget::MediaPanelFolder { folder_id: "folder-abc".to_string() },
+            &DropTarget::MediaPanelFolder {
+                folder_id: "folder-abc".to_string(),
+            },
             &[],
             &["/video.mov".to_string()],
         );
         match result {
-            DropAction::ImportIntoFolder { file_paths, folder_id } => {
+            DropAction::ImportIntoFolder {
+                file_paths,
+                folder_id,
+            } => {
                 assert_eq!(folder_id, "folder-abc");
                 assert_eq!(file_paths.len(), 1);
             }
@@ -310,9 +320,15 @@ mod tests {
     #[test]
     fn drag_009_mixed_files_filters_unsupported() {
         let result = route_drop(
-            &DropTarget::MediaPanelFolder { folder_id: "f1".to_string() },
+            &DropTarget::MediaPanelFolder {
+                folder_id: "f1".to_string(),
+            },
             &[],
-            &["/clip.mp4".to_string(), "/doc.pdf".to_string(), "/thumb.png".to_string()],
+            &[
+                "/clip.mp4".to_string(),
+                "/doc.pdf".to_string(),
+                "/thumb.png".to_string(),
+            ],
         );
         match result {
             DropAction::ImportIntoFolder { file_paths, .. } => {

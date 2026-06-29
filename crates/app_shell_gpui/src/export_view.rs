@@ -12,8 +12,8 @@
 
 #![cfg(feature = "desktop-app")]
 
-use gpui::*;
 use gpui::prelude::*;
+use gpui::*;
 
 use crate::export_model::{ExportMode, ExportViewModel};
 use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
@@ -24,7 +24,7 @@ pub struct ExportView {
     pub model: ExportViewModel,
     focus_handle: FocusHandle,
     // UI-only selection state (not in model)
-    selected_codec: usize,     // 0=H.264, 1=H.265, 2=ProRes
+    selected_codec: usize,      // 0=H.264, 1=H.265, 2=ProRes
     selected_resolution: usize, // 0=720p, 1=1080p, 2=2K, 3=4K, 4=Match
     selected_fps: usize,        // 0=24, 1=30, 2=60
     output_path: String,
@@ -70,7 +70,12 @@ fn picker_option(id: &str, label: &str, is_selected: bool) -> gpui::Stateful<gpu
         .rounded(px(Radius::XS_SM))
         .cursor_pointer()
         .when(is_selected, |el| {
-            el.bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.08 })
+            el.bg(gpui::Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 1.0,
+                a: 0.08,
+            })
         })
         // Selection dot
         .child(
@@ -79,7 +84,11 @@ fn picker_option(id: &str, label: &str, is_selected: bool) -> gpui::Stateful<gpu
                 .h(px(14.0))
                 .rounded_full()
                 .border_1()
-                .border_color(if is_selected { Accent::PRIMARY } else { BorderColors::SUBTLE })
+                .border_color(if is_selected {
+                    Accent::PRIMARY
+                } else {
+                    BorderColors::SUBTLE
+                })
                 .flex()
                 .items_center()
                 .justify_center()
@@ -96,7 +105,11 @@ fn picker_option(id: &str, label: &str, is_selected: bool) -> gpui::Stateful<gpu
         .child(
             div()
                 .text_size(px(FontSize::SM))
-                .text_color(if is_selected { Text::PRIMARY } else { Text::SECONDARY })
+                .text_color(if is_selected {
+                    Text::PRIMARY
+                } else {
+                    Text::SECONDARY
+                })
                 .child(label.to_string()),
         )
 }

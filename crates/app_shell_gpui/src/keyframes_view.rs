@@ -10,8 +10,8 @@
 
 use crate::theme::{Accent, Background, BorderColors, FontSize, Spacing, Text};
 use gpui::{
-    div, px, relative, App, Context, FocusHandle, Focusable, IntoElement,
-    InteractiveElement, ParentElement, Render, Styled, Window,
+    div, px, relative, App, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, Styled, Window,
 };
 
 const NAV_H: f32 = 24.0;
@@ -40,11 +40,26 @@ impl Default for KeyframesState {
             clip_name: "Video Clip".to_string(),
             clip_hue: 0.12,
             lanes: vec![
-                KeyframeLane { property_label: "Position", frame_fractions: vec![0.0, 0.5, 1.0] },
-                KeyframeLane { property_label: "Scale",    frame_fractions: vec![0.0, 1.0] },
-                KeyframeLane { property_label: "Rotation", frame_fractions: vec![] },
-                KeyframeLane { property_label: "Opacity",  frame_fractions: vec![0.0, 0.3, 0.7, 1.0] },
-                KeyframeLane { property_label: "Crop",     frame_fractions: vec![] },
+                KeyframeLane {
+                    property_label: "Position",
+                    frame_fractions: vec![0.0, 0.5, 1.0],
+                },
+                KeyframeLane {
+                    property_label: "Scale",
+                    frame_fractions: vec![0.0, 1.0],
+                },
+                KeyframeLane {
+                    property_label: "Rotation",
+                    frame_fractions: vec![],
+                },
+                KeyframeLane {
+                    property_label: "Opacity",
+                    frame_fractions: vec![0.0, 0.3, 0.7, 1.0],
+                },
+                KeyframeLane {
+                    property_label: "Crop",
+                    frame_fractions: vec![],
+                },
             ],
             playhead_fraction: 0.25,
         }
@@ -160,13 +175,23 @@ fn clip_strip(name: &str, hue: f32) -> impl IntoElement {
     div()
         .w_full()
         .h(px(STRIP_H))
-        .bg(gpui::Hsla { h: hue, s: 0.55, l: 0.40, a: 0.50 })
+        .bg(gpui::Hsla {
+            h: hue,
+            s: 0.55,
+            l: 0.40,
+            a: 0.50,
+        })
         .flex()
         .items_center()
         .px(px(Spacing::SM))
         .child(
             div()
-                .text_color(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.95 })
+                .text_color(gpui::Hsla {
+                    h: 0.0,
+                    s: 0.0,
+                    l: 1.0,
+                    a: 0.95,
+                })
                 .text_size(px(FontSize::XXS))
                 .child(name.to_string()),
         )
@@ -175,7 +200,12 @@ fn clip_strip(name: &str, hue: f32) -> impl IntoElement {
 fn lane_row(lane: &KeyframeLane, hue: f32) -> impl IntoElement {
     let fracs = lane.frame_fractions.clone();
     let label = lane.property_label;
-    let diamond_color = gpui::Hsla { h: hue, s: 0.60, l: 0.60, a: 1.0 };
+    let diamond_color = gpui::Hsla {
+        h: hue,
+        s: 0.60,
+        l: 0.60,
+        a: 1.0,
+    };
 
     let mut track = div()
         .flex()
@@ -205,7 +235,12 @@ fn lane_row(lane: &KeyframeLane, hue: f32) -> impl IntoElement {
         .h(px(ROW_H))
         .border_b_1()
         .border_color(BorderColors::SUBTLE)
-        .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.03 })
+        .bg(gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: 0.03,
+        })
         .child(
             div()
                 .w(px(60.0))
@@ -247,7 +282,12 @@ impl Render for KeyframesView {
                     .left(relative(playhead_frac))
                     .w(px(1.5))
                     .h(px(panel_h))
-                    .bg(gpui::Hsla { h: 0.0, s: 0.95, l: 0.55, a: 1.0 }),
+                    .bg(gpui::Hsla {
+                        h: 0.0,
+                        s: 0.95,
+                        l: 0.55,
+                        a: 1.0,
+                    }),
             )
     }
 }

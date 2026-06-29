@@ -1255,10 +1255,7 @@ mod tests {
     #[test]
     fn issue_017_default_url_is_anthropic_prod() {
         let s = UserSettings::default();
-        assert_eq!(
-            s.effective_anthropic_base_url(),
-            ANTHROPIC_DEFAULT_BASE_URL
-        );
+        assert_eq!(s.effective_anthropic_base_url(), ANTHROPIC_DEFAULT_BASE_URL);
         assert_eq!(ANTHROPIC_DEFAULT_BASE_URL, "https://api.anthropic.com");
     }
 
@@ -1277,10 +1274,7 @@ mod tests {
             anthropic_base_url: Some(String::new()),
             ..Default::default()
         };
-        assert_eq!(
-            s.effective_anthropic_base_url(),
-            ANTHROPIC_DEFAULT_BASE_URL
-        );
+        assert_eq!(s.effective_anthropic_base_url(), ANTHROPIC_DEFAULT_BASE_URL);
     }
 
     #[test]
@@ -1358,7 +1352,10 @@ mod tests {
             ..Default::default()
         };
         assert!(s.custom_llm_config.as_ref().unwrap().is_valid());
-        assert_eq!(s.active_agent_provider.display_name(), "Custom (OpenAI-compatible)");
+        assert_eq!(
+            s.active_agent_provider.display_name(),
+            "Custom (OpenAI-compatible)"
+        );
     }
 
     // ---- Issue #142: Codex CLI agent provider ----------------------------
@@ -1382,7 +1379,10 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.active_agent_provider, AgentProvider::Codex);
-        assert!(s.custom_llm_config.is_none(), "Codex uses CLI, no base_url config");
+        assert!(
+            s.custom_llm_config.is_none(),
+            "Codex uses CLI, no base_url config"
+        );
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //!
 //! Covers Help/Shortcuts and Help/MCP panes, matching Swift HelpView exactly.
 
-use app_contract::help_model::{HelpTab, HelpViewModel};
 use crate::theme::{Background, BorderColors, FontSize, Opacity, Radius, Spacing, Text};
+use app_contract::help_model::{HelpTab, HelpViewModel};
 use gpui::{
     div, prelude::*, px, svg, App, Context, FocusHandle, Focusable, Hsla, IntoElement,
     ParentElement, Render, Styled, Window,
@@ -49,65 +49,76 @@ fn tab_icon_path(tab: HelpTab) -> &'static str {
 
 // ── Shortcut data matching Swift ShortcutsPane.allShortcuts ──
 const SHORTCUT_GROUPS: &[(&str, &[(&str, &str)])] = &[
-    ("Playback", &[
-        ("Space", "Play / Pause"),
-        ("←", "Step Backward"),
-        ("→", "Step Forward"),
-        ("Shift + ←", "Skip Backward"),
-        ("Shift + →", "Skip Forward"),
-    ]),
-    ("Tools", &[
-        ("V", "Selection Tool"),
-        ("C", "Razor Tool"),
-    ]),
-    ("Editing", &[
-        ("Cmd + K", "Split at Playhead"),
-        ("[ or Q", "Trim Start to Playhead"),
-        ("] or W", "Trim End to Playhead"),
-        ("Backspace", "Delete"),
-        ("Shift + Backspace", "Ripple Delete"),
-        ("Opt + Drag", "Duplicate Clip"),
-    ]),
-    ("Timeline", &[
-        ("Shift + Drag Ruler", "Select Range"),
-        ("Drag Range Edge", "Adjust Range"),
-        ("I", "Mark Range Start"),
-        ("O", "Mark Range End"),
-        ("Opt + Scroll", "Zoom to Cursor"),
-        ("Pinch", "Zoom to Cursor"),
-        ("Cmd + Scroll", "Scroll Horizontally"),
-    ]),
-    ("File", &[
-        ("Cmd + N", "New"),
-        ("Cmd + O", "Open"),
-        ("Cmd + S", "Save"),
-        ("Cmd + Shift + S", "Save As"),
-        ("Cmd + I", "Import Media"),
-        ("Cmd + E", "Export"),
-    ]),
-    ("Edit", &[
-        ("Cmd + Z", "Undo"),
-        ("Cmd + Shift + Z", "Redo"),
-        ("Cmd + X", "Cut"),
-        ("Cmd + C", "Copy"),
-        ("Cmd + V", "Paste"),
-        ("Cmd + A", "Select All"),
-    ]),
-    ("View", &[
-        ("Cmd + F", "Full Screen"),
-        ("`", "Maximize Focused Panel"),
-        ("Cmd + Scroll", "Zoom Preview to Cursor"),
-        ("Esc", "Deselect & Reset Tool"),
-    ]),
+    (
+        "Playback",
+        &[
+            ("Space", "Play / Pause"),
+            ("←", "Step Backward"),
+            ("→", "Step Forward"),
+            ("Shift + ←", "Skip Backward"),
+            ("Shift + →", "Skip Forward"),
+        ],
+    ),
+    ("Tools", &[("V", "Selection Tool"), ("C", "Razor Tool")]),
+    (
+        "Editing",
+        &[
+            ("Cmd + K", "Split at Playhead"),
+            ("[ or Q", "Trim Start to Playhead"),
+            ("] or W", "Trim End to Playhead"),
+            ("Backspace", "Delete"),
+            ("Shift + Backspace", "Ripple Delete"),
+            ("Opt + Drag", "Duplicate Clip"),
+        ],
+    ),
+    (
+        "Timeline",
+        &[
+            ("Shift + Drag Ruler", "Select Range"),
+            ("Drag Range Edge", "Adjust Range"),
+            ("I", "Mark Range Start"),
+            ("O", "Mark Range End"),
+            ("Opt + Scroll", "Zoom to Cursor"),
+            ("Pinch", "Zoom to Cursor"),
+            ("Cmd + Scroll", "Scroll Horizontally"),
+        ],
+    ),
+    (
+        "File",
+        &[
+            ("Cmd + N", "New"),
+            ("Cmd + O", "Open"),
+            ("Cmd + S", "Save"),
+            ("Cmd + Shift + S", "Save As"),
+            ("Cmd + I", "Import Media"),
+            ("Cmd + E", "Export"),
+        ],
+    ),
+    (
+        "Edit",
+        &[
+            ("Cmd + Z", "Undo"),
+            ("Cmd + Shift + Z", "Redo"),
+            ("Cmd + X", "Cut"),
+            ("Cmd + C", "Copy"),
+            ("Cmd + V", "Paste"),
+            ("Cmd + A", "Select All"),
+        ],
+    ),
+    (
+        "View",
+        &[
+            ("Cmd + F", "Full Screen"),
+            ("`", "Maximize Focused Panel"),
+            ("Cmd + Scroll", "Zoom Preview to Cursor"),
+            ("Esc", "Deselect & Reset Tool"),
+        ],
+    ),
 ];
 
 /// Shortcut group column: title + rows. Matches Swift shortcutColumn.
 fn shortcut_column(groups: &[(&str, &[(&str, &str)])]) -> impl IntoElement {
-    let mut col = div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .gap(px(20.0));
+    let mut col = div().flex().flex_col().flex_1().gap(px(20.0));
 
     for (title, rows) in groups {
         let mut group = div()
@@ -240,7 +251,11 @@ impl Render for HelpView {
         for tab in HelpTab::ALL {
             let is_active = self.model.active_tab == *tab;
             let icon_path = tab_icon_path(*tab);
-            let icon_color = if is_active { Text::PRIMARY } else { Text::SECONDARY };
+            let icon_color = if is_active {
+                Text::PRIMARY
+            } else {
+                Text::SECONDARY
+            };
             sidebar = sidebar.child(
                 div()
                     .id(gpui::SharedString::from(format!(
@@ -256,7 +271,11 @@ impl Render for HelpView {
                     .py(px(Spacing::SM))
                     .rounded(px(Radius::SM))
                     .cursor_pointer()
-                    .bg(if is_active { TAB_ACTIVE_BG } else { Background::SURFACE })
+                    .bg(if is_active {
+                        TAB_ACTIVE_BG
+                    } else {
+                        Background::SURFACE
+                    })
                     // Icon: 12px in 16px frame
                     .child(
                         div()
@@ -276,7 +295,11 @@ impl Render for HelpView {
                     .child(
                         div()
                             .text_size(px(FontSize::MD))
-                            .text_color(if is_active { Text::PRIMARY } else { Text::SECONDARY })
+                            .text_color(if is_active {
+                                Text::PRIMARY
+                            } else {
+                                Text::SECONDARY
+                            })
                             .font_weight(if is_active {
                                 gpui::FontWeight::MEDIUM
                             } else {

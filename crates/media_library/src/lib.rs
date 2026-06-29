@@ -366,9 +366,7 @@ impl FolderOps {
         manifest
             .entries
             .iter()
-            .filter(|e| {
-                e.folder_id.as_ref().is_some_and(|f| folder_ids.contains(f))
-            })
+            .filter(|e| e.folder_id.as_ref().is_some_and(|f| folder_ids.contains(f)))
             .map(|e| e.id.clone())
             .collect()
     }
@@ -542,9 +540,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         }
     }
 

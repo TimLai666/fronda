@@ -181,11 +181,7 @@ pub fn resolve_cut_preview_snap(
     let mut best: Option<(i64, f64)> = None;
     for target in targets {
         let dist = (pointer_frame as f64 - target.frame as f64).abs();
-        if dist <= frame_threshold
-            && best
-                .as_ref()
-                .is_none_or(|(_, best_dist)| dist < *best_dist)
-        {
+        if dist <= frame_threshold && best.as_ref().is_none_or(|(_, best_dist)| dist < *best_dist) {
             best = Some((target.frame, dist));
         }
     }

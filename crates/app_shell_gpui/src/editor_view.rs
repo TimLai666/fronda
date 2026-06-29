@@ -135,7 +135,12 @@ fn inspector_content(contents: &PaneContents) -> gpui::AnyElement {
 /// Default preset: [Agent left?] | Media | Preview + Toolbar + Timeline | Inspector
 ///
 /// Agent panel is a LEFT column sibling to the rest (matches Swift layout).
-fn build_default(layout: &PaneLayout, contents: &PaneContents, timeline_height: f32, resize_handle: AnyElement) -> impl IntoElement {
+fn build_default(
+    layout: &PaneLayout,
+    contents: &PaneContents,
+    timeline_height: f32,
+    resize_handle: AnyElement,
+) -> impl IntoElement {
     let mut root = div().id("layout-default").flex().flex_row().size_full();
 
     // Agent panel: LEFT column (240px min, Swift: AGENT_PANEL_MIN=240)
@@ -214,7 +219,12 @@ fn build_default(layout: &PaneLayout, contents: &PaneContents, timeline_height: 
 }
 
 /// Media preset: media (wide) | preview + timeline (matches Swift buildMediaLayout).
-fn build_media(layout: &PaneLayout, contents: &PaneContents, timeline_height: f32, resize_handle: AnyElement) -> impl IntoElement {
+fn build_media(
+    layout: &PaneLayout,
+    contents: &PaneContents,
+    timeline_height: f32,
+    resize_handle: AnyElement,
+) -> impl IntoElement {
     let mut root = div().id("layout-media").flex().flex_row().size_full();
 
     if layout.is_visible(PaneId::Media) {
@@ -263,7 +273,12 @@ fn build_media(layout: &PaneLayout, contents: &PaneContents, timeline_height: f3
 }
 
 /// Vertical preset (Swift: Media+Inspector stacked left / Toolbar+Timeline right | Preview right).
-fn build_vertical(layout: &PaneLayout, contents: &PaneContents, timeline_height: f32, resize_handle: AnyElement) -> impl IntoElement {
+fn build_vertical(
+    layout: &PaneLayout,
+    contents: &PaneContents,
+    timeline_height: f32,
+    resize_handle: AnyElement,
+) -> impl IntoElement {
     let mut root = div().id("layout-vertical").flex().flex_row().size_full();
 
     // Left stack: media + inspector (stacked vertically)
@@ -280,17 +295,10 @@ fn build_vertical(layout: &PaneLayout, contents: &PaneContents, timeline_height:
     }
 
     if layout.is_visible(PaneId::Inspector) {
-        left = left.child(
-            div()
-                .h(px(240.0))
-                .child(inspector_content(contents)),
-        );
+        left = left.child(div().h(px(240.0)).child(inspector_content(contents)));
     }
 
-    root = root.child(
-        left.border_r_1()
-            .border_color(BorderColors::PRIMARY),
-    );
+    root = root.child(left.border_r_1().border_color(BorderColors::PRIMARY));
 
     // Right: Preview + Toolbar + resizable Timeline
     if layout.is_visible(PaneId::Preview) {
@@ -333,9 +341,15 @@ pub fn render_pane_layout(
     resize_handle: AnyElement,
 ) -> impl IntoElement {
     match layout.preset {
-        LayoutPreset::Default => build_default(layout, contents, timeline_height, resize_handle).into_any_element(),
-        LayoutPreset::Media => build_media(layout, contents, timeline_height, resize_handle).into_any_element(),
-        LayoutPreset::Vertical => build_vertical(layout, contents, timeline_height, resize_handle).into_any_element(),
+        LayoutPreset::Default => {
+            build_default(layout, contents, timeline_height, resize_handle).into_any_element()
+        }
+        LayoutPreset::Media => {
+            build_media(layout, contents, timeline_height, resize_handle).into_any_element()
+        }
+        LayoutPreset::Vertical => {
+            build_vertical(layout, contents, timeline_height, resize_handle).into_any_element()
+        }
     }
 }
 

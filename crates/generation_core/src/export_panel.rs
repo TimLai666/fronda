@@ -111,11 +111,8 @@ impl ExportPanelState {
 
     /// Whether the current settings are valid (format ↔ color_space match).
     pub fn settings_valid(&self) -> bool {
-        render_core::validate_export_color_space(
-            self.settings.format,
-            self.settings.color_space,
-        )
-        .is_ok()
+        render_core::validate_export_color_space(self.settings.format, self.settings.color_space)
+            .is_ok()
     }
 }
 
@@ -186,10 +183,7 @@ mod tests {
     #[test]
     fn issue_166_settings_valid_h264_sdr() {
         let panel = ExportPanelState::new();
-        assert!(
-            panel.settings_valid(),
-            "H264 + SDR must be valid"
-        );
+        assert!(panel.settings_valid(), "H264 + SDR must be valid");
     }
 
     #[test]

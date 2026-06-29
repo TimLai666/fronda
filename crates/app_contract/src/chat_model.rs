@@ -164,9 +164,7 @@ impl ChatPanelModel {
     /// The gpui-ce OnDrop handler calls this after resolving the dropped asset id.
     pub fn paste_media_mention(&mut self, asset_id: &str, label: &str) {
         let tag = format!("@{label}");
-        if !self.input.text.is_empty()
-            && !self.input.text.ends_with(|c: char| c.is_whitespace())
-        {
+        if !self.input.text.is_empty() && !self.input.text.ends_with(|c: char| c.is_whitespace()) {
             self.input.text.push(' ');
         }
         self.input.text.push_str(&tag);

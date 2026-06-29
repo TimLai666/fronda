@@ -111,8 +111,18 @@ impl Focusable for TransformOverlayView {
     }
 }
 
-const WHITE: gpui::Hsla = gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 1.0 };
-const WHITE_BORDER: gpui::Hsla = gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.40 };
+const WHITE: gpui::Hsla = gpui::Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 1.0,
+    a: 1.0,
+};
+const WHITE_BORDER: gpui::Hsla = gpui::Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 0.0,
+    a: 0.40,
+};
 
 /// White bounding box border.
 fn bbox_border(cx: f32, cy: f32, w: f32, h: f32) -> impl IntoElement {
@@ -125,7 +135,12 @@ fn bbox_border(cx: f32, cy: f32, w: f32, h: f32) -> impl IntoElement {
         .w(relative(w))
         .h(relative(h))
         .border_1()
-        .border_color(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::STRONG })
+        .border_color(gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: Opacity::STRONG,
+        })
 }
 
 /// Draggable corner handle.
@@ -149,16 +164,20 @@ fn corner_handle(
         .cursor_pointer()
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |this: &mut TransformOverlayView, e: &MouseDownEvent, _, _| {
-                this.drag = Some(TransformDragSession {
-                    handle,
-                    start_x: e.position.x.as_f32(),
-                    start_y: e.position.y.as_f32(),
-                    start_state: this.state.clone(),
-                });
-            }),
+            cx.listener(
+                move |this: &mut TransformOverlayView, e: &MouseDownEvent, _, _| {
+                    this.drag = Some(TransformDragSession {
+                        handle,
+                        start_x: e.position.x.as_f32(),
+                        start_y: e.position.y.as_f32(),
+                        start_state: this.state.clone(),
+                    });
+                },
+            ),
         )
-        .on_drag(TransformDrag, |_, _, _, cx| cx.new(|_| TransformDragPreview))
+        .on_drag(TransformDrag, |_, _, _, cx| {
+            cx.new(|_| TransformDragPreview)
+        })
 }
 
 /// Draggable mid-edge handle.
@@ -184,16 +203,20 @@ fn edge_handle(
         .cursor_pointer()
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |this: &mut TransformOverlayView, e: &MouseDownEvent, _, _| {
-                this.drag = Some(TransformDragSession {
-                    handle,
-                    start_x: e.position.x.as_f32(),
-                    start_y: e.position.y.as_f32(),
-                    start_state: this.state.clone(),
-                });
-            }),
+            cx.listener(
+                move |this: &mut TransformOverlayView, e: &MouseDownEvent, _, _| {
+                    this.drag = Some(TransformDragSession {
+                        handle,
+                        start_x: e.position.x.as_f32(),
+                        start_y: e.position.y.as_f32(),
+                        start_state: this.state.clone(),
+                    });
+                },
+            ),
         )
-        .on_drag(TransformDrag, |_, _, _, cx| cx.new(|_| TransformDragPreview))
+        .on_drag(TransformDrag, |_, _, _, cx| {
+            cx.new(|_| TransformDragPreview)
+        })
 }
 
 /// Draggable rotation handle (stem + circle above top-center).
@@ -215,17 +238,26 @@ fn rotation_handle(
         .cursor_pointer()
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |this: &mut TransformOverlayView, e: &MouseDownEvent, _, _| {
-                this.drag = Some(TransformDragSession {
-                    handle: TransformHandle::Rotation,
-                    start_x: e.position.x.as_f32(),
-                    start_y: e.position.y.as_f32(),
-                    start_state: this.state.clone(),
-                });
-            }),
+            cx.listener(
+                move |this: &mut TransformOverlayView, e: &MouseDownEvent, _, _| {
+                    this.drag = Some(TransformDragSession {
+                        handle: TransformHandle::Rotation,
+                        start_x: e.position.x.as_f32(),
+                        start_y: e.position.y.as_f32(),
+                        start_state: this.state.clone(),
+                    });
+                },
+            ),
         )
-        .on_drag(TransformDrag, |_, _, _, cx| cx.new(|_| TransformDragPreview))
-        .child(div().w(px(1.0)).h(relative(stem_h)).bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::STRONG }))
+        .on_drag(TransformDrag, |_, _, _, cx| {
+            cx.new(|_| TransformDragPreview)
+        })
+        .child(div().w(px(1.0)).h(relative(stem_h)).bg(gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: Opacity::STRONG,
+        }))
         .child(
             div()
                 .w(px(handle_r * 2.0))
@@ -244,7 +276,12 @@ fn snap_guide_v() -> impl IntoElement {
         .top(px(0.0))
         .w(px(BORDER_W))
         .h(relative(1.0))
-        .bg(gpui::Hsla { h: 0.94, s: 1.0, l: 0.60, a: Opacity::PROMINENT })
+        .bg(gpui::Hsla {
+            h: 0.94,
+            s: 1.0,
+            l: 0.60,
+            a: Opacity::PROMINENT,
+        })
 }
 
 fn snap_guide_h() -> impl IntoElement {
@@ -254,7 +291,12 @@ fn snap_guide_h() -> impl IntoElement {
         .left(px(0.0))
         .w(relative(1.0))
         .h(px(BORDER_W))
-        .bg(gpui::Hsla { h: 0.94, s: 1.0, l: 0.60, a: Opacity::PROMINENT })
+        .bg(gpui::Hsla {
+            h: 0.94,
+            s: 1.0,
+            l: 0.60,
+            a: Opacity::PROMINENT,
+        })
 }
 
 impl Render for TransformOverlayView {
@@ -281,67 +323,70 @@ impl Render for TransformOverlayView {
             .size_full()
             .relative()
             // Global drag-move handler — updates state for whichever handle is active
-            .on_drag_move::<TransformDrag>(move |event: &DragMoveEvent<TransformDrag>, _, cx: &mut App| {
-                let _ = weak.update(cx, |this: &mut TransformOverlayView, inner_cx| {
-                    if let Some(ref session) = this.drag {
-                        let dx = event.event.position.x.as_f32() - session.start_x;
-                        let dy = event.event.position.y.as_f32() - session.start_y;
-                        let st = &session.start_state;
-                        const MIN: f32 = 0.05;
-                        match session.handle {
-                            TransformHandle::Move => {
-                                this.state.center_x = (st.center_x + dx).clamp(0.0, 1.0);
-                                this.state.center_y = (st.center_y + dy).clamp(0.0, 1.0);
+            .on_drag_move::<TransformDrag>(
+                move |event: &DragMoveEvent<TransformDrag>, _, cx: &mut App| {
+                    let _ = weak.update(cx, |this: &mut TransformOverlayView, inner_cx| {
+                        if let Some(ref session) = this.drag {
+                            let dx = event.event.position.x.as_f32() - session.start_x;
+                            let dy = event.event.position.y.as_f32() - session.start_y;
+                            let st = &session.start_state;
+                            const MIN: f32 = 0.05;
+                            match session.handle {
+                                TransformHandle::Move => {
+                                    this.state.center_x = (st.center_x + dx).clamp(0.0, 1.0);
+                                    this.state.center_y = (st.center_y + dy).clamp(0.0, 1.0);
+                                }
+                                TransformHandle::CornerTL => {
+                                    this.state.width = (st.width - dx).max(MIN);
+                                    this.state.height = (st.height - dy).max(MIN);
+                                    this.state.center_x = st.center_x + dx / 2.0;
+                                    this.state.center_y = st.center_y + dy / 2.0;
+                                }
+                                TransformHandle::CornerTR => {
+                                    this.state.width = (st.width + dx).max(MIN);
+                                    this.state.height = (st.height - dy).max(MIN);
+                                    this.state.center_x = st.center_x + dx / 2.0;
+                                    this.state.center_y = st.center_y + dy / 2.0;
+                                }
+                                TransformHandle::CornerBL => {
+                                    this.state.width = (st.width - dx).max(MIN);
+                                    this.state.height = (st.height + dy).max(MIN);
+                                    this.state.center_x = st.center_x + dx / 2.0;
+                                    this.state.center_y = st.center_y + dy / 2.0;
+                                }
+                                TransformHandle::CornerBR => {
+                                    this.state.width = (st.width + dx).max(MIN);
+                                    this.state.height = (st.height + dy).max(MIN);
+                                    this.state.center_x = st.center_x + dx / 2.0;
+                                    this.state.center_y = st.center_y + dy / 2.0;
+                                }
+                                TransformHandle::EdgeTop => {
+                                    this.state.height = (st.height - dy).max(MIN);
+                                    this.state.center_y = st.center_y + dy / 2.0;
+                                }
+                                TransformHandle::EdgeBottom => {
+                                    this.state.height = (st.height + dy).max(MIN);
+                                    this.state.center_y = st.center_y + dy / 2.0;
+                                }
+                                TransformHandle::EdgeLeft => {
+                                    this.state.width = (st.width - dx).max(MIN);
+                                    this.state.center_x = st.center_x + dx / 2.0;
+                                }
+                                TransformHandle::EdgeRight => {
+                                    this.state.width = (st.width + dx).max(MIN);
+                                    this.state.center_x = st.center_x + dx / 2.0;
+                                }
+                                TransformHandle::Rotation => {
+                                    // Map horizontal drag to rotation (360° = 1.0 turn over ~300px)
+                                    this.state.rotation =
+                                        (st.rotation + dx / 300.0).rem_euclid(1.0);
+                                }
                             }
-                            TransformHandle::CornerTL => {
-                                this.state.width = (st.width - dx).max(MIN);
-                                this.state.height = (st.height - dy).max(MIN);
-                                this.state.center_x = st.center_x + dx / 2.0;
-                                this.state.center_y = st.center_y + dy / 2.0;
-                            }
-                            TransformHandle::CornerTR => {
-                                this.state.width = (st.width + dx).max(MIN);
-                                this.state.height = (st.height - dy).max(MIN);
-                                this.state.center_x = st.center_x + dx / 2.0;
-                                this.state.center_y = st.center_y + dy / 2.0;
-                            }
-                            TransformHandle::CornerBL => {
-                                this.state.width = (st.width - dx).max(MIN);
-                                this.state.height = (st.height + dy).max(MIN);
-                                this.state.center_x = st.center_x + dx / 2.0;
-                                this.state.center_y = st.center_y + dy / 2.0;
-                            }
-                            TransformHandle::CornerBR => {
-                                this.state.width = (st.width + dx).max(MIN);
-                                this.state.height = (st.height + dy).max(MIN);
-                                this.state.center_x = st.center_x + dx / 2.0;
-                                this.state.center_y = st.center_y + dy / 2.0;
-                            }
-                            TransformHandle::EdgeTop => {
-                                this.state.height = (st.height - dy).max(MIN);
-                                this.state.center_y = st.center_y + dy / 2.0;
-                            }
-                            TransformHandle::EdgeBottom => {
-                                this.state.height = (st.height + dy).max(MIN);
-                                this.state.center_y = st.center_y + dy / 2.0;
-                            }
-                            TransformHandle::EdgeLeft => {
-                                this.state.width = (st.width - dx).max(MIN);
-                                this.state.center_x = st.center_x + dx / 2.0;
-                            }
-                            TransformHandle::EdgeRight => {
-                                this.state.width = (st.width + dx).max(MIN);
-                                this.state.center_x = st.center_x + dx / 2.0;
-                            }
-                            TransformHandle::Rotation => {
-                                // Map horizontal drag to rotation (360° = 1.0 turn over ~300px)
-                                this.state.rotation = (st.rotation + dx / 300.0).rem_euclid(1.0);
-                            }
+                            inner_cx.notify();
                         }
-                        inner_cx.notify();
-                    }
-                });
-            })
+                    });
+                },
+            )
             // Bounding box border
             .child(bbox_border(cx_val, cy_val, w, h))
             // Draggable move area (bbox interior, transparent)
@@ -356,27 +401,79 @@ impl Render for TransformOverlayView {
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this: &mut TransformOverlayView, e: &MouseDownEvent, _, _| {
-                            this.drag = Some(TransformDragSession {
-                                handle: TransformHandle::Move,
-                                start_x: e.position.x.as_f32(),
-                                start_y: e.position.y.as_f32(),
-                                start_state: this.state.clone(),
-                            });
-                        }),
+                        cx.listener(
+                            move |this: &mut TransformOverlayView, e: &MouseDownEvent, _, _| {
+                                this.drag = Some(TransformDragSession {
+                                    handle: TransformHandle::Move,
+                                    start_x: e.position.x.as_f32(),
+                                    start_y: e.position.y.as_f32(),
+                                    start_state: this.state.clone(),
+                                });
+                            },
+                        ),
                     )
-                    .on_drag(TransformDrag, |_, _, _, cx| cx.new(|_| TransformDragPreview)),
+                    .on_drag(TransformDrag, |_, _, _, cx| {
+                        cx.new(|_| TransformDragPreview)
+                    }),
             )
             // Corner handles
-            .child(corner_handle("tf-tl", left, top, TransformHandle::CornerTL, cx))
-            .child(corner_handle("tf-tr", right, top, TransformHandle::CornerTR, cx))
-            .child(corner_handle("tf-bl", left, bottom, TransformHandle::CornerBL, cx))
-            .child(corner_handle("tf-br", right, bottom, TransformHandle::CornerBR, cx))
+            .child(corner_handle(
+                "tf-tl",
+                left,
+                top,
+                TransformHandle::CornerTL,
+                cx,
+            ))
+            .child(corner_handle(
+                "tf-tr",
+                right,
+                top,
+                TransformHandle::CornerTR,
+                cx,
+            ))
+            .child(corner_handle(
+                "tf-bl",
+                left,
+                bottom,
+                TransformHandle::CornerBL,
+                cx,
+            ))
+            .child(corner_handle(
+                "tf-br",
+                right,
+                bottom,
+                TransformHandle::CornerBR,
+                cx,
+            ))
             // Mid-edge handles
-            .child(edge_handle("tf-et", mid_x, top, TransformHandle::EdgeTop, cx))
-            .child(edge_handle("tf-eb", mid_x, bottom, TransformHandle::EdgeBottom, cx))
-            .child(edge_handle("tf-el", left, mid_y, TransformHandle::EdgeLeft, cx))
-            .child(edge_handle("tf-er", right, mid_y, TransformHandle::EdgeRight, cx))
+            .child(edge_handle(
+                "tf-et",
+                mid_x,
+                top,
+                TransformHandle::EdgeTop,
+                cx,
+            ))
+            .child(edge_handle(
+                "tf-eb",
+                mid_x,
+                bottom,
+                TransformHandle::EdgeBottom,
+                cx,
+            ))
+            .child(edge_handle(
+                "tf-el",
+                left,
+                mid_y,
+                TransformHandle::EdgeLeft,
+                cx,
+            ))
+            .child(edge_handle(
+                "tf-er",
+                right,
+                mid_y,
+                TransformHandle::EdgeRight,
+                cx,
+            ))
             // Rotation handle above top-center
             .child(rotation_handle(mid_x, top, cx))
             // Snap guides

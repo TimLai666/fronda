@@ -48,7 +48,10 @@ impl ViewerGuide {
 
     /// Whether this is a safe-zone overlay (rectangle + inset).
     pub fn is_safe_zone(&self) -> bool {
-        matches!(self, ViewerGuide::ActionSafe | ViewerGuide::TitleSafe | ViewerGuide::Center)
+        matches!(
+            self,
+            ViewerGuide::ActionSafe | ViewerGuide::TitleSafe | ViewerGuide::Center
+        )
     }
 
     /// Whether this is a format-reference overlay (letterbox/pillarbox bars).
@@ -233,7 +236,12 @@ mod tests {
 
     #[test]
     fn format_reference_guides_have_aspect_ratio() {
-        for g in [ViewerGuide::Scope, ViewerGuide::Wide, ViewerGuide::Square, ViewerGuide::Portrait] {
+        for g in [
+            ViewerGuide::Scope,
+            ViewerGuide::Wide,
+            ViewerGuide::Square,
+            ViewerGuide::Portrait,
+        ] {
             assert!(g.aspect_ratio().is_some(), "{g:?} missing aspect ratio");
             assert!(g.is_format_reference());
             assert!(!g.is_safe_zone());
@@ -242,8 +250,15 @@ mod tests {
 
     #[test]
     fn safe_zone_guides_no_aspect_ratio() {
-        for g in [ViewerGuide::ActionSafe, ViewerGuide::TitleSafe, ViewerGuide::Center] {
-            assert!(g.aspect_ratio().is_none(), "{g:?} should not have aspect ratio");
+        for g in [
+            ViewerGuide::ActionSafe,
+            ViewerGuide::TitleSafe,
+            ViewerGuide::Center,
+        ] {
+            assert!(
+                g.aspect_ratio().is_none(),
+                "{g:?} should not have aspect ratio"
+            );
             assert!(g.is_safe_zone());
             assert!(!g.is_format_reference());
         }
@@ -299,7 +314,10 @@ mod tests {
         // 1920×1080 canvas (landscape), Portrait = 9:16 (0.5625) → pillarbox bars
         let state = ViewerGuideState::new();
         let result = state.format_bars(ViewerGuide::Portrait, 1920.0, 1080.0);
-        assert!(result.is_some(), "Portrait bars expected on landscape canvas");
+        assert!(
+            result.is_some(),
+            "Portrait bars expected on landscape canvas"
+        );
         let (bar1, bar2) = result.unwrap();
         // Bars should be left/right (full height, partial width)
         assert!((bar1.3 - 1080.0).abs() < 1.0);

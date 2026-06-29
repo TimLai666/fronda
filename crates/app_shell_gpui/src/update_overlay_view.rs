@@ -30,13 +30,11 @@ impl Default for UpdateOverlayState {
     fn default() -> Self {
         Self {
             version: "1.0".into(),
-            sections: vec![
-                UpdateSection {
-                    emoji: "✦",
-                    title: "New in this version".into(),
-                    detail: "See the full changelog for details.".into(),
-                },
-            ],
+            sections: vec![UpdateSection {
+                emoji: "✦",
+                title: "New in this version".into(),
+                detail: "See the full changelog for details.".into(),
+            }],
             visible: false,
         }
     }

@@ -332,9 +332,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         }
     }
 
@@ -447,9 +447,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let url = manifest.expected_url_for("ext");
         assert_eq!(url, Some("/path/to/file.mp4".to_string()));
@@ -484,9 +484,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let result = manifest.resolve_url_for("vid", |p| p == "/path/to/vid.mp4");
         assert_eq!(result, Some(true), "RES-003: file exists");
@@ -514,9 +514,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let result = manifest.resolve_url_for("vid", |_| false);
         assert_eq!(result, Some(false), "RES-003: file missing");
@@ -551,9 +551,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let result = manifest.resolve_url_for("cached", |_| false);
         assert_eq!(result, Some(true), "RES-003: cached is always resolvable");
@@ -581,9 +581,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         assert!(
             manifest.is_missing_for("vid", |_| false),
@@ -622,9 +622,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         assert!(
             !manifest.is_missing_for("vid", |_| true),
@@ -654,9 +654,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         assert_eq!(
             manifest.display_name_for("vid"),
@@ -682,7 +682,9 @@ mod tests {
             id: id.to_string(),
             name: "clip.mp4".to_string(),
             r#type: super::super::timeline::ClipType::Video,
-            source: MediaSource::External { absolute_path: "/clip.mp4".to_string() },
+            source: MediaSource::External {
+                absolute_path: "/clip.mp4".to_string(),
+            },
             duration: 5.0,
             generation_input: None,
             source_width: None,

@@ -103,7 +103,11 @@ fn toggle_row(icon: &str, label: &str, is_on: bool) -> impl IntoElement {
         .child(
             div()
                 .w(px(20.0))
-                .text_color(if is_on { Accent::PRIMARY } else { Text::TERTIARY })
+                .text_color(if is_on {
+                    Accent::PRIMARY
+                } else {
+                    Text::TERTIARY
+                })
                 .text_size(px(FontSize::SM))
                 .child(icon.to_string()),
         )
@@ -134,7 +138,13 @@ fn toggle_row(icon: &str, label: &str, is_on: bool) -> impl IntoElement {
         )
 }
 
-fn action_row(icon: &str, title: &str, description: &str, trigger: &str, enabled: bool) -> impl IntoElement {
+fn action_row(
+    icon: &str,
+    title: &str,
+    description: &str,
+    trigger: &str,
+    enabled: bool,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -145,7 +155,11 @@ fn action_row(icon: &str, title: &str, description: &str, trigger: &str, enabled
             div()
                 .w(px(20.0))
                 .pt(px(2.0))
-                .text_color(if enabled { Text::SECONDARY } else { Text::MUTED })
+                .text_color(if enabled {
+                    Text::SECONDARY
+                } else {
+                    Text::MUTED
+                })
                 .text_size(px(FontSize::MD))
                 .child(icon.to_string()),
         )
@@ -174,8 +188,16 @@ fn action_row(icon: &str, title: &str, description: &str, trigger: &str, enabled
                 .py(px(Spacing::XXS))
                 .rounded_full()
                 .border_1()
-                .border_color(if enabled { BorderColors::PRIMARY } else { BorderColors::SUBTLE })
-                .text_color(if enabled { Text::SECONDARY } else { Text::MUTED })
+                .border_color(if enabled {
+                    BorderColors::PRIMARY
+                } else {
+                    BorderColors::SUBTLE
+                })
+                .text_color(if enabled {
+                    Text::SECONDARY
+                } else {
+                    Text::MUTED
+                })
                 .text_size(px(FontSize::XS))
                 .child(trigger.to_string()),
         )
@@ -256,15 +278,32 @@ impl Render for AiEditTabView {
                                     .items_start()
                                     .gap(px(Spacing::SM))
                                     .w_full()
-                                    .child(div().w(px(20.0)).pt(px(2.0)).text_color(Text::SECONDARY).text_size(px(FontSize::MD)).child("✦"))
+                                    .child(
+                                        div()
+                                            .w(px(20.0))
+                                            .pt(px(2.0))
+                                            .text_color(Text::SECONDARY)
+                                            .text_size(px(FontSize::MD))
+                                            .child("✦"),
+                                    )
                                     .child(
                                         div()
                                             .flex()
                                             .flex_col()
                                             .flex_1()
                                             .gap(px(Spacing::XXS))
-                                            .child(div().text_color(Text::PRIMARY).text_size(px(FontSize::SM)).child("Upscale"))
-                                            .child(div().text_color(Text::TERTIARY).text_size(px(FontSize::XS)).child("Enhance resolution with AI")),
+                                            .child(
+                                                div()
+                                                    .text_color(Text::PRIMARY)
+                                                    .text_size(px(FontSize::SM))
+                                                    .child("Upscale"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(Text::TERTIARY)
+                                                    .text_size(px(FontSize::XS))
+                                                    .child("Enhance resolution with AI"),
+                                            ),
                                     )
                                     .child(upscale_trigger),
                             )
@@ -289,18 +328,47 @@ impl Render for AiEditTabView {
                                             .px(px(Spacing::SM_MD))
                                             .py(px(Spacing::XS))
                                             .cursor_pointer()
-                                            .child(div().flex_1().text_color(Text::PRIMARY).text_size(px(FontSize::SM)).child(model.to_string()))
-                                            .child(div().text_color(Text::MUTED).text_size(px(FontSize::XXS)).child(detail.to_string())),
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_color(Text::PRIMARY)
+                                                    .text_size(px(FontSize::SM))
+                                                    .child(model.to_string()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(Text::MUTED)
+                                                    .text_size(px(FontSize::XXS))
+                                                    .child(detail.to_string()),
+                                            ),
                                     );
                                 }
                                 el.child(dropdown)
                             });
                         el.child(upscale_row)
-                          .child(action_row("★", "Edit", "Transform with a prompt or motion reference", "Edit", true))
-                          .child(action_row("↺", "Rerun", "Regenerate with the same parameters", "Rerun", true))
-                          .when(is_video, |el2| {
-                              el2.child(action_row("▷", "Create Video", "Use as first frame or reference", "Create", true))
-                          })
+                            .child(action_row(
+                                "★",
+                                "Edit",
+                                "Transform with a prompt or motion reference",
+                                "Edit",
+                                true,
+                            ))
+                            .child(action_row(
+                                "↺",
+                                "Rerun",
+                                "Regenerate with the same parameters",
+                                "Rerun",
+                                true,
+                            ))
+                            .when(is_video, |el2| {
+                                el2.child(action_row(
+                                    "▷",
+                                    "Create Video",
+                                    "Use as first frame or reference",
+                                    "Create",
+                                    true,
+                                ))
+                            })
                     }),
             )
             // AI Audio section (video only, collapsible)
@@ -315,16 +383,30 @@ impl Render for AiEditTabView {
                                 .id("btn-audio-toggle")
                                 .w_full()
                                 .cursor_pointer()
-                                .on_click(cx.listener(|this, _: &ClickEvent, _: &mut Window, cx| {
-                                    this.state.audio_expanded = !this.state.audio_expanded;
-                                    cx.notify();
-                                }))
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _: &mut Window, cx| {
+                                        this.state.audio_expanded = !this.state.audio_expanded;
+                                        cx.notify();
+                                    },
+                                ))
                                 .child(section_header_collapsible("AI Audio", audio_exp)),
                         )
                         .when(audio_exp, |el| {
                             el.child(toggle_row("↗", "Place on timeline", place_audio))
-                              .child(action_row("♪", "Music", "Generate background music from video", "Generate", true))
-                              .child(action_row("~", "Sound Effects", "Generate sound effects from video", "Generate", true))
+                                .child(action_row(
+                                    "♪",
+                                    "Music",
+                                    "Generate background music from video",
+                                    "Generate",
+                                    true,
+                                ))
+                                .child(action_row(
+                                    "~",
+                                    "Sound Effects",
+                                    "Generate sound effects from video",
+                                    "Generate",
+                                    true,
+                                ))
                         }),
                 )
             })

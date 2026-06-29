@@ -17,7 +17,12 @@ use gpui::{
 };
 
 /// Orange accent color (matches Swift AppTheme.Accent.timecodeColor).
-const ORANGE: gpui::Hsla = gpui::Hsla { h: 0.097, s: 0.90, l: 0.55, a: 1.0 };
+const ORANGE: gpui::Hsla = gpui::Hsla {
+    h: 0.097,
+    s: 0.90,
+    l: 0.55,
+    a: 1.0,
+};
 const HANDLE_SIZE: f32 = Spacing::SM_MD;
 
 /// Which corner is being dragged.
@@ -61,7 +66,12 @@ pub struct CropOverlayState {
 
 impl Default for CropOverlayState {
     fn default() -> Self {
-        Self { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9 }
+        Self {
+            left: 0.1,
+            top: 0.1,
+            right: 0.9,
+            bottom: 0.9,
+        }
     }
 }
 
@@ -95,7 +105,12 @@ fn dim_band(left: f32, top: f32, width: f32, height: f32) -> impl IntoElement {
         .top(relative(top))
         .w(relative(width))
         .h(relative(height))
-        .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: Opacity::STRONG })
+        .bg(gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: Opacity::STRONG,
+        })
 }
 
 /// Orange border rect around the crop area.
@@ -129,14 +144,16 @@ fn corner_handle(
         .cursor_pointer()
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |this: &mut CropOverlayView, e: &MouseDownEvent, _, _| {
-                this.drag = Some(CropDragSession {
-                    corner,
-                    start_x: e.position.x.as_f32(),
-                    start_y: e.position.y.as_f32(),
-                    start_state: this.state.clone(),
-                });
-            }),
+            cx.listener(
+                move |this: &mut CropOverlayView, e: &MouseDownEvent, _, _| {
+                    this.drag = Some(CropDragSession {
+                        corner,
+                        start_x: e.position.x.as_f32(),
+                        start_y: e.position.y.as_f32(),
+                        start_state: this.state.clone(),
+                    });
+                },
+            ),
         )
         .on_drag(CropDrag, |_, _, _, cx| cx.new(|_| CropDragPreview))
 }
@@ -209,7 +226,12 @@ impl Render for CropOverlayView {
                     .top(relative(t))
                     .w(px(BorderWidth::THIN))
                     .h(relative(ch))
-                    .bg(gpui::Hsla { h: ORANGE.h, s: ORANGE.s, l: ORANGE.l, a: Opacity::MEDIUM }),
+                    .bg(gpui::Hsla {
+                        h: ORANGE.h,
+                        s: ORANGE.s,
+                        l: ORANGE.l,
+                        a: Opacity::MEDIUM,
+                    }),
             )
             .child(
                 div()
@@ -218,7 +240,12 @@ impl Render for CropOverlayView {
                     .top(relative(t))
                     .w(px(BorderWidth::THIN))
                     .h(relative(ch))
-                    .bg(gpui::Hsla { h: ORANGE.h, s: ORANGE.s, l: ORANGE.l, a: Opacity::MEDIUM }),
+                    .bg(gpui::Hsla {
+                        h: ORANGE.h,
+                        s: ORANGE.s,
+                        l: ORANGE.l,
+                        a: Opacity::MEDIUM,
+                    }),
             )
             .child(
                 div()
@@ -227,7 +254,12 @@ impl Render for CropOverlayView {
                     .top(relative(h1))
                     .w(relative(cw))
                     .h(px(BorderWidth::THIN))
-                    .bg(gpui::Hsla { h: ORANGE.h, s: ORANGE.s, l: ORANGE.l, a: Opacity::MEDIUM }),
+                    .bg(gpui::Hsla {
+                        h: ORANGE.h,
+                        s: ORANGE.s,
+                        l: ORANGE.l,
+                        a: Opacity::MEDIUM,
+                    }),
             )
             .child(
                 div()
@@ -236,7 +268,12 @@ impl Render for CropOverlayView {
                     .top(relative(h2))
                     .w(relative(cw))
                     .h(px(BorderWidth::THIN))
-                    .bg(gpui::Hsla { h: ORANGE.h, s: ORANGE.s, l: ORANGE.l, a: Opacity::MEDIUM }),
+                    .bg(gpui::Hsla {
+                        h: ORANGE.h,
+                        s: ORANGE.s,
+                        l: ORANGE.l,
+                        a: Opacity::MEDIUM,
+                    }),
             )
             // ── Corner handles (draggable) ──
             .child(corner_handle("crop-tl", l, t, CropCorner::TopLeft, cx))

@@ -209,8 +209,7 @@ pub fn validate_export_color_space(
     if color_space.requires_10bit() && !format.is_10bit_capable() {
         return Err(format!(
             "{:?} does not support 10-bit depth required for {:?}. Use H265Hdr or ProRes.",
-            format,
-            color_space
+            format, color_space
         ));
     }
     Ok(())
@@ -1477,8 +1476,16 @@ mod tests {
 
     #[test]
     fn issue_059_sdr_works_with_any_format() {
-        for fmt in [ExportFormat::H264, ExportFormat::H265, ExportFormat::H265Hdr, ExportFormat::ProRes] {
-            assert!(validate_export_color_space(fmt, ColorSpace::Sdr).is_ok(), "{fmt:?}");
+        for fmt in [
+            ExportFormat::H264,
+            ExportFormat::H265,
+            ExportFormat::H265Hdr,
+            ExportFormat::ProRes,
+        ] {
+            assert!(
+                validate_export_color_space(fmt, ColorSpace::Sdr).is_ok(),
+                "{fmt:?}"
+            );
         }
     }
 
