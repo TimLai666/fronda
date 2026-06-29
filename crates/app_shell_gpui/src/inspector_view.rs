@@ -146,14 +146,11 @@ impl InspectorView {
         max: f32,
         sensitivity: f32,
         keyframeable: bool,
-        weak: WeakEntity<Self>,
+        _weak: WeakEntity<Self>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let value = self.scrub_value(field);
         let display = fmt_scrub(field, value);
-        let weak_down = weak.clone();
-        let weak_drag = weak;
-
         div()
             .id(format!("scrub-{field}"))
             .flex()

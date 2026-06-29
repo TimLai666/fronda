@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn issue_098_non_normal_blend_mode_serialized() {
-        let mut clip = Clip {
+        let clip = Clip {
             id: "c1".into(),
             media_ref: "m".into(),
             media_type: ClipType::Video,

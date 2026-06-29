@@ -476,7 +476,7 @@ impl AppRoot {
                                         .flex()
                                         .flex_row()
                                         .gap(px(HomeLayout::CARD_GAP as f32))
-                                        .children(sample_cards.iter().enumerate().map(|(i, (name, hue))| {
+                                        .children(sample_cards.iter().enumerate().map(|(i, (_, hue))| {
                                             let name: &'static str = match i {
                                                 0 => "Short Film",
                                                 1 => "Commercial",

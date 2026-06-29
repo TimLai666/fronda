@@ -359,7 +359,7 @@ mod tests {
     fn prj_015_rename_preserves_other_entries() {
         let mut reg = ProjectRegistry::new();
         reg.register(PathBuf::from("/keep.palmier"), utc(100));
-        let id_move = reg.register(PathBuf::from("/move.palmier"), utc(200));
+        reg.register(PathBuf::from("/move.palmier"), utc(200));
         reg.rename_project(
             &PathBuf::from("/move.palmier"),
             PathBuf::from("/moved.palmier"),

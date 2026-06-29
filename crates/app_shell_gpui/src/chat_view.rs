@@ -20,15 +20,6 @@ const AVAILABLE_MODELS: &[&str] = &[
     "claude-haiku-4-5",
 ];
 
-/// Role label for display.
-fn role_label(role: &ChatRole) -> &'static str {
-    match role {
-        ChatRole::User => "You",
-        ChatRole::Assistant => "Assistant",
-        ChatRole::System => "System",
-    }
-}
-
 /// Starter prompt entries shown in empty state (Swift: 7 preset action buttons).
 const STARTER_PROMPTS: &[(&str, &str)] = &[
     ("✦", "Generate an AI video"),

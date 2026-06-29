@@ -3367,14 +3367,14 @@ mod tests {
 
     #[test]
     fn exec_060_is_media_offline_true() {
-        let mut exec = make_executor_with_media();
+        let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         assert!(exec.is_media_offline(&id, |_| true));
     }
 
     #[test]
     fn exec_061_is_media_offline_false() {
-        let mut exec = make_executor_with_media();
+        let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         assert!(!exec.is_media_offline(&id, |_| false));
     }
@@ -3421,7 +3421,7 @@ mod tests {
 
     #[test]
     fn exec_064_is_media_unprocessable_true() {
-        let mut exec = make_executor_with_media();
+        let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         // File exists (not missing) but is unprocessable.
         assert!(exec.is_media_unprocessable(&id, |_| false, |_| true));
@@ -3429,7 +3429,7 @@ mod tests {
 
     #[test]
     fn exec_065_is_media_unprocessable_missing_not_unprocessable() {
-        let mut exec = make_executor_with_media();
+        let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         // If file is missing, it's offline, not unprocessable.
         assert!(!exec.is_media_unprocessable(&id, |_| true, |_| true));

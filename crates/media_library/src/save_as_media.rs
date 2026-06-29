@@ -234,7 +234,6 @@ pub fn finalize_placeholder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::*;
 
     // ── SAV-001: Video clip is valid ──
     #[test]

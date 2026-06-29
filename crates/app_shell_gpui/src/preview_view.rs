@@ -282,8 +282,6 @@ impl Render for PreviewView {
         let crop_entity = self.crop_overlay.clone();
         let active_guides: Vec<ViewerGuide> = self.guide_state.active_guides().to_vec();
         let any_guides = !active_guides.is_empty();
-        let show_guide_menu = self.show_guide_menu;
-
         div()
             .id("preview-panel")
             .flex()
