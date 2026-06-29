@@ -4,7 +4,7 @@ Audit date: 2026-06-25
 Upstream HEAD: `b9b4ad9` (palmier-io/palmier-pro main)
 
 This file catalogs every upstream PR (from the Swift `palmier-pro` repo), its
-current porting status in the Fronda Rust rewrite, and any action items.
+current porting status in Fronda, and any action items.
 
 ## Legend
 
@@ -77,7 +77,7 @@ Rust module:
 
 ## Rust-side PRs / changes not driven by upstream
 
-These are changes unique to the Fronda Rust rewrite (no Swift equivalent):
+These are changes unique to Fronda (no Swift equivalent):
 
 | Change | Crate | Description |
 |--------|-------|-------------|
@@ -86,7 +86,7 @@ These are changes unique to the Fronda Rust rewrite (no Swift equivalent):
 | Export state machine | generation_core | Idle → Rendering → Cancelling → Completed/Failed |
 | UserSettings | generation_core | Notifications, telemetry, disabled_models, agent_api_keys |
 | ModelCatalog | generation_core | Filtering disabled models |
-| gpui-ce app shell | app_shell_gpui | Window/pane/menu/shortcut scaffold |
+| gpui-ce app shell | app_shell_gpui | Window/pane/menu/shortcut shell |
 | MCP server | mcp_server | HTTP+JSON-RPC transport |
 | Composition plan | render_core | CompositionPlan + DetailedCompositionPlan + validation |
 | Audio allocation | render_core | allocate_audio_composition_tracks() |

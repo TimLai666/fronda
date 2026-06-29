@@ -25,7 +25,7 @@ Scope sources:
 - [x] `RUN-004`: Standard development commands remain `swift build` and `swift run`; bundled debug launch remains `./scripts/dev.sh`.
 - [x] `RUN-005`: The current app is a native Mac app built with SwiftUI, AppKit, and AVFoundation, and the rewrite must preserve observable native-editor behavior before changing architecture.
 - [x] `RUN-006`: The current app is intended as a non-sandboxed Developer ID app; any rewrite/package plan must explicitly preserve or replace this distribution/security model.
-- [x] `RUN-007`: The rewrite may target Rust + `gpui-ce`, but compatibility specs in this folder describe the current Palmier Pro-derived compatibility baseline that the future Fronda rewrite must satisfy, not only desired future architecture.
+- [x] `RUN-007`: Fronda uses Rust + `gpui-ce`, and the compatibility specs in this folder describe the current Palmier Pro-derived baseline that the active Fronda codebase must satisfy, not only desired architecture.
 
 ## B. Package dependencies and bundled resources
 
@@ -233,7 +233,7 @@ Scope sources:
 
 ## Migration decisions to record explicitly
 
-- `Decision:` The Rust rewrite should decide whether this file remains a compatibility appendix for the Swift/macOS app or becomes the source of truth for the first cross-platform packaging target.
+- `Decision:` Fronda should decide whether this file remains a compatibility appendix for the Swift/macOS app or becomes the source of truth for the first cross-platform packaging target.
 - `Decision:` Several AppTheme constants are visual-identity tokens rather than pure behavior. The rewrite should preserve them for visual parity unless a deliberate redesign is approved.
 - `Decision:` Sparkle, Clerk, Convex, Sentry, Keychain, and macOS notification/window behavior are platform-specific. The rewrite must either preserve them on macOS or document cross-platform substitutions with equivalent user-visible states.
-- `Decision:` `Fronda` is the Rust rewrite name, while current bundle names, executable names, package extensions, URL schemes, and MCP identifiers still use inherited Palmier identifiers. Any identifier migration should happen as one explicit compatibility change, not piecemeal.
+- `Decision:` `Fronda` is the primary Rust product name, while current bundle names, executable names, package extensions, URL schemes, and MCP identifiers still use inherited Palmier identifiers. Any identifier migration should happen as one explicit compatibility change, not piecemeal.

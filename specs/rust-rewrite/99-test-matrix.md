@@ -1,4 +1,4 @@
-# Rust Rewrite Test Matrix
+# Fronda Test Matrix
 
 This file maps the spec families to recommended Rust test layers and the best current Swift evidence.
 
@@ -160,7 +160,7 @@ Do **not** push pure timeline/search/project logic into `gpui-ce` tests if a nor
 
 ## F. Release gate for “behaviorally compatible”
 
-A Rust rewrite milestone should only be called behaviorally compatible when:
+A Fronda milestone should only be called behaviorally compatible when:
 
 1. all relevant spec families for the shipped surface have passing automated tests,
 2. all snapshot contracts are reviewed and stable,

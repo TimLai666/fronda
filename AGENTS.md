@@ -1,10 +1,19 @@
 # Palmier Pro fork / Fronda rewrite
 
-Current runnable baseline: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation. The Rust rewrite is named `Fronda`.
+Primary implementation: `Fronda`, a cross-platform Rust app. Legacy behavioral reference: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation.
 
-The Swift baseline targets macOS 26, arm64 only, non-sandboxed Developer ID. **Fronda (the Rust rewrite) is cross-platform** — it builds and runs on macOS, Windows, and Linux. UI is built with `gpui-ce` and must visually match the Swift version exactly. UI work does not require a macOS machine; develop and verify on any platform using gpui.
+The Swift baseline targets macOS 26, arm64 only, non-sandboxed Developer ID. **Fronda is the primary codebase and is cross-platform** - it builds and runs on macOS, Windows, and Linux. UI is built with `gpui-ce` and must visually match the Swift version exactly. UI work does not require a macOS machine; develop and verify on any platform using gpui.
 
 ## Build
+
+Primary Rust workflow:
+
+```bash
+cargo test --workspace
+cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda
+```
+
+Legacy Swift baseline:
 
 ```bash
 swift build
@@ -13,28 +22,28 @@ swift run
 
 ## Code style
 
-- Keep comments minimal. Only write one when the _why_ is non-obvious. Don't restate what the code does, don't narrate the current change, don't leave `// removed X` breadcrumbs. One short line max — no multi-line comment blocks or paragraph docstrings.
+- Keep comments minimal. Only write one when the _why_ is non-obvious. Don't restate what the code does, don't narrate the current change, don't leave `// removed X` breadcrumbs. One short line max - no multi-line comment blocks or paragraph docstrings.
 
 ## Design System
 
 All UI styling MUST use `AppTheme` constants from `Sources/PalmierPro/UI/AppTheme.swift`. Never use hardcoded numeric values for:
 
-- **Spacing/padding** → `AppTheme.Spacing.*` (xxs through xxl)
-- **Font sizes** → `AppTheme.FontSize.*` (xxs through display)
-- **Font weights** → `AppTheme.FontWeight.*` (regular, medium, semibold, bold)
-- **Corner radii** → `AppTheme.Radius.*` (xs through xl)
-- **Border widths** → `AppTheme.BorderWidth.*` (hairline, thin, medium, thick)
-- **Opacity** → `AppTheme.Opacity.*` (subtle, faint, muted, medium, strong, prominent)
-- **Icon frame sizes** → `AppTheme.IconSize.*` (xs through xl)
-- **Shadows** → `AppTheme.Shadow.*` (sm, md, lg) via `.shadow(AppTheme.Shadow.md)`
-- **Colors** → `AppTheme.Text.*`, `AppTheme.Border.*`, `AppTheme.Background.*`
-- **Animation durations** → `AppTheme.Anim.*`
+- **Spacing/padding** -> `AppTheme.Spacing.*` (xxs through xxl)
+- **Font sizes** -> `AppTheme.FontSize.*` (xxs through display)
+- **Font weights** -> `AppTheme.FontWeight.*` (regular, medium, semibold, bold)
+- **Corner radii** -> `AppTheme.Radius.*` (xs through xl)
+- **Border widths** -> `AppTheme.BorderWidth.*` (hairline, thin, medium, thick)
+- **Opacity** -> `AppTheme.Opacity.*` (subtle, faint, muted, medium, strong, prominent)
+- **Icon frame sizes** -> `AppTheme.IconSize.*` (xs through xl)
+- **Shadows** -> `AppTheme.Shadow.*` (sm, md, lg) via `.shadow(AppTheme.Shadow.md)`
+- **Colors** -> `AppTheme.Text.*`, `AppTheme.Border.*`, `AppTheme.Background.*`
+- **Animation durations** -> `AppTheme.Anim.*`
 
-If a needed value doesn't exist in AppTheme, add it there first — don't hardcode it.
+If a needed value doesn't exist in AppTheme, add it there first - don't hardcode it.
 
 ## Drag and drop
 
-SwiftUI `.onDrop` on a parent view shadows every drop target inside its layout area on macOS 26 — even AppKit `NSDraggingDestination` children registered directly with the window. Inner `.onDrop` modifiers silently never fire while a parent `.onDrop` is active.
+SwiftUI `.onDrop` on a parent view shadows every drop target inside its layout area on macOS 26 - even AppKit `NSDraggingDestination` children registered directly with the window. Inner `.onDrop` modifiers silently never fire while a parent `.onDrop` is active.
 
 Rule: **any drop target that spans an area containing other drop targets must use native AppKit** (see `MediaPanelDropArea` in `Sources/PalmierPro/MediaPanel/`). Inner / leaf drops can stay SwiftUI `.onDrop`. Do not stack SwiftUI `.onDrop` modifiers in parent/child layouts.
 
@@ -44,7 +53,7 @@ For Rust-side product and UI copy, Fronda speaks like a quietly capable desktop 
 
 ## Rust rewrite rules
 
-This repo is being rewritten into a cross-platform Rust app. The current Swift codebase remains the behavioral reference until a Rust implementation explicitly replaces it.
+This repo's primary implementation is the cross-platform Rust app `Fronda`. The current Swift codebase remains the behavioral reference until a Rust implementation explicitly replaces a subsystem.
 
 - Treat `specs/rust-rewrite/` as the compatibility baseline for the rewrite. If behavior changes intentionally, update the relevant spec in the same change and mark the decision explicitly.
 - For rewrite work, prefer preserving observable behavior over line-by-line source translation. Port the contract, not the syntax.

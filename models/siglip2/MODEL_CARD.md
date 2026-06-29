@@ -8,18 +8,18 @@ tags:
 library_name: coreml
 ---
 
-# SigLIP 2 B/16-256 — Core ML
+# SigLIP 2 B/16-256 Core ML
 
 Core ML conversion of [google/siglip2-base-patch16-256](https://huggingface.co/google/siglip2-base-patch16-256),
-split into separate image and text encoders for on-device text→image retrieval.
-Built for [Palmier Pro](https://palmier.io)'s footage search; usable by anything
+split into separate image and text encoders for on-device text-image retrieval.
+Built for Fronda's footage search, with Palmier Pro compatibility heritage; usable by anything
 that wants SigLIP 2 on Apple silicon.
 
 ## Files
 
 | File | Contents |
 |---|---|
-| `ImageEncoder.mlpackage.zip` | Vision tower, 256×256 input, 8-bit palettized (per-grouped-channel) |
+| `ImageEncoder.mlpackage.zip` | Vision tower, 256x256 input, 8-bit palettized (per-grouped-channel) |
 | `TextEncoder.mlpackage.zip` | Text tower, 64-token input, 8-bit palettized |
 | `tokenizer.zip` | Gemma SentencePiece tokenizer files (`tokenizer.json`, config) |
 | `manifest.json` | File names, sha256s, sizes, model dims |
@@ -29,14 +29,14 @@ is a plain dot product. Minimum deployment target: macOS 15.
 
 ## Usage notes
 
-- Image preprocessing is a **squash-resize** to 256×256 (no center crop), pixels
+- Image preprocessing is a **squash-resize** to 256x256 (no center crop), pixels
   scaled to [-1, 1]. The `ImageType` input already applies the scaling.
 - Text must be tokenized with the bundled Gemma tokenizer and **padded to 64
-  with the pad token (0), no attention mask** — SigLIP was trained that way and
+  with the pad token (0), no attention mask** - SigLIP was trained that way and
   embeddings drift if padding differs.
 - Conversion is parity-gated: every release's embeddings match the PyTorch
-  reference at cosine ≥ 0.99 on a fixture set. Conversion source:
-  [palmier-io/palmier-pro `models/siglip2`](https://github.com/palmier-io).
+  reference at cosine >= 0.99 on a fixture set. Conversion source:
+  [palmier-io/palmier-pro `models/siglip2`](https://github.com/palmier-io/palmier-pro/tree/main/models/siglip2).
 
 ## Versioning
 

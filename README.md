@@ -2,20 +2,20 @@
 
 # Fronda
 
-**Rust rewrite name for the cross-platform successor to Palmier Pro.**
+**Cross-platform Rust video editor workspace derived from Palmier Pro.**
 
 </div>
 
 <img src="./assets/palmier-ui.png" alt="Palmier Pro Swift compatibility baseline UI" width="900" />
 
-This repository is a modified fork of [Palmier Pro](https://github.com/palmier-io/palmier-pro). The current runnable application is still the inherited Swift/AppKit codebase; `Fronda` is the intended name of the Rust rewrite being developed in this fork.
+This repository is a modified fork of [Palmier Pro](https://github.com/palmier-io/palmier-pro). `Fronda` is the primary product and codebase in this fork: a cross-platform Rust editor built around `gpui-ce`, with the inherited Swift app retained as a legacy compatibility reference.
 
 ## Current status
 
-- Current runnable baseline: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation
-- Current supported runtime: macOS 26+ on Apple Silicon
-- Rust rewrite name: `Fronda`
-- Rewrite target stack: Rust + `gpui-ce`
+- Primary implementation: Rust workspace
+- Primary UI stack: `gpui-ce`
+- Legacy compatibility reference: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation
+- Legacy runtime: macOS 26+ on Apple Silicon
 - Compatibility baseline: `specs/rust-rewrite/`
 
 ## Repository goals
@@ -27,12 +27,34 @@ This repository is a modified fork of [Palmier Pro](https://github.com/palmier-i
 
 ## What is in the repo today
 
-1. the original macOS-native Swift implementation that still defines current behavior
-2. rewrite specs that list the behaviors the Rust port must satisfy with automated tests
-3. fork-specific attribution, legal notices, and rewrite rules
-4. the first Rust rewrite workspace crates plus a `gpui-ce` app-shell scaffold for `Fronda`
+1. the Rust workspace that carries the active Fronda implementation
+2. compatibility specs that define the user-visible contract Fronda must preserve or explicitly change
+3. the legacy macOS-native Swift implementation kept as behavioral reference where parity is still being verified
+4. fork-specific attribution, legal notices, and rewrite rules
 
-## Build the current Swift baseline
+## Rust workspace
+
+```bash
+cargo test --workspace
+```
+
+Check the `gpui-ce` desktop shell on a supported desktop toolchain:
+
+```bash
+cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda
+```
+
+Launch the desktop shell on a supported desktop toolchain:
+
+```bash
+cargo run -p fronda-app-shell-gpui --features desktop-app --bin fronda
+```
+
+GitHub Actions runs spec validation, Rust workspace tests, a `gpui-ce` shell compile check, and legacy Swift baseline build/test on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
+
+## Legacy Swift baseline
+
+Build:
 
 ```bash
 swift build
@@ -45,47 +67,27 @@ For a bundled debug build that launches the `.app` and streams OSLog:
 ./scripts/dev.sh
 ```
 
-## Test the current Swift baseline
+Test:
 
 ```bash
 swift test
 ```
 
-GitHub Actions runs spec validation, Rust workspace tests, a `gpui-ce` shell compile check, and the Swift baseline build/test on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
-
-## Rust rewrite workspace
-
-Run the current Rust compatibility tests:
-
-```bash
-cargo test --workspace
-```
-
-Check the first `gpui-ce` desktop shell scaffold on a supported desktop toolchain:
-
-```bash
-cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda
-```
-
-Launch the placeholder desktop shell on a supported desktop toolchain:
-
-```bash
-cargo run -p fronda-app-shell-gpui --features desktop-app --bin fronda
-```
-
-## Rust rewrite spec baseline
+## Rust compatibility spec baseline
 
 Start here:
 
 - `specs/rust-rewrite/README.md`
+- `specs/rust-rewrite/10-current-status-and-plan.md`
+- `specs/rust-rewrite/11-identifier-migration-plan.md`
 - `specs/rust-rewrite/99-test-matrix.md`
 - `AGENTS.md`
 
-The rule of thumb for rewrite work is simple: preserve observable behavior first, improve architecture second. If behavior changes intentionally, update the relevant spec in the same change.
+The rule of thumb for Fronda work is simple: preserve observable behavior first, improve architecture second. If behavior changes intentionally, update the relevant spec in the same change.
 
 ## Current Palmier compatibility identifiers
 
-`Fronda` is the Rust version name. Until identifier migration is made explicit, the current Swift baseline still exposes inherited identifiers that are part of the compatibility surface:
+`Fronda` is the active Rust product name. Until identifier migration is made explicit, the repo still preserves inherited identifiers that remain part of the compatibility surface:
 
 - Swift package / target / source paths still use `PalmierPro`
 - project packages still use the `.palmier` extension
@@ -126,18 +128,18 @@ Add this to `~/.cursor/mcp.json`:
 
 See `CONTRIBUTING.md`.
 
-For rewrite work, prefer:
+For Fronda work, prefer:
 
-- bug fixes to the Swift baseline
-- spec capture
-- migration scaffolding
+- Rust implementation work
+- spec capture and spec updates
 - compatibility-preserving refactors
+- targeted legacy Swift fixes only when they protect or clarify the compatibility contract
 
 Avoid expanding the legacy Swift app with large new features unless that is the explicit goal.
 
 ## Upstream source and license
 
-- Rust rewrite name: Fronda
+- Primary Rust product: Fronda
 - Original project: Palmier Pro
 - Upstream repository: <https://github.com/palmier-io/palmier-pro>
 - Fork repository: <https://github.com/TimLai666/fronda>
