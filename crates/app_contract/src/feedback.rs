@@ -120,11 +120,7 @@ impl FeedbackPayload {
                 Some(state.email.trim().to_string())
             },
             may_contact: state.may_contact && !state.email.trim().is_empty(),
-            screenshot_base64: if state.include_screenshot {
-                None // caller fills this after capture
-            } else {
-                None
-            },
+            screenshot_base64: None, // caller fills this after capture when enabled
             app_version: app_version.to_string(),
             os_version: os_version.to_string(),
         }

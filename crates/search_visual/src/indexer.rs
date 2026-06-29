@@ -43,17 +43,14 @@ impl<'a, E: Embedder> VisualIndexer<'a, E> {
         let mut embeddings: Vec<VisualEmbedding> = Vec::with_capacity(samples.len());
 
         for sample in &samples {
-            match fetch_frame(sample.timestamp_secs) {
-                Ok((pixels, w, h)) => {
-                    match self.embedder.embed(entry_id, sample.index, &pixels, w, h) {
-                        Ok(emb) => embeddings.push(emb),
-                        Err(e) => {
-                            // Skip frame on embed error, log at debug level only.
-                            let _ = e;
-                        }
+            if let Ok((pixels, w, h)) = fetch_frame(sample.timestamp_secs) {
+                match self.embedder.embed(entry_id, sample.index, &pixels, w, h) {
+                    Ok(emb) => embeddings.push(emb),
+                    Err(e) => {
+                        // Skip frame on embed error, log at debug level only.
+                        let _ = e;
                     }
                 }
-                Err(_) => {}
             }
         }
 

@@ -3,18 +3,13 @@ use serde::{Deserialize, Serialize};
 use crate::transcript::TranscribedWord;
 
 /// Text case mode for caption output (CAP-013).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TextCase {
+    #[default]
     Auto,
     Upper,
     Lower,
-}
-
-impl Default for TextCase {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// Configuration for caption generation.

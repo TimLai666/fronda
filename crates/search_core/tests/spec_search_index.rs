@@ -162,7 +162,7 @@ fn srch_016_single_frame_preserves_embedding() {
 #[test]
 fn srch_018_rows_must_be_strictly_increasing() {
     // Valid: strictly increasing frames
-    let rows = vec![
+    let rows = [
         EmbeddingRow {
             frame: 0,
             embedding: vec![0.1; 4],
@@ -187,7 +187,7 @@ fn srch_018_rows_must_be_strictly_increasing() {
 #[test]
 #[should_panic(expected = "strictly increasing")]
 fn srch_018_duplicate_frame_invalid() {
-    let rows = vec![
+    let rows = [
         EmbeddingRow {
             frame: 0,
             embedding: vec![0.1; 4],
@@ -206,7 +206,7 @@ fn srch_018_duplicate_frame_invalid() {
 #[test]
 #[should_panic(expected = "strictly increasing")]
 fn srch_018_out_of_order_frames_invalid() {
-    let rows = vec![
+    let rows = [
         EmbeddingRow {
             frame: 60,
             embedding: vec![0.1; 4],
@@ -234,7 +234,7 @@ fn srch_018_single_frame_is_trivially_increasing() {
 
 #[test]
 fn srch_018_large_gap_between_frames_allowed() {
-    let rows = vec![
+    let rows = [
         EmbeddingRow {
             frame: 0,
             embedding: vec![0.1; 4],
@@ -285,7 +285,7 @@ fn srch_021_results_populated_only_after_search() {
 
 #[test]
 fn srch_023_hits_sorted_descending() {
-    let mut hits = vec![
+    let mut hits = [
         SearchHit {
             media_id: "a".into(),
             frame: 0,
@@ -313,7 +313,7 @@ fn srch_023_hits_sorted_descending() {
 
 #[test]
 fn srch_023_scores_preserved_after_sort() {
-    let mut hits = vec![
+    let mut hits = [
         SearchHit {
             media_id: "low".into(),
             frame: 0,
@@ -341,7 +341,7 @@ fn srch_023_scores_preserved_after_sort() {
 
 #[test]
 fn srch_023_tie_scores_any_order() {
-    let mut hits = vec![
+    let mut hits = [
         SearchHit {
             media_id: "x".into(),
             frame: 10,
@@ -363,7 +363,7 @@ fn srch_023_tie_scores_any_order() {
 
 #[test]
 fn srch_023_single_hit_trivially_sorted() {
-    let mut hits = vec![SearchHit {
+    let mut hits = [SearchHit {
         media_id: "only".into(),
         frame: 0,
         score: 0.7,

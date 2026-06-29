@@ -298,8 +298,7 @@ mod tests {
         // the RMS-frame boundary doesn't split the noise onset.
         let samples = make_noise(96000);
         let shift_samples = 5 * FRAME_SIZE; // 5120 samples
-        let shifted: Vec<f64> = std::iter::repeat(0.0)
-            .take(shift_samples)
+        let shifted: Vec<f64> = std::iter::repeat_n(0.0, shift_samples)
             .chain(samples.iter().copied())
             .take(samples.len())
             .collect();
@@ -373,8 +372,7 @@ mod tests {
     fn find_sync_offset_shifted_signals() {
         let samples = make_noise(96000);
         let shift_samples = 5 * FRAME_SIZE; // 5120 samples = 5 RMS frames
-        let shifted: Vec<f64> = std::iter::repeat(0.0)
-            .take(shift_samples)
+        let shifted: Vec<f64> = std::iter::repeat_n(0.0, shift_samples)
             .chain(samples.iter().copied())
             .take(samples.len())
             .collect();
@@ -406,8 +404,7 @@ mod tests {
     fn find_sync_offset_project_fps_conversion() {
         let samples = make_noise(96000);
         let shift_samples = 5 * FRAME_SIZE; // 5120 samples = 5 RMS frames
-        let shifted: Vec<f64> = std::iter::repeat(0.0)
-            .take(shift_samples)
+        let shifted: Vec<f64> = std::iter::repeat_n(0.0, shift_samples)
             .chain(samples.iter().copied())
             .take(samples.len())
             .collect();

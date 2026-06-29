@@ -37,7 +37,7 @@ impl MediaGridNav {
         if self.ordered_ids.is_empty() || self.column_count == 0 {
             return 0;
         }
-        (self.ordered_ids.len() + self.column_count - 1) / self.column_count
+        self.ordered_ids.len().div_ceil(self.column_count)
     }
 
     /// DRAG-012: Right/down starts at first item when no selection.
@@ -108,9 +108,8 @@ impl MediaGridNav {
                     return;
                 }
                 // Start from bottom row center column
-                let last_row_start = ((self.row_count() - 1) * self.column_count)
-                    .min(self.ordered_ids.len().saturating_sub(1));
-                last_row_start
+                ((self.row_count() - 1) * self.column_count)
+                    .min(self.ordered_ids.len().saturating_sub(1))
             }
         };
         self.select_index(idx);
