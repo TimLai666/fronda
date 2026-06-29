@@ -43,6 +43,12 @@ jobs:
           cargo --version
           rustc --version
 
+      - name: Check workspace formatting
+        run: cargo fmt --all --check
+
+      - name: Lint workspace
+        run: cargo clippy --workspace --tests -- -D warnings
+
       - name: Test workspace
         run: cargo test --workspace
 

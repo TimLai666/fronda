@@ -60,7 +60,7 @@ For a bundled debug build that launches the `.app` and streams OSLog:
 ./scripts/dev.sh
 ```
 
-CI runs Rust workspace tests and shell checks on every pull request, push to `main`, and manual workflow dispatch. It also keeps the legacy Swift compatibility baseline building and testing on macOS through `.github/workflows/ci.yml`.
+CI runs Rust workspace formatting, clippy, tests, and shell checks on every pull request, push to `main`, and manual workflow dispatch. It also keeps the legacy Swift compatibility baseline building and testing on macOS through `.github/workflows/ci.yml`.
 
 ## Rewrite workflow
 

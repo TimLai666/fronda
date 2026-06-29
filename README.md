@@ -50,7 +50,7 @@ Launch the desktop shell on a supported desktop toolchain:
 cargo run -p fronda-app-shell-gpui --features desktop-app --bin fronda
 ```
 
-GitHub Actions runs spec validation, Rust workspace tests, a `gpui-ce` shell compile check, and legacy Swift compatibility baseline build/test on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
+GitHub Actions runs spec validation, Rust workspace `fmt`/`clippy`/tests, a `gpui-ce` shell compile check, and the legacy Swift compatibility baseline build/test on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
 
 ## Legacy Swift compatibility baseline
 
