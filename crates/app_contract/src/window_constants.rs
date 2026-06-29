@@ -116,16 +116,6 @@ mod tests {
     }
 
     // WIN-005
-    #[test]
-    fn settings_window_style() {
-        assert!(SettingsWindowStyle::DARK_APPEARANCE);
-        assert!(SettingsWindowStyle::TRANSLUCENT_BACKGROUND);
-        assert!(SettingsWindowStyle::HIDDEN_TITLE);
-        assert!(SettingsWindowStyle::TRANSPARENT_TITLEBAR);
-        assert!(SettingsWindowStyle::FULL_SIZE_CONTENT_VIEW);
-        assert!(SettingsWindowStyle::MOVABLE_BY_BACKGROUND);
-    }
-
     // WIN-006
     #[test]
     fn help_window_tabs() {

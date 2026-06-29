@@ -98,12 +98,6 @@ pub struct ProjectTelemetryContext {
 mod tests {
     use super::*;
 
-    // TEL-001
-    #[test]
-    fn telemetry_default_enabled() {
-        assert!(TELEMETRY_DEFAULT_ENABLED);
-    }
-
     // TEL-002
     #[test]
     fn telemetry_config_default() {

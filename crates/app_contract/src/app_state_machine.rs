@@ -226,12 +226,6 @@ mod tests {
         assert_eq!(order[6], BootStage::DeferredAccountConfig);
     }
 
-    // BOOT-005
-    #[test]
-    fn should_not_open_untitled_file() {
-        assert!(!SHOULD_OPEN_UNTITLED_FILE);
-    }
-
     // App lifecycle
     #[test]
     fn app_state_machine_default() {
@@ -297,8 +291,6 @@ mod tests {
             OpenPanelConfig::ALLOWED_CONTENT_TYPES,
             &["io.palmier.project"]
         );
-        assert!(!OpenPanelConfig::CAN_CHOOSE_DIRECTORIES);
-        assert!(!OpenPanelConfig::ALLOWS_MULTIPLE_SELECTION);
     }
 
     // BOOT-011

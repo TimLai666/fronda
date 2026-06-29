@@ -159,15 +159,19 @@ mod tests {
 
     #[test]
     fn validate_non_empty_message_succeeds() {
-        let mut state = FeedbackState::default();
-        state.message = "Test message".into();
+        let state = FeedbackState {
+            message: "Test message".into(),
+            ..Default::default()
+        };
         assert!(state.validate().is_ok());
     }
 
     #[test]
     fn validate_whitespace_only_fails() {
-        let mut state = FeedbackState::default();
-        state.message = "   \n  ".into();
+        let state = FeedbackState {
+            message: "   \n  ".into(),
+            ..Default::default()
+        };
         assert!(state.validate().is_err());
     }
 
@@ -195,10 +199,12 @@ mod tests {
     // FBK-006
     #[test]
     fn payload_from_state_with_email() {
-        let mut state = FeedbackState::default();
-        state.message = "Great app!".into();
-        state.email = "user@example.com".into();
-        state.may_contact = true;
+        let state = FeedbackState {
+            message: "Great app!".into(),
+            email: "user@example.com".into(),
+            may_contact: true,
+            ..Default::default()
+        };
         let payload = FeedbackPayload::from_state(&state, "0.3.5", "macOS 26.0");
         assert_eq!(payload.message, "Great app!");
         assert_eq!(payload.email, Some("user@example.com".into()));
@@ -209,10 +215,12 @@ mod tests {
 
     #[test]
     fn payload_may_contact_false_when_email_empty() {
-        let mut state = FeedbackState::default();
-        state.message = "Feedback".into();
-        state.may_contact = true;
-        state.email = "".into();
+        let state = FeedbackState {
+            message: "Feedback".into(),
+            may_contact: true,
+            email: "".into(),
+            ..Default::default()
+        };
         let payload = FeedbackPayload::from_state(&state, "1.0", "macOS 26.0");
         assert!(!payload.may_contact);
         assert_eq!(payload.email, None);
@@ -220,8 +228,10 @@ mod tests {
 
     #[test]
     fn payload_with_screenshot() {
-        let mut state = FeedbackState::default();
-        state.message = "Test".into();
+        let state = FeedbackState {
+            message: "Test".into(),
+            ..Default::default()
+        };
         let payload = FeedbackPayload::from_state(&state, "1.0", "macOS 26.0");
         let with_ss = payload.with_screenshot("iVBOR...".into());
         assert_eq!(with_ss.screenshot_base64, Some("iVBOR...".into()));
@@ -295,8 +305,8 @@ mod tests {
 
     #[test]
     fn app_005_screenshot_constants_are_reasonable() {
-        assert!(FEEDBACK_SCREENSHOT_MAX_WIDTH >= 1024);
-        assert!(FEEDBACK_SCREENSHOT_MAX_HEIGHT >= 1024);
+        assert_eq!(FEEDBACK_SCREENSHOT_MAX_WIDTH, 1920);
+        assert_eq!(FEEDBACK_SCREENSHOT_MAX_HEIGHT, 1080);
         assert!((0.0..=1.0).contains(&FEEDBACK_SCREENSHOT_QUALITY));
     }
 }
