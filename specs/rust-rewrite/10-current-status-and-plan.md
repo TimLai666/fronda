@@ -69,11 +69,12 @@ Done in this pass:
 
 ### Phase 2: Contract cleanup
 
-Next recommended work:
+Partly done, with more cleanup still worth doing:
 
 1. continue replacing future-tense "rewrite" wording inside detailed spec files when it refers to the active Fronda codebase rather than hypothetical future work
 2. normalize encoding-corrupted legacy punctuation inside older spec files where it hurts readability
 3. add cross-links from subsystem READMEs to the relevant spec families
+4. keep legacy Swift mentions only where they describe an actual compatibility contract, not repo positioning
 
 ### Phase 3: Implementation proof
 

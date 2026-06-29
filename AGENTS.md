@@ -1,4 +1,4 @@
-# Palmier Pro fork / Fronda rewrite
+# Fronda Rust-first repo rules
 
 Primary implementation: `Fronda`, a cross-platform Rust app. Legacy behavioral reference: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation.
 
@@ -13,7 +13,7 @@ cargo test --workspace
 cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda
 ```
 
-Legacy Swift baseline:
+Legacy Swift compatibility baseline:
 
 ```bash
 swift build

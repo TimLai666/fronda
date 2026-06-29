@@ -6,7 +6,7 @@
 
 </div>
 
-<img src="./assets/palmier-ui.png" alt="Palmier Pro Swift compatibility baseline UI" width="900" />
+<img src="./assets/palmier-ui.png" alt="Fronda compatibility target UI derived from the Palmier Pro baseline" width="900" />
 
 This repository is a modified fork of [Palmier Pro](https://github.com/palmier-io/palmier-pro). `Fronda` is the primary product and codebase in this fork: a cross-platform Rust editor built around `gpui-ce`, with the inherited Swift app retained as a legacy compatibility reference.
 
@@ -50,9 +50,9 @@ Launch the desktop shell on a supported desktop toolchain:
 cargo run -p fronda-app-shell-gpui --features desktop-app --bin fronda
 ```
 
-GitHub Actions runs spec validation, Rust workspace tests, a `gpui-ce` shell compile check, and legacy Swift baseline build/test on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
+GitHub Actions runs spec validation, Rust workspace tests, a `gpui-ce` shell compile check, and legacy Swift compatibility baseline build/test on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
 
-## Legacy Swift baseline
+## Legacy Swift compatibility baseline
 
 Build:
 
@@ -128,7 +128,7 @@ Add this to `~/.cursor/mcp.json`:
 
 See `CONTRIBUTING.md`.
 
-For Fronda work, prefer:
+For Fronda work, start from the Rust workspace and prefer:
 
 - Rust implementation work
 - spec capture and spec updates
