@@ -334,10 +334,10 @@ pub fn route_shortcut(key: &str, modifiers: &Modifiers) -> Option<MenuAction> {
 mod tests {
     use super::*;
 
-    fn find_group_items<'a>(
+    fn find_group_items(
         group: MenuGroup,
-        items: &'a [(MenuGroup, Vec<MenuAction>)],
-    ) -> &'a [MenuAction] {
+        items: &[(MenuGroup, Vec<MenuAction>)],
+    ) -> &[MenuAction] {
         items
             .iter()
             .find(|(g, _)| *g == group)

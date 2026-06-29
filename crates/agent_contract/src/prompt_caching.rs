@@ -112,11 +112,7 @@ pub fn build_cached_conversation(
     // calculated cut-off index) receive a breakpoint on their last content block.
     let total = messages.len();
     let uncached_count = strategy.keep_uncached_exchanges * 2; // each exchange = user + assistant
-    let cache_count = if uncached_count >= total {
-        0
-    } else {
-        total - uncached_count
-    };
+    let cache_count = total.saturating_sub(uncached_count);
 
     let messages: Vec<CachedMessage> = messages
         .iter()

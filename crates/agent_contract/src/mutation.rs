@@ -116,7 +116,7 @@ pub fn validate_set_clip_properties(
     let mut clears_keyframes = false;
     let mut timing_properties: Vec<String> = Vec::new();
 
-    if let Some(ref obj) = properties.as_object() {
+    if let Some(obj) = properties.as_object() {
         // MUT-010: detect text-only fields and reject if any non-text clip targeted.
         // Includes background/border styling (Issue #18) and fontWeight (PR #65).
         let text_fields = [
@@ -672,7 +672,7 @@ pub fn validate_add_captions(input: &Value) -> ValidationResult<AddCaptionsInput
     let words_per_caption = input
         .get("wordsPerCaption")
         .and_then(|v| v.as_u64())
-        .map(|n| n.min(12).max(1) as u32);
+        .map(|n| n.clamp(1, 12) as u32);
 
     ValidationResult::Ok(AddCaptionsInput {
         clip_ids,
@@ -1638,7 +1638,9 @@ mod tests {
                 "properties": {"textBackground": {"enabled": true, "color": color}}
             });
             let result = validate_set_clip_properties(&input, None);
-            result.into_ok().expect(format!("color {} must be accepted", color).as_str());
+            result
+                .into_ok()
+                .unwrap_or_else(|| panic!("color {} must be accepted", color));
         }
     }
 

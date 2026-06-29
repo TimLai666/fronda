@@ -299,6 +299,7 @@ impl GenerationMachine {
 
     /// Transition: Idle → Preparing.
     /// Validates account state, creates placeholder count, returns PreparingState.
+    #[allow(clippy::too_many_arguments)]
     pub fn start_prepare(
         account: &AccountState,
         prompt: String,
@@ -671,9 +672,10 @@ pub struct UserSettings {
 ///
 /// Issue #140: multi-provider support (Anthropic, DeepSeek, Custom).
 /// Issue #142: Codex CLI as an agent provider option.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum AgentProvider {
     /// Anthropic Claude (existing default).
+    #[default]
     Anthropic,
     /// DeepSeek (deepseek-chat, deepseek-reasoner).
     DeepSeek,
@@ -712,12 +714,6 @@ impl AgentProvider {
             AgentProvider::Codex => false,
             AgentProvider::Custom => false, // unknown; treat as local
         }
-    }
-}
-
-impl Default for AgentProvider {
-    fn default() -> Self {
-        AgentProvider::Anthropic
     }
 }
 
@@ -1268,15 +1264,19 @@ mod tests {
 
     #[test]
     fn issue_017_custom_url_overrides_default() {
-        let mut s = UserSettings::default();
-        s.anthropic_base_url = Some("http://127.0.0.1:8318".into());
+        let s = UserSettings {
+            anthropic_base_url: Some("http://127.0.0.1:8318".into()),
+            ..Default::default()
+        };
         assert_eq!(s.effective_anthropic_base_url(), "http://127.0.0.1:8318");
     }
 
     #[test]
     fn issue_017_empty_url_falls_back_to_default() {
-        let mut s = UserSettings::default();
-        s.anthropic_base_url = Some(String::new());
+        let s = UserSettings {
+            anthropic_base_url: Some(String::new()),
+            ..Default::default()
+        };
         assert_eq!(
             s.effective_anthropic_base_url(),
             ANTHROPIC_DEFAULT_BASE_URL
@@ -1285,8 +1285,10 @@ mod tests {
 
     #[test]
     fn issue_017_litellm_proxy_url_accepted() {
-        let mut s = UserSettings::default();
-        s.anthropic_base_url = Some("http://localhost:4000".into());
+        let s = UserSettings {
+            anthropic_base_url: Some("http://localhost:4000".into()),
+            ..Default::default()
+        };
         assert_eq!(s.effective_anthropic_base_url(), "http://localhost:4000");
     }
 
@@ -1338,16 +1340,23 @@ mod tests {
 
     #[test]
     fn issue_140_user_settings_can_set_deepseek() {
-        let mut s = UserSettings::default();
-        s.active_agent_provider = AgentProvider::DeepSeek;
+        let s = UserSettings {
+            active_agent_provider: AgentProvider::DeepSeek,
+            ..Default::default()
+        };
         assert_eq!(s.active_agent_provider, AgentProvider::DeepSeek);
     }
 
     #[test]
     fn issue_140_user_settings_can_set_custom_config() {
-        let mut s = UserSettings::default();
-        s.active_agent_provider = AgentProvider::Custom;
-        s.custom_llm_config = Some(CustomLlmConfig::new("https://api.groq.com/openai/v1", "mixtral-8x7b-32768"));
+        let s = UserSettings {
+            active_agent_provider: AgentProvider::Custom,
+            custom_llm_config: Some(CustomLlmConfig::new(
+                "https://api.groq.com/openai/v1",
+                "mixtral-8x7b-32768",
+            )),
+            ..Default::default()
+        };
         assert!(s.custom_llm_config.as_ref().unwrap().is_valid());
         assert_eq!(s.active_agent_provider.display_name(), "Custom (OpenAI-compatible)");
     }
@@ -1368,8 +1377,10 @@ mod tests {
 
     #[test]
     fn issue_142_user_settings_can_select_codex() {
-        let mut s = UserSettings::default();
-        s.active_agent_provider = AgentProvider::Codex;
+        let s = UserSettings {
+            active_agent_provider: AgentProvider::Codex,
+            ..Default::default()
+        };
         assert_eq!(s.active_agent_provider, AgentProvider::Codex);
         assert!(s.custom_llm_config.is_none(), "Codex uses CLI, no base_url config");
     }

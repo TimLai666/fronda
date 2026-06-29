@@ -60,7 +60,7 @@ fn should_drop_empty_session(session: &ChatSession) -> bool {
 
 /// SES-009: Sort sessions descending by `updated_at`.
 pub fn sort_sessions(sessions: &mut [ChatSession]) {
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
 }
 
 /// SES-010: Force-close all loaded sessions and insert a fresh empty
@@ -127,9 +127,8 @@ pub fn delete_session(
     close_tab(target_id, &sessions)
 }
 
-/// SES-008: When loading old session JSON without `isOpen`, the default
-/// remains `true`. This is handled by the serde default on ChatSession.
-
+// SES-008: When loading old session JSON without `isOpen`, the default
+// remains `true`. This is handled by the serde default on ChatSession.
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

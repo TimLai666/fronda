@@ -57,7 +57,7 @@ fn mcp_003_tool_names_are_snake_case() {
 #[test]
 fn mcp_003_all_tool_names_are_unique() {
     let tools = agent_contract::all_tools();
-    let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+    let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     names.sort();
     names.dedup();
     assert_eq!(names.len(), 54, "all 54 tool names must be unique");

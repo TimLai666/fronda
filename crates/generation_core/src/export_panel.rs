@@ -7,9 +7,10 @@ use render_core::{ColorSpace, ExportFormat, ExportResolution};
 use serde::{Deserialize, Serialize};
 
 /// The current stage of the export panel workflow (Issue #166).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ExportStage {
     /// User is configuring export settings (default).
+    #[default]
     Configure,
     /// Export is running — `progress` (0.0..=1.0) and `message` available.
     Exporting,
@@ -17,12 +18,6 @@ pub enum ExportStage {
     Done,
     /// Export failed.
     Failed,
-}
-
-impl Default for ExportStage {
-    fn default() -> Self {
-        ExportStage::Configure
-    }
 }
 
 /// User-configurable export settings.

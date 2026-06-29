@@ -491,7 +491,10 @@ pub fn format_transcript(
     clip_ranges.sort_by_key(|(_, start, _)| *start);
 
     // Attribute words to clips by word-midpoint (READ-019)
-    let mut clip_words: Vec<(String, Vec<(String, i64, i64)>)> = Vec::new();
+    type ClipWord = (String, i64, i64);
+    type ClipWordBucket = (String, Vec<ClipWord>);
+
+    let mut clip_words: Vec<ClipWordBucket> = Vec::new();
     for (word, start_f, end_f) in &frame_words {
         let mid = (start_f + end_f) / 2;
         let mut _assigned = false;
@@ -1488,7 +1491,7 @@ mod tests {
         let page1 = format_transcript(
             fps,
             &words,
-            &[clip.clone()],
+            std::slice::from_ref(&clip),
             &TranscriptFormatOptions::default(),
         );
         let total1: usize = page1.clips.iter().map(|c| c.words.len()).sum();

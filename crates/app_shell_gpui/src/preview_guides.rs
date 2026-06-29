@@ -4,6 +4,9 @@
 //! reset on app restart. They draw safe-zone rectangles and format-reference
 //! letterbox/pillarbox bars over the preview canvas without affecting export.
 
+type GuideBar = (f64, f64, f64, f64);
+type GuideBars = (GuideBar, GuideBar);
+
 /// A single viewer guide type.
 ///
 /// Safe-zone values follow SMPTE ST 2046-1 (2009) and ITU-R BT.1848-1 (2015).
@@ -150,7 +153,7 @@ impl ViewerGuideState {
         guide: ViewerGuide,
         canvas_w: f64,
         canvas_h: f64,
-    ) -> Option<((f64, f64, f64, f64), (f64, f64, f64, f64))> {
+    ) -> Option<GuideBars> {
         let target_ratio = guide.aspect_ratio()?;
         let canvas_ratio = canvas_w / canvas_h;
         const TOLERANCE: f64 = 0.02; // UIX-006
