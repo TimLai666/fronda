@@ -60,6 +60,7 @@ pub struct PropertyChanges {
 ///   - `volume` / `opacity` set the scalar and clear the keyframe track
 ///   - `transform` uses `PartialTransform::merge_into` (#114 fix)
 ///   - `content` / `font_name` etc. update text style fields
+#[allow(clippy::too_many_arguments)]
 pub fn set_clip_properties(
     clip: &mut Clip,
     duration_frames: Option<i64>,
@@ -347,8 +348,8 @@ mod tests {
         assert_eq!(result.width, 0.5);
         assert_eq!(result.height, 0.6);
         assert_eq!(result.rotation, 45.0);
-        assert_eq!(result.flip_horizontal, true);
-        assert_eq!(result.flip_vertical, false);
+        assert!(result.flip_horizontal);
+        assert!(!result.flip_vertical);
     }
 
     #[test]
@@ -365,7 +366,7 @@ mod tests {
         assert_eq!(result.rotation, 90.0);
         assert_eq!(result.width, 1.0); // from base
         assert_eq!(result.height, 1.0); // from base
-        assert_eq!(result.flip_horizontal, false); // from base
+        assert!(!result.flip_horizontal); // from base
     }
 
     // --- set_clip_properties ---
@@ -472,7 +473,7 @@ mod tests {
         assert_eq!(clip.transform.width, 0.8);
         // These must NOT be zeroed:
         assert_eq!(clip.transform.rotation, 45.0);
-        assert_eq!(clip.transform.flip_horizontal, true);
+        assert!(clip.transform.flip_horizontal);
         assert!(result.changed.contains(&"transform".to_string()));
     }
 

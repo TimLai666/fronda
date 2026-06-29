@@ -86,7 +86,7 @@ pub fn is_valid_bundle_path(path: &std::path::Path) -> bool {
         && path
             .file_name()
             .and_then(|s| s.to_str())
-            .map_or(false, |s| !s.is_empty())
+            .is_some_and(|s| !s.is_empty())
 }
 
 #[cfg(test)]
