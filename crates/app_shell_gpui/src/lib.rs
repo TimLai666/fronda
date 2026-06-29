@@ -81,7 +81,7 @@ pub use platform_adapter::{NoopPlatformAdapter, PlatformAdapter};
 pub use window::{WindowConfig, WindowKind};
 
 pub const APP_NAME: &str = "Fronda";
-pub const SHELL_HEADLINE: &str = "Rust rewrite scaffold";
+pub const SHELL_HEADLINE: &str = "Cross-platform Rust editor shell";
 pub const SHELL_STATUS: &str = "Palmier Pro compatibility baseline active";
 
 pub fn launch_status_lines() -> [&'static str; 3] {
@@ -98,5 +98,11 @@ mod tests {
         assert_eq!(lines[0], APP_NAME);
         assert_eq!(lines[1], SHELL_HEADLINE);
         assert_eq!(lines[2], SHELL_STATUS);
+    }
+
+    #[test]
+    fn shell_headline_is_not_future_tense_scaffolding_copy() {
+        assert!(!SHELL_HEADLINE.contains("rewrite"));
+        assert!(!SHELL_HEADLINE.contains("scaffold"));
     }
 }
