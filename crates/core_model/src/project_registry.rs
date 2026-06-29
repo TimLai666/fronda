@@ -124,7 +124,7 @@ impl ProjectRegistry {
     /// Get entries sorted by descending lastOpenedDate (REC-009).
     pub fn sorted_entries(&self) -> Vec<&ProjectEntry> {
         let mut sorted: Vec<&ProjectEntry> = self.entries.iter().collect();
-        sorted.sort_by(|a, b| b.last_opened_date.cmp(&a.last_opened_date));
+        sorted.sort_by_key(|entry| std::cmp::Reverse(entry.last_opened_date));
         sorted
     }
 }

@@ -67,7 +67,7 @@ impl MediaManifest {
 
     /// Returns true when expected file does not exist or entry is missing (RES-004).
     pub fn is_missing_for(&self, id: &str, file_exists: impl Fn(&str) -> bool) -> bool {
-        self.entry_for(id).map_or(true, |entry| {
+        self.entry_for(id).is_none_or(|entry| {
             if entry.cached_remote_url.is_some() {
                 return false;
             }
@@ -340,27 +340,33 @@ mod tests {
 
     #[test]
     fn med_001_missing_entry_ids_all_exist() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![entry("a", None), entry("b", None)];
+        let manifest = MediaManifest {
+            entries: vec![entry("a", None), entry("b", None)],
+            ..Default::default()
+        };
         let missing = manifest.missing_entry_ids(|_| false);
         assert!(missing.is_empty(), "no entries should be missing");
     }
 
     #[test]
     fn med_002_missing_entry_ids_returns_missing() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![entry("a", None), entry("b", None)];
+        let manifest = MediaManifest {
+            entries: vec![entry("a", None), entry("b", None)],
+            ..Default::default()
+        };
         let missing = manifest.missing_entry_ids(|e| e.id == "a");
         assert_eq!(missing, vec!["a"]);
     }
 
     #[test]
     fn med_003_missing_entry_ids_cached_url_excludes() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![
-            entry("a", Some("https://cache.example.com/a.mp4")),
-            entry("b", None),
-        ];
+        let manifest = MediaManifest {
+            entries: vec![
+                entry("a", Some("https://cache.example.com/a.mp4")),
+                entry("b", None),
+            ],
+            ..Default::default()
+        };
         // Both are "missing" per callback, but "a" has cached_remote_url so excluded.
         let missing = manifest.missing_entry_ids(|_| true);
         assert_eq!(missing, vec!["b"]);
@@ -368,11 +374,13 @@ mod tests {
 
     #[test]
     fn med_004_missing_entry_ids_all_cached_not_missing() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![
-            entry("a", Some("https://cache.example.com/a.mp4")),
-            entry("b", Some("https://cache.example.com/b.mp4")),
-        ];
+        let manifest = MediaManifest {
+            entries: vec![
+                entry("a", Some("https://cache.example.com/a.mp4")),
+                entry("b", Some("https://cache.example.com/b.mp4")),
+            ],
+            ..Default::default()
+        };
         let missing = manifest.missing_entry_ids(|_| true);
         assert!(missing.is_empty(), "cached entries should not be missing");
     }
@@ -386,21 +394,25 @@ mod tests {
 
     #[test]
     fn med_006_missing_entry_ids_mixed() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![
-            entry("online", None),              // exists -> not missing
-            entry("offline", None),             // missing
-            entry("cached", Some("https://c")), // cached -> not missing
-            entry("also_offline", None),        // missing
-        ];
+        let manifest = MediaManifest {
+            entries: vec![
+                entry("online", None),              // exists -> not missing
+                entry("offline", None),             // missing
+                entry("cached", Some("https://c")), // cached -> not missing
+                entry("also_offline", None),        // missing
+            ],
+            ..Default::default()
+        };
         let missing = manifest.missing_entry_ids(|e| e.id != "online");
         assert_eq!(missing, vec!["offline", "also_offline"]);
     }
 
     #[test]
     fn res_001_entry_for_found() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![entry("a", None), entry("b", None)];
+        let manifest = MediaManifest {
+            entries: vec![entry("a", None), entry("b", None)],
+            ..Default::default()
+        };
         let found = manifest.entry_for("a");
         assert!(found.is_some(), "RES-001: entry found");
         assert_eq!(found.unwrap().id, "a");

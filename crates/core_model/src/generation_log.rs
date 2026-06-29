@@ -132,12 +132,14 @@ mod tests {
 
     #[test]
     fn fmt_014_sort_newest_first() {
-        let mut log = GenerationLog::default();
-        log.entries = vec![
-            entry_with_time("old", 1000),
-            entry_with_time("middle", 2000),
-            entry_with_time("newest", 3000),
-        ];
+        let mut log = GenerationLog {
+            entries: vec![
+                entry_with_time("old", 1000),
+                entry_with_time("middle", 2000),
+                entry_with_time("newest", 3000),
+            ],
+            ..Default::default()
+        };
         log.sort_entries();
         assert_eq!(log.entries[0].id, "newest", "FMT-014: newest first");
         assert_eq!(log.entries[1].id, "middle", "FMT-014: middle second");
@@ -146,8 +148,10 @@ mod tests {
 
     #[test]
     fn fmt_014_dated_before_undated() {
-        let mut log = GenerationLog::default();
-        log.entries = vec![entry_no_time("no-time"), entry_with_time("with-time", 1000)];
+        let mut log = GenerationLog {
+            entries: vec![entry_no_time("no-time"), entry_with_time("with-time", 1000)],
+            ..Default::default()
+        };
         log.sort_entries();
         assert_eq!(
             log.entries[0].id, "with-time",
@@ -158,9 +162,11 @@ mod tests {
 
     #[test]
     fn fmt_014_deterministic_fallback_for_undated() {
-        let mut log = GenerationLog::default();
+        let mut log = GenerationLog {
+            entries: vec![entry_no_time("b-entry"), entry_no_time("a-entry")],
+            ..Default::default()
+        };
         // Ids sort in reverse for deterministic ordering
-        log.entries = vec![entry_no_time("b-entry"), entry_no_time("a-entry")];
         log.sort_entries();
         assert_eq!(
             log.entries[0].id, "b-entry",
@@ -178,8 +184,10 @@ mod tests {
 
     #[test]
     fn fmt_014_single_entry() {
-        let mut log = GenerationLog::default();
-        log.entries = vec![entry_with_time("only", 1000)];
+        let mut log = GenerationLog {
+            entries: vec![entry_with_time("only", 1000)],
+            ..Default::default()
+        };
         log.sort_entries();
         assert_eq!(log.entries.len(), 1);
         assert_eq!(log.entries[0].id, "only");
