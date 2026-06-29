@@ -73,22 +73,22 @@ impl XmlExport {
         media_timecodes: Option<&HashMap<String, SourceTimecode>>,
     ) -> String {
         let mut xml = String::new();
-        write!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n").ok();
-        write!(xml, "<!DOCTYPE xmeml>\n").ok();
-        write!(xml, "<xmeml version=\"4\">\n").ok();
-        write!(xml, "  <sequence>\n").ok();
-        write!(xml, "    <name>Timeline</name>\n").ok();
-        write!(
+        writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").ok();
+        writeln!(xml, "<!DOCTYPE xmeml>").ok();
+        writeln!(xml, "<xmeml version=\"4\">").ok();
+        writeln!(xml, "  <sequence>").ok();
+        writeln!(xml, "    <name>Timeline</name>").ok();
+        writeln!(
             xml,
-            "    <duration>{}</duration>\n",
+            "    <duration>{}</duration>",
             timeline_total_frames(timeline)
         )
         .ok();
-        write!(xml, "    <rate>\n").ok();
-        write!(xml, "      <timebase>{}</timebase>\n", timeline.fps).ok();
-        write!(xml, "      <ntsc>FALSE</ntsc>\n").ok();
-        write!(xml, "    </rate>\n").ok();
-        write!(xml, "    <media>\n").ok();
+        writeln!(xml, "    <rate>").ok();
+        writeln!(xml, "      <timebase>{}</timebase>", timeline.fps).ok();
+        writeln!(xml, "      <ntsc>FALSE</ntsc>").ok();
+        writeln!(xml, "    </rate>").ok();
+        writeln!(xml, "    <media>").ok();
 
         // Video tracks (XML-010: reversed order)
         let video_tracks: Vec<&Track> = timeline
@@ -96,18 +96,18 @@ impl XmlExport {
             .iter()
             .filter(|t| t.r#type != ClipType::Audio)
             .collect();
-        write!(xml, "      <video>\n").ok();
+        writeln!(xml, "      <video>").ok();
         for (i, track) in video_tracks.iter().rev().enumerate() {
-            write!(xml, "        <track>\n").ok();
-            write!(xml, "          <trackindex>{}</trackindex>\n", i + 1).ok();
-            write!(xml, "          <videotrack>\n").ok();
-            write!(
+            writeln!(xml, "        <track>").ok();
+            writeln!(xml, "          <trackindex>{}</trackindex>", i + 1).ok();
+            writeln!(xml, "          <videotrack>").ok();
+            writeln!(
                 xml,
-                "            <enabled>{}</enabled>\n",
+                "            <enabled>{}</enabled>",
                 if track.hidden { "FALSE" } else { "TRUE" }
             )
             .ok();
-            write!(xml, "            <locked>FALSE</locked>\n").ok();
+            writeln!(xml, "            <locked>FALSE</locked>").ok();
 
             for clip in &track.clips {
                 if clip.media_type == ClipType::Text || clip.media_type == ClipType::Shape {
@@ -117,10 +117,10 @@ impl XmlExport {
                 let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
                 write_clip(&mut xml, clip, timeline.fps, tc);
             }
-            write!(xml, "          </videotrack>\n").ok();
-            write!(xml, "        </track>\n").ok();
+            writeln!(xml, "          </videotrack>").ok();
+            writeln!(xml, "        </track>").ok();
         }
-        write!(xml, "      </video>\n").ok();
+        writeln!(xml, "      </video>").ok();
 
         // Audio tracks
         let audio_tracks: Vec<&Track> = timeline
@@ -128,30 +128,30 @@ impl XmlExport {
             .iter()
             .filter(|t| t.r#type == ClipType::Audio)
             .collect();
-        write!(xml, "      <audio>\n").ok();
+        writeln!(xml, "      <audio>").ok();
         for (i, track) in audio_tracks.iter().enumerate() {
-            write!(xml, "        <track>\n").ok();
-            write!(xml, "          <trackindex>{}</trackindex>\n", i + 1).ok();
-            write!(xml, "          <audiotrack>\n").ok();
-            write!(
+            writeln!(xml, "        <track>").ok();
+            writeln!(xml, "          <trackindex>{}</trackindex>", i + 1).ok();
+            writeln!(xml, "          <audiotrack>").ok();
+            writeln!(
                 xml,
-                "            <enabled>{}</enabled>\n",
+                "            <enabled>{}</enabled>",
                 if track.muted { "FALSE" } else { "TRUE" }
             )
             .ok();
-            write!(xml, "            <locked>FALSE</locked>\n").ok();
+            writeln!(xml, "            <locked>FALSE</locked>").ok();
             for clip in &track.clips {
                 let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
                 write_clip(&mut xml, clip, timeline.fps, tc);
             }
-            write!(xml, "          </audiotrack>\n").ok();
-            write!(xml, "        </track>\n").ok();
+            writeln!(xml, "          </audiotrack>").ok();
+            writeln!(xml, "        </track>").ok();
         }
-        write!(xml, "      </audio>\n").ok();
+        writeln!(xml, "      </audio>").ok();
 
-        write!(xml, "    </media>\n").ok();
-        write!(xml, "  </sequence>\n").ok();
-        write!(xml, "</xmeml>\n").ok();
+        writeln!(xml, "    </media>").ok();
+        writeln!(xml, "  </sequence>").ok();
+        writeln!(xml, "</xmeml>").ok();
         xml
     }
 }
@@ -178,175 +178,175 @@ fn write_clip(xml: &mut String, clip: &Clip, fps: i64, timecode: Option<SourceTi
         return;
     }
 
-    write!(xml, "            <clipitem id=\"{}\">\n", clip.id).ok();
-    write!(xml, "              <name>{}</name>\n", clip.media_ref).ok();
-    write!(
+    writeln!(xml, "            <clipitem id=\"{}\">", clip.id).ok();
+    writeln!(xml, "              <name>{}</name>", clip.media_ref).ok();
+    writeln!(
         xml,
-        "              <duration>{}</duration>\n",
+        "              <duration>{}</duration>",
         clip.duration_frames
     )
     .ok();
-    write!(xml, "              <rate>\n").ok();
-    write!(xml, "                <timebase>{}</timebase>\n", fps).ok();
-    write!(xml, "                <ntsc>FALSE</ntsc>\n").ok();
-    write!(xml, "              </rate>\n").ok();
+    writeln!(xml, "              <rate>").ok();
+    writeln!(xml, "                <timebase>{}</timebase>", fps).ok();
+    writeln!(xml, "                <ntsc>FALSE</ntsc>").ok();
+    writeln!(xml, "              </rate>").ok();
 
     // XML-002: clip placement
-    write!(xml, "              <start>{}</start>\n", clip.start_frame).ok();
+    writeln!(xml, "              <start>{}</start>", clip.start_frame).ok();
     // XML-003: source trims
-    write!(xml, "              <in>{}</in>\n", clip.trim_start_frame).ok();
-    write!(xml, "              <out>{}</out>\n", clip.trim_end_frame).ok();
+    writeln!(xml, "              <in>{}</in>", clip.trim_start_frame).ok();
+    writeln!(xml, "              <out>{}</out>", clip.trim_end_frame).ok();
     // XML-004: speed changes
     if (clip.speed - 1.0).abs() > f64::EPSILON {
-        write!(xml, "              <speed>\n").ok();
-        write!(xml, "                <value>{:.3}</value>\n", clip.speed).ok();
-        write!(xml, "                <timebase>{}</timebase>\n", fps).ok();
-        write!(xml, "                <ntsc>FALSE</ntsc>\n").ok();
-        write!(xml, "              </speed>\n").ok();
+        writeln!(xml, "              <speed>").ok();
+        writeln!(xml, "                <value>{:.3}</value>", clip.speed).ok();
+        writeln!(xml, "                <timebase>{}</timebase>", fps).ok();
+        writeln!(xml, "                <ntsc>FALSE</ntsc>").ok();
+        writeln!(xml, "              </speed>").ok();
     }
     // XML-005: volume
-    write!(xml, "              <volume>\n").ok();
-    write!(xml, "                <value>{:.6}</value>\n", clip.volume).ok();
-    write!(xml, "              </volume>\n").ok();
+    writeln!(xml, "              <volume>").ok();
+    writeln!(xml, "                <value>{:.6}</value>", clip.volume).ok();
+    writeln!(xml, "              </volume>").ok();
     // XML-005: opacity
-    write!(
+    writeln!(
         xml,
-        "              <opacity>{:.6}</opacity>\n",
+        "              <opacity>{:.6}</opacity>",
         clip.opacity
     )
     .ok();
     // XML-007: fades
     if clip.fade_in_frames > 0 {
-        write!(xml, "              <fadein>\n").ok();
-        write!(
+        writeln!(xml, "              <fadein>").ok();
+        writeln!(
             xml,
-            "                <duration>{}</duration>\n",
+            "                <duration>{}</duration>",
             clip.fade_in_frames
         )
         .ok();
-        write!(xml, "              </fadein>\n").ok();
+        writeln!(xml, "              </fadein>").ok();
     }
     if clip.fade_out_frames > 0 {
-        write!(xml, "              <fadeout>\n").ok();
-        write!(
+        writeln!(xml, "              <fadeout>").ok();
+        writeln!(
             xml,
-            "                <duration>{}</duration>\n",
+            "                <duration>{}</duration>",
             clip.fade_out_frames
         )
         .ok();
-        write!(xml, "              </fadeout>\n").ok();
+        writeln!(xml, "              </fadeout>").ok();
     }
     // XML-006: transform and crop
-    write!(xml, "              <filter>\n").ok();
-    write!(xml, "                <effect>\n").ok();
-    write!(xml, "                  <name>Basic Motion</name>\n").ok();
-    write!(
+    writeln!(xml, "              <filter>").ok();
+    writeln!(xml, "                <effect>").ok();
+    writeln!(xml, "                  <name>Basic Motion</name>").ok();
+    writeln!(
         xml,
-        "                  <effectcategory>motion</effectcategory>\n"
+        "                  <effectcategory>motion</effectcategory>"
     )
     .ok();
-    write!(xml, "                  <effecttype>motion</effecttype>\n").ok();
-    write!(xml, "                  <parameter>\n").ok();
-    write!(
+    writeln!(xml, "                  <effecttype>motion</effecttype>").ok();
+    writeln!(xml, "                  <parameter>").ok();
+    writeln!(
         xml,
-        "                    <parameterid>scale</parameterid>\n"
+        "                    <parameterid>scale</parameterid>"
     )
     .ok();
-    write!(
+    writeln!(
         xml,
-        "                    <value>{:.6}</value>\n",
+        "                    <value>{:.6}</value>",
         clip.transform.width
     )
     .ok();
-    write!(xml, "                  </parameter>\n").ok();
-    write!(xml, "                  <parameter>\n").ok();
-    write!(
+    writeln!(xml, "                  </parameter>").ok();
+    writeln!(xml, "                  <parameter>").ok();
+    writeln!(
         xml,
-        "                    <parameterid>rotation</parameterid>\n"
+        "                    <parameterid>rotation</parameterid>"
     )
     .ok();
-    write!(
+    writeln!(
         xml,
-        "                    <value>{:.6}</value>\n",
+        "                    <value>{:.6}</value>",
         clip.transform.rotation
     )
     .ok();
-    write!(xml, "                  </parameter>\n").ok();
-    write!(xml, "                  <parameter>\n").ok();
-    write!(
+    writeln!(xml, "                  </parameter>").ok();
+    writeln!(xml, "                  <parameter>").ok();
+    writeln!(
         xml,
-        "                    <parameterid>center</parameterid>\n"
+        "                    <parameterid>center</parameterid>"
     )
     .ok();
-    write!(
+    writeln!(
         xml,
-        "                    <value>{:.6} {:.6}</value>\n",
+        "                    <value>{:.6} {:.6}</value>",
         clip.transform.center_x, clip.transform.center_y
     )
     .ok();
-    write!(xml, "                  </parameter>\n").ok();
-    write!(xml, "                  <parameter>\n").ok();
-    write!(xml, "                    <parameterid>crop</parameterid>\n").ok();
-    write!(
+    writeln!(xml, "                  </parameter>").ok();
+    writeln!(xml, "                  <parameter>").ok();
+    writeln!(xml, "                    <parameterid>crop</parameterid>").ok();
+    writeln!(
         xml,
-        "                    <value>{:.6} {:.6} {:.6} {:.6}</value>\n",
+        "                    <value>{:.6} {:.6} {:.6} {:.6}</value>",
         clip.crop.left, clip.crop.top, clip.crop.right, clip.crop.bottom
     )
     .ok();
-    write!(xml, "                  </parameter>\n").ok();
-    write!(xml, "                </effect>\n").ok();
-    write!(xml, "              </filter>\n").ok();
+    writeln!(xml, "                  </parameter>").ok();
+    writeln!(xml, "                </effect>").ok();
+    writeln!(xml, "              </filter>").ok();
 
     // XML-008: linked clip relationships
     if let Some(ref link_id) = clip.link_group_id {
-        write!(xml, "              <link>\n").ok();
-        write!(
+        writeln!(xml, "              <link>").ok();
+        writeln!(
             xml,
-            "                <linkclipref>{}</linkclipref>\n",
+            "                <linkclipref>{}</linkclipref>",
             link_id
         )
         .ok();
-        write!(xml, "                <medialink>true</medialink>\n").ok();
-        write!(xml, "              </link>\n").ok();
+        writeln!(xml, "                <medialink>true</medialink>").ok();
+        writeln!(xml, "              </link>").ok();
     }
 
     // File reference (XML-011)
-    write!(xml, "              <file>\n").ok();
-    write!(xml, "                <name>{}</name>\n", clip.media_ref).ok();
-    write!(
+    writeln!(xml, "              <file>").ok();
+    writeln!(xml, "                <name>{}</name>", clip.media_ref).ok();
+    writeln!(
         xml,
-        "                <pathurl>{}</pathurl>\n",
+        "                <pathurl>{}</pathurl>",
         clip.media_ref
     )
     .ok();
-    write!(xml, "                <rate>\n").ok();
-    write!(xml, "                  <timebase>{}</timebase>\n", fps).ok();
-    write!(xml, "                </rate>\n").ok();
+    writeln!(xml, "                <rate>").ok();
+    writeln!(xml, "                  <timebase>{}</timebase>", fps).ok();
+    writeln!(xml, "                </rate>").ok();
     // XML-009: source timecode (PR #136)
     let ntsc = fps % 30 == 0 && fps <= 60;
     let tc = timecode_tags(timecode, fps, ntsc);
-    write!(xml, "                <timecode>\n").ok();
-    write!(xml, "                  <rate>\n").ok();
-    write!(xml, "                    <timebase>{}</timebase>\n", tc.0).ok();
-    write!(
+    writeln!(xml, "                <timecode>").ok();
+    writeln!(xml, "                  <rate>").ok();
+    writeln!(xml, "                    <timebase>{}</timebase>", tc.0).ok();
+    writeln!(
         xml,
-        "                    <ntsc>{}</ntsc>\n",
+        "                    <ntsc>{}</ntsc>",
         if tc.1 { "TRUE" } else { "FALSE" }
     )
     .ok();
-    write!(xml, "                  </rate>\n").ok();
-    write!(xml, "                  <string>{}</string>\n", tc.4).ok();
-    write!(xml, "                  <frame>{}</frame>\n", tc.2).ok();
-    write!(
+    writeln!(xml, "                  </rate>").ok();
+    writeln!(xml, "                  <string>{}</string>", tc.4).ok();
+    writeln!(xml, "                  <frame>{}</frame>", tc.2).ok();
+    writeln!(
         xml,
-        "                  <displayformat>{}</displayformat>\n",
+        "                  <displayformat>{}</displayformat>",
         if tc.3 { "DF" } else { "NDF" }
     )
     .ok();
-    write!(xml, "                </timecode>\n").ok();
-    write!(xml, "              </file>\n").ok();
+    writeln!(xml, "                </timecode>").ok();
+    writeln!(xml, "              </file>").ok();
 
-    write!(xml, "            </clipitem>\n").ok();
+    writeln!(xml, "            </clipitem>").ok();
 }
 
 #[cfg(test)]
@@ -662,9 +662,9 @@ mod tests {
             true,
         );
         assert_eq!(tc.0, 30); // base
-        assert_eq!(tc.1, true); // ntsc (still NTSC even though NDF)
+        assert!(tc.1); // ntsc (still NTSC even though NDF)
         assert_eq!(tc.2, 1968620); // frame
-        assert_eq!(tc.3, false); // drop_frame
+        assert!(!tc.3); // drop_frame
         assert_eq!(tc.4, "18:13:40:20");
         assert!(!tc.4.contains(';'));
     }
@@ -682,7 +682,7 @@ mod tests {
             true,
         );
         assert_eq!(tc.0, 30); // track quanta, not video rate
-        assert_eq!(tc.3, true); // drop frame
+        assert!(tc.3); // drop frame
         assert_eq!(tc.4, "00;23;53;18");
     }
 
@@ -691,14 +691,14 @@ mod tests {
         let tc = timecode_tags(None, 30, true);
         assert_eq!(tc.0, 30);
         assert_eq!(tc.2, 0);
-        assert_eq!(tc.3, true); // NTSC 30 → drop frame guess
+        assert!(tc.3); // NTSC 30 → drop frame guess
         assert_eq!(tc.4, "00;00;00;00");
     }
 
     #[test]
     fn timecode_tags_no_source_non_ntsc() {
         let tc = timecode_tags(None, 30, false);
-        assert_eq!(tc.3, false);
+        assert!(!tc.3);
         assert_eq!(tc.4, "00:00:00:00");
     }
 

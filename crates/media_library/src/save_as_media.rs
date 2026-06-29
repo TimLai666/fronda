@@ -174,7 +174,7 @@ pub enum PlaceholderResult {
     /// Export succeeded: finalize the placeholder into a real media entry.
     Success {
         entry_id: String,
-        entry: core_model::MediaManifestEntry,
+        entry: Box<core_model::MediaManifestEntry>,
     },
     /// Export failed: keep the placeholder with an error.
     Failure { error: String },
@@ -222,7 +222,7 @@ pub fn finalize_placeholder(
             };
             Some(PlaceholderResult::Success {
                 entry_id: entry_id.clone(),
-                entry,
+                entry: Box::new(entry),
             })
         }
         PlaceholderState::Failed { error } => Some(PlaceholderResult::Failure {

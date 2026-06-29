@@ -169,9 +169,10 @@ impl ExportFormat {
 /// Color space and transfer function for export (Issue #59).
 ///
 /// Determines whether output is SDR or HDR and which HDR standard to use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ColorSpace {
     /// Standard dynamic range (BT.709 / sRGB). Default.
+    #[default]
     Sdr,
     /// Hybrid Log-Gamma — broadcast HDR standard (ITU-R BT.2100-2).
     /// Recommended for streaming platforms (YouTube, Vimeo HDR).
@@ -179,12 +180,6 @@ pub enum ColorSpace {
     /// Perceptual Quantizer — cinema/streaming HDR (SMPTE ST 2084).
     /// Used by Netflix, Apple TV+, Dolby Vision base layer.
     Pq,
-}
-
-impl Default for ColorSpace {
-    fn default() -> Self {
-        ColorSpace::Sdr
-    }
 }
 
 impl ColorSpace {
@@ -248,7 +243,7 @@ impl CompositionPlan {
                     .iter()
                     .map(|clip| CompositionClip {
                         clip_id: clip.id.clone(),
-                        media_type: clip.media_type.clone(),
+                        media_type: clip.media_type,
                         composition_start: clip.start_frame,
                         duration_frames: clip.duration_frames,
                         source_trim_start: clip.trim_start_frame,
@@ -480,7 +475,7 @@ impl DetailedCompositionPlan {
             .tracks
             .iter()
             .filter(|t| !t.is_visual)
-            .flat_map(|t| allocate_audio_composition_tracks(t))
+            .flat_map(allocate_audio_composition_tracks)
             .collect();
 
         DetailedCompositionPlan {

@@ -364,7 +364,7 @@ pub fn scan_directory(
 
     // MED-018: Sort by filename (standard ASCII ordering is sufficient
     // for testability; actual OS localization depends on the callback).
-    entries.sort_by(|a, b| a.stem.to_lowercase().cmp(&b.stem.to_lowercase()));
+    entries.sort_by_key(|a| a.stem.to_lowercase());
 
     Ok(DirectoryImportPlan {
         root_path: root_path.to_string(),
