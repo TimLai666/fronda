@@ -1,4 +1,4 @@
-# Rust Rewrite Verification Plan
+# Fronda Verification Plan
 
 This file is the execution index for turning the compatibility specs in this folder into passing automated tests for `Fronda`.
 
@@ -14,9 +14,9 @@ Use it together with:
 Current CI now protects four things:
 
 1. the Swift baseline still builds and tests cleanly,
-2. the Rust rewrite spec set remains structurally sane,
-3. the first Rust rewrite workspace crates compile and pass compatibility tests, including `.palmier` save/write parity plus pure-core timeline math, split, overwrite/clear-region, speed-change, link-group, and ripple-validation coverage,
-4. the first `gpui-ce` app-shell scaffold compiles on macOS.
+2. the Fronda compatibility spec set remains structurally sane,
+3. the current Fronda workspace crates compile and pass compatibility tests, including `.palmier` save/write parity plus pure-core timeline math, split, overwrite/clear-region, speed-change, link-group, and ripple-validation coverage,
+4. the current `gpui-ce` app shell compiles on supported desktop targets.
 
 The spec lint is intentionally narrow for now. It validates:
 
@@ -25,7 +25,7 @@ The spec lint is intentionally narrow for now. It validates:
 - checklist IDs stay unique across the family docs,
 - each family doc still contains executable acceptance items.
 
-The first executable Rust coverage now lives in:
+Current executable Rust coverage now lives in:
 
 - `crates/core_model/tests/compatibility.rs`
 - `crates/project_io/tests/project_bundle.rs`
@@ -37,13 +37,13 @@ The first executable Rust coverage now lives in:
 - `crates/timeline_core/tests/spec_workflow.rs`
 - `fixtures/rust-rewrite/projects/**`
 
-The first `gpui-ce` shell scaffold now lives in:
+The current `gpui-ce` shell now lives in:
 
 - `crates/app_shell_gpui/src/**`
 
-That is still only early wave-3 coverage, not full product verification. But it now includes executable checks for link-group indexing/expansion, linked move delta propagation, ripple-range merging, ripple push helpers, ripple validation guards, ripple workflow planning (multi-track delete, gap delete, sync-lock, link-partner clear), timing propagation partners, and trim-value computation, which means the rewrite baseline is no longer purely documentary.
+That is still only early wave-3 coverage, not full product verification. But it now includes executable checks for link-group indexing/expansion, linked move delta propagation, ripple-range merging, ripple push helpers, ripple validation guards, ripple workflow planning (multi-track delete, gap delete, sync-lock, link-partner clear), timing propagation partners, and trim-value computation, which means Fronda's compatibility baseline is no longer purely documentary.
 
-## B. Tracking rules for the rewrite
+## B. Tracking rules for Fronda
 
 The numbered spec docs remain the source of truth for acceptance requirements.
 
@@ -134,7 +134,7 @@ These are the highest-value checks to land early even if the corresponding subsy
 10. transcript cache and transcript search fixtures
 11. generation placeholder → upload → result lifecycle tests
 12. app-shell notification / changelog / update badge state tests
-13. AppTheme / design-token snapshots for the rewrite shell
+13. AppTheme / design-token snapshots for the Fronda shell
 14. editor pane layout / maximize / restore tests under `gpui-ce`
 15. menu / shortcut routing tests under `gpui-ce`
 16. drag/drop tests only where event routing itself is the contract

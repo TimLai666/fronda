@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   validate-rewrite-specs:
-    name: Validate Rust rewrite specs
+    name: Validate Fronda compatibility specs
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -27,7 +27,7 @@ jobs:
         run: python3 scripts/check_rust_rewrite_specs.py
 
   rust-tests:
-    name: Build and test Rust rewrite workspace
+    name: Build and test Fronda workspace
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -43,11 +43,17 @@ jobs:
           cargo --version
           rustc --version
 
+      - name: Check workspace formatting
+        run: cargo fmt --all --check
+
+      - name: Lint workspace
+        run: cargo clippy --workspace --tests -- -D warnings
+
       - name: Test workspace
         run: cargo test --workspace
 
   gpui-shell-check:
-    name: Check gpui-ce app shell scaffold
+    name: Check Fronda gpui-ce app shell
     runs-on: macos-latest
     timeout-minutes: 20
 
@@ -63,17 +69,23 @@ jobs:
           cargo --version
           rustc --version
 
-      - name: Check desktop shell scaffold
+      - name: Check desktop shell
         run: cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda
 
   build-test:
-    name: Build and test Swift baseline
+    name: Build and test legacy Swift baseline
     runs-on: macos-latest
     timeout-minutes: 40
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Selecting $XCODE"
+          sudo xcode-select -s "$XCODE"
 
       - name: Show Swift toolchain
         run: swift --version

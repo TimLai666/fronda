@@ -116,7 +116,7 @@ pub fn validate_set_clip_properties(
     let mut clears_keyframes = false;
     let mut timing_properties: Vec<String> = Vec::new();
 
-    if let Some(ref obj) = properties.as_object() {
+    if let Some(obj) = properties.as_object() {
         // MUT-010: detect text-only fields and reject if any non-text clip targeted.
         // Includes background/border styling (Issue #18) and fontWeight (PR #65).
         let text_fields = [
@@ -672,7 +672,7 @@ pub fn validate_add_captions(input: &Value) -> ValidationResult<AddCaptionsInput
     let words_per_caption = input
         .get("wordsPerCaption")
         .and_then(|v| v.as_u64())
-        .map(|n| n.min(12).max(1) as u32);
+        .map(|n| n.clamp(1, 12) as u32);
 
     ValidationResult::Ok(AddCaptionsInput {
         clip_ids,
@@ -1560,7 +1560,9 @@ mod tests {
             "properties": {"textBackground": {"enabled": true, "color": "#FF0000"}}
         });
         let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result.into_error().expect("textBackground must be rejected for non-text clips");
+        let err = result
+            .into_error()
+            .expect("textBackground must be rejected for non-text clips");
         assert!(err.contains("textBackground"), "err={err}");
     }
 
@@ -1571,7 +1573,9 @@ mod tests {
             "properties": {"textBackground": {"enabled": true, "color": "#FF0000"}}
         });
         let result = validate_set_clip_properties(&input, Some(vec!["text".to_string()]));
-        result.into_ok().expect("textBackground must be accepted for text clips");
+        result
+            .into_ok()
+            .expect("textBackground must be accepted for text clips");
     }
 
     #[test]
@@ -1581,7 +1585,9 @@ mod tests {
             "properties": {"textBorder": {"enabled": false, "color": "#000000"}}
         });
         let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result.into_error().expect("textBorder rejected for non-text");
+        let err = result
+            .into_error()
+            .expect("textBorder rejected for non-text");
         assert!(err.contains("textBorder"), "err={err}");
     }
 
@@ -1614,7 +1620,9 @@ mod tests {
             "properties": {"textBackground": "red"}
         });
         let result = validate_set_clip_properties(&input, None);
-        let err = result.into_error().expect("non-object textBackground must be rejected");
+        let err = result
+            .into_error()
+            .expect("non-object textBackground must be rejected");
         assert!(err.contains("textBackground"), "err={err}");
     }
 
@@ -1625,7 +1633,9 @@ mod tests {
             "properties": {"fontWeight": 700}
         });
         let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result.into_error().expect("fontWeight rejected for non-text");
+        let err = result
+            .into_error()
+            .expect("fontWeight rejected for non-text");
         assert!(err.contains("fontWeight"), "err={err}");
     }
 
@@ -1638,7 +1648,9 @@ mod tests {
                 "properties": {"textBackground": {"enabled": true, "color": color}}
             });
             let result = validate_set_clip_properties(&input, None);
-            result.into_ok().expect(format!("color {} must be accepted", color).as_str());
+            result
+                .into_ok()
+                .unwrap_or_else(|| panic!("color {} must be accepted", color));
         }
     }
 

@@ -28,7 +28,11 @@ impl ExportMode {
     }
 
     pub fn all() -> &'static [ExportMode] {
-        &[ExportMode::Video, ExportMode::Xml, ExportMode::PalmierProject]
+        &[
+            ExportMode::Video,
+            ExportMode::Xml,
+            ExportMode::PalmierProject,
+        ]
     }
 }
 
@@ -73,8 +77,7 @@ impl ExportViewModel {
     }
 
     pub fn can_start_export(&self) -> bool {
-        self.panel.settings_valid()
-            && self.panel.stage != ExportStage::Exporting
+        self.panel.settings_valid() && self.panel.stage != ExportStage::Exporting
     }
 
     pub fn start(&mut self) {
@@ -117,7 +120,10 @@ mod tests {
     #[test]
     fn can_start_export_initially_true_for_valid_settings() {
         let vm = ExportViewModel::new();
-        assert!(vm.can_start_export(), "default settings (H264+SDR) are valid");
+        assert!(
+            vm.can_start_export(),
+            "default settings (H264+SDR) are valid"
+        );
     }
 
     #[test]
@@ -126,7 +132,10 @@ mod tests {
         vm.start();
         assert!(!vm.settings_expanded);
         assert_eq!(vm.panel.stage, ExportStage::Exporting);
-        assert!(!vm.can_start_export(), "already exporting — can't start again");
+        assert!(
+            !vm.can_start_export(),
+            "already exporting — can't start again"
+        );
     }
 
     #[test]

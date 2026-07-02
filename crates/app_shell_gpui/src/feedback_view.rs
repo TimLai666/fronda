@@ -5,8 +5,8 @@
 //!     optional screenshot row + context note + error text + Cancel/Send footer.
 //!   • Success: checkmark heading + detail text + Done button.
 
-use app_contract::feedback_model::FeedbackViewModel;
 use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
+use app_contract::feedback_model::FeedbackViewModel;
 use gpui::{
     div, prelude::*, px, Animation, AnimationExt as _, App, ClickEvent, Context, FocusHandle,
     Focusable, InteractiveElement, ParentElement, Render, Styled, Window,
@@ -66,10 +66,7 @@ impl FeedbackView {
         };
         let error_text = self.model.error.clone();
 
-        let mut form = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::LG));
+        let mut form = div().flex().flex_col().gap(px(Spacing::LG));
 
         // Description textarea
         form = form.child(
@@ -90,7 +87,11 @@ impl FeedbackView {
                             div()
                                 .flex_1()
                                 .text_size(px(FontSize::MD))
-                                .text_color(if msg_empty { Text::MUTED } else { Text::PRIMARY })
+                                .text_color(if msg_empty {
+                                    Text::MUTED
+                                } else {
+                                    Text::PRIMARY
+                                })
                                 .child(msg_preview),
                         ),
                 ),
@@ -129,12 +130,17 @@ impl FeedbackView {
                 .items_center()
                 .gap(px(Spacing::SM))
                 .cursor_pointer()
-                .on_click(cx.listener(|this: &mut FeedbackView, _: &ClickEvent, _: &mut Window, cx: &mut Context<FeedbackView>| {
-                    if this.has_reply_email() {
-                        this.model.may_contact = !this.model.may_contact;
-                        cx.notify();
-                    }
-                }))
+                .on_click(cx.listener(
+                    |this: &mut FeedbackView,
+                     _: &ClickEvent,
+                     _: &mut Window,
+                     cx: &mut Context<FeedbackView>| {
+                        if this.has_reply_email() {
+                            this.model.may_contact = !this.model.may_contact;
+                            cx.notify();
+                        }
+                    },
+                ))
                 .child(
                     // Checkbox glyph
                     div()
@@ -142,8 +148,16 @@ impl FeedbackView {
                         .h(px(14.0))
                         .rounded(px(2.0))
                         .border_1()
-                        .border_color(if may_contact && has_reply { Accent::PRIMARY } else { BorderColors::PRIMARY })
-                        .bg(if may_contact && has_reply { Accent::PRIMARY } else { Background::BASE })
+                        .border_color(if may_contact && has_reply {
+                            Accent::PRIMARY
+                        } else {
+                            BorderColors::PRIMARY
+                        })
+                        .bg(if may_contact && has_reply {
+                            Accent::PRIMARY
+                        } else {
+                            Background::BASE
+                        })
                         .flex()
                         .items_center()
                         .justify_center()
@@ -157,7 +171,11 @@ impl FeedbackView {
                 .child(
                     div()
                         .text_size(px(FontSize::MD))
-                        .text_color(if has_reply { Text::SECONDARY } else { Text::TERTIARY })
+                        .text_color(if has_reply {
+                            Text::SECONDARY
+                        } else {
+                            Text::TERTIARY
+                        })
                         .child("We may email you for follow-up questions"),
                 ),
         );
@@ -178,18 +196,31 @@ impl FeedbackView {
                             .items_center()
                             .gap(px(Spacing::SM))
                             .cursor_pointer()
-                            .on_click(cx.listener(|this: &mut FeedbackView, _: &ClickEvent, _: &mut Window, cx: &mut Context<FeedbackView>| {
-                                this.model.include_screenshot = !this.model.include_screenshot;
-                                cx.notify();
-                            }))
+                            .on_click(cx.listener(
+                                |this: &mut FeedbackView,
+                                 _: &ClickEvent,
+                                 _: &mut Window,
+                                 cx: &mut Context<FeedbackView>| {
+                                    this.model.include_screenshot = !this.model.include_screenshot;
+                                    cx.notify();
+                                },
+                            ))
                             .child(
                                 div()
                                     .w(px(14.0))
                                     .h(px(14.0))
                                     .rounded(px(2.0))
                                     .border_1()
-                                    .border_color(if include_screenshot { Accent::PRIMARY } else { BorderColors::PRIMARY })
-                                    .bg(if include_screenshot { Accent::PRIMARY } else { Background::BASE })
+                                    .border_color(if include_screenshot {
+                                        Accent::PRIMARY
+                                    } else {
+                                        BorderColors::PRIMARY
+                                    })
+                                    .bg(if include_screenshot {
+                                        Accent::PRIMARY
+                                    } else {
+                                        Background::BASE
+                                    })
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -252,7 +283,12 @@ impl FeedbackView {
         if let Some(err) = error_text {
             form = form.child(
                 div()
-                    .text_color(gpui::Hsla { h: 0.0, s: 0.85, l: 0.55, a: 1.0 })
+                    .text_color(gpui::Hsla {
+                        h: 0.0,
+                        s: 0.85,
+                        l: 0.55,
+                        a: 1.0,
+                    })
                     .text_size(px(FontSize::SM))
                     .child(err),
             );
@@ -290,15 +326,28 @@ impl FeedbackView {
                         .flex_row()
                         .items_center()
                         .gap(px(Spacing::XS))
-                        .bg(if can_submit { Accent::PRIMARY } else { Background::PROMINENT })
+                        .bg(if can_submit {
+                            Accent::PRIMARY
+                        } else {
+                            Background::PROMINENT
+                        })
                         .cursor_pointer()
-                        .on_click(cx.listener(|this: &mut FeedbackView, _: &ClickEvent, _: &mut Window, cx: &mut Context<FeedbackView>| {
-                            if this.can_submit() {
-                                this.model.is_sending = true;
-                                cx.notify();
-                            }
-                        }))
-                        .text_color(if can_submit { Background::BASE } else { Text::MUTED })
+                        .on_click(cx.listener(
+                            |this: &mut FeedbackView,
+                             _: &ClickEvent,
+                             _: &mut Window,
+                             cx: &mut Context<FeedbackView>| {
+                                if this.can_submit() {
+                                    this.model.is_sending = true;
+                                    cx.notify();
+                                }
+                            },
+                        ))
+                        .text_color(if can_submit {
+                            Background::BASE
+                        } else {
+                            Text::MUTED
+                        })
                         .text_size(px(FontSize::SM))
                         .when(is_sending, |el| el.child(sending_spinner()))
                         .child(if is_sending { "Sending" } else { "Send" }),
@@ -352,30 +401,34 @@ impl FeedbackView {
             })
             // Done button
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_end()
-                    .child(
-                        div()
-                            .id("feedback-done")
-                            .px(px(Spacing::MD_LG))
-                            .py(px(Spacing::SM))
-                            .rounded_full()
-                            .bg(Accent::PRIMARY)
-                            .cursor_pointer()
-                            .text_color(Background::BASE)
-                            .text_size(px(FontSize::SM))
-                            .child("Done"),
-                    ),
+                div().flex().flex_row().justify_end().child(
+                    div()
+                        .id("feedback-done")
+                        .px(px(Spacing::MD_LG))
+                        .py(px(Spacing::SM))
+                        .rounded_full()
+                        .bg(Accent::PRIMARY)
+                        .cursor_pointer()
+                        .text_color(Background::BASE)
+                        .text_size(px(FontSize::SM))
+                        .child("Done"),
+                ),
             )
     }
 }
 
 fn sending_spinner() -> impl gpui::IntoElement {
-    div().flex().flex_row().items_center().gap(px(2.0))
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(2.0))
         .children((0u32..3).map(|i| {
-            div().w(px(4.0)).h(px(4.0)).rounded_full().bg(Background::BASE)
+            div()
+                .w(px(4.0))
+                .h(px(4.0))
+                .rounded_full()
+                .bg(Background::BASE)
                 .with_animation(
                     format!("send-dot-{i}"),
                     Animation::new(Duration::from_millis(900)).repeat(),

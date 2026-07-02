@@ -63,7 +63,7 @@ impl FolderOps {
             .iter()
             .filter(|f| f.parent_folder_id.as_deref() == parent_id)
             .collect();
-        result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        result.sort_by_key(|a| a.name.to_lowercase());
         result
     }
 
@@ -366,11 +366,7 @@ impl FolderOps {
         manifest
             .entries
             .iter()
-            .filter(|e| {
-                e.folder_id
-                    .as_ref()
-                    .map_or(false, |f| folder_ids.contains(f))
-            })
+            .filter(|e| e.folder_id.as_ref().is_some_and(|f| folder_ids.contains(f)))
             .map(|e| e.id.clone())
             .collect()
     }
@@ -544,9 +540,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         }
     }
 
@@ -582,14 +578,16 @@ mod tests {
     // =======================================================================
     #[test]
     fn fld_002_subfolders_immediate_children_only() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![
-            folder("root1", "Root One", None),
-            folder("root2", "Root Two", None),
-            folder("child1", "Child One", Some("root1")),
-            folder("child2", "Child Two", Some("root1")),
-            folder("grandchild", "Grandchild", Some("child1")),
-        ];
+        let manifest = MediaManifest {
+            folders: vec![
+                folder("root1", "Root One", None),
+                folder("root2", "Root Two", None),
+                folder("child1", "Child One", Some("root1")),
+                folder("child2", "Child Two", Some("root1")),
+                folder("grandchild", "Grandchild", Some("child1")),
+            ],
+            ..Default::default()
+        };
 
         let root_folders: Vec<&str> = FolderOps::subfolders(&manifest, None)
             .iter()
@@ -616,12 +614,14 @@ mod tests {
     // =======================================================================
     #[test]
     fn fld_003_case_insensitive_sort() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![
-            folder("b", "Beta", None),
-            folder("a", "alpha", None),
-            folder("c", "CHARLIE", None),
-        ];
+        let manifest = MediaManifest {
+            folders: vec![
+                folder("b", "Beta", None),
+                folder("a", "alpha", None),
+                folder("c", "CHARLIE", None),
+            ],
+            ..Default::default()
+        };
 
         let names: Vec<&str> = FolderOps::subfolders(&manifest, None)
             .iter()
@@ -635,12 +635,14 @@ mod tests {
     // =======================================================================
     #[test]
     fn fld_004_folder_path_root_to_target() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![
-            folder("a", "A", None),
-            folder("b", "B", Some("a")),
-            folder("c", "C", Some("b")),
-        ];
+        let manifest = MediaManifest {
+            folders: vec![
+                folder("a", "A", None),
+                folder("b", "B", Some("a")),
+                folder("c", "C", Some("b")),
+            ],
+            ..Default::default()
+        };
 
         let path = FolderOps::folder_path(&manifest, "c").unwrap();
         assert_eq!(path, vec!["a", "b", "c"]);
@@ -654,11 +656,13 @@ mod tests {
     // =======================================================================
     #[test]
     fn fld_005_cycle_terminates_safely() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![
-            folder("a", "A", Some("b")), // a's parent is b
-            folder("b", "B", Some("a")), // b's parent is a → cycle
-        ];
+        let manifest = MediaManifest {
+            folders: vec![
+                folder("a", "A", Some("b")), // a's parent is b
+                folder("b", "B", Some("a")), // b's parent is a → cycle
+            ],
+            ..Default::default()
+        };
 
         let result = FolderOps::folder_path(&manifest, "a");
         assert_eq!(result, Err(FolderError::DescendantCycle));
@@ -669,8 +673,10 @@ mod tests {
 
     #[test]
     fn fld_005_self_cycle_terminates_safely() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![folder("a", "A", Some("a"))]; // self-loop
+        let manifest = MediaManifest {
+            folders: vec![folder("a", "A", Some("a"))], // self-loop
+            ..Default::default()
+        };
 
         let result = FolderOps::folder_path(&manifest, "a");
         assert_eq!(result, Err(FolderError::DescendantCycle));
@@ -753,12 +759,14 @@ mod tests {
     // =======================================================================
     #[test]
     fn fld_008_move_folder_under_other() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![
-            folder("a", "A", None),
-            folder("b", "B", None),
-            folder("c", "C", Some("a")),
-        ];
+        let mut manifest = MediaManifest {
+            folders: vec![
+                folder("a", "A", None),
+                folder("b", "B", None),
+                folder("c", "C", Some("a")),
+            ],
+            ..Default::default()
+        };
 
         FolderOps::move_folder(&mut manifest, "c", Some("b".to_string())).unwrap();
         let c = manifest.folders.iter().find(|f| f.id == "c").unwrap();
@@ -767,8 +775,10 @@ mod tests {
 
     #[test]
     fn fld_009_move_folder_to_root() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![folder("a", "A", None), folder("b", "B", Some("a"))];
+        let mut manifest = MediaManifest {
+            folders: vec![folder("a", "A", None), folder("b", "B", Some("a"))],
+            ..Default::default()
+        };
 
         FolderOps::move_folder(&mut manifest, "b", None).unwrap();
         let b = manifest.folders.iter().find(|f| f.id == "b").unwrap();
@@ -780,8 +790,10 @@ mod tests {
     // =======================================================================
     #[test]
     fn fld_010_reject_self_parenting() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![folder("a", "A", None)];
+        let mut manifest = MediaManifest {
+            folders: vec![folder("a", "A", None)],
+            ..Default::default()
+        };
 
         let result = FolderOps::move_folder(&mut manifest, "a", Some("a".to_string()));
         assert_eq!(result, Err(FolderError::SelfParenting));
@@ -792,12 +804,14 @@ mod tests {
     // =======================================================================
     #[test]
     fn fld_011_reject_move_under_descendant() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![
-            folder("a", "A", None),
-            folder("b", "B", Some("a")),
-            folder("c", "C", Some("b")),
-        ];
+        let mut manifest = MediaManifest {
+            folders: vec![
+                folder("a", "A", None),
+                folder("b", "B", Some("a")),
+                folder("c", "C", Some("b")),
+            ],
+            ..Default::default()
+        };
 
         // Moving "a" under "c" would create A → B → C → A cycle
         let result = FolderOps::move_folder(&mut manifest, "a", Some("c".to_string()));
@@ -806,8 +820,10 @@ mod tests {
 
     #[test]
     fn fld_011_reject_move_parent_under_child() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![folder("p", "Parent", None), folder("c", "Child", Some("p"))];
+        let mut manifest = MediaManifest {
+            folders: vec![folder("p", "Parent", None), folder("c", "Child", Some("p"))],
+            ..Default::default()
+        };
 
         let result = FolderOps::move_folder(&mut manifest, "p", Some("c".to_string()));
         assert_eq!(result, Err(FolderError::DescendantCycle));
@@ -818,18 +834,20 @@ mod tests {
     // =======================================================================
     #[test]
     fn fld_012_delete_folder_recursive() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![
-            folder("a", "A", None),
-            folder("b", "B", Some("a")),
-            folder("c", "C", Some("b")),
-            folder("other", "Other", None),
-        ];
-        manifest.entries = vec![
-            entry("e1", ClipType::Video, "vid1.mp4", Some("a")),
-            entry("e2", ClipType::Video, "vid2.mp4", Some("b")),
-            entry("e3", ClipType::Video, "vid3.mp4", None),
-        ];
+        let mut manifest = MediaManifest {
+            folders: vec![
+                folder("a", "A", None),
+                folder("b", "B", Some("a")),
+                folder("c", "C", Some("b")),
+                folder("other", "Other", None),
+            ],
+            entries: vec![
+                entry("e1", ClipType::Video, "vid1.mp4", Some("a")),
+                entry("e2", ClipType::Video, "vid2.mp4", Some("b")),
+                entry("e3", ClipType::Video, "vid3.mp4", None),
+            ],
+            ..Default::default()
+        };
 
         let deleted = FolderOps::delete_folder(&mut manifest, "a").unwrap();
         let mut deleted_sorted = deleted.clone();
@@ -882,11 +900,13 @@ mod tests {
     // =======================================================================
     #[test]
     fn fld_021_delete_asset() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![
-            entry("e1", ClipType::Video, "vid1.mp4", None),
-            entry("e2", ClipType::Video, "vid2.mp4", None),
-        ];
+        let mut manifest = MediaManifest {
+            entries: vec![
+                entry("e1", ClipType::Video, "vid1.mp4", None),
+                entry("e2", ClipType::Video, "vid2.mp4", None),
+            ],
+            ..Default::default()
+        };
 
         FolderOps::delete_asset(&mut manifest, "e1").unwrap();
         assert_eq!(manifest.entries.len(), 1);
@@ -905,13 +925,15 @@ mod tests {
     // =======================================================================
     #[test]
     fn asset_ids_in_subtree_returns_asset_ids() {
-        let mut manifest = MediaManifest::default();
-        manifest.folders = vec![folder("a", "A", None), folder("b", "B", Some("a"))];
-        manifest.entries = vec![
-            entry("e1", ClipType::Video, "vid1.mp4", Some("a")),
-            entry("e2", ClipType::Video, "vid2.mp4", Some("b")),
-            entry("e3", ClipType::Video, "vid3.mp4", None),
-        ];
+        let manifest = MediaManifest {
+            folders: vec![folder("a", "A", None), folder("b", "B", Some("a"))],
+            entries: vec![
+                entry("e1", ClipType::Video, "vid1.mp4", Some("a")),
+                entry("e2", ClipType::Video, "vid2.mp4", Some("b")),
+                entry("e3", ClipType::Video, "vid3.mp4", None),
+            ],
+            ..Default::default()
+        };
 
         let mut ids = FolderOps::asset_ids_in_subtree(&manifest, "a");
         ids.sort();
@@ -983,11 +1005,13 @@ mod tests {
     // =======================================================================
     #[test]
     fn rlk_004_batch_relink_offline_only() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![
-            entry("off1", ClipType::Video, "vid1.mp4", None),
-            entry_cached("cached1", "vid2.mp4"),
-        ];
+        let mut manifest = MediaManifest {
+            entries: vec![
+                entry("off1", ClipType::Video, "vid1.mp4", None),
+                entry_cached("cached1", "vid2.mp4"),
+            ],
+            ..Default::default()
+        };
 
         let candidates: Vec<String> = vec!["/new/vid1.mp4".to_string()];
         let result = RelinkOps::batch_relink(&mut manifest, &candidates);
@@ -1005,8 +1029,10 @@ mod tests {
     // =======================================================================
     #[test]
     fn rlk_005_recursive_candidate_indexing() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![entry("e1", ClipType::Video, "vid1.mp4", None)];
+        let mut manifest = MediaManifest {
+            entries: vec![entry("e1", ClipType::Video, "vid1.mp4", None)],
+            ..Default::default()
+        };
 
         // Candidates from different directories are all indexed
         let candidates: Vec<String> = vec![
@@ -1073,12 +1099,14 @@ mod tests {
     // =======================================================================
     #[test]
     fn rlk_008_returns_relinked_and_total_offline() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![
-            entry("off1", ClipType::Video, "vid1.mp4", None),
-            entry("off2", ClipType::Audio, "track.wav", None),
-            entry_cached("cached1", "vid3.mp4"),
-        ];
+        let mut manifest = MediaManifest {
+            entries: vec![
+                entry("off1", ClipType::Video, "vid1.mp4", None),
+                entry("off2", ClipType::Audio, "track.wav", None),
+                entry_cached("cached1", "vid3.mp4"),
+            ],
+            ..Default::default()
+        };
 
         let candidates: Vec<String> = vec![
             "/new/vid1.mp4".to_string(),

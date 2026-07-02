@@ -59,9 +59,7 @@ pub fn output_extension_for(content: &PasteboardContent) -> Option<&'static str>
 }
 
 /// PST-002/PST-003: Select the highest-priority content from a slice.
-pub fn highest_priority_content<'a>(
-    contents: &'a [PasteboardContent],
-) -> Option<&'a PasteboardContent> {
+pub fn highest_priority_content(contents: &[PasteboardContent]) -> Option<&PasteboardContent> {
     contents
         .iter()
         .min_by_key(|c| c.priority())

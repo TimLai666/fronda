@@ -3,31 +3,20 @@
 //! Implements CHAT-001 through CHAT-010.
 //! Requires the `desktop-app` feature (gpui).
 
-use app_contract::chat_model::{ChatMessage, ChatPanelModel, ChatRole, MessageStatus, ToolCallStatus};
+use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
+use app_contract::chat_model::{
+    ChatMessage, ChatPanelModel, ChatRole, MessageStatus, ToolCallStatus,
+};
 use app_contract::mention_picker::{MentionCandidate, MentionCategory, MentionPickerState};
 use app_contract::session_manager::SessionManager;
-use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
 use gpui::{
     div, prelude::*, px, Animation, AnimationExt as _, App, ClickEvent, Context, FocusHandle,
     Focusable, Hsla, InteractiveElement, KeyDownEvent, ParentElement, Render, Styled, Window,
 };
-use std::time::Duration;
 use std::collections::HashSet;
+use std::time::Duration;
 
-const AVAILABLE_MODELS: &[&str] = &[
-    "claude-opus-4-8",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
-];
-
-/// Role label for display.
-fn role_label(role: &ChatRole) -> &'static str {
-    match role {
-        ChatRole::User => "You",
-        ChatRole::Assistant => "Assistant",
-        ChatRole::System => "System",
-    }
-}
+const AVAILABLE_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
 
 /// Starter prompt entries shown in empty state (Swift: 7 preset action buttons).
 const STARTER_PROMPTS: &[(&str, &str)] = &[
@@ -166,7 +155,11 @@ impl ChatView {
     fn render_tab_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let active_idx = self.session_mgr.active_index;
         let history_open = self.history_open;
-        let sessions: Vec<(usize, String, bool)> = self.session_mgr.sessions.iter().enumerate()
+        let sessions: Vec<(usize, String, bool)> = self
+            .session_mgr
+            .sessions
+            .iter()
+            .enumerate()
             .map(|(i, s)| (i, s.title.clone(), i == active_idx))
             .collect();
         let multi = sessions.len() > 1;
@@ -197,16 +190,27 @@ impl ChatView {
                 .border_b(px(if is_active { 1.5 } else { 0.0 }))
                 .border_color(Text::PRIMARY)
                 .on_click(cx.listener(
-                    move |this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
+                    move |this: &mut ChatView,
+                          _: &ClickEvent,
+                          _: &mut Window,
+                          cx: &mut Context<ChatView>| {
                         this.session_mgr.select_tab(i);
                         cx.notify();
                     },
                 ))
                 .child(
                     div()
-                        .text_color(if is_active { Text::PRIMARY } else { Text::MUTED })
+                        .text_color(if is_active {
+                            Text::PRIMARY
+                        } else {
+                            Text::MUTED
+                        })
                         .text_size(px(FontSize::SM))
-                        .font_weight(if is_active { gpui::FontWeight::MEDIUM } else { gpui::FontWeight::NORMAL })
+                        .font_weight(if is_active {
+                            gpui::FontWeight::MEDIUM
+                        } else {
+                            gpui::FontWeight::NORMAL
+                        })
                         .child(title),
                 );
 
@@ -222,10 +226,15 @@ impl ChatView {
                         .text_color(Text::MUTED)
                         .text_size(px(FontSize::XXS))
                         .cursor_pointer()
-                        .on_click(cx.listener(move |this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
-                            this.session_mgr.close_tab(i);
-                            cx.notify();
-                        }))
+                        .on_click(cx.listener(
+                            move |this: &mut ChatView,
+                                  _: &ClickEvent,
+                                  _: &mut Window,
+                                  cx: &mut Context<ChatView>| {
+                                this.session_mgr.close_tab(i);
+                                cx.notify();
+                            },
+                        ))
                         .child("×"),
                 );
             }
@@ -246,10 +255,15 @@ impl ChatView {
                 .rounded(px(Radius::XS))
                 .text_color(Text::TERTIARY)
                 .text_size(px(FontSize::MD))
-                .on_click(cx.listener(|this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
-                    this.session_mgr.new_tab();
-                    cx.notify();
-                }))
+                .on_click(cx.listener(
+                    |this: &mut ChatView,
+                     _: &ClickEvent,
+                     _: &mut Window,
+                     cx: &mut Context<ChatView>| {
+                        this.session_mgr.new_tab();
+                        cx.notify();
+                    },
+                ))
                 .child("+"),
         );
 
@@ -268,16 +282,35 @@ impl ChatView {
                 .cursor_pointer()
                 .rounded(px(Radius::XS))
                 .bg(if history_open {
-                    Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.08 }
+                    Hsla {
+                        h: 0.0,
+                        s: 0.0,
+                        l: 1.0,
+                        a: 0.08,
+                    }
                 } else {
-                    Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 }
+                    Hsla {
+                        h: 0.0,
+                        s: 0.0,
+                        l: 0.0,
+                        a: 0.0,
+                    }
                 })
-                .text_color(if history_open { Text::PRIMARY } else { Text::TERTIARY })
+                .text_color(if history_open {
+                    Text::PRIMARY
+                } else {
+                    Text::TERTIARY
+                })
                 .text_size(px(FontSize::XS))
-                .on_click(cx.listener(|this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
-                    this.history_open = !this.history_open;
-                    cx.notify();
-                }))
+                .on_click(cx.listener(
+                    |this: &mut ChatView,
+                     _: &ClickEvent,
+                     _: &mut Window,
+                     cx: &mut Context<ChatView>| {
+                        this.history_open = !this.history_open;
+                        cx.notify();
+                    },
+                ))
                 .child("⏱"),
         );
 
@@ -286,12 +319,18 @@ impl ChatView {
 
     /// Chat history popover — rendered as an absolute overlay when history_open = true.
     fn render_history_popover(&self) -> impl IntoElement {
-        let session_entries: Vec<(String, String, bool)> = self.session_mgr.sessions.iter().enumerate()
-            .map(|(i, s)| (
-                s.title.clone(),
-                "now".to_string(),
-                i == self.session_mgr.active_index,
-            ))
+        let session_entries: Vec<(String, String, bool)> = self
+            .session_mgr
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                (
+                    s.title.clone(),
+                    "now".to_string(),
+                    i == self.session_mgr.active_index,
+                )
+            })
             .collect();
 
         let mut list = div()
@@ -320,7 +359,12 @@ impl ChatView {
             );
         } else {
             for (title, time, is_current) in session_entries {
-                let active_bg = Hsla { h: Accent::PRIMARY.h, s: Accent::PRIMARY.s, l: Accent::PRIMARY.l, a: 0.15 };
+                let active_bg = Hsla {
+                    h: Accent::PRIMARY.h,
+                    s: Accent::PRIMARY.s,
+                    l: Accent::PRIMARY.l,
+                    a: 0.15,
+                };
                 list = list.child(
                     div()
                         .flex()
@@ -331,7 +375,11 @@ impl ChatView {
                         .px(px(Spacing::MD))
                         .py(px(6.0))
                         .cursor_pointer()
-                        .bg(if is_current { active_bg } else { Background::BASE })
+                        .bg(if is_current {
+                            active_bg
+                        } else {
+                            Background::BASE
+                        })
                         .child(
                             div()
                                 .flex_col()
@@ -369,7 +417,12 @@ impl ChatView {
     /// Message layout matching Swift AgentMessageView:
     ///   - User:      right-aligned bubble, white@Opacity.faint (0.08), Radius.lg
     ///   - Assistant: left-aligned text + ToolRunRow items + copy button
-    fn render_message(&self, idx: usize, msg: &ChatMessage, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_message(
+        &self,
+        idx: usize,
+        msg: &ChatMessage,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let is_sending = matches!(&msg.status, MessageStatus::Sending);
         let failed_suffix = match &msg.status {
             MessageStatus::Failed(_) => " ⚠",
@@ -395,7 +448,12 @@ impl ChatView {
                         el.px(px(Spacing::LG))
                             .py(px(Spacing::SM_MD))
                             .rounded(px(Radius::LG))
-                            .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.08 })
+                            .bg(Hsla {
+                                h: 0.0,
+                                s: 0.0,
+                                l: 1.0,
+                                a: 0.08,
+                            })
                     })
                     .child(text_content),
             );
@@ -414,13 +472,18 @@ impl ChatView {
                 let key_click = key.clone();
                 let status_glyph = match tc.status {
                     ToolCallStatus::Running => "⋯",
-                    ToolCallStatus::Done    => "✓",
-                    ToolCallStatus::Failed  => "✕",
+                    ToolCallStatus::Done => "✓",
+                    ToolCallStatus::Failed => "✕",
                 };
                 let status_color = match tc.status {
                     ToolCallStatus::Running => Text::MUTED,
-                    ToolCallStatus::Done    => Text::TERTIARY,
-                    ToolCallStatus::Failed  => gpui::Hsla { h: 0.0, s: 0.85, l: 0.55, a: 1.0 },
+                    ToolCallStatus::Done => Text::TERTIARY,
+                    ToolCallStatus::Failed => gpui::Hsla {
+                        h: 0.0,
+                        s: 0.85,
+                        l: 0.55,
+                        a: 1.0,
+                    },
                 };
                 let name = tc.name.clone();
                 let chevron = if is_expanded { "▾" } else { "▸" };
@@ -434,16 +497,26 @@ impl ChatView {
                     .px(px(Spacing::SM_MD))
                     .py(px(Spacing::XS))
                     .rounded(px(Radius::SM))
-                    .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.04 })
+                    .bg(Hsla {
+                        h: 0.0,
+                        s: 0.0,
+                        l: 1.0,
+                        a: 0.04,
+                    })
                     .cursor_pointer()
-                    .on_click(cx.listener(move |this: &mut ChatView, _: &ClickEvent, _: &mut Window, cx: &mut Context<ChatView>| {
-                        if this.expanded_tool_rows.contains(&key_click) {
-                            this.expanded_tool_rows.remove(&key_click);
-                        } else {
-                            this.expanded_tool_rows.insert(key_click.clone());
-                        }
-                        cx.notify();
-                    }))
+                    .on_click(cx.listener(
+                        move |this: &mut ChatView,
+                              _: &ClickEvent,
+                              _: &mut Window,
+                              cx: &mut Context<ChatView>| {
+                            if this.expanded_tool_rows.contains(&key_click) {
+                                this.expanded_tool_rows.remove(&key_click);
+                            } else {
+                                this.expanded_tool_rows.insert(key_click.clone());
+                            }
+                            cx.notify();
+                        },
+                    ))
                     .child(
                         div()
                             .text_color(status_color)
@@ -479,17 +552,32 @@ impl ChatView {
                         .flex()
                         .flex_col()
                         .gap(px(Spacing::XS))
-                        .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.02 });
+                        .bg(Hsla {
+                            h: 0.0,
+                            s: 0.0,
+                            l: 1.0,
+                            a: 0.02,
+                        });
                     // Input args (Swift: argsSection with pretty-printed JSON)
                     if let Some(ref args) = tc.input_json {
                         detail = detail
-                            .child(div().text_color(Text::MUTED).text_size(px(FontSize::XXS)).child("INPUT"))
+                            .child(
+                                div()
+                                    .text_color(Text::MUTED)
+                                    .text_size(px(FontSize::XXS))
+                                    .child("INPUT"),
+                            )
                             .child(
                                 div()
                                     .px(px(Spacing::SM))
                                     .py(px(Spacing::XS))
                                     .rounded(px(Radius::XS))
-                                    .bg(Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.3 })
+                                    .bg(Hsla {
+                                        h: 0.0,
+                                        s: 0.0,
+                                        l: 0.0,
+                                        a: 0.3,
+                                    })
                                     .text_color(Text::TERTIARY)
                                     .text_size(px(FontSize::XS))
                                     .child(args.clone()),
@@ -498,20 +586,33 @@ impl ChatView {
                     // Output (Swift: resultSection)
                     if let Some(ref result) = tc.result_text {
                         detail = detail
-                            .child(div().text_color(Text::MUTED).text_size(px(FontSize::XXS)).child("OUTPUT"))
+                            .child(
+                                div()
+                                    .text_color(Text::MUTED)
+                                    .text_size(px(FontSize::XXS))
+                                    .child("OUTPUT"),
+                            )
                             .child(
                                 div()
                                     .px(px(Spacing::SM))
                                     .py(px(Spacing::XS))
                                     .rounded(px(Radius::XS))
-                                    .bg(Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.3 })
+                                    .bg(Hsla {
+                                        h: 0.0,
+                                        s: 0.0,
+                                        l: 0.0,
+                                        a: 0.3,
+                                    })
                                     .text_color(Text::SECONDARY)
                                     .text_size(px(FontSize::XS))
                                     .child(result.clone()),
                             );
                     } else if tc.input_json.is_none() {
                         detail = detail.child(
-                            div().text_color(Text::MUTED).text_size(px(FontSize::XS)).child("(no output)"),
+                            div()
+                                .text_color(Text::MUTED)
+                                .text_size(px(FontSize::XS))
+                                .child("(no output)"),
                         );
                     }
                     tool_wrap = tool_wrap.child(detail);
@@ -607,14 +708,14 @@ impl ChatView {
                     .cursor_pointer()
                     .child(
                         div()
-                            .text_color(Text::TERTIARY)  // icon: tertiary (matches Swift .tertiaryColor)
+                            .text_color(Text::TERTIARY) // icon: tertiary (matches Swift .tertiaryColor)
                             .text_size(px(FontSize::SM_MD))
                             .child(icon.to_string()),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .text_color(Text::PRIMARY)  // label: primary (matches Swift .primaryColor)
+                            .text_color(Text::PRIMARY) // label: primary (matches Swift .primaryColor)
                             .text_size(px(FontSize::SM))
                             .child(label.to_string()),
                     ),
@@ -668,7 +769,11 @@ impl ChatView {
                     .child(
                         div()
                             .text_size(px(FontSize::XS))
-                            .text_color(if is_active { Text::PRIMARY } else { Text::SECONDARY })
+                            .text_color(if is_active {
+                                Text::PRIMARY
+                            } else {
+                                Text::SECONDARY
+                            })
                             .child(cat.label().to_string()),
                     ),
             );
@@ -887,7 +992,11 @@ impl Render for ChatView {
                 .child(
                     div()
                         .text_size(px(FontSize::SM))
-                        .text_color(if can_send { Background::BASE } else { Text::MUTED })
+                        .text_color(if can_send {
+                            Background::BASE
+                        } else {
+                            Text::MUTED
+                        })
                         .child("▲"),
                 )
         };
@@ -1002,13 +1111,26 @@ impl Render for ChatView {
                     }))
                     .child(
                         div()
-                            .text_color(if is_selected { Accent::PRIMARY } else { Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.0 } })
+                            .text_color(if is_selected {
+                                Accent::PRIMARY
+                            } else {
+                                Hsla {
+                                    h: 0.0,
+                                    s: 0.0,
+                                    l: 1.0,
+                                    a: 0.0,
+                                }
+                            })
                             .text_size(px(FontSize::XS))
                             .child("✓"),
                     )
                     .child(
                         div()
-                            .text_color(if is_selected { Text::PRIMARY } else { Text::SECONDARY })
+                            .text_color(if is_selected {
+                                Text::PRIMARY
+                            } else {
+                                Text::SECONDARY
+                            })
                             .text_size(px(FontSize::SM))
                             .child(*model_name),
                     ),
@@ -1047,9 +1169,7 @@ impl Render for ChatView {
                     .w_full()
                     .child(tab_bar),
             )
-            .when(history_open, |el| {
-                el.child(self.render_history_popover())
-            });
+            .when(history_open, |el| el.child(self.render_history_popover()));
 
         // ── Full layout ──
         div()
@@ -1089,7 +1209,12 @@ fn render_md_text(text: &str, base_size: f32) -> impl IntoElement {
             .px(px(8.0))
             .py(px(6.0))
             .rounded(px(4.0))
-            .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.35 })
+            .bg(gpui::Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.0,
+                a: 0.35,
+            })
             .text_color(Text::SECONDARY)
             .text_size(px(base_size - 1.0))
             .child(block)
@@ -1121,8 +1246,18 @@ fn render_md_text(text: &str, base_size: f32) -> impl IntoElement {
             (raw_line, false, false)
         };
 
-        let font_size = if is_h1 { base_size + 4.0 } else if is_h2 { base_size + 2.0 } else { base_size };
-        let weight = if is_h1 || is_h2 { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL };
+        let font_size = if is_h1 {
+            base_size + 4.0
+        } else if is_h2 {
+            base_size + 2.0
+        } else {
+            base_size
+        };
+        let weight = if is_h1 || is_h2 {
+            gpui::FontWeight::BOLD
+        } else {
+            gpui::FontWeight::NORMAL
+        };
 
         // Inline segments: split on **bold** and `code`
         let segments = parse_inline(line_text);
@@ -1152,7 +1287,12 @@ fn render_md_text(text: &str, base_size: f32) -> impl IntoElement {
                     div()
                         .px(px(3.0))
                         .rounded(px(3.0))
-                        .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.08 })
+                        .bg(gpui::Hsla {
+                            h: 0.0,
+                            s: 0.0,
+                            l: 1.0,
+                            a: 0.08,
+                        })
                         .text_color(Text::SECONDARY)
                         .text_size(px(font_size - 1.0))
                         .child(s),
@@ -1168,7 +1308,11 @@ fn render_md_text(text: &str, base_size: f32) -> impl IntoElement {
     col
 }
 
-enum InlineSeg { Plain(String), Bold(String), Code(String) }
+enum InlineSeg {
+    Plain(String),
+    Bold(String),
+    Code(String),
+}
 
 fn parse_inline(s: &str) -> Vec<InlineSeg> {
     let mut segs = Vec::new();
@@ -1178,36 +1322,46 @@ fn parse_inline(s: &str) -> Vec<InlineSeg> {
             let code_start = rest.find('`').unwrap_or(usize::MAX);
             if code_start < bold_start {
                 // code comes first
-                if code_start > 0 { segs.push(InlineSeg::Plain(rest[..code_start].to_string())); }
+                if code_start > 0 {
+                    segs.push(InlineSeg::Plain(rest[..code_start].to_string()));
+                }
                 let inner = &rest[code_start + 1..];
                 if let Some(code_end) = inner.find('`') {
                     segs.push(InlineSeg::Code(inner[..code_end].to_string()));
                     rest = &inner[code_end + 1..];
                 } else {
-                    segs.push(InlineSeg::Plain(rest.to_string())); break;
+                    segs.push(InlineSeg::Plain(rest.to_string()));
+                    break;
                 }
             } else {
                 // bold comes first
-                if bold_start > 0 { segs.push(InlineSeg::Plain(rest[..bold_start].to_string())); }
+                if bold_start > 0 {
+                    segs.push(InlineSeg::Plain(rest[..bold_start].to_string()));
+                }
                 let inner = &rest[bold_start + 2..];
                 if let Some(bold_end) = inner.find("**") {
                     segs.push(InlineSeg::Bold(inner[..bold_end].to_string()));
                     rest = &inner[bold_end + 2..];
                 } else {
-                    segs.push(InlineSeg::Plain(rest.to_string())); break;
+                    segs.push(InlineSeg::Plain(rest.to_string()));
+                    break;
                 }
             }
         } else if let Some(code_start) = rest.find('`') {
-            if code_start > 0 { segs.push(InlineSeg::Plain(rest[..code_start].to_string())); }
+            if code_start > 0 {
+                segs.push(InlineSeg::Plain(rest[..code_start].to_string()));
+            }
             let inner = &rest[code_start + 1..];
             if let Some(code_end) = inner.find('`') {
                 segs.push(InlineSeg::Code(inner[..code_end].to_string()));
                 rest = &inner[code_end + 1..];
             } else {
-                segs.push(InlineSeg::Plain(rest.to_string())); break;
+                segs.push(InlineSeg::Plain(rest.to_string()));
+                break;
             }
         } else {
-            segs.push(InlineSeg::Plain(rest.to_string())); break;
+            segs.push(InlineSeg::Plain(rest.to_string()));
+            break;
         }
     }
     segs

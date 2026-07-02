@@ -2864,7 +2864,10 @@ mod tests {
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         // The formatted output should include the language field
-        assert!(text.contains("\"language\""), "language field in output: {text}");
+        assert!(
+            text.contains("\"language\""),
+            "language field in output: {text}"
+        );
         assert!(text.contains("fr"), "language value in output: {text}");
     }
 
@@ -2877,7 +2880,10 @@ mod tests {
             .execute("get_transcript", &json!({"mediaId": "media-001"}))
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("\"language\""), "project language in output: {text}");
+        assert!(
+            text.contains("\"language\""),
+            "project language in output: {text}"
+        );
         assert!(text.contains("ja"), "language value in output: {text}");
     }
 
@@ -2894,7 +2900,10 @@ mod tests {
         let text = result["content"][0]["text"].as_str().unwrap();
         // per-call "ko" should win over project "ja"
         assert!(text.contains("ko"), "per-call language wins: {text}");
-        assert!(!text.contains("\"ja\""), "project language not in output: {text}");
+        assert!(
+            !text.contains("\"ja\""),
+            "project language not in output: {text}"
+        );
     }
 
     #[test]
@@ -2907,7 +2916,10 @@ mod tests {
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         // language field should be omitted when None
-        assert!(!text.contains("\"language\""), "no language field expected: {text}");
+        assert!(
+            !text.contains("\"language\""),
+            "no language field expected: {text}"
+        );
     }
 
     #[test]
@@ -2920,7 +2932,10 @@ mod tests {
                 &json!({"mediaId": "media-001", "language": "de"}),
             )
             .unwrap();
-        assert!(result.get("isError").is_none(), "no error with language param");
+        assert!(
+            result.get("isError").is_none(),
+            "no error with language param"
+        );
     }
 
     #[test]
@@ -3367,14 +3382,14 @@ mod tests {
 
     #[test]
     fn exec_060_is_media_offline_true() {
-        let mut exec = make_executor_with_media();
+        let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         assert!(exec.is_media_offline(&id, |_| true));
     }
 
     #[test]
     fn exec_061_is_media_offline_false() {
-        let mut exec = make_executor_with_media();
+        let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         assert!(!exec.is_media_offline(&id, |_| false));
     }
@@ -3421,7 +3436,7 @@ mod tests {
 
     #[test]
     fn exec_064_is_media_unprocessable_true() {
-        let mut exec = make_executor_with_media();
+        let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         // File exists (not missing) but is unprocessable.
         assert!(exec.is_media_unprocessable(&id, |_| false, |_| true));
@@ -3429,7 +3444,7 @@ mod tests {
 
     #[test]
     fn exec_065_is_media_unprocessable_missing_not_unprocessable() {
-        let mut exec = make_executor_with_media();
+        let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         // If file is missing, it's offline, not unprocessable.
         assert!(!exec.is_media_unprocessable(&id, |_| true, |_| true));

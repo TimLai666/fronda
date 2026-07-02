@@ -2,23 +2,23 @@
 
 **What is Fronda?**
 
-`Fronda` is the planned name of the cross-platform Rust rewrite being developed in this fork of Palmier Pro.
+`Fronda` is the cross-platform Rust editor in this fork of Palmier Pro.
 
 **What code runs today?**
 
-Today the runnable app is still the inherited Swift 6.2 / SwiftUI / AppKit implementation from the Palmier Pro codebase.
+The active development surface is the Rust workspace. The repo also retains the inherited Swift 6.2 / SwiftUI / AppKit app as a legacy compatibility reference.
 
 **Why keep the Swift app around?**
 
-It is the behavioral reference. The Rust rewrite is expected to match current user-visible behavior unless a spec records an intentional product change.
+It remains the behavioral reference for parity checks. Fronda is expected to match current user-visible behavior unless a spec records an intentional product change.
 
 **What platforms will Fronda target?**
 
-The rewrite target is a cross-platform Rust app, with `gpui-ce` as the default UI stack.
+Fronda is a cross-platform Rust app, with `gpui-ce` as the default UI stack.
 
 **What platforms does the current app support?**
 
-The current executable is still macOS 26+ on Apple Silicon only.
+The legacy Swift app is macOS 26+ on Apple Silicon only. The Fronda workspace itself is cross-platform and is the primary target for repo work.
 
 **Why do some identifiers still say Palmier?**
 

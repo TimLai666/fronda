@@ -6,7 +6,7 @@
 ///
 /// In the Swift baseline, these are read from `Bundle.main.infoDictionary`.
 /// In Rust, they must be injected by the platform layer.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct BackendConfig {
     /// PalmierClerkPublishableKey from bundle info (CFG-001).
     pub clerk_publishable_key: Option<String>,
@@ -56,16 +56,6 @@ impl BackendConfig {
     /// but features requiring it should fail cleanly.
     pub fn has_http_url(&self) -> bool {
         self.convex_http_url.is_some()
-    }
-}
-
-impl Default for BackendConfig {
-    fn default() -> Self {
-        Self {
-            clerk_publishable_key: None,
-            convex_deployment_url: None,
-            convex_http_url: None,
-        }
     }
 }
 

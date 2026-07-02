@@ -212,6 +212,9 @@ mod tests {
     fn issue_156_project_ref_version_label_optional() {
         let p = ProjectRef::new("Rough Cut", "/cut.palmier");
         let json = serde_json::to_string(&p).unwrap();
-        assert!(!json.contains("versionLabel"), "None versionLabel must be omitted: {json}");
+        assert!(
+            !json.contains("versionLabel"),
+            "None versionLabel must be omitted: {json}"
+        );
     }
 }

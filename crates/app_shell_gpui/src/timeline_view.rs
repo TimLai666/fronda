@@ -5,12 +5,10 @@
 use crate::theme::{
     Accent, Background, BorderColors, BorderWidth, FontSize, Radius, Spacing, Text, TrackColor,
 };
-use crate::timeline_model::{
-    TimelineState, TrackKind, RULER_HEIGHT, TRACK_HEADER_WIDTH,
-};
+use crate::timeline_model::{TimelineState, TrackKind, RULER_HEIGHT, TRACK_HEADER_WIDTH};
 use gpui::{
-    div, prelude::*, px, svg, App, Context, FocusHandle, Focusable, IntoElement,
-    InteractiveElement, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, svg, App, Context, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, Styled, Window,
 };
 
 /// Timeline panel gpui entity.
@@ -160,8 +158,7 @@ impl Render for TimelineView {
                                     .border_b_1()
                                     .border_color(BorderColors::SUBTLE)
                                     .when(is_first_audio && show_zone_divider, |el| {
-                                        el.border_t_2()
-                                            .border_color(BorderColors::DIVIDER)
+                                        el.border_t_2().border_color(BorderColors::DIVIDER)
                                     })
                                     // Color strip: 3px to match Swift
                                     .child(div().w(px(3.0)).h_full().bg(color))
@@ -240,8 +237,7 @@ impl Render for TimelineView {
                                             .relative()
                                             .bg(Background::SURFACE)
                                             .when(is_first_audio && show_zone_divider, |el| {
-                                                el.border_t_2()
-                                                    .border_color(BorderColors::DIVIDER)
+                                                el.border_t_2().border_color(BorderColors::DIVIDER)
                                             })
                                             .children(track_clips.iter().map(|clip| {
                                                 let clip_x =
@@ -287,9 +283,7 @@ impl Render for TimelineView {
                             // Snap indicator — dashed yellow vertical line during clip drag
                             // Mirrors Swift SnapIndicatorOverlay (CAShapeLayer with dashes).
                             // Approximated as alternating solid segments (gpui has no native dash).
-                            .when_some(snap_x, |el, sx| {
-                                el.child(snap_indicator(sx))
-                            }),
+                            .when_some(snap_x, |el, sx| el.child(snap_indicator(sx))),
                     ),
             )
     }
@@ -300,7 +294,12 @@ fn snap_indicator(x: f32) -> impl IntoElement {
     const DASH: f32 = 4.0;
     const GAP: f32 = 4.0;
     const TOTAL: usize = 40; // covers up to 320px height
-    const YELLOW: gpui::Hsla = gpui::Hsla { h: 0.139, s: 1.0, l: 0.55, a: 1.0 };
+    const YELLOW: gpui::Hsla = gpui::Hsla {
+        h: 0.139,
+        s: 1.0,
+        l: 0.55,
+        a: 1.0,
+    };
 
     let mut col = div()
         .id("snap-indicator")
@@ -317,7 +316,14 @@ fn snap_indicator(x: f32) -> impl IntoElement {
                 .w_full()
                 .h(px(DASH))
                 .when(i % 2 == 0, |el| el.bg(YELLOW))
-                .when(i % 2 != 0, |el| el.bg(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 })),
+                .when(i % 2 != 0, |el| {
+                    el.bg(gpui::Hsla {
+                        h: 0.0,
+                        s: 0.0,
+                        l: 0.0,
+                        a: 0.0,
+                    })
+                }),
         );
         col = col.child(div().w_full().h(px(GAP)));
     }
@@ -325,12 +331,7 @@ fn snap_indicator(x: f32) -> impl IntoElement {
 }
 
 /// Generate ruler tick labels for visible timecodes.
-fn ruler_timecodes(
-    total_frames: i64,
-    fps: i64,
-    zoom: f32,
-    scroll_x: f32,
-) -> impl IntoElement {
+fn ruler_timecodes(total_frames: i64, fps: i64, zoom: f32, scroll_x: f32) -> impl IntoElement {
     let fps = fps.max(1);
     let tick_spacing_px = 80.0_f32;
     let frames_per_tick = ((tick_spacing_px / zoom).round() as i64).max(1);
@@ -339,11 +340,7 @@ fn ruler_timecodes(
     let start_frame = (scroll_x / zoom) as i64;
     let start_tick = (start_frame / frames_per_tick).max(0) * frames_per_tick;
 
-    let mut root = div()
-        .id("ruler-ticks")
-        .relative()
-        .w_full()
-        .h_full();
+    let mut root = div().id("ruler-ticks").relative().w_full().h_full();
 
     let visible_frames = (1200.0_f32 / zoom) as i64 + frames_per_tick * 2;
     let mut frame = start_tick;
@@ -368,6 +365,17 @@ fn ruler_timecodes(
 }
 
 fn round_to_nice_interval(raw: i64, fps: i64) -> i64 {
-    let candidates = [1, 5, 10, 30, fps, fps * 2, fps * 5, fps * 10, fps * 30, fps * 60];
+    let candidates = [
+        1,
+        5,
+        10,
+        30,
+        fps,
+        fps * 2,
+        fps * 5,
+        fps * 10,
+        fps * 30,
+        fps * 60,
+    ];
     *candidates.iter().find(|&&c| c >= raw).unwrap_or(&raw)
 }

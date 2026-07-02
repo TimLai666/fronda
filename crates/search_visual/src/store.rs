@@ -81,7 +81,11 @@ impl EmbeddingStore {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(top_k);
         results
     }
@@ -93,13 +97,20 @@ mod tests {
     use crate::embedder::VisualEmbedding;
 
     fn emb(id: &str, idx: usize, v: Vec<f32>) -> VisualEmbedding {
-        VisualEmbedding { entry_id: id.to_string(), sample_index: idx, vector: v }
+        VisualEmbedding {
+            entry_id: id.to_string(),
+            sample_index: idx,
+            vector: v,
+        }
     }
 
     #[test]
     fn upsert_and_search_basic() {
         let mut store = EmbeddingStore::new();
-        store.upsert(vec![emb("a", 0, vec![1.0, 0.0]), emb("a", 1, vec![0.0, 1.0])]);
+        store.upsert(vec![
+            emb("a", 0, vec![1.0, 0.0]),
+            emb("a", 1, vec![0.0, 1.0]),
+        ]);
         store.upsert(vec![emb("b", 0, vec![0.707, 0.707])]);
 
         let results = store.search(&[1.0, 0.0], 5);

@@ -2,11 +2,11 @@
 //!
 //! Requires the `desktop-app` feature (gpui).
 
-use app_contract::agent_panel_model::{AgentPanelModel, McpServerStatus};
 use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Status, Text};
+use app_contract::agent_panel_model::{AgentPanelModel, McpServerStatus};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, Hsla,
-    ParentElement, Render, Styled, Window,
+    div, prelude::*, px, App, Context, FocusHandle, Focusable, Hsla, ParentElement, Render, Styled,
+    Window,
 };
 
 /// Status indicator dot color based on MCP server state.
@@ -76,13 +76,7 @@ impl Render for AgentPanelView {
             .bg(Background::SURFACE)
             .border_b_1()
             .border_color(BorderColors::SUBTLE)
-            .child(
-                div()
-                    .w(px(6.0))
-                    .h(px(6.0))
-                    .rounded_full()
-                    .bg(dot_color),
-            )
+            .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(dot_color))
             .child(
                 div()
                     .text_color(Text::MUTED)
@@ -137,13 +131,7 @@ impl Render for AgentPanelView {
                         .px(px(Spacing::SM))
                         .rounded(px(Radius::XS))
                         .gap(px(Spacing::XS))
-                        .child(
-                            div()
-                                .w(px(4.0))
-                                .h(px(4.0))
-                                .rounded_full()
-                                .bg(dot_color),
-                        )
+                        .child(div().w(px(4.0)).h(px(4.0)).rounded_full().bg(dot_color))
                         .child(
                             div()
                                 .text_color(Text::SECONDARY)

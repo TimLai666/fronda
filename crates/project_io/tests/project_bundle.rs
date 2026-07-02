@@ -256,7 +256,7 @@ fn saves_and_loads_transcripts() {
             .as_deref(),
         Some("en")
     );
-    assert_eq!(reopened.transcripts_dir.is_some(), true);
+    assert!(reopened.transcripts_dir.is_some());
 }
 
 #[test]

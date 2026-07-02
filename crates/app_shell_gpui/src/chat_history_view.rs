@@ -6,8 +6,8 @@
 
 use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
 use gpui::{
-    div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, SharedString, Styled, Window,
+    div, prelude::*, px, App, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    SharedString, Styled, Window,
 };
 
 /// A single chat session in the history list.
@@ -64,7 +64,11 @@ fn session_row(entry: &ChatSessionEntry) -> impl IntoElement {
         .px(px(Spacing::MD))
         .py(px(6.0))
         .cursor_pointer()
-        .bg(if is_current { active_bg } else { Background::BASE })
+        .bg(if is_current {
+            active_bg
+        } else {
+            Background::BASE
+        })
         // Title + time column
         .child(
             div()

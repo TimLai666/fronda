@@ -44,8 +44,8 @@ pub fn is_track_compatible(track_type: ClipType, clip_type: ClipType) -> bool {
 }
 
 /// Find the first track compatible with the given clip type, optionally preferring a specific index.
-pub fn find_first_compatible_track<'a>(
-    tracks: &'a [core_model::Track],
+pub fn find_first_compatible_track(
+    tracks: &[core_model::Track],
     clip_type: ClipType,
     preferred_index: Option<usize>,
 ) -> Option<usize> {

@@ -418,7 +418,7 @@ impl Default for TextShadow {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TextFill {
     #[serde(default)]
     pub enabled: bool,
@@ -430,17 +430,6 @@ pub struct TextFill {
     /// Corner radius for the background pill/rounded rect (Issue #18).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corner_radius: Option<f64>,
-}
-
-impl Default for TextFill {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            color: TextRgba::default(),
-            padding: None,
-            corner_radius: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -805,8 +794,10 @@ mod tests {
 
     #[test]
     fn core_005_seconds_to_frames() {
-        let mut timeline = Timeline::default();
-        timeline.fps = 30;
+        let timeline = Timeline {
+            fps: 30,
+            ..Default::default()
+        };
         assert_eq!(timeline.seconds_to_frames(0.0), 0);
         assert_eq!(timeline.seconds_to_frames(1.0), 30);
         assert_eq!(timeline.seconds_to_frames(2.5), 75);
@@ -815,8 +806,10 @@ mod tests {
 
     #[test]
     fn core_005_frames_to_seconds() {
-        let mut timeline = Timeline::default();
-        timeline.fps = 30;
+        let timeline = Timeline {
+            fps: 30,
+            ..Default::default()
+        };
         assert!((timeline.frames_to_seconds(0) - 0.0).abs() < 1e-9);
         assert!((timeline.frames_to_seconds(30) - 1.0).abs() < 1e-9);
         assert!((timeline.frames_to_seconds(75) - 2.5).abs() < 1e-9);
@@ -824,8 +817,10 @@ mod tests {
 
     #[test]
     fn core_005_custom_fps() {
-        let mut timeline = Timeline::default();
-        timeline.fps = 60;
+        let timeline = Timeline {
+            fps: 60,
+            ..Default::default()
+        };
         assert_eq!(timeline.seconds_to_frames(1.0), 60);
         assert_eq!(timeline.seconds_to_frames(0.5), 30);
     }
@@ -881,9 +876,12 @@ mod tests {
     #[test]
     fn issue_155_compound_timelines_roundtrip() {
         let mut t = Timeline::default();
-        let mut nested = Timeline::default();
-        nested.fps = 24;
-        t.compound_timelines.insert("ct-1".to_string(), Box::new(nested));
+        let nested = Timeline {
+            fps: 24,
+            ..Default::default()
+        };
+        t.compound_timelines
+            .insert("ct-1".to_string(), Box::new(nested));
 
         let json = serde_json::to_string(&t).unwrap();
         let restored: Timeline = serde_json::from_str(&json).unwrap();
@@ -917,12 +915,15 @@ mod tests {
         let clip: Clip = serde_json::from_str(clip_json).unwrap();
         assert_eq!(clip.blend_mode, BlendMode::Normal);
         let out = serde_json::to_string(&clip).unwrap();
-        assert!(!out.contains("blendMode"), "Normal blend mode must be omitted: {out}");
+        assert!(
+            !out.contains("blendMode"),
+            "Normal blend mode must be omitted: {out}"
+        );
     }
 
     #[test]
     fn issue_098_non_normal_blend_mode_serialized() {
-        let mut clip = Clip {
+        let clip = Clip {
             id: "c1".into(),
             media_ref: "m".into(),
             media_type: ClipType::Video,
@@ -958,7 +959,10 @@ mod tests {
             chroma_key: None,
         };
         let json = serde_json::to_string(&clip).unwrap();
-        assert!(json.contains("\"blendMode\":\"multiply\""), "Multiply must be serialized: {json}");
+        assert!(
+            json.contains("\"blendMode\":\"multiply\""),
+            "Multiply must be serialized: {json}"
+        );
     }
 
     // ── Issue #97: Chroma key ─────────────────────────────────────────────────
@@ -994,7 +998,10 @@ mod tests {
         let clip: Clip = serde_json::from_str(json).unwrap();
         assert!(clip.chroma_key.is_none());
         let out = serde_json::to_string(&clip).unwrap();
-        assert!(!out.contains("chromaKey"), "None chroma_key must be omitted: {out}");
+        assert!(
+            !out.contains("chromaKey"),
+            "None chroma_key must be omitted: {out}"
+        );
     }
 
     // ── Issue #18: Caption background styling ────────────────────────────────
@@ -1003,25 +1010,44 @@ mod tests {
     fn issue_018_text_fill_padding_optional() {
         let fill = TextFill {
             enabled: true,
-            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
+            color: TextRgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.5,
+            },
             padding: Some(8.0),
             corner_radius: None,
         };
         let json = serde_json::to_string(&fill).unwrap();
-        assert!(json.contains("\"padding\":8.0"), "padding must be serialized: {json}");
-        assert!(!json.contains("corner_radius"), "None corner_radius must be omitted: {json}");
+        assert!(
+            json.contains("\"padding\":8.0"),
+            "padding must be serialized: {json}"
+        );
+        assert!(
+            !json.contains("corner_radius"),
+            "None corner_radius must be omitted: {json}"
+        );
     }
 
     #[test]
     fn issue_018_text_fill_corner_radius() {
         let fill = TextFill {
             enabled: true,
-            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
+            color: TextRgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.5,
+            },
             padding: Some(4.0),
             corner_radius: Some(6.0),
         };
         let json = serde_json::to_string(&fill).unwrap();
-        assert!(json.contains("\"corner_radius\":6.0"), "corner_radius must be serialized: {json}");
+        assert!(
+            json.contains("\"corner_radius\":6.0"),
+            "corner_radius must be serialized: {json}"
+        );
     }
 
     #[test]
@@ -1030,8 +1056,14 @@ mod tests {
         assert!(fill.padding.is_none());
         assert!(fill.corner_radius.is_none());
         let json = serde_json::to_string(&fill).unwrap();
-        assert!(!json.contains("padding"), "default padding must be omitted: {json}");
-        assert!(!json.contains("corner_radius"), "default corner_radius must be omitted: {json}");
+        assert!(
+            !json.contains("padding"),
+            "default padding must be omitted: {json}"
+        );
+        assert!(
+            !json.contains("corner_radius"),
+            "default corner_radius must be omitted: {json}"
+        );
     }
 
     // ── Issue #39: Transcription language ────────────────────────────────────
@@ -1044,17 +1076,24 @@ mod tests {
 
     #[test]
     fn issue_039_transcription_language_can_be_set() {
-        let mut t = Timeline::default();
-        t.transcription_language = Some("zh-TW".into());
+        let t = Timeline {
+            transcription_language: Some("zh-TW".into()),
+            ..Default::default()
+        };
         assert_eq!(t.transcription_language.as_deref(), Some("zh-TW"));
     }
 
     #[test]
     fn issue_039_transcription_language_serialized_when_set() {
-        let mut t = Timeline::default();
-        t.transcription_language = Some("ja".into());
+        let t = Timeline {
+            transcription_language: Some("ja".into()),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&t).unwrap();
-        assert!(json.contains("\"transcriptionLanguage\":\"ja\""), "json={json}");
+        assert!(
+            json.contains("\"transcriptionLanguage\":\"ja\""),
+            "json={json}"
+        );
     }
 
     #[test]

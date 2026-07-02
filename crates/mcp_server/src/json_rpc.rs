@@ -64,7 +64,12 @@ impl JsonRpcError {
 
 impl JsonRpcResponse {
     pub fn success(id: Value, result: Value) -> Self {
-        Self { jsonrpc: "2.0".into(), id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     pub fn error(id: Value, err: JsonRpcError) -> Self {

@@ -67,7 +67,7 @@ impl MediaManifest {
 
     /// Returns true when expected file does not exist or entry is missing (RES-004).
     pub fn is_missing_for(&self, id: &str, file_exists: impl Fn(&str) -> bool) -> bool {
-        self.entry_for(id).map_or(true, |entry| {
+        self.entry_for(id).is_none_or(|entry| {
             if entry.cached_remote_url.is_some() {
                 return false;
             }
@@ -332,35 +332,41 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         }
     }
 
     #[test]
     fn med_001_missing_entry_ids_all_exist() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![entry("a", None), entry("b", None)];
+        let manifest = MediaManifest {
+            entries: vec![entry("a", None), entry("b", None)],
+            ..Default::default()
+        };
         let missing = manifest.missing_entry_ids(|_| false);
         assert!(missing.is_empty(), "no entries should be missing");
     }
 
     #[test]
     fn med_002_missing_entry_ids_returns_missing() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![entry("a", None), entry("b", None)];
+        let manifest = MediaManifest {
+            entries: vec![entry("a", None), entry("b", None)],
+            ..Default::default()
+        };
         let missing = manifest.missing_entry_ids(|e| e.id == "a");
         assert_eq!(missing, vec!["a"]);
     }
 
     #[test]
     fn med_003_missing_entry_ids_cached_url_excludes() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![
-            entry("a", Some("https://cache.example.com/a.mp4")),
-            entry("b", None),
-        ];
+        let manifest = MediaManifest {
+            entries: vec![
+                entry("a", Some("https://cache.example.com/a.mp4")),
+                entry("b", None),
+            ],
+            ..Default::default()
+        };
         // Both are "missing" per callback, but "a" has cached_remote_url so excluded.
         let missing = manifest.missing_entry_ids(|_| true);
         assert_eq!(missing, vec!["b"]);
@@ -368,11 +374,13 @@ mod tests {
 
     #[test]
     fn med_004_missing_entry_ids_all_cached_not_missing() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![
-            entry("a", Some("https://cache.example.com/a.mp4")),
-            entry("b", Some("https://cache.example.com/b.mp4")),
-        ];
+        let manifest = MediaManifest {
+            entries: vec![
+                entry("a", Some("https://cache.example.com/a.mp4")),
+                entry("b", Some("https://cache.example.com/b.mp4")),
+            ],
+            ..Default::default()
+        };
         let missing = manifest.missing_entry_ids(|_| true);
         assert!(missing.is_empty(), "cached entries should not be missing");
     }
@@ -386,21 +394,25 @@ mod tests {
 
     #[test]
     fn med_006_missing_entry_ids_mixed() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![
-            entry("online", None),              // exists -> not missing
-            entry("offline", None),             // missing
-            entry("cached", Some("https://c")), // cached -> not missing
-            entry("also_offline", None),        // missing
-        ];
+        let manifest = MediaManifest {
+            entries: vec![
+                entry("online", None),              // exists -> not missing
+                entry("offline", None),             // missing
+                entry("cached", Some("https://c")), // cached -> not missing
+                entry("also_offline", None),        // missing
+            ],
+            ..Default::default()
+        };
         let missing = manifest.missing_entry_ids(|e| e.id != "online");
         assert_eq!(missing, vec!["offline", "also_offline"]);
     }
 
     #[test]
     fn res_001_entry_for_found() {
-        let mut manifest = MediaManifest::default();
-        manifest.entries = vec![entry("a", None), entry("b", None)];
+        let manifest = MediaManifest {
+            entries: vec![entry("a", None), entry("b", None)],
+            ..Default::default()
+        };
         let found = manifest.entry_for("a");
         assert!(found.is_some(), "RES-001: entry found");
         assert_eq!(found.unwrap().id, "a");
@@ -435,9 +447,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let url = manifest.expected_url_for("ext");
         assert_eq!(url, Some("/path/to/file.mp4".to_string()));
@@ -472,9 +484,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let result = manifest.resolve_url_for("vid", |p| p == "/path/to/vid.mp4");
         assert_eq!(result, Some(true), "RES-003: file exists");
@@ -502,9 +514,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let result = manifest.resolve_url_for("vid", |_| false);
         assert_eq!(result, Some(false), "RES-003: file missing");
@@ -539,9 +551,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         let result = manifest.resolve_url_for("cached", |_| false);
         assert_eq!(result, Some(true), "RES-003: cached is always resolvable");
@@ -569,9 +581,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         assert!(
             manifest.is_missing_for("vid", |_| false),
@@ -610,9 +622,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         assert!(
             !manifest.is_missing_for("vid", |_| true),
@@ -642,9 +654,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         });
         assert_eq!(
             manifest.display_name_for("vid"),
@@ -670,7 +682,9 @@ mod tests {
             id: id.to_string(),
             name: "clip.mp4".to_string(),
             r#type: super::super::timeline::ClipType::Video,
-            source: MediaSource::External { absolute_path: "/clip.mp4".to_string() },
+            source: MediaSource::External {
+                absolute_path: "/clip.mp4".to_string(),
+            },
             duration: 5.0,
             generation_input: None,
             source_width: None,

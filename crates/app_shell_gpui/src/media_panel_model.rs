@@ -13,7 +13,11 @@ pub enum MediaPanelTab {
 
 impl MediaPanelTab {
     pub fn all() -> [MediaPanelTab; 3] {
-        [MediaPanelTab::Media, MediaPanelTab::Captions, MediaPanelTab::Music]
+        [
+            MediaPanelTab::Media,
+            MediaPanelTab::Captions,
+            MediaPanelTab::Music,
+        ]
     }
 
     /// SF Symbol icon name for the tab button.

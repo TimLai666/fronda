@@ -278,7 +278,10 @@ mod tests {
         assert!(s.zoom_scale > orig, "zoom in increases zoom");
         s.zoom_out();
         // Should be close to original
-        assert!((s.zoom_scale - orig).abs() < 1e-3, "zoom out returns close to original");
+        assert!(
+            (s.zoom_scale - orig).abs() < 1e-3,
+            "zoom out returns close to original"
+        );
     }
 
     #[test]

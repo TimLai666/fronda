@@ -139,8 +139,10 @@ fn upstream_040_timeline_defaults_to_auto() {
 #[test]
 fn upstream_040_timeline_round_trips_language() {
     // PR #40: Setting transcription_language persists through encode/decode.
-    let mut timeline = Timeline::default();
-    timeline.transcription_language = Some("fr-FR".to_string());
+    let timeline = Timeline {
+        transcription_language: Some("fr-FR".to_string()),
+        ..Default::default()
+    };
     let json = serde_json::to_value(&timeline).unwrap();
     assert_eq!(json["transcriptionLanguage"], json!("fr-FR"));
 

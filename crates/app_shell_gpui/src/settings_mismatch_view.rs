@@ -65,7 +65,12 @@ fn grid_row(label: &str, project_val: &str, clip_val: &str, mismatch: bool) -> i
             div()
                 .text_color(if mismatch {
                     // orange for mismatch
-                    gpui::Hsla { h: 35.0 / 360.0, s: 0.90, l: 0.55, a: 1.0 }
+                    gpui::Hsla {
+                        h: 35.0 / 360.0,
+                        s: 0.90,
+                        l: 0.55,
+                        a: 1.0,
+                    }
                 } else {
                     Text::PRIMARY
                 })
@@ -106,7 +111,9 @@ impl Render for SettingsMismatchView {
                     .text_color(Text::SECONDARY)
                     .text_size(px(FontSize::SM))
                     .text_align(gpui::TextAlign::Center)
-                    .child("The clip you're adding has different settings than the current project."),
+                    .child(
+                        "The clip you're adding has different settings than the current project.",
+                    ),
             )
             // Comparison grid
             .child(

@@ -7,9 +7,10 @@ use render_core::{ColorSpace, ExportFormat, ExportResolution};
 use serde::{Deserialize, Serialize};
 
 /// The current stage of the export panel workflow (Issue #166).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ExportStage {
     /// User is configuring export settings (default).
+    #[default]
     Configure,
     /// Export is running — `progress` (0.0..=1.0) and `message` available.
     Exporting,
@@ -17,12 +18,6 @@ pub enum ExportStage {
     Done,
     /// Export failed.
     Failed,
-}
-
-impl Default for ExportStage {
-    fn default() -> Self {
-        ExportStage::Configure
-    }
 }
 
 /// User-configurable export settings.
@@ -116,11 +111,8 @@ impl ExportPanelState {
 
     /// Whether the current settings are valid (format ↔ color_space match).
     pub fn settings_valid(&self) -> bool {
-        render_core::validate_export_color_space(
-            self.settings.format,
-            self.settings.color_space,
-        )
-        .is_ok()
+        render_core::validate_export_color_space(self.settings.format, self.settings.color_space)
+            .is_ok()
     }
 }
 
@@ -191,10 +183,7 @@ mod tests {
     #[test]
     fn issue_166_settings_valid_h264_sdr() {
         let panel = ExportPanelState::new();
-        assert!(
-            panel.settings_valid(),
-            "H264 + SDR must be valid"
-        );
+        assert!(panel.settings_valid(), "H264 + SDR must be valid");
     }
 
     #[test]

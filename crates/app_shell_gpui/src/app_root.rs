@@ -4,8 +4,6 @@
 //! and PRJ-014 (close project → Home).
 
 use crate::chat_view::ChatView;
-use crate::tour_overlay_view::TourOverlayView;
-use crate::update_overlay_view::UpdateOverlayView;
 use crate::editor_view;
 use crate::home_model::HomeLayout;
 use crate::home_view::HomeView;
@@ -18,12 +16,14 @@ use crate::theme::{Background, BorderColors, FontSize, Radius, Spacing, Text};
 use crate::timeline_view::TimelineView;
 use crate::titlebar_view::TitleBarView;
 use crate::toolbar_view::ToolbarView;
+use crate::tour_overlay_view::TourOverlayView;
+use crate::update_overlay_view::UpdateOverlayView;
 use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
 use gpui::{
     div, prelude::*, px, size, svg, App, Bounds, Context, DragMoveEvent, Entity, FocusHandle,
-    Focusable, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, Window,
-    WindowBounds, WindowOptions,
+    Focusable, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, Window, WindowBounds,
+    WindowOptions,
 };
 
 /// Drag token for timeline panel resize.
@@ -102,9 +102,24 @@ impl AppRoot {
             samples_expanded: true,
             welcome_dismissed: false,
             recent_projects: vec![
-                RecentProject { id: "proj-1", name: "My Film",       hue: 0.60, last_modified: "2h ago" },
-                RecentProject { id: "proj-2", name: "Product Ad",    hue: 0.10, last_modified: "Yesterday" },
-                RecentProject { id: "proj-3", name: "Travel Vlog",   hue: 0.35, last_modified: "3 days ago" },
+                RecentProject {
+                    id: "proj-1",
+                    name: "My Film",
+                    hue: 0.60,
+                    last_modified: "2h ago",
+                },
+                RecentProject {
+                    id: "proj-2",
+                    name: "Product Ad",
+                    hue: 0.10,
+                    last_modified: "Yesterday",
+                },
+                RecentProject {
+                    id: "proj-3",
+                    name: "Travel Vlog",
+                    hue: 0.35,
+                    last_modified: "3 days ago",
+                },
             ],
             is_signed_in: false,
             titlebar_view: None,
@@ -241,7 +256,11 @@ impl AppRoot {
     }
 
     /// A sidebar navigation button row.
-    fn sidebar_row_svg(id: &str, icon_path: &'static str, label: &str) -> gpui::Stateful<gpui::Div> {
+    fn sidebar_row_svg(
+        id: &str,
+        icon_path: &'static str,
+        label: &str,
+    ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id.to_string())
             .flex()
@@ -259,7 +278,13 @@ impl AppRoot {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(svg().path(icon_path).w(px(14.0)).h(px(14.0)).text_color(Text::TERTIARY)),
+                    .child(
+                        svg()
+                            .path(icon_path)
+                            .w(px(14.0))
+                            .h(px(14.0))
+                            .text_color(Text::TERTIARY),
+                    ),
             )
             .child(
                 div()
@@ -277,54 +302,67 @@ impl AppRoot {
 
         // Sample project card data (Swift: SampleProjectsStrip items)
         let sample_cards: &[(&str, f32)] = &[
-            ("Short Film",   0.60),
-            ("Commercial",   0.75),
-            ("Documentary",  0.43),
+            ("Short Film", 0.60),
+            ("Commercial", 0.75),
+            ("Documentary", 0.43),
         ];
 
         // Project card helper: thumbnail top + name strip bottom
-        let project_card = |id: &'static str, name: &'static str, hue: f32, cx: &mut Context<Self>| {
-            div()
-                .id(id)
-                .flex()
-                .flex_col()
-                .w(px(HomeLayout::CARD_WIDTH as f32))
-                .h(px(HomeLayout::CARD_HEIGHT as f32))
-                .bg(Background::RAISED)
-                .rounded(px(Radius::MD_LG))
-                .border_1()
-                .border_color(BorderColors::SUBTLE)
-                .overflow_hidden()
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| { this.open_editor(cx); }))
-                .child(
-                    div()
-                        .flex_1()
-                        .bg(gpui::Hsla { h: hue, s: 0.35, l: 0.14, a: 1.0 })
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(gpui::Hsla { h: hue, s: 0.55, l: 0.55, a: 1.0 })
-                        .text_size(px(FontSize::DISPLAY))
-                        .child("▶"),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .w_full()
-                        .h(px(24.0))
-                        .px(px(Spacing::SM_MD))
-                        .bg(Background::RAISED)
-                        .child(
-                            div()
-                                .text_size(px(FontSize::SM))
-                                .text_color(Text::PRIMARY)
-                                .child(name),
-                        ),
-                )
-        };
+        let project_card =
+            |id: &'static str, name: &'static str, hue: f32, cx: &mut Context<Self>| {
+                div()
+                    .id(id)
+                    .flex()
+                    .flex_col()
+                    .w(px(HomeLayout::CARD_WIDTH as f32))
+                    .h(px(HomeLayout::CARD_HEIGHT as f32))
+                    .bg(Background::RAISED)
+                    .rounded(px(Radius::MD_LG))
+                    .border_1()
+                    .border_color(BorderColors::SUBTLE)
+                    .overflow_hidden()
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.open_editor(cx);
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .bg(gpui::Hsla {
+                                h: hue,
+                                s: 0.35,
+                                l: 0.14,
+                                a: 1.0,
+                            })
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(gpui::Hsla {
+                                h: hue,
+                                s: 0.55,
+                                l: 0.55,
+                                a: 1.0,
+                            })
+                            .text_size(px(FontSize::DISPLAY))
+                            .child("▶"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .w_full()
+                            .h(px(24.0))
+                            .px(px(Spacing::SM_MD))
+                            .bg(Background::RAISED)
+                            .child(
+                                div()
+                                    .text_size(px(FontSize::SM))
+                                    .text_color(Text::PRIMARY)
+                                    .child(name),
+                            ),
+                    )
+            };
 
         let welcome_dismissed = self.welcome_dismissed;
 
@@ -366,16 +404,24 @@ impl AppRoot {
                             ),
                     )
                     .child(
-                        Self::sidebar_row_svg("sidebar-new-project", "icons/plus.svg", "New Project")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_editor(cx);
-                            })),
+                        Self::sidebar_row_svg(
+                            "sidebar-new-project",
+                            "icons/plus.svg",
+                            "New Project",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_editor(cx);
+                        })),
                     )
                     .child(
-                        Self::sidebar_row_svg("sidebar-open-project", "icons/folder.svg", "Open Project")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_editor(cx);
-                            })),
+                        Self::sidebar_row_svg(
+                            "sidebar-open-project",
+                            "icons/folder.svg",
+                            "Open Project",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_editor(cx);
+                        })),
                     )
                     .child(div().flex_1())
                     // "Sign in with Google" — shown when not signed in (Swift: HomeSidebar)
@@ -407,7 +453,11 @@ impl AppRoot {
                                 ),
                         )
                     })
-                    .child(Self::sidebar_row_svg("sidebar-settings", "icons/gear.svg", "Settings")),
+                    .child(Self::sidebar_row_svg(
+                        "sidebar-settings",
+                        "icons/gear.svg",
+                        "Settings",
+                    )),
             )
             // ── Content area ──
             .child(
@@ -476,54 +526,68 @@ impl AppRoot {
                                         .flex()
                                         .flex_row()
                                         .gap(px(HomeLayout::CARD_GAP as f32))
-                                        .children(sample_cards.iter().enumerate().map(|(i, (name, hue))| {
-                                            let name: &'static str = match i {
-                                                0 => "Short Film",
-                                                1 => "Commercial",
-                                                _ => "Documentary",
-                                            };
-                                            let h = *hue;
-                                            div()
-                                                .id(format!("sample-card-{i}"))
-                                                .flex()
-                                                .flex_col()
-                                                .w(px(HomeLayout::CARD_WIDTH as f32))
-                                                .h(px(HomeLayout::CARD_HEIGHT as f32))
-                                                .bg(Background::RAISED)
-                                                .rounded(px(Radius::MD_LG))
-                                                .border_1()
-                                                .border_color(BorderColors::SUBTLE)
-                                                .overflow_hidden()
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(|this, _, _, cx| { this.open_editor(cx); }))
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .bg(gpui::Hsla { h, s: 0.35, l: 0.14, a: 1.0 })
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .text_color(gpui::Hsla { h, s: 0.55, l: 0.55, a: 1.0 })
-                                                        .text_size(px(FontSize::DISPLAY))
-                                                        .child("▶"),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .flex_row()
-                                                        .items_center()
-                                                        .w_full()
-                                                        .h(px(24.0))
-                                                        .px(px(Spacing::SM_MD))
-                                                        .bg(Background::RAISED)
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(FontSize::SM))
-                                                                .text_color(Text::PRIMARY)
-                                                                .child(name),
-                                                        ),
-                                                )
-                                        }))
+                                        .children(sample_cards.iter().enumerate().map(
+                                            |(i, (_, hue))| {
+                                                let name: &'static str = match i {
+                                                    0 => "Short Film",
+                                                    1 => "Commercial",
+                                                    _ => "Documentary",
+                                                };
+                                                let h = *hue;
+                                                div()
+                                                    .id(format!("sample-card-{i}"))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .w(px(HomeLayout::CARD_WIDTH as f32))
+                                                    .h(px(HomeLayout::CARD_HEIGHT as f32))
+                                                    .bg(Background::RAISED)
+                                                    .rounded(px(Radius::MD_LG))
+                                                    .border_1()
+                                                    .border_color(BorderColors::SUBTLE)
+                                                    .overflow_hidden()
+                                                    .cursor_pointer()
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.open_editor(cx);
+                                                    }))
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .bg(gpui::Hsla {
+                                                                h,
+                                                                s: 0.35,
+                                                                l: 0.14,
+                                                                a: 1.0,
+                                                            })
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .text_color(gpui::Hsla {
+                                                                h,
+                                                                s: 0.55,
+                                                                l: 0.55,
+                                                                a: 1.0,
+                                                            })
+                                                            .text_size(px(FontSize::DISPLAY))
+                                                            .child("▶"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .flex_row()
+                                                            .items_center()
+                                                            .w_full()
+                                                            .h(px(24.0))
+                                                            .px(px(Spacing::SM_MD))
+                                                            .bg(Background::RAISED)
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(FontSize::SM))
+                                                                    .text_color(Text::PRIMARY)
+                                                                    .child(name),
+                                                            ),
+                                                    )
+                                            },
+                                        )),
                                 )
                             }),
                     )
@@ -598,9 +662,11 @@ impl AppRoot {
                                     ),
                             )
                             // Recent projects (from registry)
-                            .children(recent_projects.iter().map(|p| {
-                                project_card(p.id, p.name, p.hue, cx)
-                            }))
+                            .children(
+                                recent_projects
+                                    .iter()
+                                    .map(|p| project_card(p.id, p.name, p.hue, cx)),
+                            ),
                     ),
             )
             // WelcomeOverlay — shown on first launch until dismissed (Swift: WelcomeOverlayView)
@@ -615,7 +681,12 @@ impl AppRoot {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.60 })
+                        .bg(gpui::Hsla {
+                            h: 0.0,
+                            s: 0.0,
+                            l: 0.0,
+                            a: 0.60,
+                        })
                         .child(
                             div()
                                 .id("welcome-card")
@@ -647,7 +718,12 @@ impl AppRoot {
                                         .px(px(Spacing::XL))
                                         .py(px(Spacing::SM))
                                         .rounded(px(Radius::SM))
-                                        .bg(gpui::Hsla { h: 0.56, s: 1.0, l: 0.55, a: 1.0 })
+                                        .bg(gpui::Hsla {
+                                            h: 0.56,
+                                            s: 1.0,
+                                            l: 0.55,
+                                            a: 1.0,
+                                        })
                                         .cursor_pointer()
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.welcome_dismissed = true;
@@ -723,20 +799,31 @@ impl Render for AppRoot {
                             .flex()
                             .flex_1()
                             // Global handler for timeline resize drag
-                            .on_drag_move::<TimelineResizeDrag>(move |event: &DragMoveEvent<TimelineResizeDrag>, _, cx: &mut App| {
-                                let _ = weak.update(cx, |this: &mut AppRoot, inner_cx| {
-                                    if let Some(ref session) = this.timeline_resize_drag {
-                                        let dy = event.event.position.y.as_f32() - session.start_y;
-                                        // Drag UP increases timeline height (timeline is below)
-                                        let new_h = (session.start_height - dy)
-                                            .clamp(crate::theme::Layout::TIMELINE_MIN_HEIGHT,
-                                                   crate::theme::Layout::TIMELINE_MAX_HEIGHT);
-                                        this.timeline_height = new_h;
-                                        inner_cx.notify();
-                                    }
-                                });
-                            })
-                            .child(editor_view::render_pane_layout(&layout, &contents, tl_height, resize_handle)),
+                            .on_drag_move::<TimelineResizeDrag>(
+                                move |event: &DragMoveEvent<TimelineResizeDrag>,
+                                      _,
+                                      cx: &mut App| {
+                                    let _ = weak.update(cx, |this: &mut AppRoot, inner_cx| {
+                                        if let Some(ref session) = this.timeline_resize_drag {
+                                            let dy =
+                                                event.event.position.y.as_f32() - session.start_y;
+                                            // Drag UP increases timeline height (timeline is below)
+                                            let new_h = (session.start_height - dy).clamp(
+                                                crate::theme::Layout::TIMELINE_MIN_HEIGHT,
+                                                crate::theme::Layout::TIMELINE_MAX_HEIGHT,
+                                            );
+                                            this.timeline_height = new_h;
+                                            inner_cx.notify();
+                                        }
+                                    });
+                                },
+                            )
+                            .child(editor_view::render_pane_layout(
+                                &layout,
+                                &contents,
+                                tl_height,
+                                resize_handle,
+                            )),
                     )
                     .into_any_element()
             }
@@ -755,14 +842,7 @@ impl Render for AppRoot {
             .relative()
             .child(content)
             // Tour overlay stacks on top of everything at launch
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .child(tour),
-            )
+            .child(div().absolute().top_0().left_0().size_full().child(tour))
             // Update changelog overlay — shown once after a new version installs
             .child(
                 div()

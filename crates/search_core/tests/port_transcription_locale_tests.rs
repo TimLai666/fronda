@@ -5,7 +5,6 @@
 /// TRN-012: Locale matching prefers exact language+region matches first.
 /// TRN-013: If no exact region exists, falls back to any supported locale with same language.
 /// TRN-014: Region override suffixes and Unicode extension tags don't block language matching.
-
 /// A simplified locale matcher for testing.
 /// Supported locales are represented as "language_region" strings.
 fn match_locale(candidates: &[&str], supported: &[&str]) -> Option<String> {

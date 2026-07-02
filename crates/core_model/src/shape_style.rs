@@ -52,22 +52,13 @@ impl Default for Stroke {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Fill {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub color: Rgba,
-}
-
-impl Default for Fill {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            color: Rgba::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -178,7 +169,10 @@ impl ShapeAnimationPreset {
 
     /// Whether this preset uses a stroke-progress keyframe track.
     pub fn uses_stroke_progress(&self) -> bool {
-        matches!(self, ShapeAnimationPreset::DrawOn | ShapeAnimationPreset::DrawOff)
+        matches!(
+            self,
+            ShapeAnimationPreset::DrawOn | ShapeAnimationPreset::DrawOff
+        )
     }
 }
 

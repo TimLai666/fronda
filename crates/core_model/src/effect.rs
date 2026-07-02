@@ -118,7 +118,7 @@ pub struct CurvePoint {
 }
 
 /// Master (luma) + per-channel R/G/B tone curves.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GradeCurve {
     #[serde(default)]
     pub master: Vec<CurvePoint>,
@@ -128,17 +128,6 @@ pub struct GradeCurve {
     pub green: Vec<CurvePoint>,
     #[serde(default)]
     pub blue: Vec<CurvePoint>,
-}
-
-impl Default for GradeCurve {
-    fn default() -> Self {
-        Self {
-            master: Vec::new(),
-            red: Vec::new(),
-            green: Vec::new(),
-            blue: Vec::new(),
-        }
-    }
 }
 
 impl GradeCurve {

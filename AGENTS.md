@@ -1,10 +1,52 @@
-# Palmier Pro fork / Fronda rewrite
+<!-- SPECTRA:START v1.0.2 -->
 
-Current runnable baseline: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation. The Rust rewrite is named `Fronda`.
+# Spectra Instructions
 
-The Swift baseline targets macOS 26, arm64 only, non-sandboxed Developer ID. **Fronda (the Rust rewrite) is cross-platform** — it builds and runs on macOS, Windows, and Linux. UI is built with `gpui-ce` and must visually match the Swift version exactly. UI work does not require a macOS machine; develop and verify on any platform using gpui.
+This project uses Spectra for Spec-Driven Development(SDD). Specs live in `openspec/specs/`, change proposals in `openspec/changes/`.
+
+## Use `$spectra-*` skills when:
+
+- A discussion needs structure before coding → `$spectra-discuss`
+- User wants to plan, propose, or design a change → `$spectra-propose`
+- Tasks are ready to implement → `$spectra-apply`
+- There's an in-progress change to continue → `$spectra-ingest`
+- User asks about specs or how something works → `$spectra-ask`
+- Implementation is done → `$spectra-archive`
+- Commit only files related to a specific change → `$spectra-commit`
+
+## Workflow
+
+discuss? → propose → apply ⇄ ingest → archive
+
+- `discuss` is optional — skip if requirements are clear
+- Requirements change mid-work? `ingest` → resume `apply`
+
+## Parked Changes
+
+Changes can be parked（暫存）— temporarily moved out of `openspec/changes/`. Parked changes won't appear in `spectra list` but can be found with `spectra list --parked`. To restore: `spectra unpark <name>`. The `$spectra-apply` and `$spectra-ingest` skills handle parked changes automatically.
+
+<!-- SPECTRA:END -->
+
+# Spectra repo-specific overrides
+
+**Do NOT park changes in this repo.** Never run `spectra park` or move changes out of `openspec/changes/`. Unimplemented change proposals stay in `openspec/changes/` and are committed to git — we track not-yet-implemented specs in version control. If a parked change is ever found, restore it with `spectra unpark <name>` and commit it. This rule overrides the auto-generated Spectra instructions above.
+
+# Fronda Rust-first repo rules
+
+Primary implementation: `Fronda`, a cross-platform Rust app. Legacy behavioral reference: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation.
+
+The Swift baseline targets macOS 26, arm64 only, non-sandboxed Developer ID. **Fronda is the primary codebase and is cross-platform** - it builds and runs on macOS, Windows, and Linux. UI is built with `gpui-ce` and must visually match the Swift version exactly. UI work does not require a macOS machine; develop and verify on any platform using gpui.
 
 ## Build
+
+Primary Rust workflow:
+
+```bash
+cargo test --workspace
+cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda
+```
+
+Legacy Swift compatibility baseline:
 
 ```bash
 swift build
@@ -13,28 +55,28 @@ swift run
 
 ## Code style
 
-- Keep comments minimal. Only write one when the _why_ is non-obvious. Don't restate what the code does, don't narrate the current change, don't leave `// removed X` breadcrumbs. One short line max — no multi-line comment blocks or paragraph docstrings.
+- Keep comments minimal. Only write one when the _why_ is non-obvious. Don't restate what the code does, don't narrate the current change, don't leave `// removed X` breadcrumbs. One short line max - no multi-line comment blocks or paragraph docstrings.
 
 ## Design System
 
 All UI styling MUST use `AppTheme` constants from `Sources/PalmierPro/UI/AppTheme.swift`. Never use hardcoded numeric values for:
 
-- **Spacing/padding** → `AppTheme.Spacing.*` (xxs through xxl)
-- **Font sizes** → `AppTheme.FontSize.*` (xxs through display)
-- **Font weights** → `AppTheme.FontWeight.*` (regular, medium, semibold, bold)
-- **Corner radii** → `AppTheme.Radius.*` (xs through xl)
-- **Border widths** → `AppTheme.BorderWidth.*` (hairline, thin, medium, thick)
-- **Opacity** → `AppTheme.Opacity.*` (subtle, faint, muted, medium, strong, prominent)
-- **Icon frame sizes** → `AppTheme.IconSize.*` (xs through xl)
-- **Shadows** → `AppTheme.Shadow.*` (sm, md, lg) via `.shadow(AppTheme.Shadow.md)`
-- **Colors** → `AppTheme.Text.*`, `AppTheme.Border.*`, `AppTheme.Background.*`
-- **Animation durations** → `AppTheme.Anim.*`
+- **Spacing/padding** -> `AppTheme.Spacing.*` (xxs through xxl)
+- **Font sizes** -> `AppTheme.FontSize.*` (xxs through display)
+- **Font weights** -> `AppTheme.FontWeight.*` (regular, medium, semibold, bold)
+- **Corner radii** -> `AppTheme.Radius.*` (xs through xl)
+- **Border widths** -> `AppTheme.BorderWidth.*` (hairline, thin, medium, thick)
+- **Opacity** -> `AppTheme.Opacity.*` (subtle, faint, muted, medium, strong, prominent)
+- **Icon frame sizes** -> `AppTheme.IconSize.*` (xs through xl)
+- **Shadows** -> `AppTheme.Shadow.*` (sm, md, lg) via `.shadow(AppTheme.Shadow.md)`
+- **Colors** -> `AppTheme.Text.*`, `AppTheme.Border.*`, `AppTheme.Background.*`
+- **Animation durations** -> `AppTheme.Anim.*`
 
-If a needed value doesn't exist in AppTheme, add it there first — don't hardcode it.
+If a needed value doesn't exist in AppTheme, add it there first - don't hardcode it.
 
 ## Drag and drop
 
-SwiftUI `.onDrop` on a parent view shadows every drop target inside its layout area on macOS 26 — even AppKit `NSDraggingDestination` children registered directly with the window. Inner `.onDrop` modifiers silently never fire while a parent `.onDrop` is active.
+SwiftUI `.onDrop` on a parent view shadows every drop target inside its layout area on macOS 26 - even AppKit `NSDraggingDestination` children registered directly with the window. Inner `.onDrop` modifiers silently never fire while a parent `.onDrop` is active.
 
 Rule: **any drop target that spans an area containing other drop targets must use native AppKit** (see `MediaPanelDropArea` in `Sources/PalmierPro/MediaPanel/`). Inner / leaf drops can stay SwiftUI `.onDrop`. Do not stack SwiftUI `.onDrop` modifiers in parent/child layouts.
 
@@ -44,7 +86,7 @@ For Rust-side product and UI copy, Fronda speaks like a quietly capable desktop 
 
 ## Rust rewrite rules
 
-This repo is being rewritten into a cross-platform Rust app. The current Swift codebase remains the behavioral reference until a Rust implementation explicitly replaces it.
+This repo's primary implementation is the cross-platform Rust app `Fronda`. The current Swift codebase remains the behavioral reference until a Rust implementation explicitly replaces a subsystem.
 
 - Treat `specs/rust-rewrite/` as the compatibility baseline for the rewrite. If behavior changes intentionally, update the relevant spec in the same change and mark the decision explicitly.
 - For rewrite work, prefer preserving observable behavior over line-by-line source translation. Port the contract, not the syntax.

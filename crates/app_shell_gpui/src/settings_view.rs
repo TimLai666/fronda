@@ -3,8 +3,8 @@
 //! Matches Swift SettingsView + all pane files (AccountPane, NotificationsPane,
 //! PrivacyPane, ModelsPane, AgentPane, StoragePane).
 
-use app_contract::settings_storage::SettingsTab;
 use crate::theme::{Accent, Background, BorderColors, FontSize, Opacity, Radius, Spacing, Text};
+use app_contract::settings_storage::SettingsTab;
 use gpui::{
     div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, Styled, Window,
@@ -114,8 +114,15 @@ fn divider() -> impl IntoElement {
 
 /// Toggle pill — 28×16 pill, knob slides right when on.
 fn toggle_pill(is_on: bool) -> impl IntoElement {
-    let bg = if is_on { Accent::PRIMARY } else {
-        gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::MUTED }
+    let bg = if is_on {
+        Accent::PRIMARY
+    } else {
+        gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: Opacity::MUTED,
+        }
     };
     div()
         .w(px(28.0))
@@ -198,7 +205,12 @@ fn account_card(caption: &str, children: Vec<gpui::AnyElement>) -> impl IntoElem
         .rounded(px(Radius::MD))
         .border_1()
         .border_color(BorderColors::SUBTLE)
-        .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.03 })
+        .bg(gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: 0.03,
+        })
         .child(
             div()
                 .text_color(Text::TERTIARY)
@@ -228,10 +240,22 @@ fn capsule_btn(id: &str, label: &str, prominent: bool) -> gpui::Stateful<gpui::D
         .py(px(Spacing::SM))
         .rounded_full()
         .border_1()
-        .border_color(if prominent { Accent::PRIMARY } else { BorderColors::PRIMARY })
-        .bg(if prominent { Accent::PRIMARY } else { Background::BASE })
+        .border_color(if prominent {
+            Accent::PRIMARY
+        } else {
+            BorderColors::PRIMARY
+        })
+        .bg(if prominent {
+            Accent::PRIMARY
+        } else {
+            Background::BASE
+        })
         .cursor_pointer()
-        .text_color(if prominent { Background::BASE } else { Text::SECONDARY })
+        .text_color(if prominent {
+            Background::BASE
+        } else {
+            Text::SECONDARY
+        })
         .text_size(px(FontSize::SM))
         .child(label.to_string())
 }
@@ -239,10 +263,7 @@ fn capsule_btn(id: &str, label: &str, prominent: bool) -> gpui::Stateful<gpui::D
 /// Account pane — three branches matching Swift AccountPane.
 /// `is_signed_in`, `is_paid`, `is_loading` control which branch renders.
 fn pane_account(is_loading: bool, is_signed_in: bool, is_paid: bool) -> impl IntoElement {
-    let mut col = div()
-        .flex()
-        .flex_col()
-        .gap(px(Spacing::LG));
+    let mut col = div().flex().flex_col().gap(px(Spacing::LG));
 
     if is_loading {
         col = col.child(body_text("Loading…"));
@@ -268,7 +289,10 @@ fn pane_account(is_loading: bool, is_signed_in: bool, is_paid: bool) -> impl Int
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .child("Pro"),
                             )
-                            .child(capsule_btn("btn-manage-sub", "Manage subscription", false).into_any_element()),
+                            .child(
+                                capsule_btn("btn-manage-sub", "Manage subscription", false)
+                                    .into_any_element(),
+                            ),
                     ),
             )
             // Credits section: Remaining + Buy more cards side-by-side
@@ -283,20 +307,25 @@ fn pane_account(is_loading: bool, is_signed_in: bool, is_paid: bool) -> impl Int
                             .flex()
                             .flex_row()
                             .gap(px(Spacing::MD))
-                            .child(account_card("Remaining", vec![
-                                div()
-                                    .text_color(Text::PRIMARY)
-                                    .text_size(px(FontSize::LG))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child("1,000")
-                                    .into_any_element(),
-                                div()
-                                    .text_color(Text::TERTIARY)
-                                    .text_size(px(FontSize::XS))
-                                    .child("of 1,500 credits")
-                                    .into_any_element(),
-                            ]))
-                            .child(account_card("Buy more", vec![
+                            .child(account_card(
+                                "Remaining",
+                                vec![
+                                    div()
+                                        .text_color(Text::PRIMARY)
+                                        .text_size(px(FontSize::LG))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child("1,000")
+                                        .into_any_element(),
+                                    div()
+                                        .text_color(Text::TERTIARY)
+                                        .text_size(px(FontSize::XS))
+                                        .child("of 1,500 credits")
+                                        .into_any_element(),
+                                ],
+                            ))
+                            .child(account_card(
+                                "Buy more",
+                                vec![
                                 div()
                                     .flex()
                                     .flex_row()
@@ -326,7 +355,8 @@ fn pane_account(is_loading: bool, is_signed_in: bool, is_paid: bool) -> impl Int
                                     .text_size(px(FontSize::XS))
                                     .child("$10–$500 · Unused credits expire at next billing date.")
                                     .into_any_element(),
-                            ])),
+                            ],
+                            )),
                     ),
             )
             .child(capsule_btn("btn-sign-out", "Sign out", false).into_any_element());
@@ -346,82 +376,88 @@ fn pane_account(is_loading: bool, is_signed_in: bool, is_paid: bool) -> impl Int
                             .flex_row()
                             .gap(px(Spacing::MD))
                             // Pro card
-                            .child(account_card("Pro", vec![
-                                div()
-                                    .flex()
-                                    .items_baseline()
-                                    .gap(px(Spacing::XS))
-                                    .child(
-                                        div()
-                                            .text_color(Text::PRIMARY)
-                                            .text_size(px(FontSize::XL))
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child("$29"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(Text::TERTIARY)
-                                            .text_size(px(FontSize::SM))
-                                            .child("/ month"),
-                                    )
-                                    .into_any_element(),
-                                div()
-                                    .text_color(Text::SECONDARY)
-                                    .text_size(px(FontSize::SM))
-                                    .child("1,500 credits / month")
-                                    .into_any_element(),
-                                div()
-                                    .id("btn-upgrade-pro")
-                                    .w_full()
-                                    .px(px(Spacing::SM))
-                                    .py(px(Spacing::XS))
-                                    .rounded_full()
-                                    .bg(Accent::PRIMARY)
-                                    .cursor_pointer()
-                                    .text_color(Background::BASE)
-                                    .text_size(px(FontSize::SM))
-                                    .child("Upgrade to Pro")
-                                    .into_any_element(),
-                            ]))
+                            .child(account_card(
+                                "Pro",
+                                vec![
+                                    div()
+                                        .flex()
+                                        .items_baseline()
+                                        .gap(px(Spacing::XS))
+                                        .child(
+                                            div()
+                                                .text_color(Text::PRIMARY)
+                                                .text_size(px(FontSize::XL))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child("$29"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_color(Text::TERTIARY)
+                                                .text_size(px(FontSize::SM))
+                                                .child("/ month"),
+                                        )
+                                        .into_any_element(),
+                                    div()
+                                        .text_color(Text::SECONDARY)
+                                        .text_size(px(FontSize::SM))
+                                        .child("1,500 credits / month")
+                                        .into_any_element(),
+                                    div()
+                                        .id("btn-upgrade-pro")
+                                        .w_full()
+                                        .px(px(Spacing::SM))
+                                        .py(px(Spacing::XS))
+                                        .rounded_full()
+                                        .bg(Accent::PRIMARY)
+                                        .cursor_pointer()
+                                        .text_color(Background::BASE)
+                                        .text_size(px(FontSize::SM))
+                                        .child("Upgrade to Pro")
+                                        .into_any_element(),
+                                ],
+                            ))
                             // Max card
-                            .child(account_card("Max", vec![
-                                div()
-                                    .flex()
-                                    .items_baseline()
-                                    .gap(px(Spacing::XS))
-                                    .child(
-                                        div()
-                                            .text_color(Text::PRIMARY)
-                                            .text_size(px(FontSize::XL))
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child("$99"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(Text::TERTIARY)
-                                            .text_size(px(FontSize::SM))
-                                            .child("/ month"),
-                                    )
-                                    .into_any_element(),
-                                div()
-                                    .text_color(Text::SECONDARY)
-                                    .text_size(px(FontSize::SM))
-                                    .child("6,000 credits / month")
-                                    .into_any_element(),
-                                div()
-                                    .id("btn-upgrade-max")
-                                    .w_full()
-                                    .px(px(Spacing::SM))
-                                    .py(px(Spacing::XS))
-                                    .rounded_full()
-                                    .border_1()
-                                    .border_color(BorderColors::PRIMARY)
-                                    .cursor_pointer()
-                                    .text_color(Text::SECONDARY)
-                                    .text_size(px(FontSize::SM))
-                                    .child("Upgrade to Max")
-                                    .into_any_element(),
-                            ])),
+                            .child(account_card(
+                                "Max",
+                                vec![
+                                    div()
+                                        .flex()
+                                        .items_baseline()
+                                        .gap(px(Spacing::XS))
+                                        .child(
+                                            div()
+                                                .text_color(Text::PRIMARY)
+                                                .text_size(px(FontSize::XL))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child("$99"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_color(Text::TERTIARY)
+                                                .text_size(px(FontSize::SM))
+                                                .child("/ month"),
+                                        )
+                                        .into_any_element(),
+                                    div()
+                                        .text_color(Text::SECONDARY)
+                                        .text_size(px(FontSize::SM))
+                                        .child("6,000 credits / month")
+                                        .into_any_element(),
+                                    div()
+                                        .id("btn-upgrade-max")
+                                        .w_full()
+                                        .px(px(Spacing::SM))
+                                        .py(px(Spacing::XS))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(BorderColors::PRIMARY)
+                                        .cursor_pointer()
+                                        .text_color(Text::SECONDARY)
+                                        .text_size(px(FontSize::SM))
+                                        .child("Upgrade to Max")
+                                        .into_any_element(),
+                                ],
+                            )),
                     )
                     .child(body_text("Credits cover AI generation and chat.")),
             )
@@ -539,7 +575,11 @@ fn model_section(section_label: &str, models: &[(&str, bool)]) -> impl IntoEleme
         .child(card(rows))
 }
 
-fn pane_models(image_on: &[bool; 3], video_on: &[bool; 3], audio_on: &[bool; 2]) -> impl IntoElement {
+fn pane_models(
+    image_on: &[bool; 3],
+    video_on: &[bool; 3],
+    audio_on: &[bool; 2],
+) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -562,29 +602,45 @@ fn pane_models(image_on: &[bool; 3], video_on: &[bool; 3], audio_on: &[bool; 2])
                 .child("⌕")
                 .child("Search models"),
         )
-        .child(model_section("Image", &[
-            ("Flux 1.1 Pro", image_on[0]),
-            ("Flux 1.1 Pro Ultra", image_on[1]),
-            ("Stable Diffusion XL", image_on[2]),
-        ]))
-        .child(model_section("Video", &[
-            ("Kling 1.6 Pro", video_on[0]),
-            ("Minimax Video 01", video_on[1]),
-            ("Wan 2.1", video_on[2]),
-        ]))
-        .child(model_section("Audio", &[
-            ("Stable Audio 2.0", audio_on[0]),
-            ("AudioGen", audio_on[1]),
-        ]))
+        .child(model_section(
+            "Image",
+            &[
+                ("Flux 1.1 Pro", image_on[0]),
+                ("Flux 1.1 Pro Ultra", image_on[1]),
+                ("Stable Diffusion XL", image_on[2]),
+            ],
+        ))
+        .child(model_section(
+            "Video",
+            &[
+                ("Kling 1.6 Pro", video_on[0]),
+                ("Minimax Video 01", video_on[1]),
+                ("Wan 2.1", video_on[2]),
+            ],
+        ))
+        .child(model_section(
+            "Audio",
+            &[("Stable Audio 2.0", audio_on[0]), ("AudioGen", audio_on[1])],
+        ))
 }
 
 // ── Agent pane ────────────────────────────────────────────────────────────────
 
 fn pane_agent(mcp_running: bool, mcp_enabled: bool, has_stored_api_key: bool) -> impl IntoElement {
     let dot_color = if mcp_running {
-        gpui::Hsla { h: 0.33, s: 0.70, l: 0.45, a: 1.0 } // green
+        gpui::Hsla {
+            h: 0.33,
+            s: 0.70,
+            l: 0.45,
+            a: 1.0,
+        } // green
     } else {
-        gpui::Hsla { h: 0.0, s: 0.0, l: 0.5, a: 1.0 }
+        gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.5,
+            a: 1.0,
+        }
     };
 
     div()
@@ -598,7 +654,9 @@ fn pane_agent(mcp_running: bool, mcp_enabled: bool, has_stored_api_key: bool) ->
                 .flex_col()
                 .gap(px(Spacing::SM_MD))
                 .child(section_title("Anthropic API Key"))
-                .child(body_text("Use your own API key for AI chat. Stored in your keychain."))
+                .child(body_text(
+                    "Use your own API key for AI chat. Stored in your keychain.",
+                ))
                 .child(link_text("Get API key →"))
                 // Key field row — stored key shows masked value + Remove; empty shows placeholder + Save
                 .child(
@@ -716,10 +774,15 @@ fn pane_agent(mcp_running: bool, mcp_enabled: bool, has_stored_api_key: bool) ->
 // ── Storage pane ──────────────────────────────────────────────────────────────
 
 fn format_bytes(bytes: u64) -> String {
-    if bytes < 1_024 { format!("{bytes} B") }
-    else if bytes < 1_048_576 { format!("{:.1} KB", bytes as f64 / 1_024.0) }
-    else if bytes < 1_073_741_824 { format!("{:.1} MB", bytes as f64 / 1_048_576.0) }
-    else { format!("{:.2} GB", bytes as f64 / 1_073_741_824.0) }
+    if bytes < 1_024 {
+        format!("{bytes} B")
+    } else if bytes < 1_048_576 {
+        format!("{:.1} KB", bytes as f64 / 1_024.0)
+    } else if bytes < 1_073_741_824 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{:.2} GB", bytes as f64 / 1_073_741_824.0)
+    }
 }
 
 fn pane_storage(search_enabled: bool, model_bytes: Option<u64>) -> impl IntoElement {
@@ -813,9 +876,7 @@ fn pane_storage(search_enabled: bool, model_bytes: Option<u64>) -> impl IntoElem
                         )
                         .child(toggle_pill(search_enabled)),
                 )
-                .child(body_text(
-                    "Indexes media on import so you can search it.",
-                ))
+                .child(body_text("Indexes media on import so you can search it."))
                 .child(
                     div()
                         .rounded(px(Radius::SM))
@@ -855,14 +916,15 @@ fn pane_storage(search_enabled: bool, model_bytes: Option<u64>) -> impl IntoElem
         )
         // ML model row — shown only when a model is downloaded (Swift: modelBytes > 0)
         .when_some(model_bytes, |el, mb| {
-            el.child(divider())
-              .child(
+            el.child(divider()).child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(Spacing::SM_MD))
                     .child(section_title("ML Model"))
-                    .child(body_text("Visual search embedding model downloaded to disk."))
+                    .child(body_text(
+                        "Visual search embedding model downloaded to disk.",
+                    ))
                     .child(
                         div()
                             .rounded(px(Radius::SM))
@@ -899,7 +961,7 @@ fn pane_storage(search_enabled: bool, model_bytes: Option<u64>) -> impl IntoElem
                                     ),
                             ),
                     ),
-              )
+            )
         })
 }
 
@@ -931,7 +993,9 @@ impl Render for SettingsView {
 
         // ── IdentityStrip (Swift: shown when !account.isMisconfigured) ──
         let identity_strip = if backend && is_signed_in {
-            let initial_str = account_initial.map(|c| c.to_string()).unwrap_or("?".to_string());
+            let initial_str = account_initial
+                .map(|c| c.to_string())
+                .unwrap_or("?".to_string());
             div()
                 .flex()
                 .flex_row()
@@ -945,7 +1009,12 @@ impl Render for SettingsView {
                         .w(px(32.0))
                         .h(px(32.0))
                         .rounded_full()
-                        .bg(gpui::Hsla { h: Accent::PRIMARY.h, s: Accent::PRIMARY.s, l: Accent::PRIMARY.l, a: 0.5 })
+                        .bg(gpui::Hsla {
+                            h: Accent::PRIMARY.h,
+                            s: Accent::PRIMARY.s,
+                            l: Accent::PRIMARY.l,
+                            a: 0.5,
+                        })
                         .flex()
                         .items_center()
                         .justify_center()
@@ -965,7 +1034,11 @@ impl Render for SettingsView {
                                 .text_color(Text::PRIMARY)
                                 .text_size(px(FontSize::MD))
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(if display_name.is_empty() { "Account".to_string() } else { display_name }),
+                                .child(if display_name.is_empty() {
+                                    "Account".to_string()
+                                } else {
+                                    display_name
+                                }),
                         )
                         .when_some(display_secondary, |el, sec| {
                             el.child(
@@ -1010,24 +1083,39 @@ impl Render for SettingsView {
                     .rounded(px(Radius::SM))
                     .cursor_pointer()
                     .bg(if is_active {
-                        gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::FAINT }
+                        gpui::Hsla {
+                            h: 0.0,
+                            s: 0.0,
+                            l: 1.0,
+                            a: Opacity::FAINT,
+                        }
                     } else {
                         Background::SURFACE
                     })
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _: &mut Window, cx| {
-                        this.active_tab = tab;
-                        cx.notify();
-                    }))
+                    .on_click(
+                        cx.listener(move |this, _: &ClickEvent, _: &mut Window, cx| {
+                            this.active_tab = tab;
+                            cx.notify();
+                        }),
+                    )
                     .child(
                         div()
-                            .text_color(if is_active { Text::PRIMARY } else { Text::TERTIARY })
+                            .text_color(if is_active {
+                                Text::PRIMARY
+                            } else {
+                                Text::TERTIARY
+                            })
                             .text_size(px(FontSize::SM_MD))
                             .child(tab_icon(tab)),
                     )
                     .child(
                         div()
                             .text_size(px(FontSize::SM))
-                            .text_color(if is_active { Text::PRIMARY } else { Text::SECONDARY })
+                            .text_color(if is_active {
+                                Text::PRIMARY
+                            } else {
+                                Text::SECONDARY
+                            })
                             .child(tab.label()),
                     ),
             );
@@ -1046,10 +1134,14 @@ impl Render for SettingsView {
         let model_bytes = self.model_bytes;
 
         let pane_content: gpui::AnyElement = match active_tab {
-            SettingsTab::Account => pane_account(is_loading, is_signed_in, is_paid).into_any_element(),
+            SettingsTab::Account => {
+                pane_account(is_loading, is_signed_in, is_paid).into_any_element()
+            }
             SettingsTab::General => pane_general(notifications_on, privacy_on).into_any_element(),
             SettingsTab::Models => pane_models(&image_on, &video_on, &audio_on).into_any_element(),
-            SettingsTab::Agent => pane_agent(mcp_running, mcp_enabled, has_stored_api_key).into_any_element(),
+            SettingsTab::Agent => {
+                pane_agent(mcp_running, mcp_enabled, has_stored_api_key).into_any_element()
+            }
             SettingsTab::Storage => pane_storage(search_enabled, model_bytes).into_any_element(),
         };
 

@@ -77,8 +77,8 @@ impl VideoGenerationPayload {
     }
 
     /// GPAY-005: Audio discount lookup by resolution key.
-    pub fn audio_discount<'a>(
-        rates: &'a std::collections::HashMap<String, f64>,
+    pub fn audio_discount(
+        rates: &std::collections::HashMap<String, f64>,
         resolution: Option<&str>,
     ) -> Option<f64> {
         if let Some(res) = resolution {
@@ -259,12 +259,13 @@ impl AudioGenerationPayload {
             }
         }
         if let Some(dur) = self.duration_seconds {
-            if !supported_durations.is_empty() && !supported_durations.contains(&dur) {
-                if dur < AUDIO_MIN_SECONDS || dur > AUDIO_MAX_SECONDS {
-                    errors.push(format!(
-                        "Duration {dur}s outside [{AUDIO_MIN_SECONDS}, {AUDIO_MAX_SECONDS}]"
-                    ));
-                }
+            if !supported_durations.is_empty()
+                && !supported_durations.contains(&dur)
+                && !(AUDIO_MIN_SECONDS..=AUDIO_MAX_SECONDS).contains(&dur)
+            {
+                errors.push(format!(
+                    "Duration {dur}s outside [{AUDIO_MIN_SECONDS}, {AUDIO_MAX_SECONDS}]"
+                ));
             }
         }
         if let Some(ref _url) = self.video_url {

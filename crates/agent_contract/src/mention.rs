@@ -54,7 +54,7 @@ pub fn clip_mention(clip: &Clip, track_label: &str, fps: i64) -> AgentMention {
         id: Uuid::new_v4(),
         display_name: normalize_name(&display_name),
         media_ref: Some(clip.media_ref.clone()),
-        r#type: Some(clip.media_type.clone()),
+        r#type: Some(clip.media_type),
         clip_id: Some(clip.id.clone()),
         timeline_range: None,
     }

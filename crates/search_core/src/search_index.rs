@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn srch_023_search_hit_sorting() {
-        let mut hits = vec![
+        let mut hits = [
             SearchHit {
                 media_id: "a".into(),
                 frame: 0,

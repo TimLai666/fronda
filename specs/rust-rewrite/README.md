@@ -1,12 +1,12 @@
-# Rust Rewrite Spec Baseline
+# Fronda Compatibility Spec Baseline
 
-This folder is the compatibility baseline for rewriting `fronda` from the current Swift/AppKit/SwiftUI/AVFoundation implementation into a cross-platform Rust application.
+This folder is the compatibility baseline for the Fronda Rust codebase. It captures the observable contract that Fronda preserves from the inherited Swift/AppKit/SwiftUI/AVFoundation implementation unless a spec records an intentional change.
 
-`Fronda` is the intended product name of that Rust rewrite, but the current Swift baseline still uses inherited `PalmierPro` / `palmier-*` runtime identifiers. Those identifiers remain part of the compatibility surface until they are migrated explicitly.
+`Fronda` is the active product name of the Rust codebase, but the repo still carries inherited `PalmierPro` / `palmier-*` runtime identifiers. Those identifiers remain part of the compatibility surface until they are migrated explicitly.
 
 ## Chosen UI stack
 
-The rewrite target is:
+The primary application stack is:
 
 - Rust for the full application codebase
 - `gpui-ce` for the UI shell and interaction layer
@@ -20,7 +20,7 @@ The rewrite target is:
 - integrated async execution
 - test support for UI interactions
 
-That means the rewrite should keep most business logic out of the view layer and reserve `gpui-ce` tests for window/panel/focus/shortcut/drag behavior.
+That means Fronda should keep most business logic out of the view layer and reserve `gpui-ce` tests for window/panel/focus/shortcut/drag behavior.
 
 ## Source basis
 
@@ -37,11 +37,11 @@ These specs were derived from the current repository state, primarily from:
 
 ## How to read these specs
 
-Each checklist item is a future acceptance requirement.
+Each checklist item is an acceptance requirement for the Rust codebase.
 
-The repo also includes a structural CI guardrail at `scripts/check_rust_rewrite_specs.py` to make sure this spec set does not silently drift while the Rust rewrite is being built.
+The repo also includes a structural CI guardrail at `scripts/check_rust_rewrite_specs.py` to make sure this spec set does not silently drift while Fronda is being built.
 
-The first executable Rust coverage now lives under:
+Current executable Rust coverage lives under:
 
 - `crates/core_model/**`
 - `crates/project_io/**`
@@ -50,18 +50,18 @@ The first executable Rust coverage now lives under:
 
 Wave-1 now includes fixture-backed `.palmier` save/write parity in `project_io`, and wave-3 has started in `timeline_core` with pure Rust timeline invariant and property tests.
 
-The first `gpui-ce` shell scaffold now lives under:
+The current `gpui-ce` shell lives under:
 
 - `crates/app_shell_gpui/**`
 
-The desktop shell binary is feature-gated behind `desktop-app` so the core rewrite workspace can keep fast portable tests while CI still checks a real `gpui-ce` desktop target on macOS.
+The desktop shell binary is feature-gated behind `desktop-app` so the core workspace can keep fast portable tests while CI still checks a real `gpui-ce` desktop target.
 
 Format:
 
-- `[ ] PREFIX-###`: a behavior that should be covered by automated tests in the Rust rewrite
-- `Decision:`: a current behavior that exists today but likely needs an explicit product/platform decision during the rewrite
+- `[ ] PREFIX-###`: a behavior that should be covered by automated tests in Fronda
+- `Decision:`: a current behavior that exists today but likely needs an explicit product/platform decision in Fronda
 
-A rewrite milestone should not be considered done until the relevant items are either:
+A Fronda milestone should not be considered done until the relevant items are either:
 
 1. covered by passing automated tests, or
 2. explicitly replaced by a documented product decision
@@ -134,6 +134,14 @@ They do **not** specify private backend implementation details.
   - generation
   - account/settings/help/app shell
   - telemetry
+- `10-current-status-and-plan.md`
+  - current Rust coverage snapshot
+  - active repo positioning
+  - staged documentation and implementation plan
+- `11-identifier-migration-plan.md`
+  - compatibility identifiers to preserve now
+  - migration sequencing for Fronda-facing names
+  - explicit hold list for appcast/updater/package ids
 - `97-upstream-pr-audit.md`
   - audit of all upstream Swift PRs and their Rust porting status
   - Swift test coverage gaps vs Rust
@@ -147,7 +155,7 @@ They do **not** specify private backend implementation details.
   - current Swift evidence
   - biggest current gaps
 
-## Test philosophy for the Rust rewrite
+## Test philosophy for Fronda
 
 1. **Pure-core unit/property tests first**
    - timeline math
@@ -173,11 +181,11 @@ They do **not** specify private backend implementation details.
    - menu/shortcut routing
    - settings/help/feedback window behavior
 
-## Rewrite rule of thumb
+## Rule of thumb
 
 Preserve observable behavior first, improve architecture second.
 
-If the current Swift app has an externally visible behavior, the Rust rewrite should either:
+If the current Swift app has an externally visible behavior, Fronda should either:
 
 - match it, or
 - document why it is intentionally changing

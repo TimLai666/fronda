@@ -108,10 +108,7 @@ pub fn plan_bundle_export(manifest: &MediaManifest, bundle_media_dir: &str) -> B
 /// BND-006: Multiple references to the same external source file are deduplicated.
 fn filename_for_external(absolute_path: &str, seen_paths: &mut HashSet<String>) -> String {
     // Derive a filename from the path: sanitize the absolute path to a flat name
-    let sanitized = absolute_path
-        .replace(':', "_")
-        .replace('/', "_")
-        .replace('\\', "_");
+    let sanitized = absolute_path.replace([':', '/', '\\'], "_");
 
     // If we've seen this path before, reuse the same filename (dedup)
     if seen_paths.contains(absolute_path) {
@@ -184,9 +181,9 @@ mod tests {
             source_timecode_frame: None,
             source_timecode_quanta: None,
             source_timecode_drop_frame: None,
-        ai_tags: None,
-        ai_description: None,
-        ai_label_status: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
         }
     }
 

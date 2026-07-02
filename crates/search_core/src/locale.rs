@@ -33,7 +33,7 @@ pub fn strip_unicode_extensions(tag: &str) -> String {
 /// Parse a BCP-47 tag into (language, region) where region may be empty.
 fn parse_locale(tag: &str) -> (String, String) {
     let cleaned = strip_unicode_extensions(tag);
-    let parts: Vec<&str> = cleaned.splitn(3, |c: char| c == '-' || c == '_').collect();
+    let parts: Vec<&str> = cleaned.splitn(3, ['-', '_']).collect();
     let lang = parts.first().unwrap_or(&"und").to_string().to_lowercase();
     let region = parts.get(1).map(|r| r.to_uppercase()).unwrap_or_default();
     (lang, region)

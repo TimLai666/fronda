@@ -301,7 +301,7 @@ proptest! {
         prop_assert!(!clip.contains_frame(clip.end_frame()));
 
         // Apply start_frame change (simulating trim/move)
-        let new_start = (start_frame as i64 + new_start_delta).max(0);
+        let new_start = (start_frame + new_start_delta).max(0);
         clip.start_frame = new_start;
         prop_assert_eq!(clip.end_frame(), new_start + clip.duration_frames);
         prop_assert!(!clip.contains_frame(clip.end_frame()));

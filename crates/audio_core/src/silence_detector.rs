@@ -190,7 +190,10 @@ mod tests {
     fn detect_silence_all_loud() {
         let samples: Vec<f64> = vec![0.5; 100];
         let result = detect_silence(&samples, 10.0, &SilenceDetectionConfig::default());
-        assert!(result.is_empty(), "no silence when all samples above threshold");
+        assert!(
+            result.is_empty(),
+            "no silence when all samples above threshold"
+        );
     }
 
     #[test]
@@ -213,8 +216,8 @@ mod tests {
     fn detect_silence_middle_silence() {
         // Pattern: 1s loud, 2s silent, 1s loud at 10 Hz
         let mut samples = vec![0.5f64; 10]; // 1s loud
-        samples.extend(vec![0.0f64; 20]);   // 2s silent
-        samples.extend(vec![0.5f64; 10]);   // 1s loud
+        samples.extend(vec![0.0f64; 20]); // 2s silent
+        samples.extend(vec![0.5f64; 10]); // 1s loud
 
         let config = SilenceDetectionConfig {
             threshold: 0.01,
@@ -232,8 +235,8 @@ mod tests {
     fn detect_silence_too_short_filtered() {
         // 0.2s silence — below min_silence=0.5s → filtered out
         let mut samples = vec![0.5f64; 10]; // 1s loud
-        samples.extend(vec![0.0f64; 2]);    // 0.2s silent
-        samples.extend(vec![0.5f64; 10]);   // 1s loud
+        samples.extend(vec![0.0f64; 2]); // 0.2s silent
+        samples.extend(vec![0.5f64; 10]); // 1s loud
 
         let config = SilenceDetectionConfig {
             threshold: 0.01,
@@ -248,8 +251,8 @@ mod tests {
     fn detect_silence_padding_eliminates_short_ranges() {
         // 0.4s silence — after 0.1+0.1=0.2s padding → 0.2s remaining → below 0.5s → filtered
         let mut samples = vec![0.5f64; 10]; // 1s loud
-        samples.extend(vec![0.0f64; 4]);    // 0.4s silent
-        samples.extend(vec![0.5f64; 10]);   // 1s loud
+        samples.extend(vec![0.0f64; 4]); // 0.4s silent
+        samples.extend(vec![0.5f64; 10]); // 1s loud
 
         let config = SilenceDetectionConfig {
             threshold: 0.01,
@@ -257,7 +260,10 @@ mod tests {
             edge_padding_seconds: 0.1,
         };
         let result = detect_silence(&samples, 10.0, &config);
-        assert!(result.is_empty(), "0.4s - 0.2s padding = 0.2s < min 0.5s → filtered");
+        assert!(
+            result.is_empty(),
+            "0.4s - 0.2s padding = 0.2s < min 0.5s → filtered"
+        );
     }
 
     #[test]
@@ -270,7 +276,10 @@ mod tests {
 
     #[test]
     fn linear_to_db_conversion() {
-        let config = SilenceDetectionConfig { threshold: 0.01, ..Default::default() };
+        let config = SilenceDetectionConfig {
+            threshold: 0.01,
+            ..Default::default()
+        };
         let db = config.threshold_db();
         assert!((db - (-40.0)).abs() < 0.1, "db={db}");
     }
@@ -284,7 +293,10 @@ mod tests {
             speed: 1.0,
             fps: 30.0,
         };
-        let ranges = vec![SourceRange { start_seconds: 1.0, end_seconds: 3.0 }];
+        let ranges = vec![SourceRange {
+            start_seconds: 1.0,
+            end_seconds: 3.0,
+        }];
         let frames = source_ranges_to_project_frames(&ranges, &placement);
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].0, 130); // 100 + 1.0*30
@@ -301,7 +313,10 @@ mod tests {
             fps: 30.0,
         };
         // Silence at 0–2s in source → 0–1s in timeline at 2x speed
-        let ranges = vec![SourceRange { start_seconds: 0.0, end_seconds: 2.0 }];
+        let ranges = vec![SourceRange {
+            start_seconds: 0.0,
+            end_seconds: 2.0,
+        }];
         let frames = source_ranges_to_project_frames(&ranges, &placement);
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].0, 0);
@@ -318,7 +333,10 @@ mod tests {
             fps: 30.0,
         };
         // Silence entirely outside the clip's visible window
-        let ranges = vec![SourceRange { start_seconds: 5.0, end_seconds: 8.0 }];
+        let ranges = vec![SourceRange {
+            start_seconds: 5.0,
+            end_seconds: 8.0,
+        }];
         let frames = source_ranges_to_project_frames(&ranges, &placement);
         assert!(frames.is_empty(), "range outside clip should be filtered");
     }
@@ -334,7 +352,10 @@ mod tests {
             fps: 30.0,
         };
         // Silence at source seconds 12–14 → clip-local 2–4s → frames 60–120
-        let ranges = vec![SourceRange { start_seconds: 12.0, end_seconds: 14.0 }];
+        let ranges = vec![SourceRange {
+            start_seconds: 12.0,
+            end_seconds: 14.0,
+        }];
         let frames = source_ranges_to_project_frames(&ranges, &placement);
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].0, 60);

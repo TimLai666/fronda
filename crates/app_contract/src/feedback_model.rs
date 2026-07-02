@@ -80,16 +80,20 @@ mod tests {
 
     #[test]
     fn feedback_validation_non_empty_succeeds() {
-        let mut model = FeedbackViewModel::default();
-        model.message = "Test feedback".into();
+        let model = FeedbackViewModel {
+            message: "Test feedback".into(),
+            ..Default::default()
+        };
         assert!(model.validate().is_ok());
     }
 
     #[test]
     fn feedback_build_payload() {
-        let mut model = FeedbackViewModel::default();
-        model.message = "Great app!".into();
-        model.email = "user@example.com".into();
+        let model = FeedbackViewModel {
+            message: "Great app!".into(),
+            email: "user@example.com".into(),
+            ..Default::default()
+        };
         let payload = model.build_payload("0.3.5", "macOS 26.0");
         assert_eq!(payload.message, "Great app!");
         assert_eq!(payload.email, Some("user@example.com".into()));

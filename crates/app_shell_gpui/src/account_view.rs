@@ -107,13 +107,27 @@ impl Render for AccountView {
             .filter_map(|w| w.chars().next())
             .take(2)
             .collect::<String>();
-        let initials = if initials.is_empty() { "?".to_string() } else { initials };
+        let initials = if initials.is_empty() {
+            "?".to_string()
+        } else {
+            initials
+        };
 
         // Credit bar color: red < 5%, orange < 25%, else accent
         let bar_color: Hsla = if state.credit_fraction < 0.05 {
-            Hsla { h: 0.0, s: 0.75, l: 0.55, a: 1.0 }
+            Hsla {
+                h: 0.0,
+                s: 0.75,
+                l: 0.55,
+                a: 1.0,
+            }
         } else if state.credit_fraction < 0.25 {
-            Hsla { h: 35.0 / 360.0, s: 0.90, l: 0.55, a: 1.0 }
+            Hsla {
+                h: 35.0 / 360.0,
+                s: 0.90,
+                l: 0.55,
+                a: 1.0,
+            }
         } else {
             Accent::PRIMARY
         };
@@ -209,7 +223,12 @@ impl Render for AccountView {
                                 .when(cancel_at, |el| {
                                     el.child(
                                         div()
-                                            .text_color(gpui::Hsla { h: 30.0 / 360.0, s: 0.95, l: 0.60, a: 1.0 })
+                                            .text_color(gpui::Hsla {
+                                                h: 30.0 / 360.0,
+                                                s: 0.95,
+                                                l: 0.60,
+                                                a: 1.0,
+                                            })
                                             .text_size(px(FontSize::XXS))
                                             .child("Cancels soon"),
                                     )
@@ -250,7 +269,10 @@ impl Render for AccountView {
                                                 .text_color(Text::SECONDARY)
                                                 .text_size(px(FontSize::SM))
                                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                                .child(format!("{} / {} credits", credits_left, credits_total)),
+                                                .child(format!(
+                                                    "{} / {} credits",
+                                                    credits_left, credits_total
+                                                )),
                                         )
                                         .when_some(reset_date, |el, date| {
                                             el.child(
@@ -361,10 +383,14 @@ impl Render for AccountView {
                     .flex()
                     .flex_col()
                     .gap(px(Spacing::XXS))
-                    .child(footer_btn("footer-settings", "⚙", "Settings")
-                        .on_click(cx.listener(|_, _, _, _| {})))
-                    .child(footer_btn("footer-feedback", "✉", "Feedback")
-                        .on_click(cx.listener(|_, _, _, _| {})))
+                    .child(
+                        footer_btn("footer-settings", "⚙", "Settings")
+                            .on_click(cx.listener(|_, _, _, _| {})),
+                    )
+                    .child(
+                        footer_btn("footer-feedback", "✉", "Feedback")
+                            .on_click(cx.listener(|_, _, _, _| {})),
+                    )
                     .child(if state.is_signed_in {
                         footer_btn("footer-signout", "→", "Sign out")
                             .on_click(cx.listener(|_, _, _, _| {}))

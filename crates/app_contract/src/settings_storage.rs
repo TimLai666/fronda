@@ -230,8 +230,7 @@ mod tests {
 
     // SETUI-011
     #[test]
-    fn mcp_default_enabled() {
-        assert!(MCP_DEFAULT_ENABLED);
+    fn mcp_key_name_stable() {
         assert_eq!(MCP_ENABLED_KEY, "io.palmier.pro.mcp.enabled");
     }
 

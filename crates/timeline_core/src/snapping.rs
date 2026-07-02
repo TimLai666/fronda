@@ -23,19 +23,10 @@ pub struct SnapResult {
     pub x: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SnapState {
     pub currently_snapped_to: Option<i64>,
     pub current_probe_offset: i64,
-}
-
-impl Default for SnapState {
-    fn default() -> Self {
-        Self {
-            currently_snapped_to: None,
-            current_probe_offset: 0,
-        }
-    }
 }
 
 pub fn collect_targets(
@@ -114,7 +105,7 @@ pub fn find_snap(
             if dist <= threshold
                 && best
                     .as_ref()
-                    .map_or(true, |(_, _, best_dist)| dist < *best_dist)
+                    .is_none_or(|(_, _, best_dist)| dist < *best_dist)
             {
                 best = Some((*probe_offset, target, dist));
             }
@@ -190,11 +181,7 @@ pub fn resolve_cut_preview_snap(
     let mut best: Option<(i64, f64)> = None;
     for target in targets {
         let dist = (pointer_frame as f64 - target.frame as f64).abs();
-        if dist <= frame_threshold
-            && best
-                .as_ref()
-                .map_or(true, |(_, best_dist)| dist < *best_dist)
-        {
+        if dist <= frame_threshold && best.as_ref().is_none_or(|(_, best_dist)| dist < *best_dist) {
             best = Some((target.frame, dist));
         }
     }

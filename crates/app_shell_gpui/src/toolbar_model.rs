@@ -16,6 +16,11 @@ pub const ZOOM_MIN: f32 = 0.05;
 pub const ZOOM_MAX: f32 = 40.0;
 pub const ZOOM_DEFAULT: f32 = 1.0;
 
+const _: () = {
+    assert!(ZOOM_MIN < ZOOM_DEFAULT);
+    assert!(ZOOM_DEFAULT < ZOOM_MAX);
+};
+
 /// Toolbar state — pure model, testable without gpui.
 #[derive(Debug, Clone)]
 pub struct ToolbarState {
@@ -123,7 +128,8 @@ mod tests {
 
     #[test]
     fn toolbar_zoom_bounds_ordered() {
-        assert!(ZOOM_MIN < ZOOM_DEFAULT);
-        assert!(ZOOM_DEFAULT < ZOOM_MAX);
+        assert_eq!(ZOOM_MIN, 0.05);
+        assert_eq!(ZOOM_DEFAULT, 1.0);
+        assert_eq!(ZOOM_MAX, 40.0);
     }
 }

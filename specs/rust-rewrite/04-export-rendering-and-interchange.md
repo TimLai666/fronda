@@ -90,8 +90,8 @@ Scope sources:
 
 ## Migration decisions to record explicitly
 
-- `Decision:` The Swift implementation depends on AVFoundation and Core Animation. The Rust rewrite may replace those internals, but must preserve output-level contract: track ordering, trims, timing, overlay behavior, XML structure, and bundle layout.
-- `Decision:` If the Rust rewrite chooses a non-AVFoundation render backend, it should add golden-frame/golden-media comparisons to prove parity with the current exported output semantics.
+- `Decision:` The Swift implementation depends on AVFoundation and Core Animation. Fronda may replace those internals, but must preserve output-level contract: track ordering, trims, timing, overlay behavior, XML structure, and bundle layout.
+- `Decision:` If Fronda chooses a non-AVFoundation render backend, it should add golden-frame/golden-media comparisons to prove parity with the current exported output semantics.
 
 ## Upstream change tracking
 

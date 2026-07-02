@@ -56,22 +56,12 @@ pub enum MessageStatus {
 }
 
 /// Chat input state.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ChatInput {
     pub text: String,
     pub cursor_position: usize,
     /// CHAT-008: Asset IDs of media mentioned via drop/paste (for submission context).
     pub pending_mentions: Vec<String>,
-}
-
-impl Default for ChatInput {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            cursor_position: 0,
-            pending_mentions: Vec::new(),
-        }
-    }
 }
 
 impl ChatInput {
@@ -87,25 +77,13 @@ impl ChatInput {
 }
 
 /// Full chat panel state.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ChatPanelModel {
     pub messages: Vec<ChatMessage>,
     pub input: ChatInput,
     pub is_agent_running: bool,
     pub show_mention_picker: bool,
     pub mention_query: String,
-}
-
-impl Default for ChatPanelModel {
-    fn default() -> Self {
-        Self {
-            messages: Vec::new(),
-            input: ChatInput::default(),
-            is_agent_running: false,
-            show_mention_picker: false,
-            mention_query: String::new(),
-        }
-    }
 }
 
 impl ChatPanelModel {
@@ -186,9 +164,7 @@ impl ChatPanelModel {
     /// The gpui-ce OnDrop handler calls this after resolving the dropped asset id.
     pub fn paste_media_mention(&mut self, asset_id: &str, label: &str) {
         let tag = format!("@{label}");
-        if !self.input.text.is_empty()
-            && !self.input.text.ends_with(|c: char| c.is_whitespace())
-        {
+        if !self.input.text.is_empty() && !self.input.text.ends_with(|c: char| c.is_whitespace()) {
             self.input.text.push(' ');
         }
         self.input.text.push_str(&tag);
@@ -272,16 +248,20 @@ mod tests {
 
     #[test]
     fn chat_can_send_while_agent_running_returns_false() {
-        let mut model = ChatPanelModel::default();
+        let mut model = ChatPanelModel {
+            is_agent_running: true,
+            ..Default::default()
+        };
         model.input.text = "Hello".into();
-        model.is_agent_running = true;
         assert!(!model.can_send());
     }
 
     #[test]
     fn chat_stop_generation_sets_idle() {
-        let mut model = ChatPanelModel::default();
-        model.is_agent_running = true;
+        let mut model = ChatPanelModel {
+            is_agent_running: true,
+            ..Default::default()
+        };
         model.stop_generation();
         assert!(!model.is_agent_running);
     }
@@ -307,9 +287,11 @@ mod tests {
 
     #[test]
     fn chat_input_clear() {
-        let mut input = ChatInput::default();
-        input.text = "test".into();
-        input.cursor_position = 4;
+        let mut input = ChatInput {
+            text: "test".into(),
+            cursor_position: 4,
+            ..Default::default()
+        };
         input.clear();
         assert!(input.text.is_empty());
         assert_eq!(input.cursor_position, 0);

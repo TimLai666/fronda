@@ -60,7 +60,10 @@ mod tests {
 
     #[test]
     fn samples_count_matches_config() {
-        let cfg = FrameSamplerConfig { frames_per_clip: 4, max_sample_duration_secs: 60.0 };
+        let cfg = FrameSamplerConfig {
+            frames_per_clip: 4,
+            max_sample_duration_secs: 60.0,
+        };
         let samples = compute_sample_timestamps(30.0, &cfg);
         assert_eq!(samples.len(), 4);
     }
@@ -76,7 +79,10 @@ mod tests {
 
     #[test]
     fn caps_at_max_duration() {
-        let cfg = FrameSamplerConfig { frames_per_clip: 2, max_sample_duration_secs: 10.0 };
+        let cfg = FrameSamplerConfig {
+            frames_per_clip: 2,
+            max_sample_duration_secs: 10.0,
+        };
         let samples = compute_sample_timestamps(9999.0, &cfg);
         assert!(samples.last().unwrap().timestamp_secs < 10.0);
     }

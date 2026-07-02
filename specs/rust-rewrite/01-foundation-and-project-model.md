@@ -20,7 +20,7 @@ Scope sources:
 - [x] `CORE-002`: `video`, `image`, `text`, and `lottie` are all treated as **visual** clip types.
 - [x] `CORE-003`: Track compatibility is strict: audio is compatible only with audio, while all visual types are mutually compatible.
 - [x] `CORE-004`: Project time is frame-based. Timeline math and persistence use integer project frames, not seconds.
-- [x] `CORE-005`: Any source-seconds-to-frame mapping in the rewrite must be computed against the **project fps**, not the source file's native fps.
+- [x] `CORE-005`: Any source-seconds-to-frame mapping in Fronda must be computed against the **project fps**, not the source file's native fps.
 
 ## B. Project package contract
 
@@ -106,7 +106,7 @@ Scope sources:
 ## F. Project settings and fps/resolution retiming
 
 - [x] `PCFG-001`: Timeline settings are `fps`, `width`, `height`, and `settingsConfigured`.
-- [x] `PCFG-002`: When fps changes, the rewrite must rescale:
+- [x] `PCFG-002`: When fps changes, Fronda must rescale:
   - `currentFrame`
   - `sourcePlayheadFrame`
   - clip `startFrame`
@@ -123,19 +123,19 @@ Scope sources:
 
 ## Migration decisions to record explicitly
 
-- `Decision:` The current project storage root is macOS-specific (`~/Documents/Palmier Pro`). The Rust rewrite should decide whether this stays identical on macOS only, or becomes a per-platform app-data path with migration logic.
-- `Decision:` `MediaAsset.toManifestEntry(projectURL:)` currently treats any path with a `projectURL.path` prefix as project-internal. The Rust rewrite should replace that with a stricter descendant check while preserving existing projects.
-- `Decision:` The current schema must remain backward-compatible with existing `.palmier` files even if the Rust rewrite introduces a cleaner internal model.
+- `Decision:` The current project storage root is macOS-specific (`~/Documents/Palmier Pro`). Fronda should decide whether this stays identical on macOS only, or becomes a per-platform app-data path with migration logic.
+- `Decision:` `MediaAsset.toManifestEntry(projectURL:)` currently treats any path with a `projectURL.path` prefix as project-internal. Fronda should replace that with a stricter descendant check while preserving existing projects.
+- `Decision:` The current schema must remain backward-compatible with existing `.palmier` files even if Fronda introduces a cleaner internal model.
 
 ## Upstream change tracking
 
-These upstream PRs define behavior the Rust rewrite must eventually match. Spec entries below represent requirements that are not yet implemented in Rust.
+These upstream PRs define behavior Fronda must eventually match. Spec entries below represent requirements that are not yet implemented in Rust.
 
 - `Upstream #99`: The `Clip` data model must support optional `chromaKey: ChromaKey?`, `colorGrade: ColorGrade?`, and `blendMode: BlendMode` fields. A new `ClipType::Adjustment` variant is needed. The serialized `project.json` / `media.json` schemas must round-trip these fields when present, but remain backward-compatible with projects that lack them. See `03-timeline-editor-and-preview.md` for compositor-level requirements.
 
 - `Upstream #62`: The `Timeline` model must support optional `lut: LUTRef?` and `primaries: PrimaryGrade?` fields for project-level color grading. The serialized project format (`.palmier` / `project.json`) must round-trip these fields. `LUTRef` includes `kind`, `lookID`, `cubeName`, `cubeDimension`, `cubeBase64` (inline base64-encoded .cube file), and `intensity`. `PrimaryGrade` includes `temperature`, `tint`, `exposure`, `contrast`, `saturation`, `vibrance`, `highlights`, `shadows` (all -100..100 range). `GradeCurve` stores `master`, `red`, `green`, `blue` curves as `[(x, y)]` points.
 
-- `Upstream #46`: The `Clip` model should eventually support an optional `shapeStyle: ShapeStyle?` field and `ClipType::Shape` variant for shape annotations. `ShapeStyle` includes `kind`, `stroke`, `fill`, `cornerRadius`, `arrowhead`. This is deferred until the shape-annotation feature is explicitly planned for the rewrite.
+- `Upstream #46`: The `Clip` model should eventually support an optional `shapeStyle: ShapeStyle?` field and `ClipType::Shape` variant for shape annotations. `ShapeStyle` includes `kind`, `stroke`, `fill`, `cornerRadius`, `arrowhead`. This is deferred until the shape-annotation feature is explicitly planned for Fronda.
 
 - `Upstream #105`: The file-type allowlist for media import must include `.aifc` (AIFF-C) and `.flac` extensions for audio, matching `ClipType::audio` handling. Simple extension mapping, no data-model change.
 

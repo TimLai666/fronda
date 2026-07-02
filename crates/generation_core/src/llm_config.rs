@@ -120,9 +120,7 @@ impl LlmConfig {
         match self.provider {
             LlmProvider::OpenAiCompatible => {
                 if self.api_base_url.is_none() {
-                    return Err(
-                        "OpenAI-compatible provider requires api_base_url to be set".into(),
-                    );
+                    return Err("OpenAI-compatible provider requires api_base_url to be set".into());
                 }
                 Ok(())
             }

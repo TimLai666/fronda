@@ -334,10 +334,7 @@ pub fn route_shortcut(key: &str, modifiers: &Modifiers) -> Option<MenuAction> {
 mod tests {
     use super::*;
 
-    fn find_group_items<'a>(
-        group: MenuGroup,
-        items: &'a [(MenuGroup, Vec<MenuAction>)],
-    ) -> &'a [MenuAction] {
+    fn find_group_items(group: MenuGroup, items: &[(MenuGroup, Vec<MenuAction>)]) -> &[MenuAction] {
         items
             .iter()
             .find(|(g, _)| *g == group)
@@ -466,47 +463,98 @@ mod tests {
 
     #[test]
     fn issue_164_jkl_routes_playback() {
-        assert_eq!(route_shortcut("j", &Modifiers::default()), Some(MenuAction::PlayBackward));
-        assert_eq!(route_shortcut("k", &Modifiers::default()), Some(MenuAction::PauseJkl));
-        assert_eq!(route_shortcut("l", &Modifiers::default()), Some(MenuAction::PlayForward));
+        assert_eq!(
+            route_shortcut("j", &Modifiers::default()),
+            Some(MenuAction::PlayBackward)
+        );
+        assert_eq!(
+            route_shortcut("k", &Modifiers::default()),
+            Some(MenuAction::PauseJkl)
+        );
+        assert_eq!(
+            route_shortcut("l", &Modifiers::default()),
+            Some(MenuAction::PlayForward)
+        );
     }
 
     #[test]
     fn issue_164_arrow_keys_route_frame_step() {
-        assert_eq!(route_shortcut("left", &Modifiers::default()), Some(MenuAction::StepFrameBackward));
-        assert_eq!(route_shortcut("right", &Modifiers::default()), Some(MenuAction::StepFrameForward));
+        assert_eq!(
+            route_shortcut("left", &Modifiers::default()),
+            Some(MenuAction::StepFrameBackward)
+        );
+        assert_eq!(
+            route_shortcut("right", &Modifiers::default()),
+            Some(MenuAction::StepFrameForward)
+        );
     }
 
     #[test]
     fn issue_164_shift_arrow_routes_skip() {
-        let shift = Modifiers { shift: true, ..Default::default() };
-        assert_eq!(route_shortcut("left", &shift), Some(MenuAction::SkipFramesBackward));
-        assert_eq!(route_shortcut("right", &shift), Some(MenuAction::SkipFramesForward));
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            route_shortcut("left", &shift),
+            Some(MenuAction::SkipFramesBackward)
+        );
+        assert_eq!(
+            route_shortcut("right", &shift),
+            Some(MenuAction::SkipFramesForward)
+        );
     }
 
     #[test]
     fn issue_164_i_o_routes_mark_in_out() {
-        assert_eq!(route_shortcut("i", &Modifiers::default()), Some(MenuAction::MarkIn));
-        assert_eq!(route_shortcut("o", &Modifiers::default()), Some(MenuAction::MarkOut));
+        assert_eq!(
+            route_shortcut("i", &Modifiers::default()),
+            Some(MenuAction::MarkIn)
+        );
+        assert_eq!(
+            route_shortcut("o", &Modifiers::default()),
+            Some(MenuAction::MarkOut)
+        );
     }
 
     #[test]
     fn issue_164_option_backspace_routes_ripple_delete() {
-        let opt = Modifiers { option: true, ..Default::default() };
-        assert_eq!(route_shortcut("backspace", &opt), Some(MenuAction::RippleDelete));
+        let opt = Modifiers {
+            option: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            route_shortcut("backspace", &opt),
+            Some(MenuAction::RippleDelete)
+        );
     }
 
     #[test]
     fn issue_164_timeline_zoom_shortcuts() {
-        assert_eq!(route_shortcut("=", &Modifiers::default()), Some(MenuAction::TimelineZoomIn));
-        assert_eq!(route_shortcut("-", &Modifiers::default()), Some(MenuAction::TimelineZoomOut));
-        let shift = Modifiers { shift: true, ..Default::default() };
-        assert_eq!(route_shortcut("z", &shift), Some(MenuAction::TimelineFitToWindow));
+        assert_eq!(
+            route_shortcut("=", &Modifiers::default()),
+            Some(MenuAction::TimelineZoomIn)
+        );
+        assert_eq!(
+            route_shortcut("-", &Modifiers::default()),
+            Some(MenuAction::TimelineZoomOut)
+        );
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            route_shortcut("z", &shift),
+            Some(MenuAction::TimelineFitToWindow)
+        );
     }
 
     #[test]
     fn issue_164_clear_marks_shortcuts() {
-        let opt = Modifiers { option: true, ..Default::default() };
+        let opt = Modifiers {
+            option: true,
+            ..Default::default()
+        };
         assert_eq!(route_shortcut("i", &opt), Some(MenuAction::ClearMarkIn));
         assert_eq!(route_shortcut("o", &opt), Some(MenuAction::ClearMarkOut));
         assert_eq!(route_shortcut("x", &opt), Some(MenuAction::ClearMarks));
