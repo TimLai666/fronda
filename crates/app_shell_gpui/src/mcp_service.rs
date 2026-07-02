@@ -4,11 +4,12 @@
 //! state through `McpServerStatus`. Pure std + workspace crates — no gpui.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use agent_contract::ToolExecutor;
 use app_contract::agent_panel_model::McpServerStatus;
 use app_contract::settings_storage::{MCP_DEFAULT_ENABLED, MCP_DEFAULT_PORT, MCP_ENABLED_KEY};
+#[cfg(test)]
 use core_model::{MediaManifest, Timeline};
 use mcp_server::{McpConfig, McpServer, McpServerHandle};
 
@@ -64,22 +65,45 @@ pub struct McpService {
     status: McpServerStatus,
     prefs_path: PathBuf,
     port: u16,
+    /// Shared project state — restarts serve the same executor.
+    executor: Arc<Mutex<ToolExecutor>>,
 }
 
 impl McpService {
+    #[cfg(test)]
     fn with_prefs_path(prefs_path: PathBuf) -> Self {
+        Self::with_prefs_path_and_executor(
+            prefs_path,
+            Arc::new(Mutex::new(ToolExecutor::new(
+                Timeline::default(),
+                MediaManifest::default(),
+            ))),
+        )
+    }
+
+    fn with_prefs_path_and_executor(
+        prefs_path: PathBuf,
+        executor: Arc<Mutex<ToolExecutor>>,
+    ) -> Self {
         Self {
             handle: None,
             status: McpServerStatus::Stopped,
             prefs_path,
             port: MCP_DEFAULT_PORT,
+            executor,
         }
     }
 
-    /// Process-wide instance — exactly one MCP server per app.
+    /// Process-wide instance — exactly one MCP server per app, serving the
+    /// shared editor state from [`crate::editor_state_hub::EditorStateHub`].
     pub fn global() -> &'static Mutex<McpService> {
         static INSTANCE: OnceLock<Mutex<McpService>> = OnceLock::new();
-        INSTANCE.get_or_init(|| Mutex::new(McpService::with_prefs_path(default_prefs_path())))
+        INSTANCE.get_or_init(|| {
+            Mutex::new(McpService::with_prefs_path_and_executor(
+                default_prefs_path(),
+                crate::editor_state_hub::EditorStateHub::global().executor(),
+            ))
+        })
     }
 
     /// SETUI-011: enabled when the preference is absent.
@@ -110,8 +134,7 @@ impl McpService {
             port: self.port,
             ..Default::default()
         };
-        let executor = ToolExecutor::new(Timeline::default(), MediaManifest::default());
-        match McpServer::new(config, executor).spawn() {
+        match McpServer::with_shared_executor(config, Arc::clone(&self.executor)).spawn() {
             Ok(handle) => {
                 self.status = McpServerStatus::Running {
                     port: handle.port(),
@@ -199,6 +222,20 @@ mod tests {
         assert_eq!(*svc.status(), McpServerStatus::Stopped);
         svc.stop(); // idempotent
         assert_eq!(*svc.status(), McpServerStatus::Stopped);
+    }
+
+    #[test]
+    fn restart_preserves_shared_executor() {
+        let hub = crate::editor_state_hub::EditorStateHub::new();
+        let mut svc =
+            McpService::with_prefs_path_and_executor(temp_prefs("restart.json"), hub.executor());
+        svc.port = 0;
+        svc.start();
+        assert!(matches!(svc.status(), McpServerStatus::Running { .. }));
+        svc.stop();
+        svc.start();
+        assert!(Arc::ptr_eq(&svc.executor, &hub.executor()));
+        svc.stop();
     }
 
     #[test]

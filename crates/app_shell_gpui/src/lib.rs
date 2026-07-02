@@ -14,6 +14,7 @@ pub mod chat_history_view;
 pub mod chat_view;
 #[cfg(feature = "desktop-app")]
 pub mod crop_overlay_view;
+pub mod editor_state_hub;
 #[cfg(feature = "desktop-app")]
 pub mod editor_view;
 pub mod export_model;

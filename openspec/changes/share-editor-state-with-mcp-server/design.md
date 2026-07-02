@@ -45,7 +45,7 @@ AgentPanelView::render 已每幀讀取 McpService 狀態，擴充為同時讀取
 
 ## Implementation Contract
 
-- 行為：app 啟動後，透過 MCP 呼叫一個 mutation 工具（例如 add_track），再呼叫 get_timeline，讀到的是同一份被修改後的狀態；EditorStateHub::revision() 在該次 mutation 後嚴格遞增。呼叫 EditorStateHub::load_project 後，MCP 的 get_timeline 回傳新載入的 timeline 內容，無需重啟 server。關閉 MCP 開關再開啟，get_timeline 仍回傳關閉前的狀態（狀態不因 server 重啟而重置）。
+- 行為：app 啟動後，透過 MCP 呼叫一個 mutation 工具（例如 create_folder），再呼叫 get_timeline，讀到的是同一份被修改後的狀態；EditorStateHub::revision() 在該次 mutation 後嚴格遞增。呼叫 EditorStateHub::load_project 後，MCP 的 get_timeline 回傳新載入的 timeline 內容，無需重啟 server。關閉 MCP 開關再開啟，get_timeline 仍回傳關閉前的狀態（狀態不因 server 重啟而重置）。
 - 介面／資料形狀：ToolExecutor::revision() -> u64；McpServer::with_shared_executor(McpConfig, Arc<Mutex<ToolExecutor>>) -> McpServer；EditorStateHub::global() -> &'static EditorStateHub（內含鎖）、executor() -> Arc<Mutex<ToolExecutor>>、revision() -> u64、load_project(Timeline, MediaManifest)。
 - 失敗模式：Mutex poisoned 時 MCP 端沿用既有的 Executor lock poisoned 錯誤回應；hub 的 revision() 在 poisoned 時回傳最後已知值或 0，不 panic。唯讀工具執行不遞增 revision。
 - 驗收標準：
@@ -53,7 +53,7 @@ AgentPanelView::render 已每幀讀取 McpService 狀態，擴充為同時讀取
   - mcp_server 新測試：以 with_shared_executor 啟動，外部先鎖住 executor 改 timeline，透過 HTTP get_timeline 讀到該變更；反向透過 HTTP mutation 後外部讀 executor 看到變更
   - app_shell_gpui 新測試：load_project 後 executor 內容被替換且 revision 遞增；stop/start McpService 後 hub 的 Arc 不變（Arc::ptr_eq）
   - cargo test --workspace 全過；cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda 通過
-  - 手動驗證：跑 app，curl 呼叫 add_track 後再 get_timeline 看到新 track
+  - 手動驗證：跑 app，curl 呼叫 create_folder 後再 list_folders 看到新資料夾
 - 範圍界線：in scope＝revision 計數、共享 executor 建構、EditorStateHub、McpService 掛載、agent panel revision 讀取；out of scope＝專案載入流程、timeline 畫面渲染綁定、多專案、協定變更。
 
 ## Risks / Trade-offs

@@ -87,10 +87,13 @@ pub struct McpServer {
 
 impl McpServer {
     pub fn new(config: McpConfig, executor: ToolExecutor) -> Self {
-        Self {
-            config,
-            executor: Arc::new(Mutex::new(executor)),
-        }
+        Self::with_shared_executor(config, Arc::new(Mutex::new(executor)))
+    }
+
+    /// Serve an externally owned executor so the shell UI and the MCP
+    /// server operate on the same project state.
+    pub fn with_shared_executor(config: McpConfig, executor: Arc<Mutex<ToolExecutor>>) -> Self {
+        Self { config, executor }
     }
 
     /// Start the server (blocking). Call in a background thread.
@@ -503,6 +506,68 @@ mod tests {
         let handle = spawn_on_ephemeral_port();
         handle.stop();
         handle.stop();
+        handle.stop();
+    }
+
+    fn http_rpc(port: u16, body: &str) -> Value {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let req = format!(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(req.as_bytes()).unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        let json_body = resp.split("\r\n\r\n").nth(1).unwrap();
+        serde_json::from_str(json_body).unwrap()
+    }
+
+    #[test]
+    fn shared_executor_state_visible_both_ways() {
+        let shared = Arc::new(Mutex::new(ToolExecutor::new(
+            Timeline::default(),
+            MediaManifest::default(),
+        )));
+        let config = McpConfig {
+            port: 0,
+            ..Default::default()
+        };
+        let handle = McpServer::with_shared_executor(config, Arc::clone(&shared))
+            .spawn()
+            .unwrap();
+        let port = handle.port();
+
+        // External change is visible over MCP.
+        shared.lock().unwrap().timeline_mut().fps = 60;
+        let resp = http_rpc(
+            port,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_timeline","arguments":{}}}"#,
+        );
+        let text = resp
+            .pointer("/result/content/0/text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert!(
+            text.contains("60"),
+            "external fps change not visible: {text}"
+        );
+
+        // MCP mutation is visible externally.
+        let resp = http_rpc(
+            port,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_folder","arguments":{"name":"B-roll"}}}"#,
+        );
+        assert!(resp.get("result").is_some(), "create_folder failed: {resp}");
+        {
+            let exec = shared.lock().unwrap();
+            assert!(exec
+                .media_manifest()
+                .folders
+                .iter()
+                .any(|f| f.name == "B-roll"));
+            assert_eq!(exec.revision(), 1);
+        }
         handle.stop();
     }
 

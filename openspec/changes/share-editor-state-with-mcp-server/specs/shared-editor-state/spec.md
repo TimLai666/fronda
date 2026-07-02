@@ -6,7 +6,7 @@ The shell SHALL own exactly one `ToolExecutor` behind `Arc<Mutex<...>>` (the `Ed
 
 #### Scenario: MCP mutation is visible to MCP reads
 
-- **WHEN** an MCP client calls a mutation tool (e.g. add_track) and then calls get_timeline
+- **WHEN** an MCP client calls a mutation tool (e.g. create_folder) and then calls get_timeline
 - **THEN** the get_timeline response reflects the mutation
 
 #### Scenario: External state change is visible over MCP
@@ -33,7 +33,7 @@ The shell SHALL own exactly one `ToolExecutor` behind `Arc<Mutex<...>>` (the `Ed
 | Action | Revision before | Revision after |
 | ------ | --------------- | -------------- |
 | get_timeline (read) | 0 | 0 |
-| add_track (mutation, success) | 0 | 1 |
+| create_folder (mutation, success) | 0 | 1 |
 | split_clip with missing args (error) | 1 | 1 |
 | load_project | 1 | 2 |
 

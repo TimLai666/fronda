@@ -23,7 +23,22 @@ pub struct ToolExecutor {
     /// READ-026: Status reporting for visual indexing.
     /// Set by the caller (app shell) to reflect search model state.
     search_status: String,
+    /// Strictly increases after each successful mutating tool execution.
+    revision: u64,
 }
+
+/// Read-only tools: successful execution does not bump the revision.
+const READ_ONLY_TOOLS: &[&str] = &[
+    "get_timeline",
+    "get_media",
+    "search_media",
+    "list_folders",
+    "list_models",
+    "inspect_media",
+    "inspect_timeline",
+    "get_transcript",
+    "inspect_color",
+];
 
 impl ToolExecutor {
     pub fn new(timeline: Timeline, media_manifest: MediaManifest) -> Self {
@@ -32,7 +47,23 @@ impl ToolExecutor {
             media_manifest,
             undo_stack: UndoStack::new(),
             search_status: String::new(),
+            revision: 0,
         }
+    }
+
+    /// Change counter for UI invalidation: bumps on successful mutations.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Replace project state in place (project open). Clears the undo
+    /// stack and bumps the revision; a running MCP server serves the new
+    /// state on its next request.
+    pub fn load_project(&mut self, timeline: Timeline, media_manifest: MediaManifest) {
+        self.timeline = timeline;
+        self.media_manifest = media_manifest;
+        self.undo_stack = UndoStack::new();
+        self.revision += 1;
     }
 
     pub fn media_manifest(&self) -> &MediaManifest {
@@ -113,6 +144,14 @@ impl ToolExecutor {
     /// Returns the JSON result that should become the MCP `content` array.
     /// For mutation tools, automatically snapshots before/after for undo.
     pub fn execute(&mut self, tool_name: &str, args: &Value) -> Result<Value, String> {
+        let result = self.execute_inner(tool_name, args);
+        if result.is_ok() && !READ_ONLY_TOOLS.contains(&tool_name) {
+            self.revision += 1;
+        }
+        result
+    }
+
+    fn execute_inner(&mut self, tool_name: &str, args: &Value) -> Result<Value, String> {
         match tool_name {
             // ── Read-only tools ──────────────────────────────────────────
             "get_timeline" => self.cmd_get_timeline(),
@@ -3448,5 +3487,49 @@ mod tests {
         let id = exec.media_manifest.entries[0].id.clone();
         // If file is missing, it's offline, not unprocessable.
         assert!(!exec.is_media_unprocessable(&id, |_| true, |_| true));
+    }
+
+    // ── Revision counter (shared-editor-state) ─────────────────────────
+
+    #[test]
+    fn revision_unchanged_by_read_only_tool() {
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        assert_eq!(exec.revision(), 0);
+        exec.execute("get_timeline", &json!({})).unwrap();
+        assert_eq!(exec.revision(), 0);
+    }
+
+    #[test]
+    fn revision_bumped_by_successful_mutation() {
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        exec.execute("create_folder", &json!({"name": "B-roll"}))
+            .unwrap();
+        assert_eq!(exec.revision(), 1);
+    }
+
+    #[test]
+    fn revision_unchanged_by_failed_mutation() {
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        exec.execute("create_folder", &json!({"name": "B-roll"}))
+            .unwrap();
+        assert!(exec.execute("split_clip", &json!({})).is_err());
+        assert_eq!(exec.revision(), 1);
+    }
+
+    #[test]
+    fn load_project_replaces_state_and_bumps_revision() {
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        exec.execute("create_folder", &json!({"name": "B-roll"}))
+            .unwrap();
+        let before = exec.revision();
+        let timeline = Timeline {
+            fps: 60,
+            ..Default::default()
+        };
+        exec.load_project(timeline, MediaManifest::default());
+        assert_eq!(exec.revision(), before + 1);
+        assert_eq!(exec.timeline().fps, 60);
+        assert!(exec.media_manifest().folders.is_empty());
+        assert!(exec.undo_stack().is_empty());
     }
 }

@@ -39,6 +39,8 @@ fn status_dot(status: &McpServerStatus) -> Hsla {
 pub struct AgentPanelView {
     focus_handle: FocusHandle,
     model: AgentPanelModel,
+    /// Last seen shared-state revision; MCP mutations trigger a redraw.
+    state_revision: u64,
 }
 
 impl AgentPanelView {
@@ -51,6 +53,7 @@ impl AgentPanelView {
         Self {
             focus_handle: handle,
             model,
+            state_revision: crate::editor_state_hub::EditorStateHub::global().revision(),
         }
     }
 }
@@ -62,9 +65,14 @@ impl Focusable for AgentPanelView {
 }
 
 impl Render for AgentPanelView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Ok(svc) = crate::mcp_service::McpService::global().lock() {
             self.model.mcp_status = svc.status().clone();
+        }
+        let revision = crate::editor_state_hub::EditorStateHub::global().revision();
+        if revision != self.state_revision {
+            self.state_revision = revision;
+            cx.notify();
         }
         let status = self.model.mcp_status.clone();
         let dot_color = status_dot(&status);
