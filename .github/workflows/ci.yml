@@ -81,6 +81,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Selecting $XCODE"
+          sudo xcode-select -s "$XCODE"
+
       - name: Show Swift toolchain
         run: swift --version
 
