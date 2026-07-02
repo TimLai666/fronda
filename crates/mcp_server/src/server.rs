@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -32,10 +33,10 @@ pub struct McpConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
-            host: "127.0.0.1".into(),          // MCP-005: loopback only
-            port: 19789,                       // MCP-006: default port
-            server_name: "palmier-pro".into(), // MCP-001
-            server_version: "1.0.0".into(),    // MCP-002
+            host: "127.0.0.1".into(),       // MCP-005: loopback only
+            port: 19789,                    // MCP-006: default port
+            server_name: "fronda".into(),   // MCP-001
+            server_version: "1.0.0".into(), // MCP-002
             auth_token: None,
         }
     }
@@ -97,23 +98,97 @@ impl McpServer {
         let addr = format!("{}:{}", self.config.host, self.config.port);
         let listener =
             TcpListener::bind(&addr).map_err(|e| format!("Failed to bind to {addr}: {e}"))?;
+        run_accept_loop(
+            listener,
+            self.config.server_name.clone(),
+            self.config.server_version.clone(),
+            Arc::clone(&self.executor),
+            Arc::new(AtomicBool::new(false)),
+        );
+        Ok(())
+    }
 
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let config = self.config.server_name.clone();
-                    let version = self.config.server_version.clone();
-                    let executor = Arc::clone(&self.executor);
-                    thread::spawn(move || {
-                        handle_connection(stream, &config, &version, &executor);
-                    });
-                }
-                Err(e) => {
-                    eprintln!("MCP connection error: {e}");
-                }
+    /// Bind and serve on a background thread, returning a handle that can stop
+    /// the server. Bind errors are returned synchronously.
+    pub fn spawn(self) -> Result<McpServerHandle, String> {
+        let addr = format!("{}:{}", self.config.host, self.config.port);
+        let listener =
+            TcpListener::bind(&addr).map_err(|e| format!("Failed to bind to {addr}: {e}"))?;
+        let local = listener
+            .local_addr()
+            .map_err(|e| format!("Failed to read local addr: {e}"))?;
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let loop_shutdown = Arc::clone(&shutdown);
+        let name = self.config.server_name.clone();
+        let version = self.config.server_version.clone();
+        let executor = Arc::clone(&self.executor);
+        let thread = thread::spawn(move || {
+            run_accept_loop(listener, name, version, executor, loop_shutdown);
+        });
+
+        Ok(McpServerHandle {
+            shutdown,
+            host: self.config.host.clone(),
+            port: local.port(),
+            thread: Mutex::new(Some(thread)),
+        })
+    }
+}
+
+/// Handle to a running MCP server started with [`McpServer::spawn`].
+pub struct McpServerHandle {
+    shutdown: Arc<AtomicBool>,
+    host: String,
+    port: u16,
+    thread: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl McpServerHandle {
+    /// The port the server is actually bound to (resolved when port 0 was requested).
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Stop the server and wait for the accept loop to exit. Idempotent.
+    pub fn stop(&self) {
+        if self.shutdown.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Wake the blocking accept so the loop observes the flag.
+        let _ = TcpStream::connect((self.host.as_str(), self.port));
+        if let Ok(mut guard) = self.thread.lock() {
+            if let Some(handle) = guard.take() {
+                let _ = handle.join();
             }
         }
-        Ok(())
+    }
+}
+
+fn run_accept_loop(
+    listener: TcpListener,
+    server_name: String,
+    server_version: String,
+    executor: Arc<Mutex<ToolExecutor>>,
+    shutdown: Arc<AtomicBool>,
+) {
+    for stream in listener.incoming() {
+        if shutdown.load(Ordering::SeqCst) {
+            break;
+        }
+        match stream {
+            Ok(stream) => {
+                let name = server_name.clone();
+                let version = server_version.clone();
+                let executor = Arc::clone(&executor);
+                thread::spawn(move || {
+                    handle_connection(stream, &name, &version, &executor);
+                });
+            }
+            Err(e) => {
+                eprintln!("MCP connection error: {e}");
+            }
+        }
     }
 }
 
@@ -151,7 +226,7 @@ fn handle_connection(
     } else {
         match serde_json::from_str::<JsonRpcRequest>(body) {
             Ok(req) => {
-                let resp = handle_json_rpc(&req, executor);
+                let resp = handle_json_rpc(&req, server_name, server_version, executor);
                 let body = serde_json::to_string(&resp).unwrap();
                 build_http_response(200, "application/json", &body)
             }
@@ -167,10 +242,30 @@ fn handle_connection(
     let _ = stream.flush();
 }
 
-fn handle_json_rpc(req: &JsonRpcRequest, executor: &Arc<Mutex<ToolExecutor>>) -> JsonRpcResponse {
+fn handle_json_rpc(
+    req: &JsonRpcRequest,
+    server_name: &str,
+    server_version: &str,
+    executor: &Arc<Mutex<ToolExecutor>>,
+) -> JsonRpcResponse {
     let id = req.id.clone();
 
     match req.method.as_str() {
+        "initialize" => JsonRpcResponse::success(
+            id,
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {},
+                    "resources": {},
+                },
+                "serverInfo": {
+                    "name": server_name,
+                    "version": server_version,
+                },
+            }),
+        ),
+
         "tools/list" => {
             let tools: Vec<Value> = all_tools()
                 .into_iter()
@@ -308,7 +403,7 @@ mod tests {
     #[test]
     fn mcp_001_server_name() {
         let config = McpConfig::default();
-        assert_eq!(config.server_name, "palmier-pro");
+        assert_eq!(config.server_name, "fronda");
     }
 
     #[test]
@@ -384,6 +479,76 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
+    fn spawn_on_ephemeral_port() -> McpServerHandle {
+        let config = McpConfig {
+            port: 0,
+            ..Default::default()
+        };
+        let executor = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        McpServer::new(config, executor).spawn().unwrap()
+    }
+
+    #[test]
+    fn spawn_stop_releases_port() {
+        let handle = spawn_on_ephemeral_port();
+        let port = handle.port();
+        assert!(TcpStream::connect(("127.0.0.1", port)).is_ok());
+        handle.stop();
+        let rebind = TcpListener::bind(("127.0.0.1", port));
+        assert!(rebind.is_ok(), "port should be released after stop");
+    }
+
+    #[test]
+    fn stop_is_idempotent() {
+        let handle = spawn_on_ephemeral_port();
+        handle.stop();
+        handle.stop();
+        handle.stop();
+    }
+
+    #[test]
+    fn spawn_bind_conflict_returns_err() {
+        let occupied = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        let config = McpConfig {
+            port,
+            ..Default::default()
+        };
+        let executor = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        match McpServer::new(config, executor).spawn() {
+            Err(e) => assert!(e.contains("Failed to bind")),
+            Ok(_) => panic!("bind conflict must surface as Err"),
+        }
+    }
+
+    #[test]
+    fn initialize_returns_server_info() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: json!(1),
+            method: "initialize".into(),
+            params: json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test-client", "version": "1.0.0"},
+            }),
+        };
+        let exec = make_executor();
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
+        let result = resp.result.unwrap();
+        assert_eq!(
+            result.pointer("/serverInfo/name").and_then(|v| v.as_str()),
+            Some("fronda")
+        );
+        assert_eq!(
+            result
+                .pointer("/serverInfo/version")
+                .and_then(|v| v.as_str()),
+            Some("1.0.0")
+        );
+        assert!(result.get("capabilities").is_some());
+    }
+
     #[test]
     fn json_rpc_parse_error() {
         let err = JsonRpcError::ParseError;
@@ -423,7 +588,7 @@ mod tests {
             params: json!({}),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         let result = resp.result.unwrap();
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
@@ -442,7 +607,7 @@ mod tests {
             params: json!({}),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         let result = resp.result.unwrap();
         let resources = result.get("resources").and_then(|v| v.as_array()).unwrap();
         assert_eq!(resources.len(), 2, "MCP-004: exactly 2 resources");
@@ -457,7 +622,7 @@ mod tests {
             params: json!({}),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }
@@ -474,7 +639,7 @@ mod tests {
             }),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         assert!(resp.result.is_some());
         let result = resp.result.unwrap();
         let content = result.get("content").and_then(|v| v.as_array()).unwrap();
@@ -494,7 +659,7 @@ mod tests {
             }),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }
@@ -511,7 +676,7 @@ mod tests {
             }),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         assert!(resp.result.is_some());
         let result = resp.result.unwrap();
         let content = result.get("content").and_then(|v| v.as_array()).unwrap();
@@ -531,7 +696,7 @@ mod tests {
             }),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         assert!(resp.result.is_some());
         let result = resp.result.unwrap();
         assert!(result.get("isError") == Some(&json!(true)));
@@ -548,7 +713,7 @@ mod tests {
             params: json!({"uri": "palmier://models/video"}),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         assert!(
             resp.error.is_none(),
             "MCP-007: video models resource should be readable"
@@ -576,7 +741,7 @@ mod tests {
             params: json!({"uri": "palmier://models/image"}),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         assert!(
             resp.error.is_none(),
             "MCP-008: image models resource should be readable"
@@ -600,7 +765,7 @@ mod tests {
             params: json!({"uri": "palmier://unknown"}),
         };
         let exec = make_executor();
-        let resp = handle_json_rpc(&req, &exec);
+        let resp = handle_json_rpc(&req, "fronda", "1.0.0", &exec);
         assert!(resp.error.is_some(), "unknown URI should return error");
         assert_eq!(resp.error.unwrap().code, -32602); // InvalidParams
     }

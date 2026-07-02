@@ -18,10 +18,14 @@ default = []
 desktop-app = ["dep:gpui", "dep:gpui_platform"]
 
 [dependencies]
+agent_contract = { package = "fronda-agent-contract", path = "../agent_contract" }
 anyhow = { workspace = true }
 app_contract = { package = "fronda-app-contract", path = "../app_contract" }
+core_model = { package = "fronda-core-model", path = "../core_model" }
 generation_core = { package = "fronda-generation-core", path = "../generation_core" }
 gpui = { git = "https://github.com/gpui-ce/gpui-ce", optional = true }
 gpui_platform = { git = "https://github.com/gpui-ce/gpui-ce", optional = true }
+mcp_server = { package = "fronda-mcp-server", path = "../mcp_server" }
 render_core = { path = "../render_core" }
 serde = { workspace = true }
+serde_json = { workspace = true }

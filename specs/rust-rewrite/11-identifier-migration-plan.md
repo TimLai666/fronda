@@ -28,7 +28,7 @@ These still intentionally preserve Palmier heritage:
 - project extension: `.palmier`
 - UTI: `io.palmier.project`
 - URL scheme: `palmier://`
-- MCP server name: `palmier-pro`
+- MCP server name: ~~`palmier-pro`~~ → **migrated to `fronda`** (change `wire-mcp-server-into-rust-shell`, 2026-07; Rust MCP server had no live consumers, so the rename shipped with the shell wiring)
 - Claude Desktop bundle: `palmier-pro.mcpb`
 - Sparkle feed metadata in `appcast.xml`
 
@@ -71,7 +71,7 @@ Keep `.palmier` until Fronda has:
 
 ### MCP identifiers
 
-Keep `palmier-pro` and `palmier://` until:
+The MCP server *name* migrated to `fronda` (see above). Keep `palmier://` resource URIs until:
 
 1. clients can discover the new name safely
 2. existing integrations have a migration path

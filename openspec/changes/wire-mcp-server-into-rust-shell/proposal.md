@@ -32,6 +32,15 @@ Rust 版 Fronda 的 MCP 協定實作已完整移植到 crates/mcp_server（HTTP 
 
 - Affected specs: 新增 `mcp-runtime`；同步更新 specs/rust-rewrite/05-agent-mcp-and-chat.md、specs/rust-rewrite/11-identifier-migration-plan.md 中的 server name 記載
 - Affected code:
-  - Modified: crates/app_shell_gpui/Cargo.toml、crates/app_shell_gpui/src/app_root.rs、crates/app_shell_gpui/src/agent_panel_view.rs、crates/app_shell_gpui/src/settings_view.rs、crates/app_contract/src/agent_panel_model.rs、crates/app_contract/src/settings_storage.rs、crates/mcp_server/src/server.rs、crates/mcp_server/tests/spec_mcp_contract.rs、README.md
+  - Modified:
+    - crates/app_shell_gpui/Cargo.toml
+    - crates/app_shell_gpui/src/app_root.rs
+    - crates/app_shell_gpui/src/agent_panel_view.rs
+    - crates/app_shell_gpui/src/settings_view.rs
+    - crates/app_contract/src/agent_panel_model.rs
+    - crates/app_contract/src/settings_storage.rs
+    - crates/mcp_server/src/server.rs
+    - crates/mcp_server/tests/spec_mcp_contract.rs
+    - README.md
   - New: (視實作而定，可能新增 crates/app_shell_gpui/src/mcp_service.rs 作為 shell 端的 server 生命週期 glue)
   - Removed: (none)

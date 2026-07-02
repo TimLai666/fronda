@@ -179,7 +179,7 @@ Scope sources:
 
 ## H. MCP transport contract
 
-- [x] `MCP-001`: `McpConfig.server_name = "palmier-pro"`. Test: `mcp_001_server_name`.
+- [x] `MCP-001`: `McpConfig.server_name = "fronda"` (migrated from `palmier-pro` by change `wire-mcp-server-into-rust-shell`; the JSON-RPC `initialize` response reports `serverInfo.name = "fronda"`). Test: `mcp_001_server_name`, `initialize_returns_server_info`.
 - [x] `MCP-002`: `McpConfig.server_version = "1.0.0"`. Test: `mcp_002_server_version`.
 - [x] `MCP-003`: MCP server `tools/list` returns exactly the tools from `agent_contract::all_tools()` (42). Test: `tools_list_returns_42_tools`, `mcp_003_exposes_42_tools`.
 - [x] `MCP-004`: Resources list returns `palmier://models/video` and `palmier://models/image`. Tests: `resources_list_returns_two_resources`, `resources_read_video_models`, `resources_read_image_models`.

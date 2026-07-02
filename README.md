@@ -16,7 +16,7 @@ Fronda is a cross-platform Rust rewrite of [Palmier Pro](https://github.com/palm
 | --- | --- |
 | Core logic (timeline math, project I/O, media library, search, generation, export planning) | Ported to pure Rust crates under `crates/`, covered by the workspace test suite |
 | Desktop shell | `gpui-ce` app shell (`crates/app_shell_gpui`), cross-platform |
-| MCP server | Protocol implementation ported to Rust (`crates/mcp_server`); not yet started by the Rust desktop shell — see [Connecting via MCP](#connecting-via-mcp) |
+| MCP server | Ported to Rust (`crates/mcp_server`) and started automatically by the desktop shell — see [Connecting via MCP](#connecting-via-mcp) |
 | Legacy Swift app | Behavioral reference only, macOS 26+ / Apple Silicon |
 
 The compatibility contract lives in `specs/rust-rewrite/`. The rule of thumb: preserve observable behavior first, improve architecture second. Intentional behavior changes must update the relevant spec in the same change.
@@ -49,24 +49,18 @@ CI (`.github/workflows/ci.yml`) runs spec validation, workspace `fmt`/`clippy`/t
 
 Fronda exposes its editing tools to AI agents (Claude Code, Codex, Cursor, and any other MCP client) through a local MCP server.
 
-**Current state:**
-
-- The MCP server implementation is ported to Rust in `crates/mcp_server` (`fronda-mcp-server`): HTTP JSON-RPC on `127.0.0.1:19789`, loopback-only by default, optional bearer-token auth for network exposure.
-- The Rust desktop shell does **not** yet start this server at runtime — wiring it into the app shell is in progress. Until then, a live MCP connection requires running the legacy Swift app on macOS.
-- The tool names, schemas, and resource URIs are part of the preserved compatibility contract, so client configuration is identical for both implementations.
-
-For compatibility, the server still identifies as `palmier-pro` and resources still use `palmier://` URIs (see [Compatibility identifiers](#compatibility-identifiers)).
+The server starts automatically with the desktop app (HTTP JSON-RPC on `127.0.0.1:19789`, loopback-only by default, optional bearer-token auth for network exposure). It identifies as `fronda` and can be toggled in Settings → Agent; the agent panel shows its live status. Tool names, schemas, and `palmier://` resource URIs are part of the preserved compatibility contract.
 
 ### Claude Code
 
 ```bash
-claude mcp add --transport http palmier-pro http://127.0.0.1:19789/mcp
+claude mcp add --transport http fronda http://127.0.0.1:19789/mcp
 ```
 
 ### Codex
 
 ```bash
-codex mcp add palmier-pro --url http://127.0.0.1:19789/mcp
+codex mcp add fronda --url http://127.0.0.1:19789/mcp
 ```
 
 ### Cursor
@@ -76,7 +70,7 @@ Add this to `~/.cursor/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "palmier-pro": {
+    "fronda": {
       "type": "http",
       "url": "http://127.0.0.1:19789/mcp"
     }
@@ -97,8 +91,7 @@ Add this to `~/.cursor/mcp.json`:
 Fronda preserves inherited identifiers until an explicit, spec-backed migration:
 
 - project packages use the `.palmier` extension (`project.json`, `media.json`, `generation-log.json`, `chat/*.json` inside)
-- MCP server name is `palmier-pro`
-- MCP resource URIs are `palmier://...`
+- MCP resource URIs are `palmier://...` (the MCP server name itself migrated to `fronda`)
 - auth callback scheme is `palmier://callback`
 - Swift package / target / source paths still use `PalmierPro`
 

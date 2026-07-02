@@ -44,9 +44,13 @@ pub struct AgentPanelView {
 impl AgentPanelView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let handle = cx.focus_handle();
+        let mut model = AgentPanelModel::default();
+        if let Ok(svc) = crate::mcp_service::McpService::global().lock() {
+            model.mcp_status = svc.status().clone();
+        }
         Self {
             focus_handle: handle,
-            model: AgentPanelModel::default(),
+            model,
         }
     }
 }
@@ -59,6 +63,9 @@ impl Focusable for AgentPanelView {
 
 impl Render for AgentPanelView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        if let Ok(svc) = crate::mcp_service::McpService::global().lock() {
+            self.model.mcp_status = svc.status().clone();
+        }
         let status = self.model.mcp_status.clone();
         let dot_color = status_dot(&status);
         let status_text = self.model.mcp_status_label();

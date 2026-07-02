@@ -33,6 +33,7 @@ pub mod inspector_model;
 pub mod inspector_view;
 #[cfg(feature = "desktop-app")]
 pub mod keyframes_view;
+pub mod mcp_service;
 pub mod media_panel_model;
 #[cfg(feature = "desktop-app")]
 pub mod media_panel_view;

@@ -857,6 +857,11 @@ impl Render for AppRoot {
 
 /// Create and open the initial window.
 pub fn open_main_window(cx: &mut App) {
+    // BOOT: start the MCP server when the preference allows (Swift: startMCPService).
+    if let Ok(mut svc) = crate::mcp_service::McpService::global().lock() {
+        svc.start_if_enabled();
+    }
+
     let cfg = WindowConfig::for_home();
     let size = size(px(cfg.default_width as f32), px(cfg.default_height as f32));
     let mut bounds = Bounds::centered(None, size, cx);

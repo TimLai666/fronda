@@ -12,7 +12,7 @@ use mcp_server::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpConfig};
 #[test]
 fn mcp_001_server_name() {
     let config = McpConfig::default();
-    assert_eq!(config.server_name, "palmier-pro");
+    assert_eq!(config.server_name, "fronda");
 }
 
 // ── MCP-002: Server version ──────────────────────────────────────────────────

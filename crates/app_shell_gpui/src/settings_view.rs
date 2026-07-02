@@ -4,6 +4,7 @@
 //! PrivacyPane, ModelsPane, AgentPane, StoragePane).
 
 use crate::theme::{Accent, Background, BorderColors, FontSize, Opacity, Radius, Spacing, Text};
+use app_contract::agent_panel_model::McpServerStatus;
 use app_contract::settings_storage::SettingsTab;
 use gpui::{
     div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
@@ -626,7 +627,12 @@ fn pane_models(
 
 // ── Agent pane ────────────────────────────────────────────────────────────────
 
-fn pane_agent(mcp_running: bool, mcp_enabled: bool, has_stored_api_key: bool) -> impl IntoElement {
+fn pane_agent(
+    mcp_running: bool,
+    mcp_status_label: String,
+    mcp_toggle: gpui::AnyElement,
+    has_stored_api_key: bool,
+) -> impl IntoElement {
     let dot_color = if mcp_running {
         gpui::Hsla {
             h: 0.33,
@@ -759,13 +765,9 @@ fn pane_agent(mcp_running: bool, mcp_enabled: bool, has_stored_api_key: bool) ->
                                         .flex_1()
                                         .text_color(Text::PRIMARY)
                                         .text_size(px(FontSize::SM))
-                                        .child(if mcp_running {
-                                            "Running on 127.0.0.1:49152"
-                                        } else {
-                                            "Stopped"
-                                        }),
+                                        .child(mcp_status_label),
                                 )
-                                .child(toggle_pill(mcp_enabled)),
+                                .child(mcp_toggle),
                         ),
                 ),
         )
@@ -981,6 +983,17 @@ fn tab_icon(tab: SettingsTab) -> &'static str {
 
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut mcp_status_label = String::from("Stopped");
+        if let Ok(svc) = crate::mcp_service::McpService::global().lock() {
+            self.mcp_enabled = svc.is_enabled_preference();
+            self.mcp_running = matches!(svc.status(), McpServerStatus::Running { .. });
+            mcp_status_label = match svc.status() {
+                McpServerStatus::Starting => "Starting\u{2026}".into(),
+                McpServerStatus::Running { port } => format!("Running on 127.0.0.1:{port}"),
+                McpServerStatus::Stopped => "Stopped".into(),
+                McpServerStatus::Failed(reason) => format!("Failed: {reason}"),
+            };
+        }
         let active_tab = self.active_tab;
         let backend = self.backend_configured;
 
@@ -1140,7 +1153,28 @@ impl Render for SettingsView {
             SettingsTab::General => pane_general(notifications_on, privacy_on).into_any_element(),
             SettingsTab::Models => pane_models(&image_on, &video_on, &audio_on).into_any_element(),
             SettingsTab::Agent => {
-                pane_agent(mcp_running, mcp_enabled, has_stored_api_key).into_any_element()
+                let mcp_toggle = div()
+                    .id("mcp-enabled-toggle")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _: &mut Window, cx| {
+                        let next = !this.mcp_enabled;
+                        if let Ok(mut svc) = crate::mcp_service::McpService::global().lock() {
+                            svc.set_enabled(next);
+                            this.mcp_enabled = next;
+                            this.mcp_running =
+                                matches!(svc.status(), McpServerStatus::Running { .. });
+                        }
+                        cx.notify();
+                    }))
+                    .child(toggle_pill(mcp_enabled))
+                    .into_any_element();
+                pane_agent(
+                    mcp_running,
+                    mcp_status_label,
+                    mcp_toggle,
+                    has_stored_api_key,
+                )
+                .into_any_element()
             }
             SettingsTab::Storage => pane_storage(search_enabled, model_bytes).into_any_element(),
         };

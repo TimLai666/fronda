@@ -22,7 +22,7 @@ The legacy Swift app is macOS 26+ on Apple Silicon only. The Fronda workspace it
 
 **Why do some identifiers still say Palmier?**
 
-Because the current compatibility surface still includes upstream identifiers such as `PalmierPro`, `.palmier`, `palmier://`, and the MCP server name `palmier-pro`. Those will only be renamed as an explicit migration, not incidentally.
+Because the current compatibility surface still includes upstream identifiers such as `PalmierPro`, `.palmier`, and `palmier://`. Those will only be renamed as an explicit migration, not incidentally. The MCP server name has already migrated to `fronda` as the first such spec-backed rename.
 
 **Is this repo fully open source?**
 
