@@ -144,6 +144,61 @@ impl TimelineState {
         self
     }
 
+    /// Build view state from the shared core timeline (project data path).
+    /// View-only fields (zoom, scroll, playhead) keep `new()` defaults —
+    /// callers preserving an existing view copy them back afterward.
+    pub fn from_core(
+        timeline: &core_model::Timeline,
+        manifest: &core_model::MediaManifest,
+    ) -> Self {
+        let mut state = Self::new();
+        state.fps = timeline.fps;
+
+        let mut video_count = 0usize;
+        let mut audio_count = 0usize;
+        let mut max_end = 0i64;
+
+        for track in &timeline.tracks {
+            let kind = if track.r#type == core_model::ClipType::Audio {
+                audio_count += 1;
+                TrackKind::Audio
+            } else {
+                video_count += 1;
+                TrackKind::Video
+            };
+            let number = match kind {
+                TrackKind::Video => video_count,
+                TrackKind::Audio => audio_count,
+            };
+            let mut row = TrackRow::new(
+                track.id.clone(),
+                kind.clone(),
+                format!("{} {}", kind.label(), number),
+            );
+            row.muted = track.muted;
+            row.hidden = track.hidden;
+            state.tracks.push(row);
+
+            for clip in &track.clips {
+                let label = manifest
+                    .entry_for(&clip.media_ref)
+                    .map(|e| e.name.clone())
+                    .unwrap_or_else(|| clip.media_ref.clone());
+                max_end = max_end.max(clip.start_frame + clip.duration_frames);
+                state.clips.push(ClipSlot::new(
+                    clip.id.clone(),
+                    track.id.clone(),
+                    clip.start_frame,
+                    clip.duration_frames,
+                    label,
+                ));
+            }
+        }
+
+        state.total_frames = max_end.max(state.total_frames);
+        state
+    }
+
     /// X position (in pixels) for a given frame at current zoom.
     pub fn x_for_frame(&self, frame: i64) -> f32 {
         frame as f32 * self.zoom_scale
@@ -296,5 +351,82 @@ mod tests {
         assert!((RULER_HEIGHT - 24.0).abs() < 1e-6);
         assert!((TRACK_HEADER_WIDTH - 100.0).abs() < 1e-6);
         assert!((DEFAULT_TRACK_HEIGHT - 50.0).abs() < 1e-6);
+    }
+
+    // ── from_core mapping (project-load spec) ──────────────────────────
+
+    fn core_timeline(json: &str) -> core_model::Timeline {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn core_manifest(json: &str) -> core_model::MediaManifest {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn from_core_maps_track_kinds_and_clip_labels() {
+        let timeline = core_timeline(
+            r#"{"fps":30,"tracks":[
+                {"id":"t1","type":"video","clips":[
+                    {"id":"c1","mediaRef":"m1","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":150},
+                    {"id":"c2","mediaRef":"m2","mediaType":"video","sourceClipType":"video","startFrame":160,"durationFrames":50}
+                ]},
+                {"id":"t2","type":"audio","clips":[]}
+            ]}"#,
+        );
+        let manifest = core_manifest(
+            r#"{"version":1,"entries":[
+                {"id":"m1","name":"Interview.mp4","type":"video","source":{"project":{"relativePath":"media/interview.mp4"}},"duration":5.0}
+            ]}"#,
+        );
+        let s = TimelineState::from_core(&timeline, &manifest);
+        assert_eq!(s.tracks.len(), 2);
+        assert_eq!(s.tracks[0].kind, TrackKind::Video);
+        assert_eq!(s.tracks[0].label, "Video 1");
+        assert_eq!(s.tracks[1].kind, TrackKind::Audio);
+        assert_eq!(s.tracks[1].label, "Audio 1");
+        assert_eq!(s.clips.len(), 2);
+        assert_eq!(s.clips[0].label, "Interview.mp4");
+        assert_eq!(s.clips[0].start_frame, 0);
+        assert_eq!(s.clips[0].duration_frames, 150);
+        assert_eq!(
+            s.clips[1].label, "m2",
+            "no manifest entry falls back to media_ref"
+        );
+    }
+
+    #[test]
+    fn from_core_total_frames_floor_and_max() {
+        // Clips ending at 290 and 480 → floor of 600.
+        let short = core_timeline(
+            r#"{"fps":30,"tracks":[{"id":"t1","type":"video","clips":[
+                {"id":"c1","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":200,"durationFrames":90},
+                {"id":"c2","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":400,"durationFrames":80}
+            ]}]}"#,
+        );
+        let manifest = core_model::MediaManifest::default();
+        assert_eq!(
+            TimelineState::from_core(&short, &manifest).total_frames,
+            600
+        );
+
+        // Clips ending at 290 and 720 → 720.
+        let long = core_timeline(
+            r#"{"fps":30,"tracks":[{"id":"t1","type":"video","clips":[
+                {"id":"c1","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":200,"durationFrames":90},
+                {"id":"c2","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":600,"durationFrames":120}
+            ]}]}"#,
+        );
+        assert_eq!(TimelineState::from_core(&long, &manifest).total_frames, 720);
+    }
+
+    #[test]
+    fn from_core_empty_project_keeps_default_extent() {
+        let empty = core_timeline(r#"{"fps":24,"tracks":[]}"#);
+        let s = TimelineState::from_core(&empty, &core_model::MediaManifest::default());
+        assert!(s.tracks.is_empty());
+        assert!(s.clips.is_empty());
+        assert_eq!(s.total_frames, 600);
+        assert_eq!(s.fps, 24);
     }
 }

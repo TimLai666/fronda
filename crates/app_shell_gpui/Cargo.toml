@@ -26,6 +26,7 @@ generation_core = { package = "fronda-generation-core", path = "../generation_co
 gpui = { git = "https://github.com/gpui-ce/gpui-ce", optional = true }
 gpui_platform = { git = "https://github.com/gpui-ce/gpui-ce", optional = true }
 mcp_server = { package = "fronda-mcp-server", path = "../mcp_server" }
+project_io = { package = "fronda-project-io", path = "../project_io" }
 render_core = { path = "../render_core" }
 serde = { workspace = true }
 serde_json = { workspace = true }

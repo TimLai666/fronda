@@ -151,6 +151,15 @@ impl AppRoot {
         cx.notify();
     }
 
+    /// Open a .palmier project: load into the shared state, then show
+    /// the editor. On failure the current screen is kept.
+    pub fn open_project_at(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        match crate::editor_state_hub::EditorStateHub::global().load_bundle(path) {
+            Ok(()) => self.open_editor(cx),
+            Err(reason) => eprintln!("Failed to open project {}: {reason}", path.display()),
+        }
+    }
+
     /// Navigate back to Home (e.g., close project).
     pub fn show_home(&mut self, cx: &mut Context<Self>) {
         self.active_screen = ActiveScreen::Home;
@@ -178,6 +187,11 @@ impl AppRoot {
 
         match action {
             menu::MenuAction::NewProject => {
+                // Fresh shared state so the UI and MCP observe the same new project.
+                crate::editor_state_hub::EditorStateHub::global().load_project(
+                    core_model::Timeline::default(),
+                    core_model::MediaManifest::default(),
+                );
                 self.open_editor(cx);
             }
             menu::MenuAction::OpenProject => {

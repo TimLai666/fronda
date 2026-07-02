@@ -15,14 +15,43 @@ use gpui::{
 pub struct TimelineView {
     pub state: TimelineState,
     focus_handle: FocusHandle,
+    /// Last seen shared-state revision; project loads and MCP mutations
+    /// trigger a data rebuild.
+    state_revision: u64,
 }
 
 impl TimelineView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        Self {
-            state: TimelineState::new().with_default_tracks(),
+        let mut view = Self {
+            state: TimelineState::new(),
             focus_handle: cx.focus_handle(),
+            state_revision: u64::MAX,
+        };
+        view.sync_from_shared_state();
+        view
+    }
+
+    /// Rebuild data fields from the shared editor state, preserving
+    /// view-only state (zoom, scroll, playhead).
+    fn sync_from_shared_state(&mut self) -> bool {
+        let hub = crate::editor_state_hub::EditorStateHub::global();
+        let revision = hub.revision();
+        if revision == self.state_revision {
+            return false;
         }
+        self.state_revision = revision;
+
+        let executor = hub.executor();
+        let Ok(exec) = executor.lock() else {
+            return false;
+        };
+        let mut next = TimelineState::from_core(exec.timeline(), exec.media_manifest());
+        next.zoom_scale = self.state.zoom_scale;
+        next.scroll_x = self.state.scroll_x;
+        next.scroll_y = self.state.scroll_y;
+        next.playhead_frame = self.state.playhead_frame;
+        self.state = next;
+        true
     }
 
     pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
@@ -43,7 +72,10 @@ impl Focusable for TimelineView {
 }
 
 impl Render for TimelineView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.sync_from_shared_state() {
+            cx.notify();
+        }
         let tracks = self.state.tracks.clone();
         let clips = self.state.clips.clone();
         let zoom = self.state.zoom_scale;

@@ -3,14 +3,17 @@
 //! Owns the one `ToolExecutor` both the UI and the MCP server operate on.
 //! Pure std + workspace crates — no gpui.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use agent_contract::ToolExecutor;
 use core_model::{MediaManifest, Timeline};
+use project_io::ProjectBundle;
 
 /// Process-wide holder of the current project state.
 pub struct EditorStateHub {
     executor: Arc<Mutex<ToolExecutor>>,
+    project_root: Mutex<Option<PathBuf>>,
 }
 
 impl EditorStateHub {
@@ -20,6 +23,7 @@ impl EditorStateHub {
                 Timeline::default(),
                 MediaManifest::default(),
             ))),
+            project_root: Mutex::new(None),
         }
     }
 
@@ -45,6 +49,27 @@ impl EditorStateHub {
         if let Ok(mut exec) = self.executor.lock() {
             exec.load_project(timeline, media_manifest);
         }
+        if let Ok(mut root) = self.project_root.lock() {
+            *root = None;
+        }
+    }
+
+    /// Open a `.palmier` package and load it into the shared state.
+    /// On failure the shared state and revision are left untouched.
+    pub fn load_bundle(&self, path: &Path) -> Result<(), String> {
+        let bundle = ProjectBundle::open(path).map_err(|e| e.to_string())?;
+        if let Ok(mut exec) = self.executor.lock() {
+            exec.load_project(bundle.timeline, bundle.manifest.unwrap_or_default());
+        }
+        if let Ok(mut root) = self.project_root.lock() {
+            *root = Some(bundle.root);
+        }
+        Ok(())
+    }
+
+    /// Root directory of the currently loaded project, if any.
+    pub fn project_root(&self) -> Option<PathBuf> {
+        self.project_root.lock().ok().and_then(|r| r.clone())
     }
 }
 
@@ -88,5 +113,45 @@ mod tests {
     fn executor_returns_same_shared_instance() {
         let hub = EditorStateHub::new();
         assert!(Arc::ptr_eq(&hub.executor(), &hub.executor()));
+    }
+
+    fn temp_bundle_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join("fronda-editor-state-hub-tests")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn load_bundle_success_loads_state_and_records_root() {
+        let dir = temp_bundle_dir("ok.palmier");
+        std::fs::write(
+            dir.join(core_model::TIMELINE_FILENAME),
+            r#"{"fps":60,"width":1920,"height":1080}"#,
+        )
+        .unwrap();
+
+        let hub = EditorStateHub::new();
+        let before = hub.revision();
+        hub.load_bundle(&dir).unwrap();
+
+        assert!(hub.revision() > before);
+        assert_eq!(hub.project_root(), Some(dir.clone()));
+        let exec = hub.executor();
+        assert_eq!(exec.lock().unwrap().timeline().fps, 60);
+    }
+
+    #[test]
+    fn load_bundle_failure_leaves_state_untouched() {
+        let dir = temp_bundle_dir("missing.palmier");
+        // No project.json inside.
+        let hub = EditorStateHub::new();
+        let before = hub.revision();
+        let err = hub.load_bundle(&dir).unwrap_err();
+        assert!(err.contains("project.json"), "err={err}");
+        assert_eq!(hub.revision(), before);
+        assert!(hub.project_root().is_none());
     }
 }
