@@ -2,100 +2,60 @@
 
 # Fronda
 
-**Cross-platform Rust video editor workspace derived from Palmier Pro.**
+**Cross-platform video editor written in Rust, driven by AI agents over MCP.**
 
 </div>
 
-<img src="./assets/palmier-ui.png" alt="Fronda compatibility target UI derived from the Palmier Pro baseline" width="900" />
+<img src="./assets/palmier-ui.png" alt="Fronda UI, matching the Palmier Pro baseline" width="900" />
 
-This repository is a modified fork of [Palmier Pro](https://github.com/palmier-io/palmier-pro). `Fronda` is the primary product and codebase in this fork: a cross-platform Rust editor built around `gpui-ce`, with the inherited Swift app retained as a legacy compatibility reference.
+Fronda is a cross-platform Rust rewrite of [Palmier Pro](https://github.com/palmier-io/palmier-pro), built on `gpui-ce`. It runs on macOS, Windows, and Linux. The inherited Swift app is kept in this repository only as a legacy behavioral reference while parity is verified — **the Rust workspace is the primary codebase.**
 
-## Current status
+## Status
 
-- Primary implementation: Rust workspace
-- Primary UI stack: `gpui-ce`
-- Legacy compatibility reference: Palmier Pro on Swift 6.2, SwiftUI + AppKit, AVFoundation
-- Legacy runtime: macOS 26+ on Apple Silicon
-- Compatibility baseline: `specs/rust-rewrite/`
+| Area | State |
+| --- | --- |
+| Core logic (timeline math, project I/O, media library, search, generation, export planning) | Ported to pure Rust crates under `crates/`, covered by the workspace test suite |
+| Desktop shell | `gpui-ce` app shell (`crates/app_shell_gpui`), cross-platform |
+| MCP server | Protocol implementation ported to Rust (`crates/mcp_server`); not yet started by the Rust desktop shell — see [Connecting via MCP](#connecting-via-mcp) |
+| Legacy Swift app | Behavioral reference only, macOS 26+ / Apple Silicon |
 
-## Repository goals
+The compatibility contract lives in `specs/rust-rewrite/`. The rule of thumb: preserve observable behavior first, improve architecture second. Intentional behavior changes must update the relevant spec in the same change.
 
-- preserve the current editor's observable behavior in a testable spec
-- port non-UI logic into pure Rust modules first
-- use `gpui-ce` for windows, panes, input, shortcuts, and drag/drop
-- make platform-specific behavior explicit behind adapters
+## Build and run
 
-## What is in the repo today
+Requires a recent stable Rust toolchain.
 
-1. the Rust workspace that carries the active Fronda implementation
-2. compatibility specs that define the user-visible contract Fronda must preserve or explicitly change
-3. the legacy macOS-native Swift implementation kept as behavioral reference where parity is still being verified
-4. fork-specific attribution, legal notices, and rewrite rules
-
-## Rust workspace
+Run the test suite:
 
 ```bash
 cargo test --workspace
 ```
 
-Check the `gpui-ce` desktop shell on a supported desktop toolchain:
+Type-check the desktop shell:
 
 ```bash
 cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda
 ```
 
-Launch the desktop shell on a supported desktop toolchain:
+Launch the desktop app:
 
 ```bash
 cargo run -p fronda-app-shell-gpui --features desktop-app --bin fronda
 ```
 
-GitHub Actions runs spec validation, Rust workspace `fmt`/`clippy`/tests, a `gpui-ce` shell compile check, and the legacy Swift compatibility baseline build/test on pushes to `main`, pull requests, and manual dispatch through `.github/workflows/ci.yml`.
+CI (`.github/workflows/ci.yml`) runs spec validation, workspace `fmt`/`clippy`/tests, a `gpui-ce` shell compile check, and the legacy Swift baseline build/test.
 
-## Legacy Swift compatibility baseline
+## Connecting via MCP
 
-Build:
+Fronda exposes its editing tools to AI agents (Claude Code, Codex, Cursor, and any other MCP client) through a local MCP server.
 
-```bash
-swift build
-swift run
-```
+**Current state:**
 
-For a bundled debug build that launches the `.app` and streams OSLog:
+- The MCP server implementation is ported to Rust in `crates/mcp_server` (`fronda-mcp-server`): HTTP JSON-RPC on `127.0.0.1:19789`, loopback-only by default, optional bearer-token auth for network exposure.
+- The Rust desktop shell does **not** yet start this server at runtime — wiring it into the app shell is in progress. Until then, a live MCP connection requires running the legacy Swift app on macOS.
+- The tool names, schemas, and resource URIs are part of the preserved compatibility contract, so client configuration is identical for both implementations.
 
-```bash
-./scripts/dev.sh
-```
-
-Test:
-
-```bash
-swift test
-```
-
-## Rust compatibility spec baseline
-
-Start here:
-
-- `specs/rust-rewrite/README.md`
-- `specs/rust-rewrite/10-current-status-and-plan.md`
-- `specs/rust-rewrite/11-identifier-migration-plan.md`
-- `specs/rust-rewrite/99-test-matrix.md`
-- `AGENTS.md`
-
-The rule of thumb for Fronda work is simple: preserve observable behavior first, improve architecture second. If behavior changes intentionally, update the relevant spec in the same change.
-
-## Current Palmier compatibility identifiers
-
-`Fronda` is the active Rust product name. Until identifier migration is made explicit, the repo still preserves inherited identifiers that remain part of the compatibility surface:
-
-- Swift package / target / source paths still use `PalmierPro`
-- project packages still use the `.palmier` extension
-- MCP server name is still `palmier-pro`
-- MCP resource URIs are still `palmier://...`
-- auth callback scheme is still `palmier://callback`
-
-So current MCP setup examples still use the legacy server name:
+For compatibility, the server still identifies as `palmier-pro` and resources still use `palmier://` URIs (see [Compatibility identifiers](#compatibility-identifiers)).
 
 ### Claude Code
 
@@ -124,18 +84,46 @@ Add this to `~/.cursor/mcp.json`:
 }
 ```
 
+## Repository layout
+
+- `crates/` — the Rust workspace: `core_model`, `timeline_core`, `project_io`, `media_library`, `render_core`, `search_core`, `generation_core`, `agent_contract`, `mcp_server`, `app_contract`, `app_shell_gpui`, and more
+- `specs/rust-rewrite/` — the compatibility spec baseline; start with `specs/rust-rewrite/README.md` and `10-current-status-and-plan.md`
+- `openspec/` — Spectra spec-driven-development specs and change proposals
+- `Sources/`, `Tests/` — the legacy Swift implementation (behavioral reference)
+- `AGENTS.md` — repo rules for AI-assisted work
+
+## Compatibility identifiers
+
+Fronda preserves inherited identifiers until an explicit, spec-backed migration:
+
+- project packages use the `.palmier` extension (`project.json`, `media.json`, `generation-log.json`, `chat/*.json` inside)
+- MCP server name is `palmier-pro`
+- MCP resource URIs are `palmier://...`
+- auth callback scheme is `palmier://callback`
+- Swift package / target / source paths still use `PalmierPro`
+
+Do not rename these piecemeal.
+
+## Legacy Swift baseline
+
+Kept as the behavioral reference on macOS 26+ / Apple Silicon:
+
+```bash
+swift build
+swift run    # or ./scripts/dev.sh for a bundled debug build with OSLog
+swift test
+```
+
+Avoid adding large new features to the Swift app; prefer Rust implementation work, spec capture, and compatibility fixes.
+
 ## Contributing
 
-See `CONTRIBUTING.md`.
-
-For Fronda work, start from the Rust workspace and prefer:
+See `CONTRIBUTING.md`. For Fronda work, start from the Rust workspace and prefer:
 
 - Rust implementation work
 - spec capture and spec updates
 - compatibility-preserving refactors
 - targeted legacy Swift fixes only when they protect or clarify the compatibility contract
-
-Avoid expanding the legacy Swift app with large new features unless that is the explicit goal.
 
 ## Upstream source and license
 

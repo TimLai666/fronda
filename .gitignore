@@ -34,3 +34,6 @@ models/*/.venv/
 models/*/build*/
 models/*/checkpoint*
 models/*/convert*.log
+.spectra/
+openspec/.vector-search.db*
+.claude/settings.local.json
