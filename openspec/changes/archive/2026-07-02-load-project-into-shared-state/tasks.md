@@ -13,4 +13,4 @@
 
 ## 4. 全面驗證
 
-- [ ] 4.1 cargo test --workspace、cargo clippy --workspace --tests -- -D warnings、cargo fmt --all -- --check 全過；手動驗證：建含 project.json 的 .palmier 目錄，程式路徑呼叫 load_bundle 後 curl get_timeline 反映載入內容。驗證：指令輸出與 curl 回應內容審閱
+- [x] 4.1 cargo test --workspace、cargo clippy --workspace --tests -- -D warnings、cargo fmt --all -- --check 全過；手動驗證：建含 project.json 的 .palmier 目錄，程式路徑呼叫 load_bundle 後 curl get_timeline 反映載入內容。驗證：指令輸出與 curl 回應內容審閱
