@@ -30,6 +30,7 @@ mcp_server = { package = "fronda-mcp-server", path = "../mcp_server" }
 project_io = { package = "fronda-project-io", path = "../project_io" }
 timeline_core = { package = "fronda-timeline-core", path = "../timeline_core" }
 render_core = { path = "../render_core" }
+audio_core = { package = "fronda-audio-core", path = "../audio_core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ffmpeg-the-third = { version = "5.0.0", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }

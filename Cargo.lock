@@ -1883,6 +1883,7 @@ dependencies = [
  "ffmpeg-the-third",
  "fronda-agent-contract",
  "fronda-app-contract",
+ "fronda-audio-core",
  "fronda-core-model",
  "fronda-generation-core",
  "fronda-mcp-server",

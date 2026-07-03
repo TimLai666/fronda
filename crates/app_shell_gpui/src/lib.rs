@@ -75,6 +75,7 @@ pub mod transform_overlay_view;
 pub mod update_overlay_view;
 pub mod agent_bridge;
 pub mod anthropic_transport;
+pub mod audio_export;
 pub mod preview_render;
 pub mod video_export;
 pub mod video_thumbnails;
