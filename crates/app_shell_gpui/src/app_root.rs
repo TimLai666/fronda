@@ -997,6 +997,14 @@ pub fn open_main_window(cx: &mut App) {
         svc.start_if_enabled();
     }
 
+    // BOOT: prune the thumbnail cache to its size cap off the UI thread.
+    std::thread::spawn(|| {
+        crate::video_thumbnails::prune_by_size(
+            &crate::video_thumbnails::thumbnail_cache_dir(),
+            crate::video_thumbnails::THUMBNAIL_CACHE_MAX_BYTES,
+        );
+    });
+
     let cfg = WindowConfig::for_home();
     let size = size(px(cfg.default_width as f32), px(cfg.default_height as f32));
     let mut bounds = Bounds::centered(None, size, cx);
