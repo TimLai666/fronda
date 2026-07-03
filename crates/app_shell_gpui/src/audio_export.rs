@@ -141,6 +141,7 @@ pub fn clip_waveform_peaks(source: &Path, buckets: usize) -> Option<Vec<f32>> {
 /// each frame (reusing one decoder per source), mixes the timeline audio, and
 /// muxes an AAC stream when there is any non-silent audio (otherwise video-only).
 /// Both streams start at PTS 0, so they stay in sync.
+#[allow(clippy::too_many_arguments)]
 pub fn export_project_with_audio(
     timeline: &Timeline,
     manifest: &MediaManifest,
@@ -148,10 +149,9 @@ pub fn export_project_with_audio(
     output: &Path,
     width: u32,
     height: u32,
+    codec: crate::video_export::VideoCodec,
 ) -> Result<(), String> {
-    use crate::video_export::{
-        source_time_seconds, Mp4Encoder, SourceDecoder,
-    };
+    use crate::video_export::{source_time_seconds, Mp4Encoder, SourceDecoder};
     use render_core::compositor::compose_frame;
     use timeline_core::TimelineMathExt;
 
@@ -174,11 +174,8 @@ pub fn export_project_with_audio(
     });
     let has_audio = mixed.iter().any(|&s| s != 0.0);
 
-    let mut enc = if has_audio {
-        Mp4Encoder::new_with_audio(output, width, height, fps as i32, arate, ach)?
-    } else {
-        Mp4Encoder::new(output, width, height, fps as i32)?
-    };
+    let audio_params = has_audio.then_some((arate, ach));
+    let mut enc = Mp4Encoder::new_av_codec(output, width, height, fps as i32, audio_params, codec)?;
 
     let ew = (width & !1).max(2) as usize;
     let eh = (height & !1).max(2) as usize;
@@ -422,7 +419,16 @@ mod tests {
         };
 
         let out = dir.join("out.mp4");
-        export_project_with_audio(&timeline, &manifest, &dir, &out, 64, 48).expect("av export");
+        export_project_with_audio(
+            &timeline,
+            &manifest,
+            &dir,
+            &out,
+            64,
+            48,
+            crate::video_export::VideoCodec::H264,
+        )
+        .expect("av export");
         assert!(std::fs::metadata(&out).unwrap().len() > 0);
         assert!(decode_audio_pcm(&out, 48_000, 2).is_some_and(|p| !p.is_empty()));
         assert!(crate::video_export::decode_frame_rgba(&out, 0.0).is_some());

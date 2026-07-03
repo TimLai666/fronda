@@ -65,6 +65,7 @@ pub struct Mp4Encoder {
     scaler: ffmpeg::software::scaling::Context,
     width: u32,
     height: u32,
+    pix: Pixel,
     stream_index: usize,
     enc_time_base: Rational,
     ost_time_base: Rational,
@@ -73,10 +74,36 @@ pub struct Mp4Encoder {
     finished: bool,
 }
 
+/// Supported export video codecs. ProRes writes 10-bit 4:2:2 to a `.mov`;
+/// H.264/H.265 write YUV420P to an `.mp4`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoCodec {
+    H264,
+    H265,
+    ProRes,
+}
+
+impl VideoCodec {
+    fn codec_id(self) -> ffmpeg::codec::Id {
+        match self {
+            VideoCodec::H264 => ffmpeg::codec::Id::H264,
+            VideoCodec::H265 => ffmpeg::codec::Id::HEVC,
+            VideoCodec::ProRes => ffmpeg::codec::Id::PRORES,
+        }
+    }
+
+    fn pixel_format(self) -> Pixel {
+        match self {
+            VideoCodec::ProRes => Pixel::YUV422P10LE,
+            _ => Pixel::YUV420P,
+        }
+    }
+}
+
 impl Mp4Encoder {
-    /// Open `output` for writing video at `width`x`height` and `fps`.
+    /// Open `output` for writing H.264 video at `width`x`height` and `fps`.
     pub fn new(output: &Path, width: u32, height: u32, fps: i32) -> Result<Self, String> {
-        Self::build(output, width, height, fps, None)
+        Self::build(output, width, height, fps, None, VideoCodec::H264)
     }
 
     /// Like [`new`] but also muxes an AAC audio stream at `audio_rate` /
@@ -89,7 +116,26 @@ impl Mp4Encoder {
         audio_rate: u32,
         audio_channels: u16,
     ) -> Result<Self, String> {
-        Self::build(output, width, height, fps, Some((audio_rate, audio_channels)))
+        Self::build(
+            output,
+            width,
+            height,
+            fps,
+            Some((audio_rate, audio_channels)),
+            VideoCodec::H264,
+        )
+    }
+
+    /// Like [`new_with_audio`] but with an explicit video codec.
+    pub fn new_av_codec(
+        output: &Path,
+        width: u32,
+        height: u32,
+        fps: i32,
+        audio: Option<(u32, u16)>,
+        codec: VideoCodec,
+    ) -> Result<Self, String> {
+        Self::build(output, width, height, fps, audio, codec)
     }
 
     fn build(
@@ -98,6 +144,7 @@ impl Mp4Encoder {
         height: u32,
         fps: i32,
         audio: Option<(u32, u16)>,
+        video_codec: VideoCodec,
     ) -> Result<Self, String> {
         init_ffmpeg();
         let width = width & !1;
@@ -108,7 +155,10 @@ impl Mp4Encoder {
         if fps <= 0 {
             return Err("fps must be positive".into());
         }
-        let codec = pick_encoder().ok_or("no H.264/MPEG-4 encoder in linked ffmpeg")?;
+        let pix = video_codec.pixel_format();
+        let codec = ffmpeg::encoder::find(video_codec.codec_id())
+            .or_else(pick_encoder)
+            .ok_or("no usable video encoder in linked ffmpeg")?;
 
         let mut octx = match ffmpeg::format::output(&output) {
             Ok(o) => o,
@@ -127,7 +177,7 @@ impl Mp4Encoder {
         };
         enc.set_width(width);
         enc.set_height(height);
-        enc.set_format(Pixel::YUV420P);
+        enc.set_format(pix);
         enc.set_time_base(enc_time_base);
         enc.set_frame_rate(Some(Rational(fps, 1)));
         enc.set_gop(12);
@@ -178,7 +228,7 @@ impl Mp4Encoder {
             Pixel::RGBA,
             width,
             height,
-            Pixel::YUV420P,
+            pix,
             width,
             height,
             ffmpeg::software::scaling::Flags::BILINEAR,
@@ -193,6 +243,7 @@ impl Mp4Encoder {
             scaler,
             width,
             height,
+            pix,
             stream_index,
             enc_time_base,
             ost_time_base,
@@ -264,7 +315,7 @@ impl Mp4Encoder {
                 dst.copy_from_slice(src);
             }
         }
-        let mut yuv = ffmpeg::frame::Video::new(Pixel::YUV420P, self.width, self.height);
+        let mut yuv = ffmpeg::frame::Video::new(self.pix, self.width, self.height);
         if let Err(e) = self.scaler.run(&rgba, &mut yuv) {
             return err("scale frame", e);
         }
@@ -848,6 +899,53 @@ mod tests {
         let entry = external_entry("m", Path::new("/media/clip.mp4"));
         let p = source_path(&entry, Path::new("/project")).unwrap();
         assert_eq!(p, PathBuf::from("/media/clip.mp4"));
+    }
+
+    /// Try a full encode+decode round-trip for a codec; `Ok(true)` if it works,
+    /// `Ok(false)` if the encoder is unusable in this build (e.g. an MF encoder
+    /// that rejects the input). Test helper.
+    fn try_codec(dir: &std::path::Path, codec: VideoCodec, ext: &str) -> bool {
+        let out = dir.join(format!("clip-{codec:?}.{ext}"));
+        let mut enc = match Mp4Encoder::new_av_codec(&out, 64, 48, 15, None, codec) {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+        for _ in 0..5 {
+            if enc
+                .write_frame(&RgbaImage::solid(64, 48, [200, 30, 30, 255]))
+                .is_err()
+            {
+                return false;
+            }
+        }
+        if enc.finish().is_err() {
+            return false;
+        }
+        std::fs::metadata(&out).map(|m| m.len() > 0).unwrap_or(false)
+            && decode_frame_rgba(&out, 0.0).is_some()
+    }
+
+    #[test]
+    fn h264_export_round_trips() {
+        if !encoder_available() {
+            return;
+        }
+        let dir = temp_dir("codec-h264");
+        // H.264 must always work (it's the default and universally available).
+        assert!(try_codec(&dir, VideoCodec::H264, "mp4"), "H.264 round-trips");
+    }
+
+    #[test]
+    fn codec_selection_is_usable_or_reported() {
+        if !encoder_available() {
+            return;
+        }
+        let dir = temp_dir("codec-all");
+        // H.265 (often only via Media Foundation) and ProRes may or may not work
+        // in a given ffmpeg build; log the support matrix rather than assert.
+        for (codec, ext) in [(VideoCodec::H265, "mp4"), (VideoCodec::ProRes, "mov")] {
+            eprintln!("codec {codec:?} usable = {}", try_codec(&dir, codec, ext));
+        }
     }
 
     #[test]

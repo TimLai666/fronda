@@ -676,8 +676,22 @@ impl Render for ExportView {
                                     let start_dir =
                                         std::env::home_dir().unwrap_or_else(|| ".".into());
                                     let resolution = this.model.panel.settings.resolution;
-                                    let rx = cx
-                                        .prompt_for_new_path(&start_dir, Some("Timeline.mp4"));
+                                    let (video_codec, ext) = match this.model.panel.settings.format
+                                    {
+                                        ExportFormat::ProRes => {
+                                            (crate::video_export::VideoCodec::ProRes, "mov")
+                                        }
+                                        ExportFormat::H265 | ExportFormat::H265Hdr => {
+                                            (crate::video_export::VideoCodec::H265, "mp4")
+                                        }
+                                        ExportFormat::H264 => {
+                                            (crate::video_export::VideoCodec::H264, "mp4")
+                                        }
+                                    };
+                                    let rx = cx.prompt_for_new_path(
+                                        &start_dir,
+                                        Some(&format!("Timeline.{ext}")),
+                                    );
                                     cx.spawn(async move |this, cx| {
                                         let Ok(Ok(Some(path))) = rx.await else {
                                             return;
@@ -709,6 +723,7 @@ impl Render for ExportView {
                                                 let h = size.height.max(2) as u32;
                                                 crate::audio_export::export_project_with_audio(
                                                     &timeline, &manifest, &root, &out, w, h,
+                                                    video_codec,
                                                 )
                                                 .map(|()| out.clone())
                                             })
