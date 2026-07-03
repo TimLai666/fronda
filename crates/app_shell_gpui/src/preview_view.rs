@@ -374,6 +374,21 @@ impl Render for PreviewView {
         let crop_entity = self.crop_overlay.clone();
         let active_guides: Vec<ViewerGuide> = self.guide_state.active_guides().to_vec();
         let any_guides = !active_guides.is_empty();
+
+        // Real project settings for the badge row (was hardcoded).
+        let (aspect_label, fps_label, quality_label) = {
+            let hub = crate::editor_state_hub::EditorStateHub::global();
+            let exec = hub.executor();
+            let guard = exec.lock().unwrap();
+            let t = guard.timeline();
+            let (w, h, fps) = (t.width, t.height, t.fps);
+            let quality = timeline_core::QUALITY_PRESETS
+                .iter()
+                .find(|q| q.matches(w, h))
+                .map(|q| q.label.to_string())
+                .unwrap_or_else(|| "Custom".into());
+            (timeline_core::format_aspect_ratio(w, h), format!("{fps} fps"), quality)
+        };
         div()
             .id("preview-panel")
             .flex()
@@ -764,10 +779,10 @@ impl Render for PreviewView {
                             .justify_end()
                             .items_center()
                             .gap(px(Spacing::XS))
-                            // 4 tappable badge stubs matching Swift: aspectRatio, fps, quality, viewFit
-                            .child(settings_badge("badge-aspect", "16:9"))
-                            .child(settings_badge("badge-fps", "24 fps"))
-                            .child(settings_badge("badge-quality", "HD"))
+                            // Badges reflect the live project settings (Swift: aspectRatio, fps, quality, viewFit)
+                            .child(settings_badge("badge-aspect", &aspect_label))
+                            .child(settings_badge("badge-fps", &fps_label))
+                            .child(settings_badge("badge-quality", &quality_label))
                             .child(settings_badge("badge-fit", "Fit"))
                             // Guides toggle (Swift: guideMenuButton — shows/hides ViewerGuideMenu)
                             .child(

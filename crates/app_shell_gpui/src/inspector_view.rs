@@ -305,6 +305,29 @@ fn section_header(id: &str, label: &str, expanded: bool) -> gpui::Stateful<gpui:
 }
 
 fn project_metadata_content() -> impl IntoElement {
+    use timeline_core::TimelineMathExt;
+
+    let hub = crate::editor_state_hub::EditorStateHub::global();
+    let (width, height, fps, total_frames) = {
+        let exec = hub.executor();
+        let guard = exec.lock().unwrap();
+        let t = guard.timeline();
+        (t.width, t.height, t.fps, t.total_frames())
+    };
+    let (name, path) = match hub.project_root() {
+        Some(p) => (
+            p.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Untitled".into()),
+            p.display().to_string(),
+        ),
+        None => ("Untitled".into(), "~/Movies/Untitled.palmier".into()),
+    };
+    let resolution = format!("{width} x {height}");
+    let frame_rate = format!("{fps} fps");
+    let aspect = timeline_core::format_aspect_ratio(width, height);
+    let duration = timeline_core::format_duration(total_frames as f64 / fps.max(1) as f64);
+
     div()
         .flex()
         .flex_col()
@@ -317,8 +340,8 @@ fn project_metadata_content() -> impl IntoElement {
                 .pt(px(Spacing::MD))
                 .gap(px(Spacing::XXS))
                 .child(section_header("section-project", "Project", true))
-                .child(prop_row("Name", "Untitled"))
-                .child(prop_row("Path", "~/Movies/Untitled.palmier")),
+                .child(prop_row("Name", &name))
+                .child(prop_row("Path", &path)),
         )
         .child(
             div()
@@ -328,10 +351,10 @@ fn project_metadata_content() -> impl IntoElement {
                 .pt(px(Spacing::SM))
                 .gap(px(Spacing::XXS))
                 .child(section_header("section-format", "Format", true))
-                .child(prop_row("Resolution", "1920 x 1080"))
-                .child(prop_row("Frame Rate", "30 fps"))
-                .child(prop_row("Aspect Ratio", "16:9"))
-                .child(prop_row("Duration", "0:20")),
+                .child(prop_row("Resolution", &resolution))
+                .child(prop_row("Frame Rate", &frame_rate))
+                .child(prop_row("Aspect Ratio", &aspect))
+                .child(prop_row("Duration", &duration)),
         )
 }
 
