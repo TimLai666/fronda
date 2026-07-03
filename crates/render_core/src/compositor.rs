@@ -177,10 +177,46 @@ pub fn blend_rgb(mode: BlendMode, s: [f64; 3], d: [f64; 3]) -> [f64; 3] {
     }
 }
 
+/// Bilinearly sample `src` at continuous pixel coordinates `(fx, fy)`, returning
+/// a **premultiplied** RGBA in `0..=1`. Premultiplying before interpolation keeps
+/// edges against transparent pixels from fringing toward the transparent colour.
+/// Coordinates are clamped to the source bounds (edge clamp).
+fn sample_bilinear(src: &RgbaImage, fx: f64, fy: f64) -> [f64; 4] {
+    let x = fx.clamp(0.0, src.width as f64 - 1.0);
+    let y = fy.clamp(0.0, src.height as f64 - 1.0);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(src.width - 1);
+    let y1 = (y0 + 1).min(src.height - 1);
+    let tx = x - x0 as f64;
+    let ty = y - y0 as f64;
+    let premul = |xx: usize, yy: usize| {
+        let [r, g, b, a] = src.pixel(xx, yy);
+        let af = a as f64 / 255.0;
+        [
+            r as f64 / 255.0 * af,
+            g as f64 / 255.0 * af,
+            b as f64 / 255.0 * af,
+            af,
+        ]
+    };
+    let p00 = premul(x0, y0);
+    let p10 = premul(x1, y0);
+    let p01 = premul(x0, y1);
+    let p11 = premul(x1, y1);
+    let mut out = [0.0; 4];
+    for k in 0..4 {
+        let top = p00[k] + (p10[k] - p00[k]) * tx;
+        let bot = p01[k] + (p11[k] - p01[k]) * tx;
+        out[k] = top + (bot - top) * ty;
+    }
+    out
+}
+
 /// Composite `src` into `canvas` scaled to fill the pixel rect `dst`, rotated
 /// `rotation_degrees` about the rect's centre, sampling only the normalized
 /// sub-rectangle `src_region` of the source (for crop), with `opacity` (0..1)
-/// and source-over alpha blending. Nearest-neighbour (inverse-mapped).
+/// and source-over alpha blending. Bilinear (inverse-mapped, premultiplied).
 ///
 /// `dst` and `src_region` are `(x, y, w, h)`. `dst` is in canvas pixels and may
 /// extend past the canvas edges (it is clipped). `src_region` is fractions in
@@ -235,18 +271,17 @@ pub fn blit_scaled(
             if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
                 continue;
             }
-            let sx = (((sx0 + u * sw) * src.width as f64) as isize)
-                .clamp(0, src.width as isize - 1) as usize;
-            let sy = (((sy0 + v * sh) * src.height as f64) as isize)
-                .clamp(0, src.height as isize - 1) as usize;
-
-            let [sr, sg, sb, sa] = src.pixel(sx, sy);
-            let a = (sa as f64 / 255.0) * opacity;
+            // Continuous source position (pixel-centre convention: subtract 0.5).
+            let fx = (sx0 + u * sw) * src.width as f64 - 0.5;
+            let fy = (sy0 + v * sh) * src.height as f64 - 0.5;
+            let [pr, pg, pb, pa] = sample_bilinear(src, fx, fy);
+            let a = pa * opacity;
             if a <= 0.0 {
                 continue;
             }
             let ci = (py * canvas.width + px) * 4;
-            let s_rgb = [sr as f64 / 255.0, sg as f64 / 255.0, sb as f64 / 255.0];
+            // Un-premultiply to straight colour for the blend function.
+            let s_rgb = [pr / pa, pg / pa, pb / pa];
             let d_rgb = [
                 canvas.pixels[ci] as f64 / 255.0,
                 canvas.pixels[ci + 1] as f64 / 255.0,
@@ -623,6 +658,21 @@ mod tests {
         assert_eq!(decoded, 4);
         assert_eq!(frames[0], (0, [0, 0, 0, 255]));
         assert_eq!(frames[3], (3, [30, 0, 0, 255]));
+    }
+
+    #[test]
+    fn sample_bilinear_interpolates_between_pixels() {
+        // 2x1 source: black then white, both opaque.
+        let mut src = RgbaImage::new(2, 1);
+        src.pixels[0..4].copy_from_slice(&[0, 0, 0, 255]);
+        src.pixels[4..8].copy_from_slice(&[255, 255, 255, 255]);
+        // Midway between the two pixel centres → mid-grey, fully opaque.
+        let mid = sample_bilinear(&src, 0.5, 0.0);
+        assert!((mid[0] - 0.5).abs() < 1e-6, "r {}", mid[0]);
+        assert!((mid[3] - 1.0).abs() < 1e-6, "a {}", mid[3]);
+        // At the exact pixel centres, no blending.
+        assert_eq!(sample_bilinear(&src, 0.0, 0.0), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(sample_bilinear(&src, 1.0, 0.0), [1.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]
