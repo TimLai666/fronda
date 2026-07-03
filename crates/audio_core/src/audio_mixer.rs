@@ -86,9 +86,10 @@ pub fn mix(placements: &[AudioPlacement], channels: usize, min_frames: usize) ->
     out
 }
 
-/// Resample interleaved PCM to exactly `out_frames` per-channel frames with
-/// linear interpolation (time-stretch / speed change). Empty input yields
-/// `out_frames` of silence; a single input frame is held.
+/// Resample interleaved PCM to exactly `out_frames` per-channel frames
+/// (time-stretch / speed change). Upsampling uses linear interpolation;
+/// downsampling box-averages the input window per output frame to avoid aliasing
+/// on sped-up audio. Empty input yields silence; a single input frame is held.
 pub fn resample_linear(samples: &[f32], channels: usize, out_frames: usize) -> Vec<f32> {
     if channels == 0 || out_frames == 0 {
         return Vec::new();
@@ -102,6 +103,22 @@ pub fn resample_linear(samples: &[f32], channels: usize, out_frames: usize) -> V
         for f in 0..out_frames {
             for c in 0..channels {
                 out[f * channels + c] = samples[c];
+            }
+        }
+        return out;
+    }
+    if out_frames < in_frames {
+        // Downsample: average each output frame's input window (anti-alias).
+        for f in 0..out_frames {
+            let start = f * in_frames / out_frames;
+            let end = ((f + 1) * in_frames / out_frames).clamp(start + 1, in_frames);
+            let n = (end - start) as f32;
+            for c in 0..channels {
+                let mut sum = 0.0f32;
+                for i in start..end {
+                    sum += samples[i * channels + c];
+                }
+                out[f * channels + c] = sum / n;
             }
         }
         return out;
@@ -266,11 +283,12 @@ mod tests {
     }
 
     #[test]
-    fn resample_downsamples() {
-        // 4 frames → 2 frames (2x speed): roughly half the samples.
-        let out = resample_linear(&[0.0, 0.25, 0.5, 0.75], 1, 2);
+    fn resample_downsamples_by_averaging() {
+        // 4 frames → 2 (2x speed): each output averages its 2-sample window.
+        let out = resample_linear(&[0.0, 0.2, 0.4, 0.6], 1, 2);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0], 0.0);
+        assert!((out[0] - 0.1).abs() < 1e-6, "avg(0.0,0.2)=0.1, got {}", out[0]);
+        assert!((out[1] - 0.5).abs() < 1e-6, "avg(0.4,0.6)=0.5, got {}", out[1]);
     }
 
     #[test]
