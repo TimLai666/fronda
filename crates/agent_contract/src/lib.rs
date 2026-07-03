@@ -1,5 +1,6 @@
 //! Agent/MCP tool definitions, ID shortening, and system prompt contract.
 
+pub mod agent_loop;
 pub mod hex_color_parser;
 pub mod id_short;
 pub mod mention;
@@ -12,6 +13,10 @@ pub mod tool_exec;
 pub mod tools;
 pub mod undo;
 
+pub use agent_loop::{
+    parse_response, run_agent_turn, AgentOutcome, LlmTransport, ParsedResponse, ToolCallRecord,
+    ToolUse,
+};
 pub use tool_exec::{AgentSkill, ToolExecutor};
 pub use tools::{skill_prompt_index, system_instruction_with_skills};
 pub use undo::{UndoCommand, UndoError, UndoStack};
