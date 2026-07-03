@@ -239,14 +239,18 @@ pub fn compose_frame(
         let Some(src) = fetch_source(clip) else {
             continue;
         };
-        let t = &clip.transform;
+        // Keyframe tracks are clip-relative; resolve transform/crop/opacity at
+        // this frame so animated clips render correctly.
+        let rel = frame - clip.start_frame;
+        let t = timeline_core::resolved_transform_at(clip, rel);
+        let c = timeline_core::resolved_crop_at(clip, rel);
+        let opacity = timeline_core::resolved_opacity_at(clip, rel);
         let dw = t.width * cw;
         let dh = t.height * ch;
         let dx = t.center_x * cw - dw / 2.0;
         let dy = t.center_y * ch - dh / 2.0;
 
         // Crop → the source sub-rectangle that stays visible.
-        let c = &clip.crop;
         let src_region = (
             c.left,
             c.top,
@@ -259,7 +263,7 @@ pub fn compose_frame(
             &src,
             src_region,
             (dx, dy, dw, dh),
-            clip.opacity,
+            opacity,
             t.rotation,
             clip.blend_mode,
         );
@@ -271,7 +275,7 @@ pub fn compose_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core_model::{Clip, Crop, Interpolation, Track, Transform};
+    use core_model::{Clip, Crop, Interpolation, Keyframe, KeyframeTrack, Track, Transform};
 
     fn clip(id: &str, media_ref: &str, start: i64, dur: i64) -> Clip {
         Clip {
@@ -451,6 +455,38 @@ mod tests {
         assert!((blend_channel(Difference, 0.7, 0.3) - 0.4).abs() < 1e-9);
         // Non-separable HSL modes fall back to Normal (src) for now.
         assert!((blend_channel(Color, 0.3, 0.7) - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compose_samples_opacity_keyframes() {
+        let mut c = clip("c1", "m1", 0, 100);
+        c.transform = Transform::from_top_left(0.0, 0.0, 1.0, 1.0); // full frame
+        c.opacity_track = Some(KeyframeTrack {
+            keyframes: vec![
+                Keyframe {
+                    frame: 0,
+                    value: 0.0,
+                    interpolation_out: Interpolation::Linear,
+                },
+                Keyframe {
+                    frame: 100,
+                    value: 1.0,
+                    interpolation_out: Interpolation::Linear,
+                },
+            ],
+        });
+        let timeline = tl(vec![c]);
+        // At frame 0 the keyframed opacity is 0 → nothing drawn.
+        let f0 = compose_frame(&timeline, &MediaManifest::default(), 0, 2, 2, |_| {
+            Some(RgbaImage::solid(2, 2, [255, 255, 255, 255]))
+        });
+        assert_eq!(px(&f0, 0, 0), [0, 0, 0, 0]);
+        // At frame 50 the opacity is ~0.5 → half-alpha result.
+        let f50 = compose_frame(&timeline, &MediaManifest::default(), 50, 2, 2, |_| {
+            Some(RgbaImage::solid(2, 2, [255, 255, 255, 255]))
+        });
+        let p = px(&f50, 0, 0);
+        assert!(p[3] > 100 && p[3] < 160, "alpha ~0.5, got {}", p[3]);
     }
 
     #[test]

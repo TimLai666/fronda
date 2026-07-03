@@ -10,5 +10,6 @@ path = "src/lib.rs"
 
 [dependencies]
 core_model = { package = "fronda-core-model", path = "../core_model" }
+timeline_core = { package = "fronda-timeline-core", path = "../timeline_core" }
 serde.workspace = true
 serde_json.workspace = true

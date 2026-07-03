@@ -4634,6 +4634,7 @@ name = "render_core"
 version = "0.1.0"
 dependencies = [
  "fronda-core-model",
+ "fronda-timeline-core",
  "serde",
  "serde_json",
 ]
