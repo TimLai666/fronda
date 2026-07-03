@@ -116,6 +116,8 @@ pub struct TimelineState {
     pub selected_clip_ids: Vec<String>,
     /// Active clip drag session, if any.
     pub clip_drag: Option<ClipDrag>,
+    /// Active trim drag session, if any.
+    pub trim_drag: Option<TrimDrag>,
 }
 
 /// In-flight clip drag: proposed position tracked in project frames.
@@ -130,7 +132,29 @@ pub struct ClipDrag {
     pub duration_frames: i64,
     /// Proposed (possibly snapped) new start frame.
     pub proposed_start: i64,
+    /// Track index the drag started on.
+    pub origin_track_index: usize,
+    /// Proposed target track (same-kind tracks only).
+    pub proposed_track_index: usize,
     snap_state: timeline_core::SnapState,
+}
+
+/// Which clip edge a trim drag operates on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrimEdge {
+    Start,
+    End,
+}
+
+/// In-flight trim drag on a clip edge.
+#[derive(Debug, Clone)]
+pub struct TrimDrag {
+    pub clip_id: String,
+    pub edge: TrimEdge,
+    pub original_start: i64,
+    pub original_end: i64,
+    /// Proposed boundary frame (clamped so the clip keeps >= 1 frame).
+    pub proposed_frame: i64,
 }
 
 impl TimelineState {
@@ -147,6 +171,7 @@ impl TimelineState {
             snap_x_frame: None,
             selected_clip_ids: Vec::new(),
             clip_drag: None,
+            trim_drag: None,
         }
     }
 
@@ -182,6 +207,24 @@ impl TimelineState {
         self.selected_clip_ids.clear();
     }
 
+    /// Select every clip.
+    pub fn select_all(&mut self) {
+        self.selected_clip_ids = self.clips.iter().map(|c| c.id.clone()).collect();
+    }
+
+    /// Track index under a content-area y position (row heights accumulate).
+    pub fn track_index_at_y(&self, content_y: f32) -> Option<usize> {
+        let mut top = 0.0f32;
+        for (i, track) in self.tracks.iter().enumerate() {
+            let bottom = top + track.height;
+            if content_y >= top && content_y < bottom {
+                return Some(i);
+            }
+            top = bottom;
+        }
+        None
+    }
+
     /// Move the playhead to the frame under a content-area x position.
     pub fn scrub_to_content_x(&mut self, content_x: f32) {
         self.playhead_frame = self.frame_for_x(self.scroll_x + content_x).max(0);
@@ -198,15 +241,90 @@ impl TimelineState {
         let Some(clip) = self.clips.iter().find(|c| c.id == clip_id) else {
             return false;
         };
+        let track_index = self
+            .tracks
+            .iter()
+            .position(|t| t.id == clip.track_id)
+            .unwrap_or(0);
         self.clip_drag = Some(ClipDrag {
             clip_id: clip_id.to_string(),
             grab_offset_frames: pointer_frame - clip.start_frame,
             original_start: clip.start_frame,
             duration_frames: clip.duration_frames,
             proposed_start: clip.start_frame,
+            origin_track_index: track_index,
+            proposed_track_index: track_index,
             snap_state: timeline_core::SnapState::default(),
         });
         true
+    }
+
+    /// Propose a target track from the pointer y. Only tracks of the same
+    /// kind as the origin track are accepted; otherwise the previous
+    /// proposal is kept.
+    pub fn update_clip_drag_track(&mut self, content_y: f32) {
+        let Some(candidate) = self.track_index_at_y(content_y) else {
+            return;
+        };
+        let Some(drag) = self.clip_drag.as_ref() else {
+            return;
+        };
+        let origin_kind = match self.tracks.get(drag.origin_track_index) {
+            Some(t) => t.kind.clone(),
+            None => return,
+        };
+        if self
+            .tracks
+            .get(candidate)
+            .is_some_and(|t| t.kind == origin_kind)
+        {
+            if let Some(drag) = self.clip_drag.as_mut() {
+                drag.proposed_track_index = candidate;
+            }
+        }
+    }
+
+    /// Start a trim drag on a clip edge. Returns false for unknown clips.
+    pub fn begin_trim_drag(&mut self, clip_id: &str, edge: TrimEdge) -> bool {
+        let Some(clip) = self.clips.iter().find(|c| c.id == clip_id) else {
+            return false;
+        };
+        let end = clip.start_frame + clip.duration_frames;
+        self.trim_drag = Some(TrimDrag {
+            clip_id: clip_id.to_string(),
+            edge,
+            original_start: clip.start_frame,
+            original_end: end,
+            proposed_frame: match edge {
+                TrimEdge::Start => clip.start_frame,
+                TrimEdge::End => end,
+            },
+        });
+        true
+    }
+
+    /// Update the trim proposal, clamping so the clip keeps >= 1 frame.
+    pub fn update_trim_drag(&mut self, pointer_frame: i64) {
+        let Some(drag) = self.trim_drag.as_mut() else {
+            return;
+        };
+        drag.proposed_frame = match drag.edge {
+            TrimEdge::Start => pointer_frame.clamp(0, drag.original_end - 1),
+            TrimEdge::End => pointer_frame.max(drag.original_start + 1),
+        };
+    }
+
+    /// Finish the trim drag; None when the boundary did not change.
+    pub fn take_trim_drag(&mut self) -> Option<(String, TrimEdge, i64)> {
+        let drag = self.trim_drag.take()?;
+        let unchanged = match drag.edge {
+            TrimEdge::Start => drag.proposed_frame == drag.original_start,
+            TrimEdge::End => drag.proposed_frame == drag.original_end,
+        };
+        if unchanged {
+            return None;
+        }
+        Some((drag.clip_id, drag.edge, drag.proposed_frame))
     }
 
     /// Update the drag proposal from the current pointer frame, snapping to
@@ -253,15 +371,17 @@ impl TimelineState {
         drag.proposed_start = proposed;
     }
 
-    /// Finish the drag. Returns Some((clip_id, to_frame)) when the clip
-    /// actually moved; None for a zero-distance drop.
-    pub fn take_clip_drag(&mut self) -> Option<(String, i64)> {
+    /// Finish the drag. Returns Some((clip_id, to_track, to_frame)) when
+    /// the clip actually moved; None for a same-track zero-distance drop.
+    pub fn take_clip_drag(&mut self) -> Option<(String, usize, i64)> {
         self.snap_x_frame = None;
         let drag = self.clip_drag.take()?;
-        if drag.proposed_start == drag.original_start {
+        if drag.proposed_start == drag.original_start
+            && drag.proposed_track_index == drag.origin_track_index
+        {
             return None;
         }
-        Some((drag.clip_id, drag.proposed_start))
+        Some((drag.clip_id, drag.proposed_track_index, drag.proposed_start))
     }
 
     /// Build view state from the shared core timeline (project data path).
@@ -613,7 +733,92 @@ mod tests {
         let mut s = state_with_two_clips();
         assert!(s.begin_clip_drag("c1", 0));
         s.update_clip_drag(90);
-        assert_eq!(s.take_clip_drag(), Some(("c1".to_string(), 90)));
+        assert_eq!(s.take_clip_drag(), Some(("c1".to_string(), 0, 90)));
+    }
+
+    #[test]
+    fn select_all_selects_every_clip() {
+        let mut s = state_with_two_clips();
+        s.select_all();
+        assert_eq!(s.selected_clip_ids.len(), 2);
+        s.clear_selection();
+        assert!(s.selected_clip_ids.is_empty());
+    }
+
+    fn state_with_two_video_tracks() -> TimelineState {
+        let mut s = TimelineState::new();
+        s.tracks = vec![
+            TrackRow::new("v1", TrackKind::Video, "Video 1"),
+            TrackRow::new("v2", TrackKind::Video, "Video 2"),
+            TrackRow::new("a1", TrackKind::Audio, "Audio 1"),
+        ];
+        s.clips = vec![ClipSlot::new("c1", "v1", 0, 100, "A")];
+        s
+    }
+
+    #[test]
+    fn track_index_at_y_uses_row_heights() {
+        let s = state_with_two_video_tracks();
+        // Default heights 50 each: rows at [0,50), [50,100), [100,150).
+        assert_eq!(s.track_index_at_y(10.0), Some(0));
+        assert_eq!(s.track_index_at_y(60.0), Some(1));
+        assert_eq!(s.track_index_at_y(120.0), Some(2));
+        assert_eq!(s.track_index_at_y(999.0), None);
+    }
+
+    #[test]
+    fn cross_track_drag_accepts_same_kind_only() {
+        let mut s = state_with_two_video_tracks();
+        assert!(s.begin_clip_drag("c1", 0));
+        // Over the second video track: accepted.
+        s.update_clip_drag_track(60.0);
+        assert_eq!(s.clip_drag.as_ref().unwrap().proposed_track_index, 1);
+        // Over the audio track: rejected, keeps previous proposal.
+        s.update_clip_drag_track(120.0);
+        assert_eq!(s.clip_drag.as_ref().unwrap().proposed_track_index, 1);
+        // Cross-track drop reports the new track even at the same frame.
+        assert_eq!(s.take_clip_drag(), Some(("c1".to_string(), 1, 0)));
+    }
+
+    #[test]
+    fn same_track_zero_distance_still_none() {
+        let mut s = state_with_two_video_tracks();
+        assert!(s.begin_clip_drag("c1", 0));
+        s.update_clip_drag(0);
+        s.update_clip_drag_track(10.0); // stays on track 0
+        assert!(s.take_clip_drag().is_none());
+    }
+
+    #[test]
+    fn trim_end_clamps_to_start_plus_one() {
+        let mut s = state_with_two_clips();
+        assert!(s.begin_trim_drag("c1", TrimEdge::End)); // clip 0..100
+        s.update_trim_drag(-50);
+        assert_eq!(s.trim_drag.as_ref().unwrap().proposed_frame, 1);
+        s.update_trim_drag(70);
+        assert_eq!(
+            s.take_trim_drag(),
+            Some(("c1".to_string(), TrimEdge::End, 70))
+        );
+    }
+
+    #[test]
+    fn trim_start_clamps_between_zero_and_end_minus_one() {
+        let mut s = state_with_two_clips();
+        assert!(s.begin_trim_drag("c1", TrimEdge::Start)); // clip 0..100
+        s.update_trim_drag(-10);
+        assert_eq!(s.trim_drag.as_ref().unwrap().proposed_frame, 0);
+        s.update_trim_drag(500);
+        assert_eq!(s.trim_drag.as_ref().unwrap().proposed_frame, 99);
+    }
+
+    #[test]
+    fn trim_without_change_returns_none() {
+        let mut s = state_with_two_clips();
+        assert!(s.begin_trim_drag("c1", TrimEdge::Start));
+        s.update_trim_drag(0);
+        assert!(s.take_trim_drag().is_none());
+        assert!(s.trim_drag.is_none());
     }
 
     #[test]

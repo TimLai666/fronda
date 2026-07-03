@@ -5,7 +5,7 @@
 use crate::theme::{
     Accent, Background, BorderColors, BorderWidth, FontSize, Radius, Spacing, Text, TrackColor,
 };
-use crate::timeline_model::{TimelineState, TrackKind, RULER_HEIGHT, TRACK_HEADER_WIDTH};
+use crate::timeline_model::{TimelineState, TrackKind, TrimEdge, RULER_HEIGHT, TRACK_HEADER_WIDTH};
 use gpui::{
     canvas, div, prelude::*, px, svg, App, Context, DragMoveEvent, FocusHandle, Focusable,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render, Styled,
@@ -17,6 +17,10 @@ use std::sync::Arc;
 /// Drag token for clip moves.
 #[derive(Debug, Clone)]
 struct ClipDragToken;
+
+/// Drag token for clip edge trims.
+#[derive(Debug, Clone)]
+struct TrimDragToken;
 
 /// Invisible drag preview.
 struct ClipDragPreview;
@@ -106,11 +110,8 @@ impl TimelineView {
 
     /// Commit a finished clip drag through move_clips (undo-tracked).
     fn commit_clip_drag(&mut self, cx: &mut Context<Self>) {
-        let Some((clip_id, to_frame)) = self.state.take_clip_drag() else {
+        let Some((clip_id, to_track, to_frame)) = self.state.take_clip_drag() else {
             cx.notify();
-            return;
-        };
-        let Some(to_track) = self.state.track_index_of_clip(&clip_id) else {
             return;
         };
         Self::run_shared_tool(
@@ -121,6 +122,108 @@ impl TimelineView {
                 "toFrame": to_frame,
             }),
         );
+        cx.notify();
+    }
+
+    /// Apply a boundary change to one clip through the shared executor.
+    /// End edge: durationFrames. Start edge: durationFrames then move_clips
+    /// (two undo steps — merging them needs a composite tool, an MCP
+    /// contract change out of scope here).
+    fn apply_trim(&mut self, clip_id: &str, edge: TrimEdge, boundary: i64) {
+        let Some(clip) = self.state.clips.iter().find(|c| c.id == clip_id) else {
+            return;
+        };
+        let start = clip.start_frame;
+        let end = start + clip.duration_frames;
+        match edge {
+            TrimEdge::End => {
+                Self::run_shared_tool(
+                    "set_clip_properties",
+                    serde_json::json!({
+                        "clipIds": [clip_id],
+                        "properties": { "durationFrames": boundary - start },
+                    }),
+                );
+            }
+            TrimEdge::Start => {
+                let Some(track) = self.state.track_index_of_clip(clip_id) else {
+                    return;
+                };
+                Self::run_shared_tool(
+                    "set_clip_properties",
+                    serde_json::json!({
+                        "clipIds": [clip_id],
+                        "properties": { "durationFrames": end - boundary },
+                    }),
+                );
+                Self::run_shared_tool(
+                    "move_clips",
+                    serde_json::json!({
+                        "clipIds": [clip_id],
+                        "toTrack": track,
+                        "toFrame": boundary,
+                    }),
+                );
+            }
+        }
+    }
+
+    /// Commit a finished trim drag.
+    fn commit_trim_drag(&mut self, cx: &mut Context<Self>) {
+        let Some((clip_id, edge, frame)) = self.state.take_trim_drag() else {
+            cx.notify();
+            return;
+        };
+        self.apply_trim(&clip_id, edge, frame);
+        cx.notify();
+    }
+
+    /// Select every clip (menu SelectAll).
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.state.select_all();
+        cx.notify();
+    }
+
+    /// Trim each selected clip's boundary to the playhead. Clips whose
+    /// range does not contain the playhead are skipped.
+    pub fn trim_selected_to_playhead(&mut self, edge: TrimEdge, cx: &mut Context<Self>) {
+        let playhead = self.state.playhead_frame;
+        for id in self.state.selected_clip_ids.clone() {
+            let in_range = self.state.clips.iter().any(|c| {
+                c.id == id
+                    && playhead > c.start_frame
+                    && playhead < c.start_frame + c.duration_frames
+            });
+            if in_range {
+                self.apply_trim(&id, edge, playhead);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Ripple-delete the selected clips (per-track ranges).
+    pub fn ripple_delete_selected(&mut self, cx: &mut Context<Self>) {
+        let mut per_track: std::collections::BTreeMap<usize, Vec<serde_json::Value>> =
+            std::collections::BTreeMap::new();
+        for id in &self.state.selected_clip_ids {
+            let Some(track) = self.state.track_index_of_clip(id) else {
+                continue;
+            };
+            let Some(clip) = self.state.clips.iter().find(|c| &c.id == id) else {
+                continue;
+            };
+            per_track.entry(track).or_default().push(serde_json::json!({
+                "start": clip.start_frame,
+                "end": clip.start_frame + clip.duration_frames,
+            }));
+        }
+        for (track_index, ranges) in per_track {
+            Self::run_shared_tool(
+                "ripple_delete_ranges",
+                serde_json::json!({ "trackIndex": track_index, "ranges": ranges }),
+            );
+        }
+        self.state.clear_selection();
         cx.notify();
     }
 
@@ -174,6 +277,12 @@ impl Render for TimelineView {
         let selected_ids = self.state.selected_clip_ids.clone();
         let drag_clip_id = self.state.clip_drag.as_ref().map(|d| d.clip_id.clone());
         let drag_proposed_start = self.state.clip_drag.as_ref().map(|d| d.proposed_start);
+        let drag_proposed_track = self
+            .state
+            .clip_drag
+            .as_ref()
+            .map(|d| d.proposed_track_index);
+        let trim_drag = self.state.trim_drag.clone();
         let zoom = self.state.zoom_scale;
         let total_frames = self.state.total_frames;
         let fps = self.state.fps;
@@ -353,18 +462,42 @@ impl Render for TimelineView {
                                 .absolute()
                                 .size_full()
                             })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                    this.state.clear_selection();
+                                    cx.notify();
+                                }),
+                            )
                             .on_drag_move::<ClipDragToken>(cx.listener(
                                 |this, e: &DragMoveEvent<ClipDragToken>, _, cx| {
                                     let content_x =
                                         e.event.position.x.as_f32() - e.bounds.origin.x.as_f32();
+                                    let content_y =
+                                        e.event.position.y.as_f32() - e.bounds.origin.y.as_f32();
                                     let frame =
                                         this.state.frame_for_x(this.state.scroll_x + content_x);
                                     this.state.update_clip_drag(frame);
+                                    this.state
+                                        .update_clip_drag_track(this.state.scroll_y + content_y);
                                     cx.notify();
                                 },
                             ))
                             .on_drop::<ClipDragToken>(cx.listener(|this, _, _, cx| {
                                 this.commit_clip_drag(cx);
+                            }))
+                            .on_drag_move::<TrimDragToken>(cx.listener(
+                                |this, e: &DragMoveEvent<TrimDragToken>, _, cx| {
+                                    let content_x =
+                                        e.event.position.x.as_f32() - e.bounds.origin.x.as_f32();
+                                    let frame =
+                                        this.state.frame_for_x(this.state.scroll_x + content_x);
+                                    this.state.update_trim_drag(frame);
+                                    cx.notify();
+                                },
+                            ))
+                            .on_drop::<TrimDragToken>(cx.listener(|this, _, _, cx| {
+                                this.commit_trim_drag(cx);
                             }))
                             .child(
                                 div()
@@ -388,7 +521,13 @@ impl Render for TimelineView {
                                                 .unwrap_or(false);
                                         let track_clips: Vec<_> = clips
                                             .iter()
-                                            .filter(|c| c.track_id == track.id)
+                                            .filter(|c| {
+                                                if drag_clip_id.as_deref() == Some(c.id.as_str()) {
+                                                    drag_proposed_track == Some(i)
+                                                } else {
+                                                    c.track_id == track.id
+                                                }
+                                            })
                                             .collect();
                                         let track_height = track.height;
                                         div()
@@ -405,14 +544,23 @@ impl Render for TimelineView {
                                             .children(track_clips.iter().map(|clip| {
                                                 let is_dragging = drag_clip_id.as_deref()
                                                     == Some(clip.id.as_str());
-                                                let start = if is_dragging {
+                                                let mut start = if is_dragging {
                                                     drag_proposed_start.unwrap_or(clip.start_frame)
                                                 } else {
                                                     clip.start_frame
                                                 };
+                                                let mut end = start + clip.duration_frames;
+                                                if let Some(t) = trim_drag
+                                                    .as_ref()
+                                                    .filter(|t| t.clip_id == clip.id)
+                                                {
+                                                    match t.edge {
+                                                        TrimEdge::Start => start = t.proposed_frame,
+                                                        TrimEdge::End => end = t.proposed_frame,
+                                                    }
+                                                }
                                                 let clip_x = start as f32 * zoom - scroll_x;
-                                                let clip_w =
-                                                    (clip.duration_frames as f32 * zoom).max(4.0);
+                                                let clip_w = ((end - start) as f32 * zoom).max(4.0);
                                                 let is_selected =
                                                     selected_ids.iter().any(|id| id == &clip.id);
                                                 let mut bg = color;
@@ -442,8 +590,17 @@ impl Render for TimelineView {
                                                                   e: &MouseDownEvent,
                                                                   _,
                                                                   cx| {
-                                                                this.state
-                                                                    .select_only(&clip_id);
+                                                                cx.stop_propagation();
+                                                                let multi = e.modifiers.shift
+                                                                    || e.modifiers.platform
+                                                                    || e.modifiers.control;
+                                                                if multi {
+                                                                    this.state
+                                                                        .toggle_select(&clip_id);
+                                                                } else {
+                                                                    this.state
+                                                                        .select_only(&clip_id);
+                                                                }
                                                                 let frame = this.pointer_frame(
                                                                     e.position.x.as_f32(),
                                                                 );
@@ -465,6 +622,16 @@ impl Render for TimelineView {
                                                             .text_color(Text::PRIMARY)
                                                             .child(clip.label.clone()),
                                                     )
+                                                    .child(trim_handle(
+                                                        cx,
+                                                        clip.id.clone(),
+                                                        TrimEdge::Start,
+                                                    ))
+                                                    .child(trim_handle(
+                                                        cx,
+                                                        clip.id.clone(),
+                                                        TrimEdge::End,
+                                                    ))
                                             }))
                                     })),
                             )
@@ -577,4 +744,39 @@ fn round_to_nice_interval(raw: i64, fps: i64) -> i64 {
         fps * 60,
     ];
     *candidates.iter().find(|&&c| c >= raw).unwrap_or(&raw)
+}
+
+/// 6px trim hot zone on a clip edge.
+fn trim_handle(
+    cx: &mut Context<TimelineView>,
+    clip_id: String,
+    edge: TrimEdge,
+) -> gpui::Stateful<gpui::Div> {
+    let base = div()
+        .id(format!(
+            "trim-{}-{}",
+            match edge {
+                TrimEdge::Start => "l",
+                TrimEdge::End => "r",
+            },
+            clip_id
+        ))
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .w(px(6.0))
+        .cursor_ew_resize()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                this.state.begin_trim_drag(&clip_id, edge);
+                cx.notify();
+            }),
+        )
+        .on_drag(TrimDragToken, |_, _, _, cx| cx.new(|_| ClipDragPreview));
+    match edge {
+        TrimEdge::Start => base.left_0(),
+        TrimEdge::End => base.right_0(),
+    }
 }

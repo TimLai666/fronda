@@ -260,6 +260,64 @@ mod tests {
     }
 
     #[test]
+    fn trim_end_shrinks_duration_and_undo_restores() {
+        let hub = EditorStateHub::new();
+        let timeline: Timeline = serde_json::from_str(
+            r#"{"fps":30,"tracks":[{"id":"t1","type":"video","clips":[
+                {"id":"c1","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":100}
+            ]}]}"#,
+        )
+        .unwrap();
+        hub.load_project(timeline, MediaManifest::default());
+
+        let exec = hub.executor();
+        let mut exec = exec.lock().unwrap();
+        exec.execute(
+            "set_clip_properties",
+            &serde_json::json!({"clipIds":["c1"],"properties":{"durationFrames":60}}),
+        )
+        .unwrap();
+        let clip = &exec.timeline().tracks[0].clips[0];
+        assert_eq!(
+            clip.start_frame + clip.duration_frames,
+            60,
+            "clip ends at the trimmed frame"
+        );
+
+        exec.execute("undo", &serde_json::json!({})).unwrap();
+        let clip = &exec.timeline().tracks[0].clips[0];
+        assert_eq!(clip.duration_frames, 100, "undo restores the length");
+    }
+
+    #[test]
+    fn ripple_delete_shifts_later_clips_left() {
+        let hub = EditorStateHub::new();
+        let timeline: Timeline = serde_json::from_str(
+            r#"{"fps":30,"tracks":[{"id":"t1","type":"video","clips":[
+                {"id":"c1","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":100},
+                {"id":"c2","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":300,"durationFrames":50}
+            ]}]}"#,
+        )
+        .unwrap();
+        hub.load_project(timeline, MediaManifest::default());
+
+        let exec = hub.executor();
+        let mut exec = exec.lock().unwrap();
+        exec.execute(
+            "ripple_delete_ranges",
+            &serde_json::json!({"trackIndex":0,"ranges":[{"start":0,"end":100}]}),
+        )
+        .unwrap();
+        let clips = &exec.timeline().tracks[0].clips;
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].id, "c2");
+        assert_eq!(
+            clips[0].start_frame, 200,
+            "later clip shifts 100 frames left"
+        );
+    }
+
+    #[test]
     fn save_without_open_project_fails() {
         let hub = EditorStateHub::new();
         let err = hub.save().unwrap_err();

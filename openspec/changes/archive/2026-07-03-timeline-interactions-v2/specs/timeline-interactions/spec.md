@@ -1,38 +1,5 @@
-# timeline-interactions Specification
+## MODIFIED Requirements
 
-## Purpose
-
-TBD - created by archiving change 'timeline-editing-interactions'. Update Purpose after archive.
-
-## Requirements
-
-### Requirement: Playhead scrubbing on the ruler
-
-Clicking or dragging on the ruler content area SHALL move the playhead to the frame under the pointer, clamped to a minimum of frame 0. The playhead position is view-only state and MUST NOT create an undo entry.
-
-#### Scenario: Click sets the playhead
-
-- **WHEN** the user clicks the ruler at a content x corresponding to frame 120
-- **THEN** the playhead moves to frame 120
-
-#### Scenario: Clamp below zero
-
-- **WHEN** the pointer maps to a negative frame
-- **THEN** the playhead is set to frame 0
-
-
-<!-- @trace
-source: timeline-editing-interactions
-updated: 2026-07-03
-code:
-  - crates/app_shell_gpui/src/app_root.rs
-  - crates/app_shell_gpui/src/timeline_view.rs
-  - crates/app_shell_gpui/src/timeline_model.rs
-  - crates/app_shell_gpui/src/editor_state_hub.rs
-  - crates/app_shell_gpui/Cargo.toml
--->
-
----
 ### Requirement: Clip selection is view state
 
 Clicking a clip without modifiers SHALL select only that clip. Clicking with Shift or the platform command modifier (Cmd/Ctrl) SHALL toggle the clip in a multi-selection. Select All SHALL select every clip; clicking empty canvas SHALL clear the selection. Selection SHALL live in the timeline view state and MUST survive shared-state rebuilds triggered by revision changes.
@@ -52,19 +19,6 @@ Clicking a clip without modifiers SHALL select only that clip. Clicking with Shi
 - **WHEN** the user triggers SelectAll and then clicks empty canvas
 - **THEN** all clips are selected, then none are
 
-
-<!-- @trace
-source: timeline-interactions-v2
-updated: 2026-07-03
-code:
-  - crates/agent_contract/src/tool_exec.rs
-  - crates/app_shell_gpui/src/timeline_view.rs
-  - crates/app_shell_gpui/src/timeline_model.rs
-  - crates/app_shell_gpui/src/app_root.rs
-  - crates/app_shell_gpui/src/editor_state_hub.rs
--->
-
----
 ### Requirement: Same-track clip drag with snapping commits via the shared executor
 
 Dragging a clip SHALL propose a new start frame (pointer minus grab offset, clamped to 0), snapping to other clips' edges and the playhead within the snapping threshold and showing the snap indicator line while snapped. Dragging vertically SHALL propose a target track when the pointer is over a track of the same kind as the clip's origin track; over a different-kind track the proposal keeps the previous track. Releasing the drag SHALL commit the move through the shared executor's move_clips tool (proposed track and frame) so the move is undo-tracked and visible over MCP. A drag released at the original track and start frame MUST NOT issue a mutation.
@@ -94,19 +48,6 @@ Dragging a clip SHALL propose a new start frame (pointer minus grab offset, clam
 - **WHEN** a video clip is dragged over an audio track
 - **THEN** the proposed track remains the last same-kind track
 
-
-<!-- @trace
-source: timeline-interactions-v2
-updated: 2026-07-03
-code:
-  - crates/agent_contract/src/tool_exec.rs
-  - crates/app_shell_gpui/src/timeline_view.rs
-  - crates/app_shell_gpui/src/timeline_model.rs
-  - crates/app_shell_gpui/src/app_root.rs
-  - crates/app_shell_gpui/src/editor_state_hub.rs
--->
-
----
 ### Requirement: Edit menu actions operate on the shared state
 
 Undo (Cmd/Ctrl+Z) and Redo SHALL execute the shared executor's undo/redo tools, sharing one undo history with MCP edits. Delete SHALL remove the selected clips via remove_clips and clear the selection. SplitAtPlayhead SHALL split each selected clip at the playhead via split_clip. TrimStartToPlayhead and TrimEndToPlayhead SHALL set the selected clips' boundary to the playhead — the end boundary via set_clip_properties durationFrames, the start boundary via durationFrames followed by move_clips (two undo steps). Clips whose (start, end) range does not contain the playhead SHALL be skipped. RippleDelete SHALL remove the selected clips' ranges per track via ripple_delete_ranges so later clips shift left. A tool error SHALL leave the UI unchanged.
@@ -131,19 +72,8 @@ Undo (Cmd/Ctrl+Z) and Redo SHALL execute the shared executor's undo/redo tools, 
 - **WHEN** a clip spanning frames 0-100 is selected with a later clip at frame 300, and RippleDelete is triggered
 - **THEN** the selected clip is removed and the later clip shifts 100 frames earlier
 
+## ADDED Requirements
 
-<!-- @trace
-source: timeline-interactions-v2
-updated: 2026-07-03
-code:
-  - crates/agent_contract/src/tool_exec.rs
-  - crates/app_shell_gpui/src/timeline_view.rs
-  - crates/app_shell_gpui/src/timeline_model.rs
-  - crates/app_shell_gpui/src/app_root.rs
-  - crates/app_shell_gpui/src/editor_state_hub.rs
--->
-
----
 ### Requirement: Trim handles on clip edges
 
 Each clip SHALL expose left and right edge handles (6px hot zones). Dragging a handle horizontally SHALL propose a new boundary frame, clamped so the clip never becomes shorter than one frame (start handle within [0, end-1], end handle at or beyond start+1). Releasing SHALL commit through the shared executor: the right handle via set_clip_properties durationFrames, the left handle via durationFrames followed by move_clips (two undo steps), all undo-tracked. A release with no boundary change MUST NOT issue a mutation.
@@ -157,14 +87,3 @@ Each clip SHALL expose left and right edge handles (6px hot zones). Dragging a h
 
 - **WHEN** the right handle is dragged to or before the clip's start frame
 - **THEN** the proposed boundary clamps to start+1
-
-<!-- @trace
-source: timeline-interactions-v2
-updated: 2026-07-03
-code:
-  - crates/agent_contract/src/tool_exec.rs
-  - crates/app_shell_gpui/src/timeline_view.rs
-  - crates/app_shell_gpui/src/timeline_model.rs
-  - crates/app_shell_gpui/src/app_root.rs
-  - crates/app_shell_gpui/src/editor_state_hub.rs
--->

@@ -285,10 +285,30 @@ impl AppRoot {
                     tv.update(cx, |view, cx| view.delete_selected(cx));
                 }
             }
-            menu::MenuAction::SelectAll
-            | menu::MenuAction::TrimStartToPlayhead
-            | menu::MenuAction::TrimEndToPlayhead
-            | menu::MenuAction::RippleDelete => {}
+            menu::MenuAction::SelectAll => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.select_all(cx));
+                }
+            }
+            menu::MenuAction::TrimStartToPlayhead => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| {
+                        view.trim_selected_to_playhead(crate::timeline_model::TrimEdge::Start, cx)
+                    });
+                }
+            }
+            menu::MenuAction::TrimEndToPlayhead => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| {
+                        view.trim_selected_to_playhead(crate::timeline_model::TrimEdge::End, cx)
+                    });
+                }
+            }
+            menu::MenuAction::RippleDelete => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.ripple_delete_selected(cx));
+                }
+            }
             menu::MenuAction::About
             | menu::MenuAction::CheckForUpdates
             | menu::MenuAction::Settings => {}

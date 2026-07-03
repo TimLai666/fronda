@@ -525,6 +525,7 @@ impl ToolExecutor {
             return Err(format!("Track index {track_index} out of bounds"));
         }
 
+        let range_list = ranges.clone();
         let config = timeline_core::RippleDeleteConfig {
             anchor_track_index: track_index,
             ranges,
@@ -549,6 +550,22 @@ impl ToolExecutor {
                         .map(|c| c.id.clone())
                         .collect();
                     timeline_core::remove_clips(&mut self.timeline, ids_to_remove, false);
+                }
+
+                // Ripple: close the gap by shifting later clips left on
+                // every sync-locked track (spec 03 ripple math).
+
+                for track in &mut self.timeline.tracks {
+                    if !track.sync_locked {
+                        continue;
+                    }
+                    let shifts =
+                        timeline_core::compute_ripple_shifts_for_ranges(&track.clips, &range_list);
+                    for shift in shifts {
+                        if let Some(clip) = track.clips.iter_mut().find(|c| c.id == shift.clip_id) {
+                            clip.start_frame = shift.new_start_frame;
+                        }
+                    }
                 }
 
                 let removed_frames = report.removed_frames;
