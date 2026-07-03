@@ -3,6 +3,7 @@ mod clip_properties;
 mod drag_payload;
 mod edit;
 mod inspector;
+mod project_presets;
 mod project_settings;
 mod project_settings_guard;
 pub use keyframes::{
@@ -47,6 +48,10 @@ pub use linking::{
     partner_moves_for_move_of, unlink_clips, LinkIndex, LinkedPartnerMove,
 };
 pub use overwrite::{compute_overwrite, OverwriteAction};
+pub use project_presets::{
+    AspectPreset, QualityPreset, ZoomPreset, ASPECT_PRESETS, FPS_PRESETS, QUALITY_PRESETS,
+    ZOOM_PRESETS,
+};
 pub use project_settings::{apply_fps, apply_settings, refit_transforms, FpsChangeReport};
 pub use project_settings_guard::{
     is_settings_configured, ProjectSettingsGuard, SettingsGuardAction, SettingsMismatch,
