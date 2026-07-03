@@ -343,6 +343,32 @@ pub fn apply_blur(img: &mut RgbaImage, radius: usize) {
     }
 }
 
+/// Darken pixels toward the corners (radial vignette). `amount` is `0..=1`: 0 is
+/// a no-op, 1 fully darkens the corners. Falloff is quadratic in the normalized
+/// distance from centre. Alpha is untouched. PR #8 vignette path.
+pub fn apply_vignette(img: &mut RgbaImage, amount: f64) {
+    let amount = amount.clamp(0.0, 1.0);
+    if amount == 0.0 || img.width == 0 || img.height == 0 {
+        return;
+    }
+    let (w, h) = (img.width as f64, img.height as f64);
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    let max_d2 = cx * cx + cy * cy;
+    for y in 0..img.height {
+        for x in 0..img.width {
+            let dx = x as f64 + 0.5 - cx;
+            let dy = y as f64 + 0.5 - cy;
+            let d2 = (dx * dx + dy * dy) / max_d2; // 0..1
+            let factor = 1.0 - amount * d2;
+            let i = (y * img.width + x) * 4;
+            for c in 0..3 {
+                img.pixels[i + c] =
+                    (img.pixels[i + c] as f64 * factor).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
 /// Apply a per-channel RGB function (result clamped to `0..=255`), leaving alpha.
 fn map_rgb(img: &mut RgbaImage, f: impl Fn(f64) -> f64) {
     for px in img.pixels.chunks_exact_mut(4) {
@@ -585,9 +611,16 @@ pub fn compose_frame(
             }
             if fx.has_blur_or_vignette {
                 for e in &fx.effects {
-                    if e.enabled && matches!(e.effect_type.as_str(), "blur.gaussian" | "blur") {
-                        let radius = e.params.values().next().copied().unwrap_or(0.0);
-                        apply_blur(&mut src, radius.max(0.0).round() as usize);
+                    if !e.enabled {
+                        continue;
+                    }
+                    let amount = e.params.values().next().copied().unwrap_or(0.0);
+                    match e.effect_type.as_str() {
+                        "blur.gaussian" | "blur" => {
+                            apply_blur(&mut src, amount.max(0.0).round() as usize)
+                        }
+                        "vignette" => apply_vignette(&mut src, amount),
+                        _ => {}
                     }
                 }
             }
@@ -961,6 +994,23 @@ mod tests {
         apply_blur(&mut img, 1);
         assert!(px(&img, 2, 2)[0] < 255, "center spread out");
         assert!(px(&img, 1, 2)[0] > 0, "neighbour picked up brightness");
+    }
+
+    #[test]
+    fn vignette_darkens_corners_not_center() {
+        let mut img = RgbaImage::solid(9, 9, [200, 200, 200, 255]);
+        apply_vignette(&mut img, 0.8);
+        assert_eq!(px(&img, 4, 4), [200, 200, 200, 255], "centre unchanged");
+        assert!(px(&img, 0, 0)[0] < 200, "corner darkened");
+        assert_eq!(px(&img, 0, 0)[3], 255, "alpha untouched");
+    }
+
+    #[test]
+    fn vignette_zero_is_noop() {
+        let mut img = RgbaImage::solid(4, 4, [123, 45, 67, 255]);
+        let before = img.pixels.clone();
+        apply_vignette(&mut img, 0.0);
+        assert_eq!(img.pixels, before);
     }
 
     #[test]
