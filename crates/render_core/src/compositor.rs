@@ -9,6 +9,7 @@
 //! opacity with source-over alpha blending (nearest-neighbour sampling).
 //! Rotation, blend modes, effects, and bilinear sampling are follow-ups.
 
+use core_model::shape_style::{Rgba, ShapeKind, ShapeStyle};
 use core_model::{BlendMode, Clip, ClipType, MediaManifest, Timeline};
 
 /// An RGBA8 image (row-major, 4 bytes/pixel: R, G, B, A).
@@ -300,9 +301,65 @@ pub fn blit_scaled(
     }
 }
 
+fn rgba_to_u8(c: &Rgba) -> [u8; 4] {
+    [
+        (c.r * 255.0).round().clamp(0.0, 255.0) as u8,
+        (c.g * 255.0).round().clamp(0.0, 255.0) as u8,
+        (c.b * 255.0).round().clamp(0.0, 255.0) as u8,
+        (c.a * 255.0).round().clamp(0.0, 255.0) as u8,
+    ]
+}
+
+/// Rasterize a shape annotation into a `w`×`h` RGBA image (transparent outside
+/// the shape). Rect and Oval/Circle render fill + a border stroke; Arrow and
+/// Line are not yet composited (returned transparent). PR #46.
+pub fn rasterize_shape(shape: &ShapeStyle, w: usize, h: usize) -> RgbaImage {
+    let mut img = RgbaImage::new(w, h);
+    if w == 0 || h == 0 {
+        return img;
+    }
+    let is_ellipse = matches!(shape.kind, ShapeKind::Oval | ShapeKind::Circle);
+    if !is_ellipse && shape.kind != ShapeKind::Rect {
+        return img;
+    }
+    let fill = rgba_to_u8(&shape.fill.color);
+    let stroke = rgba_to_u8(&shape.stroke.color);
+    let sw = shape.stroke.width.max(0.0);
+    let band_x = sw / w as f64;
+    let band_y = sw / h as f64;
+    for y in 0..h {
+        for x in 0..w {
+            let nx = (x as f64 + 0.5) / w as f64;
+            let ny = (y as f64 + 0.5) / h as f64;
+            let (inside, on_stroke) = if is_ellipse {
+                let (ex, ey) = (nx * 2.0 - 1.0, ny * 2.0 - 1.0);
+                let r = ex * ex + ey * ey;
+                let inner = (1.0 - 2.0 * band_x.max(band_y)).max(0.0);
+                (r <= 1.0, r > inner * inner)
+            } else {
+                let on = nx < band_x || nx > 1.0 - band_x || ny < band_y || ny > 1.0 - band_y;
+                (true, on)
+            };
+            if !inside {
+                continue;
+            }
+            let color = if sw > 0.0 && on_stroke {
+                stroke
+            } else if shape.fill.enabled {
+                fill
+            } else {
+                continue;
+            };
+            let i = (y * w + x) * 4;
+            img.pixels[i..i + 4].copy_from_slice(&color);
+        }
+    }
+    img
+}
+
 /// Visual clips on `timeline` that are on screen at `frame`, bottom track first
-/// (render order), skipping text/shape overlays (not composited by v1) and clips
-/// with no media.
+/// (render order). Text overlays are still skipped (need a text rasterizer);
+/// shape annotations are included. Media clips need a non-empty `media_ref`.
 fn visible_clips(timeline: &Timeline, frame: i64) -> Vec<&Clip> {
     let mut out: Vec<&Clip> = Vec::new();
     // Video tracks bottom-to-top = the order they appear in `tracks`.
@@ -311,9 +368,11 @@ fn visible_clips(timeline: &Timeline, frame: i64) -> Vec<&Clip> {
             continue;
         }
         for clip in &track.clips {
-            if clip.media_ref.is_empty()
-                || matches!(clip.media_type, ClipType::Text | ClipType::Shape)
-            {
+            let is_shape = clip.media_type == ClipType::Shape && clip.shape_style.is_some();
+            if clip.media_type == ClipType::Text {
+                continue;
+            }
+            if !is_shape && clip.media_ref.is_empty() {
                 continue;
             }
             if frame >= clip.start_frame && frame < clip.start_frame + clip.duration_frames {
@@ -341,27 +400,38 @@ pub fn compose_frame(
     let (cw, ch) = (width as f64, height as f64);
 
     for clip in visible_clips(timeline, frame) {
-        let Some(src) = fetch_source(clip) else {
-            continue;
-        };
         // Keyframe tracks are clip-relative; resolve transform/crop/opacity at
         // this frame so animated clips render correctly.
         let rel = frame - clip.start_frame;
         let t = timeline_core::resolved_transform_at(clip, rel);
-        let c = timeline_core::resolved_crop_at(clip, rel);
         let opacity = timeline_core::resolved_opacity_at(clip, rel);
         let dw = t.width * cw;
         let dh = t.height * ch;
         let dx = t.center_x * cw - dw / 2.0;
         let dy = t.center_y * ch - dh / 2.0;
 
-        // Crop → the source sub-rectangle that stays visible.
-        let src_region = (
-            c.left,
-            c.top,
-            (1.0 - c.left - c.right).max(0.0),
-            (1.0 - c.top - c.bottom).max(0.0),
-        );
+        // Shape annotations are rasterized procedurally (full source region);
+        // media clips are fetched and cropped.
+        let (src, src_region) = if clip.media_type == ClipType::Shape {
+            let Some(shape) = clip.shape_style.as_ref() else {
+                continue;
+            };
+            let sw = (dw.round() as usize).clamp(1, 4096);
+            let sh = (dh.round() as usize).clamp(1, 4096);
+            (rasterize_shape(shape, sw, sh), (0.0, 0.0, 1.0, 1.0))
+        } else {
+            let Some(src) = fetch_source(clip) else {
+                continue;
+            };
+            let c = timeline_core::resolved_crop_at(clip, rel);
+            let region = (
+                c.left,
+                c.top,
+                (1.0 - c.left - c.right).max(0.0),
+                (1.0 - c.top - c.bottom).max(0.0),
+            );
+            (src, region)
+        };
 
         blit_scaled(
             &mut canvas,
@@ -632,6 +702,62 @@ mod tests {
         });
         // Multiply gray over white ≈ gray.
         assert_eq!(px(&out, 0, 0), [128, 128, 128, 255]);
+    }
+
+    fn solid_shape(kind: core_model::shape_style::ShapeKind, rgba: [f64; 4]) -> ShapeStyle {
+        use core_model::shape_style::{Fill, Rgba, Stroke};
+        ShapeStyle {
+            kind,
+            stroke: Stroke {
+                color: Rgba::default(),
+                width: 0.0, // no border → pure fill for the test
+                dashed: false,
+                arrowhead_style: None,
+            },
+            fill: Fill {
+                enabled: true,
+                color: Rgba {
+                    r: rgba[0],
+                    g: rgba[1],
+                    b: rgba[2],
+                    a: rgba[3],
+                },
+            },
+            arrowhead: None,
+            endpoints: None,
+        }
+    }
+
+    #[test]
+    fn rasterize_rect_is_fully_filled() {
+        use core_model::shape_style::ShapeKind;
+        let img = rasterize_shape(&solid_shape(ShapeKind::Rect, [1.0, 0.0, 0.0, 1.0]), 4, 4);
+        for y in 0..4 {
+            for x in 0..4 {
+                assert_eq!(px(&img, x, y), [255, 0, 0, 255], "({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn rasterize_oval_fills_center_not_corners() {
+        use core_model::shape_style::ShapeKind;
+        let img = rasterize_shape(&solid_shape(ShapeKind::Oval, [0.0, 0.0, 1.0, 1.0]), 8, 8);
+        assert_eq!(px(&img, 4, 4), [0, 0, 255, 255], "center filled");
+        assert_eq!(px(&img, 0, 0), [0, 0, 0, 0], "corner transparent");
+    }
+
+    #[test]
+    fn compose_renders_shape_clip() {
+        use core_model::shape_style::ShapeKind;
+        let mut c = clip("s1", "", 0, 10);
+        c.media_type = ClipType::Shape;
+        c.shape_style = Some(solid_shape(ShapeKind::Rect, [0.0, 1.0, 0.0, 1.0]));
+        c.transform = Transform::from_top_left(0.0, 0.0, 1.0, 1.0);
+        let timeline = tl(vec![c]);
+        // Shapes are procedural — fetch_source is never consulted for them.
+        let out = compose_frame(&timeline, &MediaManifest::default(), 0, 4, 4, |_| None);
+        assert_eq!(px(&out, 2, 2), [0, 255, 0, 255], "shape fill composited");
     }
 
     #[test]
