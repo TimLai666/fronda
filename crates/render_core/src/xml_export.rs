@@ -177,6 +177,27 @@ fn timeline_total_frames(timeline: &Timeline) -> i64 {
 }
 
 /// Write a single clip element.
+/// Emit a Basic Motion `<parameter>`. With keyframes it writes one `<keyframe>`
+/// per entry (`when` = clip-relative frame); otherwise the single static value.
+/// XML-012 (keyframed params). NLE round-trip is not machine-verified here; the
+/// tests assert the emitted XMEML structure faithfully mirrors the track.
+fn write_motion_param(xml: &mut String, id: &str, static_value: String, keyframes: &[(i64, String)]) {
+    writeln!(xml, "                  <parameter>").ok();
+    writeln!(xml, "                    <parameterid>{id}</parameterid>").ok();
+    if keyframes.is_empty() {
+        writeln!(xml, "                    <value>{static_value}</value>").ok();
+    } else {
+        for (when, value) in keyframes {
+            writeln!(
+                xml,
+                "                    <keyframe><when>{when}</when><value>{value}</value></keyframe>"
+            )
+            .ok();
+        }
+    }
+    writeln!(xml, "                  </parameter>").ok();
+}
+
 /// XML-002~008: preserves clip placement, trims, speed, volume, opacity, transform, crop, fades.
 /// XML-011: a full `<file>` is emitted once per (media_ref, is_audio); repeats
 ///          become self-closing `<file id="…"/>` references. When `manifest`
@@ -260,48 +281,109 @@ fn write_clip(
     )
     .ok();
     writeln!(xml, "                  <effecttype>motion</effecttype>").ok();
-    writeln!(xml, "                  <parameter>").ok();
-    writeln!(xml, "                    <parameterid>scale</parameterid>").ok();
-    writeln!(
+    // XML-012: keyframed motion params when a track is present, else static.
+    // Scale is uniform in Basic Motion; follow the static convention and take
+    // the AnimPair's first component (matches transform.width above).
+    let scale_kf: Vec<(i64, String)> = clip
+        .scale_track
+        .as_ref()
+        .map(|t| {
+            t.keyframes
+                .iter()
+                .map(|k| (k.frame, format!("{:.6}", k.value.a)))
+                .collect()
+        })
+        .unwrap_or_default();
+    write_motion_param(xml, "scale", format!("{:.6}", clip.transform.width), &scale_kf);
+
+    let rotation_kf: Vec<(i64, String)> = clip
+        .rotation_track
+        .as_ref()
+        .map(|t| {
+            t.keyframes
+                .iter()
+                .map(|k| (k.frame, format!("{:.6}", k.value)))
+                .collect()
+        })
+        .unwrap_or_default();
+    write_motion_param(
         xml,
-        "                    <value>{:.6}</value>",
-        clip.transform.width
-    )
-    .ok();
-    writeln!(xml, "                  </parameter>").ok();
-    writeln!(xml, "                  <parameter>").ok();
-    writeln!(
+        "rotation",
+        format!("{:.6}", clip.transform.rotation),
+        &rotation_kf,
+    );
+
+    let center_kf: Vec<(i64, String)> = clip
+        .position_track
+        .as_ref()
+        .map(|t| {
+            t.keyframes
+                .iter()
+                .map(|k| (k.frame, format!("{:.6} {:.6}", k.value.a, k.value.b)))
+                .collect()
+        })
+        .unwrap_or_default();
+    write_motion_param(
         xml,
-        "                    <parameterid>rotation</parameterid>"
-    )
-    .ok();
-    writeln!(
+        "center",
+        format!("{:.6} {:.6}", clip.transform.center_x, clip.transform.center_y),
+        &center_kf,
+    );
+
+    let crop_kf: Vec<(i64, String)> = clip
+        .crop_track
+        .as_ref()
+        .map(|t| {
+            t.keyframes
+                .iter()
+                .map(|k| {
+                    (
+                        k.frame,
+                        format!(
+                            "{:.6} {:.6} {:.6} {:.6}",
+                            k.value.left, k.value.top, k.value.right, k.value.bottom
+                        ),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    write_motion_param(
         xml,
-        "                    <value>{:.6}</value>",
-        clip.transform.rotation
-    )
-    .ok();
-    writeln!(xml, "                  </parameter>").ok();
-    writeln!(xml, "                  <parameter>").ok();
-    writeln!(xml, "                    <parameterid>center</parameterid>").ok();
-    writeln!(
-        xml,
-        "                    <value>{:.6} {:.6}</value>",
-        clip.transform.center_x, clip.transform.center_y
-    )
-    .ok();
-    writeln!(xml, "                  </parameter>").ok();
-    writeln!(xml, "                  <parameter>").ok();
-    writeln!(xml, "                    <parameterid>crop</parameterid>").ok();
-    writeln!(
-        xml,
-        "                    <value>{:.6} {:.6} {:.6} {:.6}</value>",
-        clip.crop.left, clip.crop.top, clip.crop.right, clip.crop.bottom
-    )
-    .ok();
-    writeln!(xml, "                  </parameter>").ok();
+        "crop",
+        format!(
+            "{:.6} {:.6} {:.6} {:.6}",
+            clip.crop.left, clip.crop.top, clip.crop.right, clip.crop.bottom
+        ),
+        &crop_kf,
+    );
     writeln!(xml, "                </effect>").ok();
     writeln!(xml, "              </filter>").ok();
+
+    // XML-012: keyframed opacity becomes a dedicated Opacity filter so the
+    // animation survives export; static opacity stays on the clipitem above.
+    if let Some(track) = clip.opacity_track.as_ref() {
+        if !track.keyframes.is_empty() {
+            let opacity_kf: Vec<(i64, String)> = track
+                .keyframes
+                .iter()
+                .map(|k| (k.frame, format!("{:.6}", k.value)))
+                .collect();
+            writeln!(xml, "              <filter>").ok();
+            writeln!(xml, "                <effect>").ok();
+            writeln!(xml, "                  <name>Opacity</name>").ok();
+            writeln!(xml, "                  <effectcategory>motion</effectcategory>").ok();
+            writeln!(xml, "                  <effecttype>opacity</effecttype>").ok();
+            write_motion_param(
+                xml,
+                "opacity",
+                format!("{:.6}", clip.opacity),
+                &opacity_kf,
+            );
+            writeln!(xml, "                </effect>").ok();
+            writeln!(xml, "              </filter>").ok();
+        }
+    }
 
     // XML-008: linked clip relationships
     if let Some(ref link_id) = clip.link_group_id {
@@ -886,5 +968,61 @@ mod tests {
         assert!(xml.contains("<timecode>"));
         assert!(xml.contains("<string>00:00:03:10</string>")); // frame 100 at 30fps
         assert!(xml.contains("<displayformat>NDF</displayformat>"));
+    }
+
+    #[test]
+    fn xml_012_static_params_have_no_keyframes() {
+        let clip = mk_clip("c1", "asset.mp4", ClipType::Video, 0);
+        let xml = XmlExport::export(&tl_with(vec![clip]));
+        // A clip with no tracks emits plain <value> params, no <keyframe>.
+        assert!(xml.contains("<parameterid>scale</parameterid>"));
+        assert!(!xml.contains("<keyframe>"));
+    }
+
+    #[test]
+    fn xml_012_scale_keyframes_exported() {
+        let mut clip = mk_clip("c1", "asset.mp4", ClipType::Video, 0);
+        clip.scale_track = Some(core_model::KeyframeTrack {
+            keyframes: vec![
+                core_model::Keyframe {
+                    frame: 0,
+                    value: core_model::AnimPair { a: 50.0, b: 50.0 },
+                    interpolation_out: Interpolation::Linear,
+                },
+                core_model::Keyframe {
+                    frame: 30,
+                    value: core_model::AnimPair { a: 120.0, b: 120.0 },
+                    interpolation_out: Interpolation::Linear,
+                },
+            ],
+        });
+        let xml = XmlExport::export(&tl_with(vec![clip]));
+        // Scale param carries keyframes at the track frames/values.
+        assert!(xml.contains("<keyframe><when>0</when><value>50.000000</value></keyframe>"));
+        assert!(xml.contains("<keyframe><when>30</when><value>120.000000</value></keyframe>"));
+    }
+
+    #[test]
+    fn xml_012_opacity_track_becomes_opacity_filter() {
+        let mut clip = mk_clip("c1", "asset.mp4", ClipType::Video, 0);
+        clip.opacity_track = Some(core_model::KeyframeTrack {
+            keyframes: vec![
+                core_model::Keyframe {
+                    frame: 0,
+                    value: 0.0,
+                    interpolation_out: Interpolation::Linear,
+                },
+                core_model::Keyframe {
+                    frame: 15,
+                    value: 1.0,
+                    interpolation_out: Interpolation::Linear,
+                },
+            ],
+        });
+        let xml = XmlExport::export(&tl_with(vec![clip]));
+        assert!(xml.contains("<name>Opacity</name>"));
+        assert!(xml.contains("<effecttype>opacity</effecttype>"));
+        assert!(xml.contains("<keyframe><when>0</when><value>0.000000</value></keyframe>"));
+        assert!(xml.contains("<keyframe><when>15</when><value>1.000000</value></keyframe>"));
     }
 }
