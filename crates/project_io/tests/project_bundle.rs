@@ -339,3 +339,35 @@ fn save_removes_stale_transcripts_and_visual_indexes_when_empty() {
     assert!(reopened.visual_indexes.is_empty());
     assert!(reopened.visual_indexes_dir.is_none());
 }
+
+#[test]
+fn save_project_state_writes_only_timeline_and_manifest() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("narrow.palmier");
+    fs::create_dir_all(root.join(CHAT_DIRECTORY_NAME)).unwrap();
+    let chat_path = root.join(CHAT_DIRECTORY_NAME).join("session1.json");
+    let chat_content = r#"{"id":"s1","title":"Chat","messages":[]}"#;
+    fs::write(&chat_path, chat_content).unwrap();
+
+    let timeline: core_model::Timeline = serde_json::from_str(r#"{"fps":60}"#).unwrap();
+    let mut manifest = core_model::MediaManifest::default();
+    manifest.folders.push(core_model::MediaFolder {
+        id: "f1".into(),
+        name: "B-roll".into(),
+        parent_folder_id: None,
+    });
+
+    project_io::save_project_state(&root, &timeline, &manifest).unwrap();
+
+    let reopened = ProjectBundle::open(&root).unwrap();
+    assert_eq!(reopened.timeline.fps, 60);
+    let folders = &reopened.manifest.unwrap().folders;
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].name, "B-roll");
+    assert_eq!(
+        fs::read_to_string(&chat_path).unwrap(),
+        chat_content,
+        "chat files must be untouched"
+    );
+    assert!(!root.join(GENERATION_LOG_FILENAME).exists());
+}

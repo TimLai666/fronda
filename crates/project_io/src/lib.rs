@@ -161,6 +161,20 @@ impl ProjectBundle {
     }
 }
 
+/// Write only `project.json` and `media.json` under `root`, leaving every
+/// other file in the package untouched. The narrow save path for in-memory
+/// editor state that does not hold the full bundle.
+pub fn save_project_state(
+    root: &Path,
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+) -> Result<(), BundleError> {
+    ensure_directory(root)?;
+    write_json(&root.join(TIMELINE_FILENAME), timeline)?;
+    write_json(&root.join(MANIFEST_FILENAME), manifest)?;
+    Ok(())
+}
+
 fn read_required_json<T>(path: &Path) -> Result<T, BundleError>
 where
     T: DeserializeOwned,

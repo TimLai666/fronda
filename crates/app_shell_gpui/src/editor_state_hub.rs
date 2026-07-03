@@ -71,6 +71,22 @@ impl EditorStateHub {
     pub fn project_root(&self) -> Option<PathBuf> {
         self.project_root.lock().ok().and_then(|r| r.clone())
     }
+
+    /// Write the shared timeline and manifest back to the open project.
+    /// Clones the state under the lock, writes to disk outside it.
+    pub fn save(&self) -> Result<(), String> {
+        let Some(root) = self.project_root() else {
+            return Err("No project open: nothing to save".into());
+        };
+        let (timeline, manifest) = {
+            let exec = self
+                .executor
+                .lock()
+                .map_err(|_| "Editor state lock poisoned".to_string())?;
+            (exec.timeline().clone(), exec.media_manifest().clone())
+        };
+        project_io::save_project_state(&root, &timeline, &manifest).map_err(|e| e.to_string())
+    }
 }
 
 impl Default for EditorStateHub {
@@ -141,6 +157,41 @@ mod tests {
         assert_eq!(hub.project_root(), Some(dir.clone()));
         let exec = hub.executor();
         assert_eq!(exec.lock().unwrap().timeline().fps, 60);
+    }
+
+    #[test]
+    fn save_round_trips_mcp_edits() {
+        let dir = temp_bundle_dir("save.palmier");
+        std::fs::write(dir.join(core_model::TIMELINE_FILENAME), r#"{"fps":60}"#).unwrap();
+
+        let hub = EditorStateHub::new();
+        hub.load_bundle(&dir).unwrap();
+        {
+            let exec = hub.executor();
+            exec.lock()
+                .unwrap()
+                .execute("create_folder", &serde_json::json!({"name": "B-roll"}))
+                .unwrap();
+        }
+        hub.save().unwrap();
+
+        let fresh = EditorStateHub::new();
+        fresh.load_bundle(&dir).unwrap();
+        let exec = fresh.executor();
+        let exec = exec.lock().unwrap();
+        assert_eq!(exec.timeline().fps, 60);
+        assert!(exec
+            .media_manifest()
+            .folders
+            .iter()
+            .any(|f| f.name == "B-roll"));
+    }
+
+    #[test]
+    fn save_without_open_project_fails() {
+        let hub = EditorStateHub::new();
+        let err = hub.save().unwrap_err();
+        assert!(err.contains("No project open"), "err={err}");
     }
 
     #[test]

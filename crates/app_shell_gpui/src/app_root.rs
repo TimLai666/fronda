@@ -224,8 +224,12 @@ impl AppRoot {
             }
             menu::MenuAction::EnterFullScreen => {}
             menu::MenuAction::Quit => {}
-            menu::MenuAction::SaveProject
-            | menu::MenuAction::SaveProjectAs
+            menu::MenuAction::SaveProject => {
+                if let Err(reason) = crate::editor_state_hub::EditorStateHub::global().save() {
+                    eprintln!("Save failed: {reason}");
+                }
+            }
+            menu::MenuAction::SaveProjectAs
             | menu::MenuAction::ImportMedia
             | menu::MenuAction::Export => {}
             menu::MenuAction::Undo
