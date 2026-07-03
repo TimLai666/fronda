@@ -58,6 +58,11 @@ pub struct PreviewView {
     transform_overlay: Entity<TransformOverlayView>,
     crop_overlay: Entity<CropOverlayView>,
     focus_handle: FocusHandle,
+    /// Cache PNG of the last composited preview frame, shown on the canvas.
+    frame_png: Option<std::path::PathBuf>,
+    /// (project revision, frame) currently rendered or in flight — avoids
+    /// re-compositing the same frame every render.
+    rendered_key: Option<(u64, i64)>,
 }
 
 impl PreviewView {
@@ -74,7 +79,65 @@ impl PreviewView {
             transform_overlay: cx.new(|cx| TransformOverlayView::new(cx)),
             crop_overlay: cx.new(|cx| CropOverlayView::new(cx)),
             focus_handle: cx.focus_handle(),
+            frame_png: None,
+            rendered_key: None,
         }
+    }
+
+    /// If the current playhead frame hasn't been composited yet, kick a
+    /// background render of it to a cache PNG and show it when ready. Skipped
+    /// during playback (per-frame decode would be too slow) — the last rendered
+    /// frame stays on screen. Compose + decode + encode run off the UI thread,
+    /// so this never blocks rendering.
+    fn ensure_preview_frame(&mut self, cx: &mut Context<Self>) {
+        if self.state.is_playing || self.active_tab_idx != 0 {
+            return;
+        }
+        let hub = crate::editor_state_hub::EditorStateHub::global();
+        let key = (hub.revision(), self.state.active_frame);
+        if self.rendered_key == Some(key) {
+            return;
+        }
+        self.rendered_key = Some(key);
+        let frame = self.state.active_frame;
+        let (revision, _) = key;
+        cx.spawn(async move |this, cx| {
+            let rendered = cx
+                .background_executor()
+                .spawn(async move {
+                    let hub = crate::editor_state_hub::EditorStateHub::global();
+                    let (timeline, manifest, root) = {
+                        let exec = hub.executor();
+                        let guard = exec.lock().unwrap();
+                        (
+                            guard.timeline().clone(),
+                            guard.media_manifest().clone(),
+                            hub.project_root().unwrap_or_else(|| {
+                                std::env::temp_dir().join("fronda-preview")
+                            }),
+                        )
+                    };
+                    let cache_dir =
+                        crate::project_registry_store::fronda_config_dir().join("preview");
+                    let out = crate::preview_render::preview_cache_path(&cache_dir, revision, frame);
+                    if out.is_file() {
+                        return Some(out);
+                    }
+                    crate::preview_render::render_frame_png(
+                        &timeline, &manifest, &root, frame, &out,
+                    )
+                    .ok()
+                    .map(|()| out)
+                })
+                .await;
+            if let Some(path) = rendered {
+                let _ = this.update(cx, |view, cx| {
+                    view.frame_png = Some(path);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     /// Open a media asset tab (Swift: openMediaAssetTab). Selects it immediately.
@@ -352,6 +415,8 @@ fn settings_badge(id: &str, label: &str) -> gpui::Stateful<gpui::Div> {
 
 impl Render for PreviewView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_preview_frame(cx);
+        let frame_png = self.frame_png.clone();
         let is_playing = self.state.is_playing;
         let fraction = self.state.playhead_fraction();
         let current_tc = self.state.format_timecode();
@@ -531,14 +596,20 @@ impl Render for PreviewView {
                     .w_full()
                     .relative()
                     .bg(Background::BASE)
-                    // Placeholder text — hidden when an overlay is shown
-                    .when(canvas_overlay == CanvasOverlay::None, |el| {
-                        el.child(
+                    // Composited frame (or placeholder) — hidden when an overlay is shown
+                    .when(canvas_overlay == CanvasOverlay::None, |el| match &frame_png {
+                        Some(path) => el.child(
+                            gpui::img(path.clone())
+                                .max_w_full()
+                                .max_h_full()
+                                .object_fit(gpui::ObjectFit::Contain),
+                        ),
+                        None => el.child(
                             div()
                                 .text_color(Text::MUTED)
                                 .text_size(px(FontSize::SM))
                                 .child("Preview"),
-                        )
+                        ),
                     })
                     // Offline overlay (Swift: "Media Offline" message)
                     .when(canvas_overlay == CanvasOverlay::Offline, |el| {
