@@ -54,9 +54,10 @@ impl RgbaImage {
     }
 }
 
-/// Composite `src` into `canvas` scaled to fill the pixel rect `dst`, sampling
-/// only the normalized sub-rectangle `src_region` of the source (for crop), with
-/// `opacity` (0..1) applied and source-over alpha blending. Nearest-neighbour.
+/// Composite `src` into `canvas` scaled to fill the pixel rect `dst`, rotated
+/// `rotation_degrees` about the rect's centre, sampling only the normalized
+/// sub-rectangle `src_region` of the source (for crop), with `opacity` (0..1)
+/// and source-over alpha blending. Nearest-neighbour (inverse-mapped).
 ///
 /// `dst` and `src_region` are `(x, y, w, h)`. `dst` is in canvas pixels and may
 /// extend past the canvas edges (it is clipped). `src_region` is fractions in
@@ -68,6 +69,7 @@ pub fn blit_scaled(
     src_region: (f64, f64, f64, f64),
     dst: (f64, f64, f64, f64),
     opacity: f64,
+    rotation_degrees: f64,
 ) {
     let (dx, dy, dw, dh) = dst;
     if dw <= 0.0 || dh <= 0.0 || src.width == 0 || src.height == 0 || opacity <= 0.0 {
@@ -75,35 +77,51 @@ pub fn blit_scaled(
     }
     let opacity = opacity.clamp(0.0, 1.0);
     let (sx0, sy0, sw, sh) = src_region;
+    let (hw, hh) = (dw / 2.0, dh / 2.0);
+    let (cx, cy) = (dx + hw, dy + hh);
+    let rad = rotation_degrees * std::f64::consts::PI / 180.0;
+    let (sin, cos) = (rad.sin(), rad.cos());
 
-    // Canvas pixel span covered by the destination rect (clipped to canvas).
-    let x_start = dx.floor().max(0.0) as usize;
-    let y_start = dy.floor().max(0.0) as usize;
-    let x_end = ((dx + dw).ceil() as isize).clamp(0, canvas.width as isize) as usize;
-    let y_end = ((dy + dh).ceil() as isize).clamp(0, canvas.height as isize) as usize;
+    // Canvas AABB of the rotated destination rect (clipped to the canvas).
+    let corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)];
+    let (mut min_x, mut min_y, mut max_x, mut max_y) =
+        (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (lx, ly) in corners {
+        let wx = cx + lx * cos - ly * sin;
+        let wy = cy + lx * sin + ly * cos;
+        min_x = min_x.min(wx);
+        min_y = min_y.min(wy);
+        max_x = max_x.max(wx);
+        max_y = max_y.max(wy);
+    }
+    let x_start = min_x.floor().max(0.0) as usize;
+    let y_start = min_y.floor().max(0.0) as usize;
+    let x_end = ((max_x.ceil() as isize).clamp(0, canvas.width as isize)) as usize;
+    let y_end = ((max_y.ceil() as isize).clamp(0, canvas.height as isize)) as usize;
 
-    for cy in y_start..y_end {
-        // v in 0..1 across the destination height → source row.
-        let v = (cy as f64 + 0.5 - dy) / dh;
-        if !(0.0..1.0).contains(&v) {
-            continue;
-        }
-        let sfy = (sy0 + v * sh) * src.height as f64;
-        let sy = (sfy as isize).clamp(0, src.height as isize - 1) as usize;
-        for cx in x_start..x_end {
-            let u = (cx as f64 + 0.5 - dx) / dw;
-            if !(0.0..1.0).contains(&u) {
+    for py in y_start..y_end {
+        for px in x_start..x_end {
+            // Un-rotate the pixel centre into the rect's local (axis-aligned) frame.
+            let rx = px as f64 + 0.5 - cx;
+            let ry = py as f64 + 0.5 - cy;
+            let lx = rx * cos + ry * sin;
+            let ly = -rx * sin + ry * cos;
+            let u = (lx + hw) / dw;
+            let v = (ly + hh) / dh;
+            if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
                 continue;
             }
-            let sfx = (sx0 + u * sw) * src.width as f64;
-            let sx = (sfx as isize).clamp(0, src.width as isize - 1) as usize;
+            let sx = (((sx0 + u * sw) * src.width as f64) as isize)
+                .clamp(0, src.width as isize - 1) as usize;
+            let sy = (((sy0 + v * sh) * src.height as f64) as isize)
+                .clamp(0, src.height as isize - 1) as usize;
 
             let [sr, sg, sb, sa] = src.pixel(sx, sy);
             let a = (sa as f64 / 255.0) * opacity;
             if a <= 0.0 {
                 continue;
             }
-            let ci = (cy * canvas.width + cx) * 4;
+            let ci = (py * canvas.width + px) * 4;
             for k in 0..3 {
                 let s = [sr, sg, sb][k] as f64;
                 let d = canvas.pixels[ci + k] as f64;
@@ -182,6 +200,7 @@ pub fn compose_frame(
             src_region,
             (dx, dy, dw, dh),
             clip.opacity,
+            t.rotation,
         );
     }
 
@@ -260,7 +279,7 @@ mod tests {
         let mut canvas = RgbaImage::new(4, 4);
         let red = RgbaImage::solid(2, 2, [255, 0, 0, 255]);
         // Fill the whole 4x4 canvas.
-        blit_scaled(&mut canvas, &red, (0.0, 0.0, 1.0, 1.0), (0.0, 0.0, 4.0, 4.0), 1.0);
+        blit_scaled(&mut canvas, &red, (0.0, 0.0, 1.0, 1.0), (0.0, 0.0, 4.0, 4.0), 1.0, 0.0);
         for y in 0..4 {
             for x in 0..4 {
                 assert_eq!(px(&canvas, x, y), [255, 0, 0, 255], "({x},{y})");
@@ -272,9 +291,23 @@ mod tests {
     fn blit_half_opacity_blends_over_black() {
         let mut canvas = RgbaImage::solid(2, 2, [0, 0, 0, 255]);
         let white = RgbaImage::solid(1, 1, [255, 255, 255, 255]);
-        blit_scaled(&mut canvas, &white, (0.0, 0.0, 1.0, 1.0), (0.0, 0.0, 2.0, 2.0), 0.5);
+        blit_scaled(&mut canvas, &white, (0.0, 0.0, 1.0, 1.0), (0.0, 0.0, 2.0, 2.0), 0.5, 0.0);
         // 255*0.5 + 0*0.5 = 127.5 → 128.
         assert_eq!(px(&canvas, 0, 0), [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn blit_rotation_90_swaps_axes() {
+        // A 4-wide, 2-tall dst rect rotated 90° covers a 2-wide, 4-tall area on
+        // an 8x8 canvas, centered — its rotated footprint stays on-canvas.
+        let mut canvas = RgbaImage::new(8, 8);
+        let green = RgbaImage::solid(1, 1, [0, 255, 0, 255]);
+        // dst rect (x=2,y=3,w=4,h=2) → center (4,4); rotated 90° spans x∈[3,5), y∈[2,6).
+        blit_scaled(&mut canvas, &green, (0.0, 0.0, 1.0, 1.0), (2.0, 3.0, 4.0, 2.0), 1.0, 90.0);
+        // Center is filled; a point on the (now narrow) horizontal axis is empty.
+        assert_eq!(px(&canvas, 4, 4), [0, 255, 0, 255], "center filled");
+        assert_eq!(px(&canvas, 4, 2), [0, 255, 0, 255], "extends vertically");
+        assert_eq!(px(&canvas, 1, 4), [0, 0, 0, 0], "narrow horizontally");
     }
 
     #[test]
