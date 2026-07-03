@@ -272,6 +272,29 @@ pub fn compose_frame(
     canvas
 }
 
+/// Compose every frame in `[0, total_frames)` and hand each to
+/// `sink(frame_index, &image)`. This is the pure render driver a video encoder
+/// plugs into: `fetch_source(clip, frame)` decodes each clip's source frame
+/// (platform adapter), and `sink` receives the flattened RGBA frame (the encoder
+/// writes it). Timeline math and compositing are pure and unit-tested here.
+#[allow(clippy::too_many_arguments)]
+pub fn render_sequence(
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+    total_frames: i64,
+    width: usize,
+    height: usize,
+    mut fetch_source: impl FnMut(&Clip, i64) -> Option<RgbaImage>,
+    mut sink: impl FnMut(i64, &RgbaImage),
+) {
+    for frame in 0..total_frames.max(0) {
+        let img = compose_frame(timeline, manifest, frame, width, height, |c| {
+            fetch_source(c, frame)
+        });
+        sink(frame, &img);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,5 +527,47 @@ mod tests {
         });
         // Multiply gray over white ≈ gray.
         assert_eq!(px(&out, 0, 0), [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn render_sequence_composes_every_frame() {
+        let mut c = clip("c1", "m1", 0, 4);
+        c.transform = Transform::from_top_left(0.0, 0.0, 1.0, 1.0);
+        let timeline = tl(vec![c]);
+        let mut frames: Vec<(i64, [u8; 4])> = Vec::new();
+        let mut decoded = 0;
+        render_sequence(
+            &timeline,
+            &MediaManifest::default(),
+            4,
+            2,
+            2,
+            |_clip, frame| {
+                decoded += 1;
+                // Encode the frame index into the red channel to prove per-frame decode.
+                Some(RgbaImage::solid(2, 2, [frame as u8 * 10, 0, 0, 255]))
+            },
+            |frame, img| frames.push((frame, px(img, 0, 0))),
+        );
+        assert_eq!(frames.len(), 4);
+        assert_eq!(decoded, 4);
+        assert_eq!(frames[0], (0, [0, 0, 0, 255]));
+        assert_eq!(frames[3], (3, [30, 0, 0, 255]));
+    }
+
+    #[test]
+    fn render_sequence_zero_frames_yields_nothing() {
+        let timeline = tl(vec![clip("c1", "m1", 0, 4)]);
+        let mut count = 0;
+        render_sequence(
+            &timeline,
+            &MediaManifest::default(),
+            0,
+            2,
+            2,
+            |_, _| Some(RgbaImage::solid(2, 2, [255, 255, 255, 255])),
+            |_, _| count += 1,
+        );
+        assert_eq!(count, 0);
     }
 }
