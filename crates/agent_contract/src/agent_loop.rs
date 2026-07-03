@@ -1,14 +1,14 @@
 //! Transport-agnostic agent turn loop for the Anthropic Messages API.
 //!
 //! This owns the tool-use conversation: send a request, parse the response, run
-//! any requested tools through [`ToolExecutor`], feed the results back, and
+//! any requested tools via an `execute_tool` closure, feed the results back, and
 //! repeat until the model stops calling tools. The network is abstracted behind
 //! [`LlmTransport`] so the loop is pure and unit-testable with a scripted mock;
 //! a concrete HTTP client is a thin adapter that implements the one `send`
-//! method.
+//! method. Tools go through a closure (not a borrowed executor) so a caller can
+//! lock a shared executor per tool call rather than across HTTP round-trips.
 
 use crate::tools::ToolDefinition;
-use crate::ToolExecutor;
 use serde_json::{json, Value};
 
 /// One request/response exchange with the model. Implementors serialize
@@ -128,14 +128,19 @@ fn tool_result_block(id: &str, result: &Result<Value, String>) -> Value {
 /// Run one agent turn to completion.
 ///
 /// Starts from `user_message`, then loops: build the request, `send` it, and if
-/// the model emitted tool calls, execute each via `executor`, append the
+/// the model emitted tool calls, run each via `execute_tool`, append the
 /// assistant message and the `tool_result` blocks, and resend. Returns when the
 /// model produces a response with no tool calls, or errors if `max_iterations`
 /// is exceeded (a runaway-loop backstop).
+///
+/// `execute_tool(name, input)` runs a single tool. Passing a closure (rather than
+/// the executor directly) lets a caller hold a shared executor's lock only for
+/// the duration of each tool call — never across the `send` HTTP round-trips —
+/// so a background agent turn cannot freeze other lock users.
 #[allow(clippy::too_many_arguments)]
 pub fn run_agent_turn(
     transport: &mut dyn LlmTransport,
-    executor: &mut ToolExecutor,
+    mut execute_tool: impl FnMut(&str, &Value) -> Result<Value, String>,
     model: &str,
     max_tokens: u32,
     system: &str,
@@ -178,7 +183,7 @@ pub fn run_agent_turn(
 
         let mut result_blocks = Vec::with_capacity(parsed.tool_uses.len());
         for tu in &parsed.tool_uses {
-            let result = executor.execute(&tu.name, &tu.input);
+            let result = execute_tool(&tu.name, &tu.input);
             result_blocks.push(tool_result_block(&tu.id, &result));
             tool_calls.push(ToolCallRecord {
                 name: tu.name.clone(),
@@ -196,6 +201,7 @@ pub fn run_agent_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ToolExecutor;
 
     /// Replays a fixed script of responses, one per `send`, and captures the
     /// requests it was given so tests can assert on the conversation.
@@ -257,7 +263,7 @@ mod tests {
         let mut executor = ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
         let outcome = run_agent_turn(
             &mut transport,
-            &mut executor,
+            |name, args| executor.execute(name, args),
             "claude-x",
             1024,
             "system",
@@ -286,7 +292,7 @@ mod tests {
         let mut executor = ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
         let outcome = run_agent_turn(
             &mut transport,
-            &mut executor,
+            |name, args| executor.execute(name, args),
             "claude-x",
             1024,
             "system",
@@ -325,7 +331,7 @@ mod tests {
         let mut executor = ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
         let outcome = run_agent_turn(
             &mut transport,
-            &mut executor,
+            |name, args| executor.execute(name, args),
             "claude-x",
             1024,
             "system",
@@ -355,7 +361,7 @@ mod tests {
         let mut executor = ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
         let outcome = run_agent_turn(
             &mut transport,
-            &mut executor,
+            |name, args| executor.execute(name, args),
             "claude-x",
             1024,
             "system",

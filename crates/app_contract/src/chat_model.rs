@@ -115,6 +115,31 @@ impl ChatPanelModel {
         self.is_agent_running = false;
     }
 
+    /// Complete an agent turn: append the assistant reply (with any tool calls)
+    /// and return to idle. Call after the agent loop finishes successfully.
+    pub fn complete_agent_turn(&mut self, text: String, tool_calls: Vec<ToolCall>) {
+        self.messages.push(ChatMessage {
+            role: ChatRole::Assistant,
+            text,
+            timestamp: chrono::Utc::now(),
+            status: MessageStatus::Delivered,
+            tool_calls,
+        });
+        self.is_agent_running = false;
+    }
+
+    /// Record an agent failure as a failed assistant message and return to idle.
+    pub fn fail_agent_turn(&mut self, error: String) {
+        self.messages.push(ChatMessage {
+            role: ChatRole::Assistant,
+            text: error.clone(),
+            timestamp: chrono::Utc::now(),
+            status: MessageStatus::Failed(error),
+            tool_calls: Vec::new(),
+        });
+        self.is_agent_running = false;
+    }
+
     /// Whether the send button should be enabled.
     ///
     /// CHAT-001: Send action is enabled when input is non-empty and agent is not running.
@@ -196,6 +221,33 @@ mod tests {
         assert_eq!(model.messages.len(), 1);
         assert!(model.input.is_empty());
         assert!(model.is_agent_running);
+    }
+
+    #[test]
+    fn complete_agent_turn_appends_assistant_and_idles() {
+        let mut model = ChatPanelModel::default();
+        model.input.text = "hi".into();
+        model.send_message();
+        assert!(model.is_agent_running);
+        model.complete_agent_turn("here you go".into(), Vec::new());
+        assert_eq!(model.messages.len(), 2);
+        let last = model.messages.last().unwrap();
+        assert_eq!(last.role, ChatRole::Assistant);
+        assert_eq!(last.text, "here you go");
+        assert_eq!(last.status, MessageStatus::Delivered);
+        assert!(!model.is_agent_running);
+    }
+
+    #[test]
+    fn fail_agent_turn_records_failure_and_idles() {
+        let mut model = ChatPanelModel::default();
+        model.input.text = "hi".into();
+        model.send_message();
+        model.fail_agent_turn("no API key".into());
+        let last = model.messages.last().unwrap();
+        assert_eq!(last.role, ChatRole::Assistant);
+        assert_eq!(last.status, MessageStatus::Failed("no API key".into()));
+        assert!(!model.is_agent_running);
     }
 
     #[test]

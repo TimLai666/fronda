@@ -102,6 +102,58 @@ impl ChatView {
         }
     }
 
+    /// Run an agent turn for `user_text` against the Anthropic API, then append
+    /// the reply. The tool loop runs on the background executor; the shared
+    /// project executor is locked only per tool call, never across the HTTP
+    /// round-trips, so the UI never blocks on the network. Requires
+    /// `ANTHROPIC_API_KEY` in the environment.
+    fn spawn_agent_turn(&mut self, user_text: String, cx: &mut Context<Self>) {
+        let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+        if api_key.trim().is_empty() {
+            self.model
+                .fail_agent_turn("Set ANTHROPIC_API_KEY to use the agent.".into());
+            cx.notify();
+            return;
+        }
+        let model_id = AVAILABLE_MODELS
+            .get(self.selected_model_idx)
+            .copied()
+            .unwrap_or(AVAILABLE_MODELS[0])
+            .to_string();
+        let executor = crate::editor_state_hub::EditorStateHub::global().executor();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut transport = crate::anthropic_transport::AnthropicTransport::new(
+                        crate::anthropic_transport::AnthropicConfig::new(api_key),
+                    )?;
+                    let tools = agent_contract::all_tools();
+                    agent_contract::run_agent_turn(
+                        &mut transport,
+                        |name, args| executor.lock().unwrap().execute(name, args),
+                        &model_id,
+                        8192,
+                        agent_contract::SYSTEM_INSTRUCTION,
+                        &tools,
+                        &user_text,
+                        16,
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                match result {
+                    Ok(outcome) => {
+                        view.model.complete_agent_turn(outcome.final_text, Vec::new())
+                    }
+                    Err(err) => view.model.fail_agent_turn(err),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -110,7 +162,7 @@ impl ChatView {
     ) {
         match event.keystroke.key.as_str() {
             "enter" => {
-                if self.model.handle_send_action(self.shift_held).is_some() {
+                if let Some(agent_text) = self.model.handle_send_action(self.shift_held) {
                     self.session_mgr.increment_message_count();
                     if self
                         .session_mgr
@@ -127,6 +179,7 @@ impl ChatView {
                         );
                         self.session_mgr.set_active_title(title);
                     }
+                    self.spawn_agent_turn(agent_text, cx);
                 }
                 cx.notify();
             }
@@ -968,7 +1021,7 @@ impl Render for ChatView {
                      _event: &ClickEvent,
                      _window: &mut Window,
                      cx: &mut Context<ChatView>| {
-                        if this.model.handle_send_action(false).is_some() {
+                        if let Some(agent_text) = this.model.handle_send_action(false) {
                             this.session_mgr.increment_message_count();
                             if this
                                 .session_mgr
@@ -985,6 +1038,7 @@ impl Render for ChatView {
                                 );
                                 this.session_mgr.set_active_title(title);
                             }
+                            this.spawn_agent_turn(agent_text, cx);
                         }
                         cx.notify();
                     },
