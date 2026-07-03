@@ -86,6 +86,34 @@ pub fn mix(placements: &[AudioPlacement], channels: usize, min_frames: usize) ->
     out
 }
 
+/// Downsample interleaved PCM to `bucket_count` peak amplitudes for waveform
+/// display. Each bucket is the maximum absolute sample across all channels in
+/// its slice of frames. Returns at most `bucket_count` values (fewer when there
+/// are fewer frames than buckets); empty for empty input or zero buckets.
+pub fn compute_peaks(samples: &[f32], channels: usize, bucket_count: usize) -> Vec<f32> {
+    if samples.is_empty() || channels == 0 || bucket_count == 0 {
+        return Vec::new();
+    }
+    let frames = samples.len() / channels;
+    if frames == 0 {
+        return Vec::new();
+    }
+    let buckets = bucket_count.min(frames);
+    let mut peaks = Vec::with_capacity(buckets);
+    for b in 0..buckets {
+        let start = b * frames / buckets;
+        let end = ((b + 1) * frames / buckets).max(start + 1);
+        let mut peak = 0.0f32;
+        for f in start..end {
+            for c in 0..channels {
+                peak = peak.max(samples[f * channels + c].abs());
+            }
+        }
+        peaks.push(peak);
+    }
+    peaks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +219,40 @@ mod tests {
     fn empty_input_is_empty() {
         assert!(mix(&[], 2, 0).is_empty());
         assert!(mix(&[placement(0, vec![1.0], 1.0)], 0, 0).is_empty());
+    }
+
+    #[test]
+    fn peaks_of_constant_signal_are_flat() {
+        let samples = vec![0.5f32; 100];
+        let peaks = compute_peaks(&samples, 1, 4);
+        assert_eq!(peaks.len(), 4);
+        for p in peaks {
+            assert!((p - 0.5).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn peaks_take_absolute_max_across_channels() {
+        // Stereo: L quiet, R has a loud negative spike in bucket 1.
+        let samples = vec![0.1, 0.1, 0.1, -0.9, 0.1, 0.1, 0.1, 0.1];
+        let peaks = compute_peaks(&samples, 2, 2);
+        assert_eq!(peaks.len(), 2);
+        assert!((peaks[0] - 0.9).abs() < 1e-6, "bucket 0 catches the -0.9 spike");
+        assert!((peaks[1] - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn peaks_clamp_buckets_to_frame_count() {
+        let samples = vec![0.2f32, 0.4, 0.6]; // 3 mono frames
+        let peaks = compute_peaks(&samples, 1, 10);
+        assert_eq!(peaks.len(), 3);
+        assert_eq!(peaks, vec![0.2, 0.4, 0.6]);
+    }
+
+    #[test]
+    fn peaks_empty_guards() {
+        assert!(compute_peaks(&[], 1, 4).is_empty());
+        assert!(compute_peaks(&[1.0, 1.0], 0, 4).is_empty());
+        assert!(compute_peaks(&[1.0, 1.0], 1, 0).is_empty());
     }
 }
