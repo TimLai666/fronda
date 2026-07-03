@@ -8,8 +8,8 @@
 
 ## 3. CI 三平台建置
 
-- [ ] 3.1 依 design 決策「建置環境設定」：ci.yml 的 workspace 測試（ubuntu）與 shell check（macOS）job 加前置步驟安裝 LLVM 與 vcpkg ffmpeg 靜態並設定 VCPKG_ROOT/VCPKGRS_TRIPLET/LIBCLANG_PATH（含 vcpkg installed 樹的 actions/cache）。驗證：push 後觀察 CI 三個 Rust 相關 job 綠燈
+- [x] 3.1 依 design 決策「建置環境設定」：ci.yml 的 workspace 測試（ubuntu）與 shell check（macOS）job 加前置步驟安裝 LLVM 與 vcpkg ffmpeg 靜態並設定 VCPKG_ROOT/VCPKGRS_TRIPLET/LIBCLANG_PATH（含 vcpkg installed 樹的 actions/cache）。驗證：push 後觀察 CI 三個 Rust 相關 job 綠燈
 
 ## 4. 全面驗證
 
-- [ ] 4.1 cargo test --workspace、cargo clippy --workspace --tests -- -D warnings 全過；app smoke（啟動加 MCP initialize）；CI 全綠。驗證：指令輸出與 CI 結果審閱
+- [x] 4.1 cargo test --workspace、cargo clippy --workspace --tests -- -D warnings 全過；app smoke（啟動加 MCP initialize）；CI 全綠。驗證：指令輸出與 CI 結果審閱

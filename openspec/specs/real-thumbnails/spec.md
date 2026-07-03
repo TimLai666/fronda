@@ -8,7 +8,7 @@ TBD - created by archiving change 'media-import-recents-thumbnails'. Update Purp
 
 ### Requirement: Image media renders real thumbnails
 
-Media panel tiles for Image entries SHALL render the source image file (External absolute path, or Project relative path resolved against the current project root). Video entries SHALL render a first-frame thumbnail extracted through the system-ffmpeg adapter when an ffmpeg executable is available (FRONDA_FFMPEG env var, else PATH), cached under the Fronda config directory and keyed by source path plus mtime so source updates re-extract. When the file is missing, the path cannot be resolved, ffmpeg is unavailable, or extraction fails, the tile SHALL fall back to the type-colored placeholder. Audio tiles keep the placeholder. Linking a native decoding library into the app remains an explicit architecture decision this capability does not take.
+Media panel tiles for Image entries SHALL render the source image file (External absolute path, or Project relative path resolved against the current project root). Video entries SHALL render a first-frame thumbnail decoded in-process through the linked ffmpeg library (statically compiled into the binary on Windows), cached under the Fronda config directory and keyed by source path plus mtime so source updates re-decode; decoding uses the ffmpeg library, not an ffmpeg executable, so no ffmpeg command-line tool is required at runtime. When the file is missing, the path cannot be resolved, or decoding fails, the tile SHALL fall back to the type-colored placeholder. Audio tiles keep the placeholder.
 
 #### Scenario: Image tile shows the file
 
@@ -20,30 +20,20 @@ Media panel tiles for Image entries SHALL render the source image file (External
 - **WHEN** an Image entry's source file does not exist on disk
 - **THEN** its tile renders the type-colored placeholder
 
-#### Scenario: Video tile shows an extracted frame
+#### Scenario: Video tile shows a decoded frame without a system ffmpeg
 
-- **WHEN** ffmpeg is available and a Video entry references an existing video file
-- **THEN** its tile renders a frame extracted from that video, and a repeat visit serves the cached thumbnail without re-running ffmpeg
+- **WHEN** a Video entry references an existing supported video file and no ffmpeg executable is on PATH
+- **THEN** its tile renders a frame decoded by the statically linked ffmpeg, and a repeat visit serves the cached thumbnail without re-decoding
 
-#### Scenario: No ffmpeg falls back silently
+#### Scenario: Decode failure falls back silently
 
-- **WHEN** no ffmpeg executable can be started
-- **THEN** video tiles render the type-colored placeholder and no error surfaces
+- **WHEN** a video file is corrupt or its codec is unsupported
+- **THEN** the tile renders the type-colored placeholder and no error surfaces
 
 #### Scenario: Source update invalidates the cache
 
 - **WHEN** a video file's mtime changes after a thumbnail was cached
-- **THEN** the next request extracts a fresh thumbnail
-
-
-<!-- @trace
-source: video-thumbnails-ffmpeg-adapter
-updated: 2026-07-03
-code:
-  - crates/app_shell_gpui/src/video_thumbnails.rs
-  - crates/app_shell_gpui/src/lib.rs
-  - crates/app_shell_gpui/src/media_panel_view.rs
--->
+- **THEN** the next request re-decodes a fresh thumbnail
 
 ---
 ### Requirement: Project cards show the bundle thumbnail
