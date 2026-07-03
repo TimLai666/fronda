@@ -301,6 +301,64 @@ pub fn blit_scaled(
     }
 }
 
+/// Apply a per-channel RGB function (result clamped to `0..=255`), leaving alpha.
+fn map_rgb(img: &mut RgbaImage, f: impl Fn(f64) -> f64) {
+    for px in img.pixels.chunks_exact_mut(4) {
+        for c in px.iter_mut().take(3) {
+            *c = (f(*c as f64 / 255.0) * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+}
+
+/// Apply the compositor-supported colour adjustments (exposure, contrast,
+/// saturation, brightness) from a clip's resolved effect states, in that order.
+/// Each is a single-parameter effect; unrecognised or grading effects are left
+/// for a dedicated pass. PR #8 colour-adjustment path.
+pub fn apply_color_adjustments(img: &mut RgbaImage, effects: &[crate::effects::EffectState]) {
+    for e in effects {
+        if !e.enabled {
+            continue;
+        }
+        let amount = e.params.values().next().copied();
+        match e.effect_type.as_str() {
+            "color.exposure" => {
+                let ev = amount.unwrap_or(0.0);
+                if ev != 0.0 {
+                    let m = 2f64.powf(ev);
+                    map_rgb(img, |c| c * m);
+                }
+            }
+            "color.brightness" => {
+                let b = amount.unwrap_or(0.0);
+                if b != 0.0 {
+                    map_rgb(img, |c| c + b);
+                }
+            }
+            "color.contrast" => {
+                let c = amount.unwrap_or(1.0);
+                if c != 1.0 {
+                    map_rgb(img, |v| (v - 0.5) * c + 0.5);
+                }
+            }
+            "color.saturation" => {
+                let s = amount.unwrap_or(1.0);
+                if s != 1.0 {
+                    for px in img.pixels.chunks_exact_mut(4) {
+                        let (r, g, b) =
+                            (px[0] as f64 / 255.0, px[1] as f64 / 255.0, px[2] as f64 / 255.0);
+                        let luma = 0.299 * r + 0.587 * g + 0.114 * b;
+                        let adj = |c: f64| (luma + (c - luma) * s).clamp(0.0, 1.0);
+                        px[0] = (adj(r) * 255.0).round() as u8;
+                        px[1] = (adj(g) * 255.0).round() as u8;
+                        px[2] = (adj(b) * 255.0).round() as u8;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Make pixels within `tolerance` of the key colour transparent (green-screen
 /// keying), then suppress key-colour spill on the pixels that survive. Distances
 /// are Euclidean in normalized RGB; `tolerance` and `spill_suppression` are
@@ -477,6 +535,10 @@ pub fn compose_frame(
             };
             if let Some(key) = clip.chroma_key.as_ref() {
                 apply_chroma_key(&mut src, key);
+            }
+            let fx = crate::effects::analyze_clip_effects(clip, rel);
+            if fx.has_color_adjustments {
+                apply_color_adjustments(&mut src, &fx.effects);
             }
             let c = timeline_core::resolved_crop_at(clip, rel);
             let region = (
@@ -818,6 +880,49 @@ mod tests {
         apply_chroma_key(&mut img, &key);
         assert_eq!(px(&img, 0, 0)[3], 0, "green keyed out");
         assert_eq!(px(&img, 1, 0), [255, 0, 0, 255], "red untouched");
+    }
+
+    fn color_effect(kind: &str, value: f64) -> crate::effects::EffectState {
+        let mut params = std::collections::HashMap::new();
+        params.insert("amount".to_string(), value);
+        crate::effects::EffectState {
+            effect_type: kind.to_string(),
+            enabled: true,
+            params,
+            grade_curve: None,
+        }
+    }
+
+    #[test]
+    fn brightness_adjustment_adds() {
+        let mut img = RgbaImage::solid(1, 1, [0, 0, 0, 255]);
+        apply_color_adjustments(&mut img, &[color_effect("color.brightness", 0.5)]);
+        assert_eq!(px(&img, 0, 0), [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn exposure_adjustment_scales() {
+        let mut img = RgbaImage::solid(1, 1, [64, 64, 64, 255]); // ~0.25
+        apply_color_adjustments(&mut img, &[color_effect("color.exposure", 1.0)]); // ×2
+        assert_eq!(px(&img, 0, 0), [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn contrast_adjustment_pushes_from_mid() {
+        let mut img = RgbaImage::solid(1, 1, [64, 64, 64, 255]); // 0.25
+        apply_color_adjustments(&mut img, &[color_effect("color.contrast", 2.0)]);
+        // (0.25 - 0.5) * 2 + 0.5 = 0.0
+        assert_eq!(px(&img, 0, 0), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn saturation_zero_greys_out() {
+        let mut img = RgbaImage::solid(1, 1, [255, 0, 0, 255]);
+        apply_color_adjustments(&mut img, &[color_effect("color.saturation", 0.0)]);
+        let p = px(&img, 0, 0);
+        // Fully desaturated red → its luma in every channel (~76).
+        assert!(p[0] == p[1] && p[1] == p[2], "grey: {p:?}");
+        assert!((p[0] as i32 - 76).abs() <= 1, "luma of red, got {}", p[0]);
     }
 
     #[test]
