@@ -29,7 +29,14 @@ impl FcpxmlExport {
         let total = timeline_total_frames(timeline).max(1);
 
         // Assign one FCPXML lane per track: video tracks stack up (+), audio down (-).
+        // Higher positive lane = further above (on top), so `tracks[0]` (the top
+        // visual layer) must get the HIGHEST video lane, not lane 1.
         // Same-lane clips are the track's own non-overlapping clips.
+        let num_video = timeline
+            .tracks
+            .iter()
+            .filter(|t| t.r#type != ClipType::Audio)
+            .count() as i64;
         let mut video_seen = 0i64;
         let mut audio_seen = 0i64;
         let mut lane_of_track: Vec<i64> = Vec::with_capacity(timeline.tracks.len());
@@ -39,7 +46,7 @@ impl FcpxmlExport {
                 lane_of_track.push(-audio_seen);
             } else {
                 video_seen += 1;
-                lane_of_track.push(video_seen);
+                lane_of_track.push(num_video - video_seen + 1);
             }
         }
 
@@ -479,6 +486,22 @@ mod tests {
         assert!(xml.contains("<gap name=\"Gap\" offset=\"0s\" duration=\"120/30s\">"));
         assert!(xml.contains("ref=\"r3\" lane=\"1\" offset=\"0s\" name=\"shot.mp4\" duration=\"60/30s\""));
         assert!(xml.contains("ref=\"r4\" lane=\"-1\" offset=\"0s\" name=\"music.wav\" duration=\"120/30s\""));
+    }
+
+    #[test]
+    fn fcpxml_top_track_gets_the_highest_lane() {
+        // Two video tracks: tracks[0] is the top layer → highest lane (2),
+        // tracks[1] → lane 1. Higher positive lane renders above in FCP.
+        let tl = timeline(vec![
+            track(ClipType::Video, vec![clip("top", "a", ClipType::Video, 0, 30)]),
+            track(ClipType::Video, vec![clip("bot", "b", ClipType::Video, 0, 30)]),
+        ]);
+        let mut m = MediaManifest::default();
+        m.entries.push(entry("a", "top.mp4", ClipType::Video, 1.0, "/top.mp4"));
+        m.entries.push(entry("b", "bot.mp4", ClipType::Video, 1.0, "/bot.mp4"));
+        let xml = FcpxmlExport::export(&tl, &m);
+        assert!(xml.contains("lane=\"2\" offset=\"0s\" name=\"top.mp4\""), "tracks[0] → lane 2");
+        assert!(xml.contains("lane=\"1\" offset=\"0s\" name=\"bot.mp4\""), "tracks[1] → lane 1");
     }
 
     #[test]
