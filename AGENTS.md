@@ -122,6 +122,12 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 - `GenerationInput` implements `Default`.
 - `MediaManifest::missing_entry_ids(callback)` returns IDs of entries whose local files are missing. Entries with `cached_remote_url` set are never considered missing (upstream PR #135).
 - `ToolExecutor` has `media_offline_ids()`, `is_media_offline()`, and `is_media_unprocessable()` helpers that delegate to `missing_entry_ids()`.
+- `render_core::compositor` is the pure CPU frame compositor: `compose_frame` flattens a timeline frame into RGBA (layer order, per-clip transform/crop/opacity, rotation, all 16 blend modes via `blend_rgb`, keyframe-resolved via `timeline_core::resolved_*_at`); `render_sequence` drives per-frame compose for the exporter. Media decode is a `fetch_source` closure (platform adapter), so the module is fully unit-tested with synthetic sources.
+- `app_shell_gpui::video_export` renders a real timeline to mp4 via statically-linked ffmpeg: `Mp4Encoder` (RGBA→YUV420P, H.264 with MPEG-4 fallback), `decode_frame_rgba`, and `export_project` (resolves manifest sources, decodes each clip's mapped source frame, composites, encodes). Verified end-to-end against a committed H.264 fixture.
+- `agent_contract::agent_loop` runs the Anthropic tool-use conversation loop (`run_agent_turn`, `parse_response`) behind the sync `LlmTransport` trait — pure and mock-tested. `app_shell_gpui::anthropic_transport::AnthropicTransport` is the concrete blocking reqwest (rustls) implementation; the live call needs an API key and is not auto-tested.
+- `timeline_core::project_presets` holds the inspector/preview dropdown data (upstream #168): `ASPECT_PRESETS`, `FPS_PRESETS`, `QUALITY_PRESETS`, `ZOOM_PRESETS` with active-selection logic, mirroring Swift `PreviewContainerView` exactly.
+- XML export (`render_core/src/xml_export.rs`) emits keyframed motion params (scale/rotation/center/crop) and a keyframed Opacity filter when the clip has the matching animation track (XML-012).
+- Cross-platform: the `desktop-app` `fronda` bin compiles clean on Windows (gpui-ce + ffmpeg + reqwest), verified via `cargo check` (2026-07-03).
 
 ## Upstream PR management
 
