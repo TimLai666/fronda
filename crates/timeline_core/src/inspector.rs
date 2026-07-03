@@ -80,6 +80,28 @@ pub fn resolved_opacity_at(clip: &Clip, frame: i64) -> f64 {
     }
 }
 
+/// Linear fade-in/out multiplier (`0..=1`) at clip-relative `frame`, from the
+/// clip's `fade_in_frames` / `fade_out_frames`. Returns 1.0 where no fade
+/// applies. Multiply this into `resolved_opacity_at` for the effective opacity.
+pub fn fade_multiplier_at(clip: &Clip, frame: i64) -> f64 {
+    let dur = clip.duration_frames;
+    if dur <= 0 {
+        return 1.0;
+    }
+    let mut m = 1.0;
+    if clip.fade_in_frames > 0 && frame < clip.fade_in_frames {
+        m *= (frame as f64 + 0.5) / clip.fade_in_frames as f64;
+    }
+    if clip.fade_out_frames > 0 {
+        let out_start = dur - clip.fade_out_frames;
+        if frame >= out_start {
+            let into = frame - out_start;
+            m *= 1.0 - (into as f64 + 0.5) / clip.fade_out_frames as f64;
+        }
+    }
+    m.clamp(0.0, 1.0)
+}
+
 /// INS-002 (volume track): Resolve the effective volume at a clip-relative frame.
 ///
 /// When the volume keyframe track is non-empty the interpolated value
@@ -925,5 +947,29 @@ mod tests {
         let original = clip.clone();
         fit_text_clip_to_content(&mut clip, 100.0, 50.0, 0.0, 1080.0);
         assert_eq!(clip.transform.width, original.transform.width);
+    }
+
+    #[test]
+    fn fade_multiplier_ramps_in_and_out() {
+        let mut clip = make_clip();
+        clip.duration_frames = 100;
+        clip.fade_in_frames = 10;
+        clip.fade_out_frames = 20;
+        // Ramps up through the fade-in region.
+        assert!(fade_multiplier_at(&clip, 0) < fade_multiplier_at(&clip, 5));
+        assert!(fade_multiplier_at(&clip, 5) < fade_multiplier_at(&clip, 9));
+        // Full opacity in the middle.
+        assert!((fade_multiplier_at(&clip, 50) - 1.0).abs() < 1e-9);
+        // Ramps down through the fade-out region.
+        assert!(fade_multiplier_at(&clip, 85) > fade_multiplier_at(&clip, 95));
+        assert!(fade_multiplier_at(&clip, 99) < 0.1);
+    }
+
+    #[test]
+    fn fade_multiplier_is_unity_without_fades() {
+        let mut clip = make_clip();
+        clip.duration_frames = 50;
+        assert_eq!(fade_multiplier_at(&clip, 0), 1.0);
+        assert_eq!(fade_multiplier_at(&clip, 49), 1.0);
     }
 }

@@ -514,7 +514,8 @@ pub fn compose_frame(
         // this frame so animated clips render correctly.
         let rel = frame - clip.start_frame;
         let t = timeline_core::resolved_transform_at(clip, rel);
-        let opacity = timeline_core::resolved_opacity_at(clip, rel);
+        let opacity = timeline_core::resolved_opacity_at(clip, rel)
+            * timeline_core::fade_multiplier_at(clip, rel);
         let dw = t.width * cw;
         let dh = t.height * ch;
         let dx = t.center_x * cw - dw / 2.0;
