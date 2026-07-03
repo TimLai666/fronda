@@ -1,17 +1,13 @@
-//! Video thumbnail extraction via the system ffmpeg executable.
+//! Video thumbnail extraction via statically-linked ffmpeg.
 //!
-//! External-decoder adapter: no native decoding library is linked into
-//! the app. When ffmpeg cannot be started, callers fall back to the
-//! type-colored placeholder. Pure std — no gpui.
+//! ffmpeg is compiled into the binary, so decoding needs no ffmpeg
+//! executable at runtime. Any decode failure falls back to the
+//! type-colored placeholder. No gpui dependency.
 
+use ffmpeg_the_third as ffmpeg;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-
-/// ffmpeg executable: FRONDA_FFMPEG overrides, else PATH resolution.
-fn ffmpeg_program() -> String {
-    std::env::var("FRONDA_FFMPEG").unwrap_or_else(|_| "ffmpeg".into())
-}
 
 /// Default on-disk cache directory for extracted thumbnails.
 pub fn thumbnail_cache_dir() -> PathBuf {
@@ -104,29 +100,101 @@ pub fn prune_by_size(cache_dir: &Path, max_bytes: u64) -> u64 {
     freed
 }
 
-/// Extract a ~160px-wide frame at 0.5s into the cache. Cache hits skip
-/// ffmpeg entirely; every failure mode returns None.
+fn init_ffmpeg() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = ffmpeg::init();
+    });
+}
+
+/// Decode a frame near 0.5s, scale to 160px wide RGB, write PNG to `out`.
+fn decode_first_frame_png(source: &Path, out: &Path) -> Option<()> {
+    init_ffmpeg();
+    let mut ictx = ffmpeg::format::input(source).ok()?;
+    let stream = ictx.streams().best(ffmpeg::media::Type::Video)?;
+    let video_index = stream.index();
+    let decoder_ctx = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+    let mut decoder = decoder_ctx.decoder().video().ok()?;
+
+    let (w, h) = (decoder.width(), decoder.height());
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let tw = 160u32;
+    let th = ((160u64 * h as u64 / w as u64) as u32).max(2) & !1;
+
+    let mut scaler = ffmpeg::software::scaling::Context::get(
+        decoder.format(),
+        w,
+        h,
+        ffmpeg::format::Pixel::RGB24,
+        tw,
+        th,
+        ffmpeg::software::scaling::Flags::BILINEAR,
+    )
+    .ok()?;
+
+    // Best-effort seek to 0.5s (AV_TIME_BASE microseconds) to skip black leads.
+    let _ = ictx.seek(500_000, ..500_000);
+
+    let mut frame = ffmpeg::frame::Video::empty();
+    let mut rgb = ffmpeg::frame::Video::empty();
+    let mut got = false;
+
+    'outer: for res in ictx.packets() {
+        let Ok((packet_stream, packet)) = res else {
+            break;
+        };
+        if packet_stream.index() != video_index {
+            continue;
+        }
+        if decoder.send_packet(&packet).is_err() {
+            continue;
+        }
+        while decoder.receive_frame(&mut frame).is_ok() {
+            if scaler.run(&frame, &mut rgb).is_ok() {
+                got = true;
+                break 'outer;
+            }
+        }
+    }
+    if !got {
+        let _ = decoder.send_eof();
+        if decoder.receive_frame(&mut frame).is_ok() {
+            got = scaler.run(&frame, &mut rgb).is_ok();
+        }
+    }
+    if !got {
+        return None;
+    }
+
+    let data = rgb.data(0);
+    let stride = rgb.stride(0);
+    let mut img = image::RgbImage::new(tw, th);
+    for y in 0..th as usize {
+        let row = &data[y * stride..];
+        for x in 0..tw as usize {
+            let p = &row[x * 3..x * 3 + 3];
+            img.put_pixel(x as u32, y as u32, image::Rgb([p[0], p[1], p[2]]));
+        }
+    }
+    let tmp = out.with_extension("tmp.png");
+    img.save_with_format(&tmp, image::ImageFormat::Png).ok()?;
+    std::fs::rename(&tmp, out).ok()?;
+    Some(())
+}
+
+/// Extract a ~160px-wide frame into the cache. Cache hits skip decoding;
+/// every failure mode returns None (caller shows the placeholder).
 pub fn extract(source: &Path, cache_dir: &Path) -> Option<PathBuf> {
     let cache = cache_path_for(source, cache_dir)?;
     if cache.is_file() {
         return Some(cache);
     }
     std::fs::create_dir_all(cache_dir).ok()?;
-    let status = std::process::Command::new(ffmpeg_program())
-        .args(["-y", "-ss", "0.5", "-i"])
-        .arg(source)
-        .args(["-frames:v", "1", "-vf", "scale=160:-2"])
-        .arg(&cache)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .ok()?;
-    if status.success() && cache.is_file() {
-        evict_stale_versions(cache_dir, &cache_prefix_for(source), &cache);
-        Some(cache)
-    } else {
-        None
-    }
+    decode_first_frame_png(source, &cache)?;
+    evict_stale_versions(cache_dir, &cache_prefix_for(source), &cache);
+    Some(cache)
 }
 
 type ResultMap = Mutex<(HashMap<PathBuf, Option<PathBuf>>, HashSet<PathBuf>)>;
@@ -162,13 +230,6 @@ pub fn request_thumbnail(source: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
-
-    /// FRONDA_FFMPEG is process-global; serialize the tests that set it.
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
@@ -198,34 +259,27 @@ mod tests {
     }
 
     #[test]
-    fn missing_ffmpeg_returns_none() {
-        let dir = temp_dir("no-ffmpeg");
+    fn decode_failure_returns_none() {
+        let dir = temp_dir("bad-video");
         let source = dir.join("clip.mp4");
         std::fs::write(&source, b"not a real video").unwrap();
-
-        let _guard = env_lock().lock().unwrap();
-        std::env::set_var("FRONDA_FFMPEG", dir.join("no-such-ffmpeg.exe"));
-        let result = extract(&source, &dir.join("cache"));
-        std::env::remove_var("FRONDA_FFMPEG");
-        assert!(result.is_none());
+        assert!(extract(&source, &dir.join("cache")).is_none());
     }
 
     #[test]
-    fn cache_hit_skips_ffmpeg() {
+    fn cache_hit_short_circuits_decode() {
         let dir = temp_dir("hit");
         let source = dir.join("clip.mp4");
         std::fs::write(&source, b"video").unwrap();
         let cache_dir = dir.join("cache");
 
+        // Pre-place the cache file; extract must return it without decoding
+        // (the source is not a real video, so decoding would fail).
         let cache = cache_path_for(&source, &cache_dir).unwrap();
         std::fs::create_dir_all(&cache_dir).unwrap();
         std::fs::write(&cache, b"png").unwrap();
 
-        let _guard = env_lock().lock().unwrap();
-        std::env::set_var("FRONDA_FFMPEG", dir.join("no-such-ffmpeg.exe"));
-        let result = extract(&source, &cache_dir);
-        std::env::remove_var("FRONDA_FFMPEG");
-        assert_eq!(result, Some(cache), "cache hit must not need ffmpeg");
+        assert_eq!(extract(&source, &cache_dir), Some(cache));
     }
 
     /// Write a file then wait long enough for a distinct mtime, so
@@ -291,31 +345,21 @@ mod tests {
     }
 
     #[test]
-    fn extracts_real_frame_when_ffmpeg_available() {
-        if Command::new("ffmpeg").arg("-version").output().is_err() {
-            eprintln!("SKIP: ffmpeg not on PATH, real extraction not tested");
-            return;
-        }
-        let dir = temp_dir("real");
-        let source = dir.join("test.mp4");
-        let status = Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "testsrc=duration=1:size=320x240:rate=30",
-            ])
-            .arg(&source)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap();
-        assert!(status.success(), "test video generation failed");
+    fn decodes_fixture_to_png() {
+        // Statically-linked ffmpeg decodes a committed H.264 fixture — no
+        // system ffmpeg needed, so this runs everywhere including CI.
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
+        assert!(fixture.is_file(), "fixture missing: {}", fixture.display());
 
-        let thumb = extract(&source, &dir.join("cache")).expect("extraction should succeed");
+        let dir = temp_dir("decode");
+        let thumb = extract(&fixture, &dir).expect("fixture should decode");
         let bytes = std::fs::read(&thumb).unwrap();
         assert!(!bytes.is_empty());
         assert_eq!(&bytes[1..4], b"PNG", "output is a PNG");
+
+        // A 160-wide thumbnail from a 160x120 source (4:3 → 120 tall).
+        let decoded = image::open(&thumb).unwrap();
+        assert_eq!(decoded.width(), 160);
+        assert_eq!(decoded.height(), 120);
     }
 }

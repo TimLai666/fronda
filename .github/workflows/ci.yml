@@ -29,11 +29,19 @@ jobs:
   rust-tests:
     name: Build and test Fronda workspace
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Install ffmpeg dev libraries and libclang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libavcodec-dev libavformat-dev libavutil-dev \
+            libswscale-dev libswresample-dev \
+            clang libclang-dev pkg-config nasm
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -55,11 +63,14 @@ jobs:
   gpui-shell-check:
     name: Check Fronda gpui-ce app shell
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Install ffmpeg (thumbnail decoder)
+        run: brew install ffmpeg pkg-config nasm
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
