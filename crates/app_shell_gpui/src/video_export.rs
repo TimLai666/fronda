@@ -41,6 +41,19 @@ pub fn encoder_available() -> bool {
     pick_encoder().is_some()
 }
 
+/// Resolve the encoder for a requested codec. H.265 prefers `libx265` and falls
+/// back to H.264 when it is absent — many Windows builds only expose the Media
+/// Foundation HEVC encoder, which rejects our input, so producing a valid H.264
+/// file beats a broken HEVC one.
+fn find_video_encoder(codec: VideoCodec) -> Option<ffmpeg::codec::Codec> {
+    match codec {
+        VideoCodec::H265 => ffmpeg::encoder::find_by_name("libx265")
+            .or_else(|| ffmpeg::encoder::find(ffmpeg::codec::Id::H264)),
+        other => ffmpeg::encoder::find(other.codec_id()),
+    }
+    .or_else(pick_encoder)
+}
+
 fn err<T>(context: &str, e: ffmpeg::Error) -> Result<T, String> {
     Err(format!("{context}: {e}"))
 }
@@ -156,9 +169,8 @@ impl Mp4Encoder {
             return Err("fps must be positive".into());
         }
         let pix = video_codec.pixel_format();
-        let codec = ffmpeg::encoder::find(video_codec.codec_id())
-            .or_else(pick_encoder)
-            .ok_or("no usable video encoder in linked ffmpeg")?;
+        let codec =
+            find_video_encoder(video_codec).ok_or("no usable video encoder in linked ffmpeg")?;
 
         let mut octx = match ffmpeg::format::output(&output) {
             Ok(o) => o,
