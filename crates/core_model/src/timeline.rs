@@ -309,6 +309,19 @@ impl Transform {
             self.center_y - self.height / 2.0,
         )
     }
+
+    /// Build from a top-left corner and size; unrotated, unflipped.
+    pub fn from_top_left(x: f64, y: f64, w: f64, h: f64) -> Transform {
+        Transform {
+            center_x: x + w / 2.0,
+            center_y: y + h / 2.0,
+            width: w,
+            height: h,
+            rotation: 0.0,
+            flip_horizontal: false,
+            flip_vertical: false,
+        }
+    }
 }
 
 impl Default for Transform {
@@ -720,6 +733,14 @@ impl Default for Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transform_from_top_left_round_trips() {
+        let t = Transform::from_top_left(0.0, 0.0, 0.5, 0.5);
+        assert_eq!(t.center_x, 0.25);
+        assert_eq!(t.center_y, 0.25);
+        assert_eq!(t.top_left(), (0.0, 0.0));
+    }
 
     #[test]
     fn clip_type_from_extension_video() {
