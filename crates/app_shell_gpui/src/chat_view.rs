@@ -129,12 +129,18 @@ impl ChatView {
                         crate::anthropic_transport::AnthropicConfig::new(api_key),
                     )?;
                     let tools = agent_contract::all_tools();
+                    // Include any installed skills in the system prompt so the
+                    // agent knows they exist (read via the read_skill tool).
+                    let system = {
+                        let guard = executor.lock().unwrap();
+                        agent_contract::system_instruction_with_skills(guard.skills())
+                    };
                     agent_contract::run_agent_turn(
                         &mut transport,
                         |name, args| executor.lock().unwrap().execute(name, args),
                         &model_id,
                         8192,
-                        agent_contract::SYSTEM_INSTRUCTION,
+                        &system,
                         &tools,
                         &user_text,
                         16,
