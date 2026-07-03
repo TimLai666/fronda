@@ -103,14 +103,9 @@ jobs:
       - name: Show Swift toolchain
         run: swift --version
 
-      - name: Cache SwiftPM build artifacts
-        uses: actions/cache@v4
-        with:
-          path: .build
-          key: spm-${{ runner.os }}-${{ steps.xcode.outputs.version }}-${{ hashFiles('Package.resolved') }}
-          restore-keys: |
-            spm-${{ runner.os }}-${{ steps.xcode.outputs.version }}-
-
+      # No SwiftPM build cache: restored .build artifacts from a different
+      # Xcode/runtime leave the test bundle dlopen-ing a stale Swift runtime
+      # dylib. A clean build each run is fast enough and deterministic.
       - name: Build
         run: swift build
 
