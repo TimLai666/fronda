@@ -288,13 +288,17 @@ pub fn blit_scaled(
                 canvas.pixels[ci + 1] as f64 / 255.0,
                 canvas.pixels[ci + 2] as f64 / 255.0,
             ];
+            let da = canvas.pixels[ci + 3] as f64 / 255.0;
             let blended = blend_rgb(blend, s_rgb, d_rgb);
             for k in 0..3 {
-                let out = blended[k] * a + d_rgb[k] * (1.0 - a);
+                // The blend only takes effect in proportion to the backdrop's
+                // alpha (W3C compositing); over transparent areas the source
+                // shows unblended.
+                let effective = (1.0 - da) * s_rgb[k] + da * blended[k];
+                let out = effective * a + d_rgb[k] * (1.0 - a);
                 canvas.pixels[ci + k] = (out * 255.0).round().clamp(0.0, 255.0) as u8;
             }
             // Straight-alpha over: out_a = src_a + dst_a*(1-src_a).
-            let da = canvas.pixels[ci + 3] as f64 / 255.0;
             let out_a = a + da * (1.0 - a);
             canvas.pixels[ci + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
         }
@@ -956,6 +960,20 @@ mod tests {
         });
         // Multiply gray over white ≈ gray.
         assert_eq!(px(&out, 0, 0), [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn blend_mode_over_transparent_shows_source() {
+        // A Multiply clip alone on a transparent canvas must show the clip, not
+        // multiply-against-black (which would be all black).
+        let mut top = clip("only", "m1", 0, 30);
+        top.blend_mode = BlendMode::Multiply;
+        top.transform = Transform::from_top_left(0.0, 0.0, 1.0, 1.0);
+        let timeline = tl(vec![top]);
+        let out = compose_frame(&timeline, &MediaManifest::default(), 0, 2, 2, |_| {
+            Some(RgbaImage::solid(2, 2, [200, 100, 50, 255]))
+        });
+        assert_eq!(px(&out, 0, 0), [200, 100, 50, 255], "source shows over transparent");
     }
 
     fn solid_shape(kind: core_model::shape_style::ShapeKind, rgba: [f64; 4]) -> ShapeStyle {
