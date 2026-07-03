@@ -321,6 +321,9 @@ pub fn export_project(
         .filter_map(|e| source_path(e, project_root).map(|p| (e.id.as_str(), p)))
         .collect();
 
+    // One decoder per source, opened on first use and reused for every frame —
+    // avoids reopening the file per frame.
+    let mut decoders: HashMap<String, Option<SourceDecoder>> = HashMap::new();
     export_timeline(
         timeline,
         manifest,
@@ -331,9 +334,106 @@ pub fn export_project(
         total,
         |clip, frame| {
             let path = paths.get(clip.media_ref.as_str())?;
-            decode_frame_rgba(path, source_time_seconds(clip, frame, fps))
+            let decoder = decoders
+                .entry(clip.media_ref.clone())
+                .or_insert_with(|| SourceDecoder::open(path));
+            decoder
+                .as_mut()?
+                .frame_at_seconds(source_time_seconds(clip, frame, fps))
         },
     )
+}
+
+/// A video source opened once and reused across many frame requests. Avoids the
+/// per-frame file-open + stream-probe cost of [`decode_frame_rgba`], which makes
+/// a full-timeline export dramatically faster.
+pub struct SourceDecoder {
+    ictx: ffmpeg::format::context::Input,
+    decoder: ffmpeg::decoder::Video,
+    scaler: ffmpeg::software::scaling::Context,
+    video_index: usize,
+    width: u32,
+    height: u32,
+}
+
+impl SourceDecoder {
+    /// Open `source`'s best video stream. `None` when it has no decodable video.
+    pub fn open(source: &Path) -> Option<Self> {
+        init_ffmpeg();
+        let ictx = ffmpeg::format::input(source).ok()?;
+        let stream = ictx.streams().best(ffmpeg::media::Type::Video)?;
+        let video_index = stream.index();
+        let decoder_ctx =
+            ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+        let decoder = decoder_ctx.decoder().video().ok()?;
+        let (width, height) = (decoder.width(), decoder.height());
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let scaler = ffmpeg::software::scaling::Context::get(
+            decoder.format(),
+            width,
+            height,
+            Pixel::RGBA,
+            width,
+            height,
+            ffmpeg::software::scaling::Flags::BILINEAR,
+        )
+        .ok()?;
+        Some(Self {
+            ictx,
+            decoder,
+            scaler,
+            video_index,
+            width,
+            height,
+        })
+    }
+
+    /// Decode the frame nearest `time_seconds` as native-resolution RGBA, reusing
+    /// the already-open context. `None` on decode failure.
+    pub fn frame_at_seconds(&mut self, time_seconds: f64) -> Option<RgbaImage> {
+        if time_seconds >= 0.0 {
+            let ts = (time_seconds * 1_000_000.0) as i64;
+            let _ = self.ictx.seek(ts, ..=ts);
+        }
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut rgba = ffmpeg::frame::Video::empty();
+        let mut got = false;
+        for res in self.ictx.packets() {
+            let Ok((packet_stream, packet)) = res else {
+                break;
+            };
+            if packet_stream.index() != self.video_index {
+                continue;
+            }
+            if self.decoder.send_packet(&packet).is_err() {
+                continue;
+            }
+            if self.decoder.receive_frame(&mut frame).is_ok()
+                && self.scaler.run(&frame, &mut rgba).is_ok()
+            {
+                got = true;
+                break;
+            }
+        }
+        if !got {
+            return None;
+        }
+        let (w, h) = (self.width as usize, self.height as usize);
+        let stride = rgba.stride(0);
+        let data = rgba.data(0);
+        let row_bytes = w * 4;
+        let mut pixels = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            pixels.extend_from_slice(&data[y * stride..y * stride + row_bytes]);
+        }
+        Some(RgbaImage {
+            width: w,
+            height: h,
+            pixels,
+        })
+    }
 }
 
 /// Decode the frame nearest `time_seconds` from `source` as RGBA at the
@@ -586,6 +686,19 @@ mod tests {
         let entry = external_entry("m", Path::new("/media/clip.mp4"));
         let p = source_path(&entry, Path::new("/project")).unwrap();
         assert_eq!(p, PathBuf::from("/media/clip.mp4"));
+    }
+
+    #[test]
+    fn source_decoder_reads_frames_from_one_open() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
+        let mut dec = SourceDecoder::open(&fixture).expect("fixture opens");
+        // Two frames from a single open decoder — no reopen between them.
+        let a = dec.frame_at_seconds(0.0).expect("frame 0");
+        let b = dec.frame_at_seconds(0.1).expect("frame near 0.1s");
+        assert_eq!((a.width, a.height), (160, 120));
+        assert_eq!((b.width, b.height), (160, 120));
+        assert_eq!(a.pixels.len(), 160 * 120 * 4);
     }
 
     #[test]
