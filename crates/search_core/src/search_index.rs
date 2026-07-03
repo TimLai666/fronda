@@ -24,6 +24,26 @@ impl CacheIdentity {
             file_size: 0,
         }
     }
+
+    /// A stable content key: a deterministic hex digest of path + modification
+    /// time + file size, for naming and looking up cache entries. Stable across
+    /// runs. Dependency-free FNV-1a — the cache is per-app, so cross-app hash
+    /// compatibility isn't required (Swift uses SHA-256 for the same role).
+    pub fn content_key(&self) -> String {
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut feed = |bytes: &[u8]| {
+            for &b in bytes {
+                hash ^= b as u64;
+                hash = hash.wrapping_mul(PRIME);
+            }
+        };
+        feed(self.path.as_bytes());
+        feed(&[0]);
+        feed(&self.modification_time.to_le_bytes());
+        feed(&self.file_size.to_le_bytes());
+        format!("{hash:016x}")
+    }
 }
 
 /// Single embedding row at a frame offset.
@@ -444,6 +464,33 @@ mod tests {
             file_size: 42_000,
         };
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn content_key_is_stable_and_field_sensitive() {
+        let base = CacheIdentity {
+            path: "/movies/clip.mov".into(),
+            modification_time: 1_700_000_000,
+            file_size: 42_000,
+        };
+        // Deterministic + fixed 16-hex-digit format.
+        let k = base.content_key();
+        assert_eq!(k, base.clone().content_key());
+        assert_eq!(k.len(), 16);
+        assert!(k.chars().all(|c| c.is_ascii_hexdigit()));
+
+        // Sensitive to each field.
+        let mut path_changed = base.clone();
+        path_changed.path = "/movies/other.mov".into();
+        assert_ne!(path_changed.content_key(), k);
+
+        let mut mtime_changed = base.clone();
+        mtime_changed.modification_time += 1;
+        assert_ne!(mtime_changed.content_key(), k);
+
+        let mut size_changed = base.clone();
+        size_changed.file_size += 1;
+        assert_ne!(size_changed.content_key(), k);
     }
 
     #[test]
