@@ -10,7 +10,7 @@
 //! Rotation, blend modes, effects, and bilinear sampling are follow-ups.
 
 use core_model::shape_style::{Rgba, ShapeKind, ShapeStyle};
-use core_model::{BlendMode, Clip, ClipType, MediaManifest, Timeline};
+use core_model::{BlendMode, ChromaKey, Clip, ClipType, MediaManifest, Timeline};
 
 /// An RGBA8 image (row-major, 4 bytes/pixel: R, G, B, A).
 #[derive(Debug, Clone, PartialEq)]
@@ -301,6 +301,58 @@ pub fn blit_scaled(
     }
 }
 
+/// Make pixels within `tolerance` of the key colour transparent (green-screen
+/// keying), then suppress key-colour spill on the pixels that survive. Distances
+/// are Euclidean in normalized RGB; `tolerance` and `spill_suppression` are
+/// `0..=1`. No-op when the key is disabled. PR #8 chroma-key path.
+pub fn apply_chroma_key(img: &mut RgbaImage, key: &ChromaKey) {
+    if !key.enabled {
+        return;
+    }
+    let (kr, kg, kb) = (key.key_r, key.key_g, key.key_b);
+    // Distance is in 0..√3; scale the 0..1 tolerance to that range.
+    let cutoff = key.tolerance.clamp(0.0, 1.0) * 3.0f64.sqrt();
+    let spill = key.spill_suppression.clamp(0.0, 1.0);
+    for px in img.pixels.chunks_exact_mut(4) {
+        let r = px[0] as f64 / 255.0;
+        let g = px[1] as f64 / 255.0;
+        let b = px[2] as f64 / 255.0;
+        let d = ((r - kr).powi(2) + (g - kg).powi(2) + (b - kb).powi(2)).sqrt();
+        if d <= cutoff {
+            px[3] = 0;
+        } else if spill > 0.0 {
+            // Pull the key colour's dominant channel toward the other two.
+            let avg = ((r + g + b) - key_channel(kr, kg, kb, r, g, b)) / 2.0;
+            let (ci, cv) = dominant_channel(kr, kg, kb);
+            if cv > 0.5 {
+                let cur = px[ci] as f64 / 255.0;
+                let reduced = cur + (avg - cur) * spill * (1.0 - (d / cutoff).min(1.0)).max(0.0);
+                px[ci] = (reduced * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
+/// Value of the channel that is the key's dominant one, read from a pixel.
+fn key_channel(kr: f64, kg: f64, kb: f64, r: f64, g: f64, b: f64) -> f64 {
+    match dominant_channel(kr, kg, kb).0 {
+        0 => r,
+        1 => g,
+        _ => b,
+    }
+}
+
+/// Index (0=r,1=g,2=b) and value of the key's largest channel.
+fn dominant_channel(kr: f64, kg: f64, kb: f64) -> (usize, f64) {
+    if kg >= kr && kg >= kb {
+        (1, kg)
+    } else if kr >= kb {
+        (0, kr)
+    } else {
+        (2, kb)
+    }
+}
+
 fn rgba_to_u8(c: &Rgba) -> [u8; 4] {
     [
         (c.r * 255.0).round().clamp(0.0, 255.0) as u8,
@@ -420,9 +472,12 @@ pub fn compose_frame(
             let sh = (dh.round() as usize).clamp(1, 4096);
             (rasterize_shape(shape, sw, sh), (0.0, 0.0, 1.0, 1.0))
         } else {
-            let Some(src) = fetch_source(clip) else {
+            let Some(mut src) = fetch_source(clip) else {
                 continue;
             };
+            if let Some(key) = clip.chroma_key.as_ref() {
+                apply_chroma_key(&mut src, key);
+            }
             let c = timeline_core::resolved_crop_at(clip, rel);
             let region = (
                 c.left,
@@ -745,6 +800,39 @@ mod tests {
         let img = rasterize_shape(&solid_shape(ShapeKind::Oval, [0.0, 0.0, 1.0, 1.0]), 8, 8);
         assert_eq!(px(&img, 4, 4), [0, 0, 255, 255], "center filled");
         assert_eq!(px(&img, 0, 0), [0, 0, 0, 0], "corner transparent");
+    }
+
+    #[test]
+    fn chroma_key_makes_key_colour_transparent() {
+        let mut img = RgbaImage::new(2, 1);
+        img.pixels[0..4].copy_from_slice(&[0, 255, 0, 255]); // green (keyed)
+        img.pixels[4..8].copy_from_slice(&[255, 0, 0, 255]); // red (kept)
+        let key = core_model::ChromaKey {
+            enabled: true,
+            key_r: 0.0,
+            key_g: 1.0,
+            key_b: 0.0,
+            tolerance: 0.2,
+            spill_suppression: 0.0,
+        };
+        apply_chroma_key(&mut img, &key);
+        assert_eq!(px(&img, 0, 0)[3], 0, "green keyed out");
+        assert_eq!(px(&img, 1, 0), [255, 0, 0, 255], "red untouched");
+    }
+
+    #[test]
+    fn chroma_key_disabled_is_noop() {
+        let mut img = RgbaImage::solid(1, 1, [0, 255, 0, 255]);
+        let key = core_model::ChromaKey {
+            enabled: false,
+            key_r: 0.0,
+            key_g: 1.0,
+            key_b: 0.0,
+            tolerance: 0.5,
+            spill_suppression: 0.0,
+        };
+        apply_chroma_key(&mut img, &key);
+        assert_eq!(px(&img, 0, 0), [0, 255, 0, 255]);
     }
 
     #[test]
