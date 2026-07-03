@@ -14,16 +14,31 @@ use project_io::ProjectBundle;
 pub struct EditorStateHub {
     executor: Arc<Mutex<ToolExecutor>>,
     project_root: Mutex<Option<PathBuf>>,
+    /// Recent-project registry file (test constructors inject a temp path).
+    registry_path: PathBuf,
 }
 
 impl EditorStateHub {
     pub fn new() -> Self {
+        Self::with_registry_path(crate::project_registry_store::default_registry_path())
+    }
+
+    fn with_registry_path(registry_path: PathBuf) -> Self {
         Self {
             executor: Arc::new(Mutex::new(ToolExecutor::new(
                 Timeline::default(),
                 MediaManifest::default(),
             ))),
             project_root: Mutex::new(None),
+            registry_path,
+        }
+    }
+
+    fn record_in_registry(&self, project_path: &Path) {
+        if let Err(reason) =
+            crate::project_registry_store::record_opened_at(&self.registry_path, project_path)
+        {
+            eprintln!("Failed to record recent project: {reason}");
         }
     }
 
@@ -61,6 +76,7 @@ impl EditorStateHub {
         if let Ok(mut exec) = self.executor.lock() {
             exec.load_project(bundle.timeline, bundle.manifest.unwrap_or_default());
         }
+        self.record_in_registry(&bundle.root);
         if let Ok(mut root) = self.project_root.lock() {
             *root = Some(bundle.root);
         }
@@ -96,6 +112,7 @@ impl EditorStateHub {
     pub fn save_as(&self, root: &Path) -> Result<(), String> {
         let (timeline, manifest) = self.snapshot()?;
         project_io::save_project_state(root, &timeline, &manifest).map_err(|e| e.to_string())?;
+        self.record_in_registry(root);
         if let Ok(mut current) = self.project_root.lock() {
             *current = Some(root.to_path_buf());
         }
@@ -143,6 +160,28 @@ mod tests {
     fn executor_returns_same_shared_instance() {
         let hub = EditorStateHub::new();
         assert!(Arc::ptr_eq(&hub.executor(), &hub.executor()));
+    }
+
+    fn hub_with_temp_registry(name: &str) -> EditorStateHub {
+        let dir = std::env::temp_dir().join("fronda-hub-registry-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(name);
+        let _ = std::fs::remove_file(&path);
+        EditorStateHub::with_registry_path(path)
+    }
+
+    #[test]
+    fn load_bundle_records_recent_project() {
+        let dir = temp_bundle_dir("recents.palmier");
+        std::fs::write(dir.join(core_model::TIMELINE_FILENAME), r#"{"fps":30}"#).unwrap();
+
+        let hub = hub_with_temp_registry("recents.json");
+        hub.load_bundle(&dir).unwrap();
+
+        let registry = crate::project_registry_store::load_from(&hub.registry_path);
+        let entries = registry.sorted_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].url, dir);
     }
 
     fn temp_bundle_dir(name: &str) -> std::path::PathBuf {

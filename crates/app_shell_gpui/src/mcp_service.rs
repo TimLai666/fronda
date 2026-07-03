@@ -13,20 +13,9 @@ use app_contract::settings_storage::{MCP_DEFAULT_ENABLED, MCP_DEFAULT_PORT, MCP_
 use core_model::{MediaManifest, Timeline};
 use mcp_server::{McpConfig, McpServer, McpServerHandle};
 
-/// Platform config directory for Fronda preferences.
+/// Platform config file for Fronda preferences.
 fn default_prefs_path() -> PathBuf {
-    let base = if cfg!(target_os = "windows") {
-        std::env::var_os("APPDATA").map(PathBuf::from)
-    } else if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-    };
-    base.unwrap_or_else(|| PathBuf::from("."))
-        .join("Fronda")
-        .join("preferences.json")
+    crate::project_registry_store::fronda_config_dir().join("preferences.json")
 }
 
 fn read_enabled_preference(path: &Path) -> bool {

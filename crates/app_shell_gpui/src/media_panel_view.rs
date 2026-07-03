@@ -66,7 +66,9 @@ impl MediaPanelView {
         let Ok(exec) = executor.lock() else {
             return false;
         };
-        self.state.sync_from_manifest(exec.media_manifest());
+        let root = hub.project_root();
+        self.state
+            .sync_from_manifest(exec.media_manifest(), root.as_deref());
         true
     }
 
@@ -201,6 +203,37 @@ fn demo_tile(id: &str, icon: &str, name: &str, hue: f32) -> impl IntoElement {
         )
 }
 
+/// Media tile rendering the actual image file (80x60, cover).
+fn image_tile(id: &str, name: &str, path: std::path::PathBuf) -> impl IntoElement {
+    div()
+        .id(format!("tile-{id}"))
+        .flex()
+        .flex_col()
+        .w(px(80.0))
+        .cursor_pointer()
+        .child(
+            div()
+                .w(px(80.0))
+                .h(px(60.0))
+                .rounded(px(Radius::XS_SM))
+                .overflow_hidden()
+                .child(
+                    gpui::img(path)
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Cover),
+                ),
+        )
+        .child(
+            div()
+                .w(px(80.0))
+                .pt(px(Spacing::XXS))
+                .text_color(Text::SECONDARY)
+                .text_size(px(FontSize::XS))
+                .overflow_hidden()
+                .child(name.to_string()),
+        )
+}
+
 /// Library grid driven by the shared manifest entries.
 fn media_grid(items: &[crate::media_panel_model::MediaItem]) -> impl IntoElement {
     let mut grid = div()
@@ -210,12 +243,19 @@ fn media_grid(items: &[crate::media_panel_model::MediaItem]) -> impl IntoElement
         .gap(px(Spacing::SM_MD))
         .p(px(Spacing::SM_MD));
     for item in items {
-        grid = grid.child(demo_tile(
-            &format!("tile-{}", item.id),
-            crate::media_panel_model::tile_icon(&item.kind),
-            &item.name,
-            crate::media_panel_model::tile_hue(&item.id),
-        ));
+        let image = (item.kind == core_model::ClipType::Image)
+            .then(|| item.source_path.clone())
+            .flatten();
+        if let Some(path) = image {
+            grid = grid.child(image_tile(&item.id, &item.name, path));
+        } else {
+            grid = grid.child(demo_tile(
+                &format!("tile-{}", item.id),
+                crate::media_panel_model::tile_icon(&item.kind),
+                &item.name,
+                crate::media_panel_model::tile_hue(&item.id),
+            ));
+        }
     }
     div()
         .id("media-grid-scroll")

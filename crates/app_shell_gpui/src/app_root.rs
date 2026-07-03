@@ -45,17 +45,6 @@ struct TimelineResizeDragSession {
     start_height: f32,
 }
 
-/// A recently opened project entry (Swift: ProjectRegistry.Entry).
-#[derive(Debug, Clone)]
-pub struct RecentProject {
-    pub id: &'static str,
-    pub name: &'static str,
-    /// Hue (0.0..=1.0) for the placeholder thumbnail color.
-    pub hue: f32,
-    /// Relative time string, e.g. "2h ago".
-    pub last_modified: &'static str,
-}
-
 /// Which screen the app is showing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActiveScreen {
@@ -73,7 +62,6 @@ pub struct AppRoot {
     samples_expanded: bool,
     welcome_dismissed: bool,
     /// Recent projects list (Swift: ProjectRegistry.sortedEntries).
-    recent_projects: Vec<RecentProject>,
     /// True when a user is signed in (controls sidebar Sign in button).
     is_signed_in: bool,
     /// Timeline panel height in pixels (draggable).
@@ -101,26 +89,6 @@ impl AppRoot {
             home: HomeView::new(handle),
             samples_expanded: true,
             welcome_dismissed: false,
-            recent_projects: vec![
-                RecentProject {
-                    id: "proj-1",
-                    name: "My Film",
-                    hue: 0.60,
-                    last_modified: "2h ago",
-                },
-                RecentProject {
-                    id: "proj-2",
-                    name: "Product Ad",
-                    hue: 0.10,
-                    last_modified: "Yesterday",
-                },
-                RecentProject {
-                    id: "proj-3",
-                    name: "Travel Vlog",
-                    hue: 0.35,
-                    last_modified: "3 days ago",
-                },
-            ],
             is_signed_in: false,
             titlebar_view: None,
             chat_view: None,
@@ -262,7 +230,21 @@ impl AppRoot {
                 })
                 .detach();
             }
-            menu::MenuAction::ImportMedia | menu::MenuAction::Export => {}
+            menu::MenuAction::ImportMedia => {
+                let rx = cx.prompt_for_paths(PathPromptOptions {
+                    files: true,
+                    directories: false,
+                    multiple: true,
+                    prompt: Some("Import".into()),
+                });
+                cx.spawn(async move |_, _| {
+                    if let Ok(Ok(Some(paths))) = rx.await {
+                        crate::media_import::import_files_into_shared_state(&paths);
+                    }
+                })
+                .detach();
+            }
+            menu::MenuAction::Export => {}
             menu::MenuAction::Undo => {
                 crate::timeline_view::TimelineView::run_history_tool("undo");
                 cx.notify();
@@ -412,7 +394,31 @@ impl AppRoot {
     fn render_home(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let samples_expanded = self.samples_expanded;
         let is_signed_in = self.is_signed_in;
-        let recent_projects = self.recent_projects.clone();
+        // Registry-driven recent projects (Home renders rarely; direct read).
+        let registry = crate::project_registry_store::load_from(
+            &crate::project_registry_store::default_registry_path(),
+        );
+        let now = chrono::Utc::now();
+        let recent_projects: Vec<(
+            String,
+            String,
+            String,
+            Option<std::path::PathBuf>,
+            std::path::PathBuf,
+        )> = registry
+            .sorted_entries()
+            .iter()
+            .map(|entry| {
+                let thumb = entry.url.join(core_model::THUMBNAIL_FILENAME);
+                (
+                    entry.id.clone(),
+                    entry.name(),
+                    crate::home_model::relative_time_label(entry.last_opened_date, now),
+                    thumb.is_file().then_some(thumb),
+                    entry.url.clone(),
+                )
+            })
+            .collect();
 
         // Sample project card data (Swift: SampleProjectsStrip items)
         let sample_cards: &[(&str, f32)] = &[
@@ -420,63 +426,6 @@ impl AppRoot {
             ("Commercial", 0.75),
             ("Documentary", 0.43),
         ];
-
-        // Project card helper: thumbnail top + name strip bottom
-        let project_card =
-            |id: &'static str, name: &'static str, hue: f32, cx: &mut Context<Self>| {
-                div()
-                    .id(id)
-                    .flex()
-                    .flex_col()
-                    .w(px(HomeLayout::CARD_WIDTH as f32))
-                    .h(px(HomeLayout::CARD_HEIGHT as f32))
-                    .bg(Background::RAISED)
-                    .rounded(px(Radius::MD_LG))
-                    .border_1()
-                    .border_color(BorderColors::SUBTLE)
-                    .overflow_hidden()
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_editor(cx);
-                    }))
-                    .child(
-                        div()
-                            .flex_1()
-                            .bg(gpui::Hsla {
-                                h: hue,
-                                s: 0.35,
-                                l: 0.14,
-                                a: 1.0,
-                            })
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(gpui::Hsla {
-                                h: hue,
-                                s: 0.55,
-                                l: 0.55,
-                                a: 1.0,
-                            })
-                            .text_size(px(FontSize::DISPLAY))
-                            .child("▶"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .w_full()
-                            .h(px(24.0))
-                            .px(px(Spacing::SM_MD))
-                            .bg(Background::RAISED)
-                            .child(
-                                div()
-                                    .text_size(px(FontSize::SM))
-                                    .text_color(Text::PRIMARY)
-                                    .child(name),
-                            ),
-                    )
-            };
 
         let welcome_dismissed = self.welcome_dismissed;
 
@@ -776,11 +725,83 @@ impl AppRoot {
                                     ),
                             )
                             // Recent projects (from registry)
-                            .children(
-                                recent_projects
-                                    .iter()
-                                    .map(|p| project_card(p.id, p.name, p.hue, cx)),
-                            ),
+                            .children(recent_projects.into_iter().map(
+                                |(id, name, time_label, thumb, path)| {
+                                    let hue = crate::media_panel_model::tile_hue(&name);
+                                    let thumb_area = if let Some(thumb) = thumb {
+                                        div()
+                                            .flex_1()
+                                            .overflow_hidden()
+                                            .child(
+                                                gpui::img(thumb)
+                                                    .size_full()
+                                                    .object_fit(gpui::ObjectFit::Cover),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        div()
+                                            .flex_1()
+                                            .bg(gpui::Hsla {
+                                                h: hue,
+                                                s: 0.35,
+                                                l: 0.14,
+                                                a: 1.0,
+                                            })
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_color(gpui::Hsla {
+                                                h: hue,
+                                                s: 0.55,
+                                                l: 0.55,
+                                                a: 1.0,
+                                            })
+                                            .text_size(px(FontSize::DISPLAY))
+                                            .child("\u{25b6}")
+                                            .into_any_element()
+                                    };
+                                    div()
+                                        .id(format!("recent-{id}"))
+                                        .flex()
+                                        .flex_col()
+                                        .w(px(HomeLayout::CARD_WIDTH as f32))
+                                        .h(px(HomeLayout::CARD_HEIGHT as f32))
+                                        .bg(Background::RAISED)
+                                        .rounded(px(Radius::MD_LG))
+                                        .border_1()
+                                        .border_color(BorderColors::SUBTLE)
+                                        .overflow_hidden()
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.open_project_at(&path.clone(), cx);
+                                        }))
+                                        .child(thumb_area)
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_row()
+                                                .items_center()
+                                                .justify_between()
+                                                .w_full()
+                                                .h(px(24.0))
+                                                .px(px(Spacing::SM_MD))
+                                                .bg(Background::RAISED)
+                                                .child(
+                                                    div()
+                                                        .text_size(px(FontSize::SM))
+                                                        .text_color(Text::PRIMARY)
+                                                        .overflow_hidden()
+                                                        .child(name),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(FontSize::XS))
+                                                        .text_color(Text::TERTIARY)
+                                                        .child(time_label),
+                                                ),
+                                        )
+                                },
+                            )),
                     ),
             )
             // WelcomeOverlay — shown on first launch until dismissed (Swift: WelcomeOverlayView)

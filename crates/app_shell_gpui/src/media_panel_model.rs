@@ -61,6 +61,8 @@ pub struct MediaItem {
     pub id: String,
     pub name: String,
     pub kind: core_model::ClipType,
+    /// Resolved on-disk source (existing files only) for real thumbnails.
+    pub source_path: Option<std::path::PathBuf>,
 }
 
 /// Media panel state — pure model, testable without gpui.
@@ -83,14 +85,30 @@ impl MediaPanelState {
 
     /// Rebuild items and folders from the shared manifest, preserving
     /// view-only state such as the active tab.
-    pub fn sync_from_manifest(&mut self, manifest: &core_model::MediaManifest) {
+    pub fn sync_from_manifest(
+        &mut self,
+        manifest: &core_model::MediaManifest,
+        project_root: Option<&std::path::Path>,
+    ) {
         self.items = manifest
             .entries
             .iter()
-            .map(|e| MediaItem {
-                id: e.id.clone(),
-                name: e.name.clone(),
-                kind: e.r#type,
+            .map(|e| {
+                let source_path = match &e.source {
+                    core_model::MediaSource::External { absolute_path } => {
+                        Some(std::path::PathBuf::from(absolute_path))
+                    }
+                    core_model::MediaSource::Project { relative_path } => {
+                        project_root.map(|root| root.join(relative_path))
+                    }
+                }
+                .filter(|p| p.is_file());
+                MediaItem {
+                    id: e.id.clone(),
+                    name: e.name.clone(),
+                    kind: e.r#type,
+                    source_path,
+                }
             })
             .collect();
         self.folders = manifest
@@ -194,7 +212,7 @@ mod tests {
     fn sync_maps_entries_and_folders() {
         let mut s = MediaPanelState::new();
         s.select_tab(MediaPanelTab::Music);
-        s.sync_from_manifest(&manifest_with_two_entries_one_folder());
+        s.sync_from_manifest(&manifest_with_two_entries_one_folder(), None);
         assert_eq!(s.items.len(), 2);
         assert_eq!(s.items[0].id, "m1");
         assert_eq!(s.items[0].name, "Interview.mp4");
@@ -224,16 +242,52 @@ mod tests {
     }
 
     #[test]
+    fn source_path_resolution() {
+        // External absolute path pointing at a real temp file resolves.
+        let dir = std::env::temp_dir().join("fronda-media-panel-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let img = dir.join("photo.png");
+        std::fs::write(&img, b"png").unwrap();
+
+        let manifest: core_model::MediaManifest = serde_json::from_str(&format!(
+            r#"{{"version":1,"entries":[
+                {{"id":"m1","name":"photo.png","type":"image","source":{{"external":{{"absolutePath":{abs:?}}}}},"duration":0.0}},
+                {{"id":"m2","name":"clip.mp4","type":"video","source":{{"project":{{"relativePath":"media/clip.mp4"}}}},"duration":1.0}}
+            ]}}"#,
+            abs = img.to_string_lossy()
+        ))
+        .unwrap();
+
+        let mut s = MediaPanelState::new();
+        s.sync_from_manifest(&manifest, None);
+        assert_eq!(s.items[0].source_path.as_deref(), Some(img.as_path()));
+        assert!(
+            s.items[1].source_path.is_none(),
+            "project-relative source without a root is unresolved"
+        );
+
+        // With a root, the relative path resolves only if the file exists.
+        let root = dir.join("proj.palmier");
+        let _ = std::fs::create_dir_all(root.join("media"));
+        std::fs::write(root.join("media/clip.mp4"), b"mp4").unwrap();
+        s.sync_from_manifest(&manifest, Some(&root));
+        assert_eq!(
+            s.items[1].source_path.as_deref(),
+            Some(root.join("media/clip.mp4").as_path())
+        );
+    }
+
+    #[test]
     fn sync_is_idempotent_and_replaces() {
         let mut s = MediaPanelState::new();
         let manifest = manifest_with_two_entries_one_folder();
-        s.sync_from_manifest(&manifest);
-        s.sync_from_manifest(&manifest);
+        s.sync_from_manifest(&manifest, None);
+        s.sync_from_manifest(&manifest, None);
         assert_eq!(s.items.len(), 2);
         assert_eq!(s.folders.len(), 1);
 
         let empty = core_model::MediaManifest::default();
-        s.sync_from_manifest(&empty);
+        s.sync_from_manifest(&empty, None);
         assert!(s.items.is_empty(), "lists replaced, not appended");
         assert!(s.folders.is_empty());
     }

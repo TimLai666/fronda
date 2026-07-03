@@ -14,6 +14,20 @@ impl HomeLayout {
     pub const HEADING_TOP: f64 = 48.0;
 }
 
+/// Relative time label for recent-project cards.
+pub fn relative_time_label(
+    then: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let secs = (now - then).num_seconds().max(0);
+    match secs {
+        0..=59 => "just now".into(),
+        60..=3599 => format!("{}m ago", secs / 60),
+        3600..=86_399 => format!("{}h ago", secs / 3600),
+        _ => format!("{}d ago", secs / 86_400),
+    }
+}
+
 /// A recent project entry displayed on the Home view.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectCard {
@@ -69,5 +83,26 @@ mod tests {
             HomeAction::OpenProjectAt(idx) => assert_eq!(idx, 3),
             _ => panic!("expected OpenProjectAt"),
         }
+    }
+}
+
+#[cfg(test)]
+mod relative_time_tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn labels_match_spec_examples() {
+        let now = Utc::now();
+        assert_eq!(
+            relative_time_label(now - Duration::seconds(30), now),
+            "just now"
+        );
+        assert_eq!(
+            relative_time_label(now - Duration::minutes(5), now),
+            "5m ago"
+        );
+        assert_eq!(relative_time_label(now - Duration::hours(3), now), "3h ago");
+        assert_eq!(relative_time_label(now - Duration::days(2), now), "2d ago");
     }
 }

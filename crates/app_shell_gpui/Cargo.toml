@@ -20,6 +20,7 @@ desktop-app = ["dep:gpui", "dep:gpui_platform"]
 [dependencies]
 agent_contract = { package = "fronda-agent-contract", path = "../agent_contract" }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 app_contract = { package = "fronda-app-contract", path = "../app_contract" }
 core_model = { package = "fronda-core-model", path = "../core_model" }
 generation_core = { package = "fronda-generation-core", path = "../generation_core" }

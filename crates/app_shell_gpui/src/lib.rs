@@ -35,6 +35,7 @@ pub mod inspector_view;
 #[cfg(feature = "desktop-app")]
 pub mod keyframes_view;
 pub mod mcp_service;
+pub mod media_import;
 pub mod media_panel_model;
 #[cfg(feature = "desktop-app")]
 pub mod media_panel_view;
@@ -50,6 +51,7 @@ pub mod preview_model;
 pub mod preview_view;
 #[cfg(feature = "desktop-app")]
 pub mod project_activity_view;
+pub mod project_registry_store;
 #[cfg(feature = "desktop-app")]
 pub mod settings_mismatch_view;
 #[cfg(feature = "desktop-app")]

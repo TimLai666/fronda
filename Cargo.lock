@@ -1826,6 +1826,7 @@ name = "fronda-app-shell-gpui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "fronda-agent-contract",
  "fronda-app-contract",
  "fronda-core-model",
