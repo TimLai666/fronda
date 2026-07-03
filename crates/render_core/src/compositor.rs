@@ -55,8 +55,8 @@ impl RgbaImage {
 }
 
 /// Separable blend function for one colour channel (both in `0..=1`). Issue #203.
-/// The four non-separable HSL modes (Hue/Saturation/Color/Luminosity) fall back
-/// to `Normal` for now (they need whole-pixel HSL math).
+/// The four non-separable HSL modes route through [`blend_rgb`] instead; here
+/// they degenerate to `Normal` (a single channel can't carry HSL semantics).
 pub fn blend_channel(mode: BlendMode, s: f64, d: f64) -> f64 {
     use BlendMode::*;
     let r = match mode {
@@ -109,6 +109,72 @@ pub fn blend_channel(mode: BlendMode, s: f64, d: f64) -> f64 {
         Exclusion => s + d - 2.0 * s * d,
     };
     r.clamp(0.0, 1.0)
+}
+
+// ── Non-separable (HSL) blend helpers, per the W3C Compositing spec ──────────
+
+fn lum(c: [f64; 3]) -> f64 {
+    0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+}
+
+/// Clamp a colour into `[0,1]` per channel while preserving its luminosity.
+fn clip_color(c: [f64; 3]) -> [f64; 3] {
+    let l = lum(c);
+    let n = c[0].min(c[1]).min(c[2]);
+    let x = c[0].max(c[1]).max(c[2]);
+    let mut out = c;
+    if n < 0.0 && l - n > 0.0 {
+        for v in &mut out {
+            *v = l + (*v - l) * l / (l - n);
+        }
+    }
+    if x > 1.0 && x - l > 0.0 {
+        for v in &mut out {
+            *v = l + (*v - l) * (1.0 - l) / (x - l);
+        }
+    }
+    out
+}
+
+fn set_lum(c: [f64; 3], l: f64) -> [f64; 3] {
+    let d = l - lum(c);
+    clip_color([c[0] + d, c[1] + d, c[2] + d])
+}
+
+fn sat(c: [f64; 3]) -> f64 {
+    c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])
+}
+
+/// Scale a colour's saturation to `s`, keeping its relative channel ordering.
+fn set_sat(c: [f64; 3], s: f64) -> [f64; 3] {
+    let mut idx = [0usize, 1, 2];
+    idx.sort_by(|&a, &b| c[a].partial_cmp(&c[b]).unwrap_or(std::cmp::Ordering::Equal));
+    let (imin, imid, imax) = (idx[0], idx[1], idx[2]);
+    let mut out = [0.0; 3];
+    if c[imax] > c[imin] {
+        out[imid] = (c[imid] - c[imin]) * s / (c[imax] - c[imin]);
+        out[imax] = s;
+    }
+    out[imin] = 0.0;
+    out
+}
+
+/// Blend a source RGB triple over a destination one (both `0..=1`). Separable
+/// modes apply [`blend_channel`] per channel; the four HSL modes (Hue,
+/// Saturation, Color, Luminosity) use whole-pixel non-separable math. Issue #203.
+pub fn blend_rgb(mode: BlendMode, s: [f64; 3], d: [f64; 3]) -> [f64; 3] {
+    use BlendMode::*;
+    match mode {
+        Hue => set_lum(set_sat(s, sat(d)), lum(d)),
+        Saturation => set_lum(set_sat(d, sat(s)), lum(d)),
+        Color => set_lum(s, lum(d)),
+        Luminosity => set_lum(d, lum(s)),
+        other => [
+            blend_channel(other, s[0], d[0]),
+            blend_channel(other, s[1], d[1]),
+            blend_channel(other, s[2], d[2]),
+        ],
+    }
 }
 
 /// Composite `src` into `canvas` scaled to fill the pixel rect `dst`, rotated
@@ -180,12 +246,16 @@ pub fn blit_scaled(
                 continue;
             }
             let ci = (py * canvas.width + px) * 4;
+            let s_rgb = [sr as f64 / 255.0, sg as f64 / 255.0, sb as f64 / 255.0];
+            let d_rgb = [
+                canvas.pixels[ci] as f64 / 255.0,
+                canvas.pixels[ci + 1] as f64 / 255.0,
+                canvas.pixels[ci + 2] as f64 / 255.0,
+            ];
+            let blended = blend_rgb(blend, s_rgb, d_rgb);
             for k in 0..3 {
-                let s = [sr, sg, sb][k] as f64 / 255.0;
-                let d = canvas.pixels[ci + k] as f64 / 255.0;
-                let b = blend_channel(blend, s, d);
-                canvas.pixels[ci + k] =
-                    ((b * a + d * (1.0 - a)) * 255.0).round().clamp(0.0, 255.0) as u8;
+                let out = blended[k] * a + d_rgb[k] * (1.0 - a);
+                canvas.pixels[ci + k] = (out * 255.0).round().clamp(0.0, 255.0) as u8;
             }
             // Straight-alpha over: out_a = src_a + dst_a*(1-src_a).
             let da = canvas.pixels[ci + 3] as f64 / 255.0;
@@ -553,6 +623,42 @@ mod tests {
         assert_eq!(decoded, 4);
         assert_eq!(frames[0], (0, [0, 0, 0, 255]));
         assert_eq!(frames[3], (3, [30, 0, 0, 255]));
+    }
+
+    #[test]
+    fn blend_rgb_separable_matches_per_channel() {
+        // Multiply of mid-grey over mid-grey → quarter-grey, per channel.
+        let out = blend_rgb(BlendMode::Multiply, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]);
+        for v in out {
+            assert!((v - 0.25).abs() < 1e-9, "got {v}");
+        }
+    }
+
+    #[test]
+    fn blend_rgb_color_takes_dst_luminosity() {
+        // Color: source hue/sat, destination luminosity.
+        let dst = [0.5, 0.5, 0.5];
+        let out = blend_rgb(BlendMode::Color, [0.0, 0.0, 1.0], dst);
+        assert!((lum(out) - lum(dst)).abs() < 1e-6, "lum {}", lum(out));
+    }
+
+    #[test]
+    fn blend_rgb_luminosity_takes_src_luminosity() {
+        // Luminosity: destination hue/sat, source luminosity.
+        let src = [0.5, 0.5, 0.5];
+        let out = blend_rgb(BlendMode::Luminosity, src, [1.0, 0.0, 0.0]);
+        assert!((lum(out) - lum(src)).abs() < 1e-6, "lum {}", lum(out));
+        // Destination hue is preserved: red channel stays the largest.
+        assert!(out[0] >= out[1] && out[0] >= out[2]);
+    }
+
+    #[test]
+    fn blend_rgb_hue_and_saturation_keep_dst_luminosity() {
+        let dst = [0.2, 0.6, 0.9];
+        let hue = blend_rgb(BlendMode::Hue, [0.9, 0.1, 0.1], dst);
+        let sat = blend_rgb(BlendMode::Saturation, [0.9, 0.1, 0.1], dst);
+        assert!((lum(hue) - lum(dst)).abs() < 1e-6);
+        assert!((lum(sat) - lum(dst)).abs() < 1e-6);
     }
 
     #[test]
