@@ -92,6 +92,53 @@ pub const DEFAULT_PIXELS_PER_FRAME: f32 = 4.0;
 pub const ZOOM_MIN: f32 = 0.05;
 pub const ZOOM_MAX: f32 = 40.0;
 
+/// Keyboard transport state: rate 0 = paused (view-only, no undo).
+#[derive(Debug, Clone, Default)]
+pub struct TransportState {
+    /// Playback rate in x-realtime; negative plays backward.
+    pub rate: f64,
+    /// Fractional frame accumulator so slow ticks still add up.
+    frame_accumulator: f64,
+}
+
+pub const TRANSPORT_MAX_RATE: f64 = 8.0;
+
+impl TransportState {
+    pub fn is_playing(&self) -> bool {
+        self.rate != 0.0
+    }
+
+    /// Space: toggle between paused and 1x forward.
+    pub fn toggle_play(&mut self) {
+        self.rate = if self.rate == 0.0 { 1.0 } else { 0.0 };
+        self.frame_accumulator = 0.0;
+    }
+
+    /// L: forward, doubling on repeat up to the cap.
+    pub fn jkl_forward(&mut self) {
+        self.rate = if self.rate <= 0.0 {
+            1.0
+        } else {
+            (self.rate * 2.0).min(TRANSPORT_MAX_RATE)
+        };
+    }
+
+    /// J: backward, doubling on repeat down to the cap.
+    pub fn jkl_backward(&mut self) {
+        self.rate = if self.rate >= 0.0 {
+            -1.0
+        } else {
+            (self.rate * 2.0).max(-TRANSPORT_MAX_RATE)
+        };
+    }
+
+    /// K: pause.
+    pub fn jkl_pause(&mut self) {
+        self.rate = 0.0;
+        self.frame_accumulator = 0.0;
+    }
+}
+
 /// Timeline view state.
 #[derive(Debug, Clone)]
 pub struct TimelineState {
@@ -118,6 +165,8 @@ pub struct TimelineState {
     pub clip_drag: Option<ClipDrag>,
     /// Active trim drag session, if any.
     pub trim_drag: Option<TrimDrag>,
+    /// Keyboard transport (playback) state.
+    pub transport: TransportState,
 }
 
 /// In-flight clip drag: proposed position tracked in project frames.
@@ -172,6 +221,7 @@ impl TimelineState {
             selected_clip_ids: Vec::new(),
             clip_drag: None,
             trim_drag: None,
+            transport: TransportState::default(),
         }
     }
 
@@ -228,6 +278,39 @@ impl TimelineState {
     /// Move the playhead to the frame under a content-area x position.
     pub fn scrub_to_content_x(&mut self, content_x: f32) {
         self.playhead_frame = self.frame_for_x(self.scroll_x + content_x).max(0);
+    }
+
+    /// Advance the playhead by rate x fps x dt. Returns true when the
+    /// playhead moved. Stops (rate 0) when hitting either boundary.
+    pub fn transport_tick(&mut self, dt_seconds: f64) -> bool {
+        if !self.transport.is_playing() {
+            return false;
+        }
+        self.transport.frame_accumulator += self.transport.rate * self.fps as f64 * dt_seconds;
+        // Epsilon guards float drift (e.g. 5 x 0.6 accumulating to 2.999...).
+        let eps = 1e-9 * self.transport.rate.signum();
+        let whole = (self.transport.frame_accumulator + eps).trunc() as i64;
+        if whole == 0 {
+            return true; // still playing, sub-frame progress
+        }
+        self.transport.frame_accumulator -= whole as f64;
+        let next = self.playhead_frame + whole;
+        if next <= 0 {
+            self.playhead_frame = 0;
+            self.transport.jkl_pause();
+        } else if next >= self.total_frames {
+            self.playhead_frame = self.total_frames;
+            self.transport.jkl_pause();
+        } else {
+            self.playhead_frame = next;
+        }
+        true
+    }
+
+    /// Pause and move the playhead by delta frames, clamped to the extent.
+    pub fn step_frames(&mut self, delta: i64) {
+        self.transport.jkl_pause();
+        self.playhead_frame = (self.playhead_frame + delta).clamp(0, self.total_frames);
     }
 
     /// Track index (for move_clips toTrack) of the clip's track.
@@ -828,6 +911,92 @@ mod tests {
         assert_eq!(s.track_index_of_clip("c1"), Some(0));
         assert_eq!(s.track_index_of_clip("c3"), Some(1));
         assert_eq!(s.track_index_of_clip("nope"), None);
+    }
+
+    // Transport (transport-controls spec)
+
+    #[test]
+    fn space_toggles_between_paused_and_1x() {
+        let mut t = TransportState::default();
+        assert!(!t.is_playing());
+        t.toggle_play();
+        assert_eq!(t.rate, 1.0);
+        t.toggle_play();
+        assert_eq!(t.rate, 0.0);
+    }
+
+    #[test]
+    fn jkl_doubles_and_caps() {
+        let mut t = TransportState::default();
+        for expected in [1.0, 2.0, 4.0, 8.0, 8.0] {
+            t.jkl_forward();
+            assert_eq!(t.rate, expected);
+        }
+        for expected in [-1.0, -2.0, -4.0, -8.0, -8.0] {
+            t.jkl_backward();
+            assert_eq!(t.rate, expected);
+        }
+        t.jkl_pause();
+        assert_eq!(t.rate, 0.0);
+    }
+
+    #[test]
+    fn tick_advances_thirty_frames_per_second_at_1x() {
+        let mut s = state_with_two_clips();
+        s.fps = 30;
+        s.playhead_frame = 0;
+        s.transport.toggle_play();
+        assert!(s.transport_tick(1.0));
+        assert_eq!(s.playhead_frame, 30);
+    }
+
+    #[test]
+    fn tick_accumulates_fractional_frames() {
+        let mut s = state_with_two_clips();
+        s.fps = 30;
+        s.playhead_frame = 0;
+        s.transport.toggle_play();
+        for _ in 0..5 {
+            s.transport_tick(0.02); // 0.6 frames per tick
+        }
+        assert_eq!(s.playhead_frame, 3, "5 x 0.6 = 3 whole frames");
+    }
+
+    #[test]
+    fn backward_playback_clamps_at_zero_and_stops() {
+        let mut s = state_with_two_clips();
+        s.fps = 30;
+        s.playhead_frame = 10;
+        s.transport.jkl_backward();
+        s.transport_tick(1.0); // -30 frames from 10
+        assert_eq!(s.playhead_frame, 0);
+        assert!(!s.transport.is_playing(), "stops at the boundary");
+    }
+
+    #[test]
+    fn forward_playback_stops_at_total_frames() {
+        let mut s = state_with_two_clips();
+        s.fps = 30;
+        s.total_frames = 40;
+        s.playhead_frame = 20;
+        s.transport.toggle_play();
+        s.transport_tick(1.0);
+        assert_eq!(s.playhead_frame, 40);
+        assert!(!s.transport.is_playing());
+    }
+
+    #[test]
+    fn step_and_skip_clamp() {
+        let mut s = state_with_two_clips();
+        s.playhead_frame = 0;
+        s.step_frames(-1);
+        assert_eq!(s.playhead_frame, 0);
+        s.playhead_frame = 100;
+        s.step_frames(5);
+        assert_eq!(s.playhead_frame, 105);
+        s.transport.toggle_play();
+        s.step_frames(1);
+        assert!(!s.transport.is_playing(), "stepping pauses playback");
     }
 
     #[test]

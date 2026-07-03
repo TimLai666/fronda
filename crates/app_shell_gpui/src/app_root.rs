@@ -316,14 +316,46 @@ impl AppRoot {
             | menu::MenuAction::KeyboardShortcuts
             | menu::MenuAction::McpInstructions
             | menu::MenuAction::SendFeedback => {}
-            menu::MenuAction::PlayPause
-            | menu::MenuAction::PlayBackward
-            | menu::MenuAction::PauseJkl
-            | menu::MenuAction::PlayForward
-            | menu::MenuAction::StepFrameBackward
-            | menu::MenuAction::StepFrameForward
-            | menu::MenuAction::SkipFramesBackward
-            | menu::MenuAction::SkipFramesForward => {}
+            menu::MenuAction::PlayPause => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.transport_toggle_play(cx));
+                }
+            }
+            menu::MenuAction::PlayBackward => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.transport_jkl(-1, cx));
+                }
+            }
+            menu::MenuAction::PauseJkl => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.transport_jkl(0, cx));
+                }
+            }
+            menu::MenuAction::PlayForward => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.transport_jkl(1, cx));
+                }
+            }
+            menu::MenuAction::StepFrameBackward => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.transport_step(-1, cx));
+                }
+            }
+            menu::MenuAction::StepFrameForward => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.transport_step(1, cx));
+                }
+            }
+            menu::MenuAction::SkipFramesBackward => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.transport_step(-5, cx));
+                }
+            }
+            menu::MenuAction::SkipFramesForward => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.transport_step(5, cx));
+                }
+            }
             menu::MenuAction::MarkIn
             | menu::MenuAction::MarkOut
             | menu::MenuAction::ClearMarkIn

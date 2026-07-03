@@ -40,6 +40,8 @@ pub struct TimelineView {
     /// Window x of the shared content left edge (ruler / clip canvas),
     /// captured each frame by a zero-size canvas element.
     content_origin_x: Arc<AtomicU32>,
+    /// True while the transport ticker task loop is alive.
+    ticker_running: bool,
 }
 
 impl TimelineView {
@@ -49,6 +51,7 @@ impl TimelineView {
             focus_handle: cx.focus_handle(),
             state_revision: u64::MAX,
             content_origin_x: Arc::new(AtomicU32::new(0f32.to_bits())),
+            ticker_running: false,
         };
         view.sync_from_shared_state();
         view
@@ -248,6 +251,56 @@ impl TimelineView {
         next.playhead_frame = self.state.playhead_frame;
         self.state = next;
         true
+    }
+
+    /// Space: toggle playback.
+    pub fn transport_toggle_play(&mut self, cx: &mut Context<Self>) {
+        self.state.transport.toggle_play();
+        self.ensure_ticker(cx);
+        cx.notify();
+    }
+
+    /// JKL keys: direction -1 (J), 0 (K), 1 (L).
+    pub fn transport_jkl(&mut self, direction: i8, cx: &mut Context<Self>) {
+        match direction {
+            d if d < 0 => self.state.transport.jkl_backward(),
+            0 => self.state.transport.jkl_pause(),
+            _ => self.state.transport.jkl_forward(),
+        }
+        self.ensure_ticker(cx);
+        cx.notify();
+    }
+
+    /// Step/skip: pause and move the playhead by delta frames.
+    pub fn transport_step(&mut self, delta: i64, cx: &mut Context<Self>) {
+        self.state.step_frames(delta);
+        cx.notify();
+    }
+
+    /// Spawn the ~30Hz tick loop if playback is active and no loop runs.
+    fn ensure_ticker(&mut self, cx: &mut Context<Self>) {
+        if self.ticker_running || !self.state.transport.is_playing() {
+            return;
+        }
+        self.ticker_running = true;
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(33))
+                .await;
+            let alive = this.update(cx, |view, cx| {
+                let moving = view.state.transport_tick(0.033);
+                if moving {
+                    cx.notify();
+                } else {
+                    view.ticker_running = false;
+                }
+                moving
+            });
+            if !alive.unwrap_or(false) {
+                break;
+            }
+        })
+        .detach();
     }
 
     pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
