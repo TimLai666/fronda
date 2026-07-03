@@ -5,6 +5,7 @@ use core_model::{Clip, Crop, Transform};
 use serde::{Deserialize, Serialize};
 
 pub mod bundle_export;
+pub mod compositor;
 pub mod effects;
 pub mod export_stall_watchdog;
 pub mod fcpxml_export;
