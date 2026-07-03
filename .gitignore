@@ -37,4 +37,5 @@ models/*/convert*.log
 .spectra/
 openspec/.vector-search.db*
 .claude/settings.local.json
+.claude/worktrees/
 .cargo/config.toml
