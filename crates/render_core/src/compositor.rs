@@ -530,13 +530,15 @@ pub fn rasterize_shape(shape: &ShapeStyle, w: usize, h: usize) -> RgbaImage {
     img
 }
 
-/// Visual clips on `timeline` that are on screen at `frame`, bottom track first
-/// (render order). Text overlays are still skipped (need a text rasterizer);
-/// shape annotations are included. Media clips need a non-empty `media_ref`.
+/// Visual clips on `timeline` that are on screen at `frame`, in render order
+/// (bottom layer first). `tracks[0]` is the TOP visual layer (matching the model
+/// convention the XMEML export reverses), so tracks are walked back-to-front.
+/// Text overlays are still skipped (need a text rasterizer); shape annotations
+/// are included. Media clips need a non-empty `media_ref`.
 fn visible_clips(timeline: &Timeline, frame: i64) -> Vec<&Clip> {
     let mut out: Vec<&Clip> = Vec::new();
-    // Video tracks bottom-to-top = the order they appear in `tracks`.
-    for track in &timeline.tracks {
+    // Last track = bottom layer (blitted first); tracks[0] = top (blitted last).
+    for track in timeline.tracks.iter().rev() {
         if track.r#type == ClipType::Audio || track.hidden {
             continue;
         }
@@ -823,6 +825,40 @@ mod tests {
         });
         assert_eq!(px(&out, 0, 0), [0, 255, 0, 255], "top-left is the green overlay");
         assert_eq!(px(&out, 3, 3), [255, 0, 0, 255], "elsewhere is the red bg");
+    }
+
+    #[test]
+    fn compose_first_track_is_the_top_layer() {
+        // tracks[0] is the top visual layer; a full-frame clip there must cover a
+        // full-frame clip on tracks[1].
+        let top_clip = clip("top", "m1", 0, 30);
+        let bottom_clip = clip("bot", "m2", 0, 30);
+        let mk_track = |id: &str, clips: Vec<Clip>| Track {
+            id: id.into(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            clips,
+        };
+        let timeline = Timeline {
+            fps: 30,
+            width: 4,
+            height: 4,
+            tracks: vec![mk_track("v0", vec![top_clip]), mk_track("v1", vec![bottom_clip])],
+            settings_configured: true,
+            selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
+        };
+        let out = compose_frame(&timeline, &MediaManifest::default(), 0, 4, 4, |c| {
+            if c.id == "top" {
+                Some(RgbaImage::solid(4, 4, [0, 0, 255, 255])) // blue on tracks[0]
+            } else {
+                Some(RgbaImage::solid(4, 4, [255, 0, 0, 255])) // red on tracks[1]
+            }
+        });
+        assert_eq!(px(&out, 2, 2), [0, 0, 255, 255], "tracks[0] blue is on top");
     }
 
     #[test]
