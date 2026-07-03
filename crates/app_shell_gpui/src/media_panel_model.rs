@@ -39,17 +39,65 @@ impl MediaPanelTab {
     }
 }
 
+/// Icon glyph for a media clip type.
+pub fn tile_icon(kind: &core_model::ClipType) -> &'static str {
+    match kind {
+        core_model::ClipType::Audio => "\u{266a}",
+        core_model::ClipType::Image => "\u{2b1c}",
+        core_model::ClipType::Text => "T",
+        _ => "\u{25b6}",
+    }
+}
+
+/// Deterministic placeholder hue in [0.0, 1.0) derived from the media id.
+pub fn tile_hue(id: &str) -> f32 {
+    let sum: u32 = id.bytes().map(u32::from).sum();
+    (sum % 100) as f32 / 100.0
+}
+
+/// One media entry as shown in the Library grid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaItem {
+    pub id: String,
+    pub name: String,
+    pub kind: core_model::ClipType,
+}
+
 /// Media panel state — pure model, testable without gpui.
 #[derive(Debug, Clone)]
 pub struct MediaPanelState {
     pub active_tab: MediaPanelTab,
+    pub items: Vec<MediaItem>,
+    /// (id, name) of manifest folders, display only.
+    pub folders: Vec<(String, String)>,
 }
 
 impl MediaPanelState {
     pub fn new() -> Self {
         Self {
             active_tab: MediaPanelTab::Media,
+            items: Vec::new(),
+            folders: Vec::new(),
         }
+    }
+
+    /// Rebuild items and folders from the shared manifest, preserving
+    /// view-only state such as the active tab.
+    pub fn sync_from_manifest(&mut self, manifest: &core_model::MediaManifest) {
+        self.items = manifest
+            .entries
+            .iter()
+            .map(|e| MediaItem {
+                id: e.id.clone(),
+                name: e.name.clone(),
+                kind: e.r#type,
+            })
+            .collect();
+        self.folders = manifest
+            .folders
+            .iter()
+            .map(|f| (f.id.clone(), f.name.clone()))
+            .collect();
     }
 
     pub fn select_tab(&mut self, tab: MediaPanelTab) {
@@ -126,5 +174,67 @@ mod tests {
         for tab in MediaPanelTab::all() {
             assert!(!tab.label().is_empty());
         }
+    }
+
+    // ── sync_from_manifest (media-panel-binding spec) ──────────────────
+
+    fn manifest_with_two_entries_one_folder() -> core_model::MediaManifest {
+        serde_json::from_str(
+            r#"{"version":1,
+                "entries":[
+                    {"id":"m1","name":"Interview.mp4","type":"video","source":{"project":{"relativePath":"media/a.mp4"}},"duration":5.0},
+                    {"id":"m2","name":"Music.wav","type":"audio","source":{"project":{"relativePath":"media/b.wav"}},"duration":9.0}
+                ],
+                "folders":[{"id":"f1","name":"B-roll"}]}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn sync_maps_entries_and_folders() {
+        let mut s = MediaPanelState::new();
+        s.select_tab(MediaPanelTab::Music);
+        s.sync_from_manifest(&manifest_with_two_entries_one_folder());
+        assert_eq!(s.items.len(), 2);
+        assert_eq!(s.items[0].id, "m1");
+        assert_eq!(s.items[0].name, "Interview.mp4");
+        assert_eq!(s.items[1].kind, core_model::ClipType::Audio);
+        assert_eq!(s.folders, vec![("f1".to_string(), "B-roll".to_string())]);
+        assert_eq!(s.active_tab, MediaPanelTab::Music, "tab preserved");
+    }
+
+    #[test]
+    fn tile_hue_is_stable_and_in_range() {
+        let a = tile_hue("m1");
+        let b = tile_hue("m1");
+        assert_eq!(a, b, "same id same hue");
+        assert!((0.0..1.0).contains(&a));
+        for id in ["m2", "clip-long-identifier", ""] {
+            let h = tile_hue(id);
+            assert!((0.0..1.0).contains(&h), "hue out of range for {id:?}");
+        }
+    }
+
+    #[test]
+    fn tile_icons_by_kind() {
+        assert_eq!(tile_icon(&core_model::ClipType::Audio), "\u{266a}");
+        assert_eq!(tile_icon(&core_model::ClipType::Image), "\u{2b1c}");
+        assert_eq!(tile_icon(&core_model::ClipType::Text), "T");
+        assert_eq!(tile_icon(&core_model::ClipType::Video), "\u{25b6}");
+    }
+
+    #[test]
+    fn sync_is_idempotent_and_replaces() {
+        let mut s = MediaPanelState::new();
+        let manifest = manifest_with_two_entries_one_folder();
+        s.sync_from_manifest(&manifest);
+        s.sync_from_manifest(&manifest);
+        assert_eq!(s.items.len(), 2);
+        assert_eq!(s.folders.len(), 1);
+
+        let empty = core_model::MediaManifest::default();
+        s.sync_from_manifest(&empty);
+        assert!(s.items.is_empty(), "lists replaced, not appended");
+        assert!(s.folders.is_empty());
     }
 }

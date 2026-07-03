@@ -37,16 +37,37 @@ pub struct MediaPanelView {
     focus_handle: FocusHandle,
     /// AI generation panel embedded in the media tab (Swift: GenerationView).
     pub generation: Entity<GenerationView>,
+    /// Last seen shared-state revision; manifest changes rebuild the grid.
+    state_revision: u64,
 }
 
 impl MediaPanelView {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let gen = cx.new(|cx| GenerationView::new(cx));
-        Self {
+        let mut view = Self {
             state: MediaPanelState::new(),
             focus_handle: cx.focus_handle(),
             generation: gen,
+            state_revision: u64::MAX,
+        };
+        view.sync_from_shared_state();
+        view
+    }
+
+    /// Rebuild grid data from the shared manifest when the revision moved.
+    fn sync_from_shared_state(&mut self) -> bool {
+        let hub = crate::editor_state_hub::EditorStateHub::global();
+        let revision = hub.revision();
+        if revision == self.state_revision {
+            return false;
         }
+        self.state_revision = revision;
+        let executor = hub.executor();
+        let Ok(exec) = executor.lock() else {
+            return false;
+        };
+        self.state.sync_from_manifest(exec.media_manifest());
+        true
     }
 
     pub fn select_tab(&mut self, tab: MediaPanelTab, cx: &mut Context<Self>) {
@@ -180,26 +201,27 @@ fn demo_tile(id: &str, icon: &str, name: &str, hue: f32) -> impl IntoElement {
         )
 }
 
-/// Demo asset grid — flex-wrap tile grid matching Swift LazyVGrid.
-fn media_demo_grid() -> impl IntoElement {
+/// Library grid driven by the shared manifest entries.
+fn media_grid(items: &[crate::media_panel_model::MediaItem]) -> impl IntoElement {
+    let mut grid = div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .gap(px(Spacing::SM_MD))
+        .p(px(Spacing::SM_MD));
+    for item in items {
+        grid = grid.child(demo_tile(
+            &format!("tile-{}", item.id),
+            crate::media_panel_model::tile_icon(&item.kind),
+            &item.name,
+            crate::media_panel_model::tile_hue(&item.id),
+        ));
+    }
     div()
         .id("media-grid-scroll")
         .flex_1()
         .overflow_y_scroll()
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(Spacing::SM_MD))
-                .p(px(Spacing::SM_MD))
-                .child(demo_tile("tile-0", "▶", "interview.mp4", 0.60))
-                .child(demo_tile("tile-1", "▶", "b-roll.mp4", 0.75))
-                .child(demo_tile("tile-2", "♪", "music.wav", 0.83))
-                .child(demo_tile("tile-3", "⬜", "title-card.png", 0.55))
-                .child(demo_tile("tile-4", "▶", "drone.mp4", 0.35))
-                .child(demo_tile("tile-5", "▶", "closeup.mp4", 0.06)),
-        )
+        .child(grid)
 }
 
 /// Media toolbar row — matches Swift MediaTab.actionsRow + searchControlsRow.
@@ -505,6 +527,10 @@ fn music_tab_content() -> impl IntoElement {
 
 impl Render for MediaPanelView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.sync_from_shared_state() {
+            cx.notify();
+        }
+        let media_items = self.state.items.clone();
         let active = self.state.active_tab.clone();
         let media_active = active == MediaPanelTab::Media;
         let captions_active = active == MediaPanelTab::Captions;
@@ -592,8 +618,7 @@ impl Render for MediaPanelView {
                             .size_full()
                             // Toolbar at top (Import + Generate + Search + View controls)
                             .child(media_toolbar())
-                            // Library grid (demo tiles; real assets would populate this)
-                            .child(media_demo_grid())
+                            .child(media_grid(&media_items))
                             // GenerationView anchored to BOTTOM with padding (Swift: .padding(.horizontal, sm).padding(.bottom, sm))
                             .child(
                                 div()
