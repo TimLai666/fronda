@@ -8,13 +8,15 @@
 //! The encoder prefers H.264 and falls back to MPEG-4 Part 2, which is present
 //! in stock ffmpeg builds even without the (GPL) libx264 encoder.
 
-use core_model::{Clip, MediaManifest, Timeline};
+use core_model::{Clip, MediaManifest, MediaSource, Timeline};
 use ffmpeg_the_third as ffmpeg;
 use ffmpeg::format::Pixel;
 use ffmpeg::Rational;
 use render_core::compositor::{compose_frame, RgbaImage};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use timeline_core::TimelineMathExt;
 
 fn init_ffmpeg() {
     static INIT: OnceLock<()> = OnceLock::new();
@@ -273,6 +275,67 @@ pub fn export_timeline(
     enc.finish()
 }
 
+/// Real-time offset into a clip's source for a given absolute timeline frame.
+///
+/// Timeline math is in project frames, so the source offset is
+/// `trim_start + rel * speed` project frames (matching `source_frames_consumed`)
+/// converted to seconds by the project fps. `rel` is clamped to the clip range.
+pub fn source_time_seconds(clip: &Clip, timeline_frame: i64, project_fps: i64) -> f64 {
+    let rel = (timeline_frame - clip.start_frame).max(0) as f64;
+    let src_frame = clip.trim_start_frame as f64 + rel * clip.speed.max(0.0);
+    src_frame / project_fps.max(1) as f64
+}
+
+/// Absolute filesystem path for a manifest entry, given the project root that
+/// project-relative sources are resolved against. `None` for sources without a
+/// local file (e.g. remote-only entries).
+pub fn source_path(entry: &core_model::MediaManifestEntry, project_root: &Path) -> Option<PathBuf> {
+    match &entry.source {
+        MediaSource::External { absolute_path } => Some(PathBuf::from(absolute_path)),
+        MediaSource::Project { relative_path } => Some(project_root.join(relative_path)),
+    }
+}
+
+/// Composite and encode an entire project timeline to `output`.
+///
+/// Resolves each clip's source file from `manifest` (relative sources against
+/// `project_root`), decodes the source frame at the clip's mapped time, and
+/// composites via render_core. Decoding seeks per frame, so this favours
+/// correctness over speed; a sequential-decode fast path is a follow-up.
+pub fn export_project(
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+    project_root: &Path,
+    output: &Path,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let total = timeline.total_frames();
+    if total <= 0 {
+        return Err("timeline has no frames to export".into());
+    }
+    let fps = timeline.fps;
+    let paths: HashMap<&str, PathBuf> = manifest
+        .entries
+        .iter()
+        .filter_map(|e| source_path(e, project_root).map(|p| (e.id.as_str(), p)))
+        .collect();
+
+    export_timeline(
+        timeline,
+        manifest,
+        output,
+        width,
+        height,
+        fps as i32,
+        total,
+        |clip, frame| {
+            let path = paths.get(clip.media_ref.as_str())?;
+            decode_frame_rgba(path, source_time_seconds(clip, frame, fps))
+        },
+    )
+}
+
 /// Decode the frame nearest `time_seconds` from `source` as RGBA at the
 /// source's native resolution. `None` on any decode failure.
 pub fn decode_frame_rgba(source: &Path, time_seconds: f64) -> Option<RgbaImage> {
@@ -350,12 +413,99 @@ pub fn decode_frame_rgba(source: &Path, time_seconds: f64) -> Option<RgbaImage> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_model::{
+        ClipType, Crop, Interpolation, MediaManifestEntry, Track, Transform,
+    };
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join("fronda-video-export-tests").join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn full_frame_clip(id: &str, media_ref: &str, start: i64, dur: i64) -> Clip {
+        Clip {
+            id: id.into(),
+            media_ref: media_ref.into(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: start,
+            duration_frames: dur,
+            trim_start_frame: 0,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            opacity: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            transform: Transform::from_top_left(0.0, 0.0, 1.0, 1.0),
+            crop: Crop::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+            effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
+            compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
+        }
+    }
+
+    fn single_video_timeline(clip: Clip) -> Timeline {
+        Timeline {
+            fps: 15,
+            width: 64,
+            height: 48,
+            tracks: vec![Track {
+                id: "v1".into(),
+                r#type: ClipType::Video,
+                muted: false,
+                hidden: false,
+                sync_locked: false,
+                clips: vec![clip],
+            }],
+            settings_configured: true,
+            selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
+        }
+    }
+
+    fn external_entry(id: &str, absolute_path: &Path) -> MediaManifestEntry {
+        MediaManifestEntry {
+            id: id.into(),
+            name: id.into(),
+            r#type: ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: absolute_path.to_string_lossy().into_owned(),
+            },
+            duration: 1.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+        }
     }
 
     #[test]
@@ -416,5 +566,53 @@ mod tests {
         let mut enc = Mp4Encoder::new(&dir.join("clip.mp4"), 64, 48, 15).unwrap();
         let wrong = RgbaImage::solid(32, 24, [0, 0, 0, 255]);
         assert!(enc.write_frame(&wrong).is_err());
+    }
+
+    #[test]
+    fn source_time_seconds_maps_project_frames() {
+        let mut clip = full_frame_clip("c", "m", 10, 30);
+        clip.trim_start_frame = 6; // 6 project frames into the source
+        clip.speed = 2.0;
+        // At the clip's first timeline frame: only the trim offset, at 15 fps.
+        assert!((source_time_seconds(&clip, 10, 15) - 6.0 / 15.0).abs() < 1e-9);
+        // 5 frames in at 2x speed → source frame 6 + 10 = 16 → 16/15 s.
+        assert!((source_time_seconds(&clip, 15, 15) - 16.0 / 15.0).abs() < 1e-9);
+        // Frames before the clip clamp to the start (rel = 0).
+        assert!((source_time_seconds(&clip, 0, 15) - 6.0 / 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn external_source_path_is_absolute() {
+        let entry = external_entry("m", Path::new("/media/clip.mp4"));
+        let p = source_path(&entry, Path::new("/project")).unwrap();
+        assert_eq!(p, PathBuf::from("/media/clip.mp4"));
+    }
+
+    #[test]
+    fn export_project_with_fixture_roundtrips() {
+        if !encoder_available() {
+            eprintln!("skipping: no video encoder in linked ffmpeg");
+            return;
+        }
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
+        assert!(fixture.is_file(), "fixture missing: {}", fixture.display());
+
+        let dir = temp_dir("export-project");
+        let out = dir.join("out.mp4");
+        let clip = full_frame_clip("c1", "m1", 0, 3);
+        let timeline = single_video_timeline(clip);
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(external_entry("m1", &fixture));
+
+        export_project(&timeline, &manifest, &dir, &out, 64, 48)
+            .expect("real fixture export should succeed");
+
+        assert!(std::fs::metadata(&out).unwrap().len() > 0);
+        let decoded = decode_frame_rgba(&out, 0.0).expect("exported video decodes");
+        assert_eq!(decoded.width, 64);
+        assert_eq!(decoded.height, 48);
+        // The composited frame is fully opaque (source fills the canvas).
+        assert_eq!(decoded.pixels[3], 255);
     }
 }
