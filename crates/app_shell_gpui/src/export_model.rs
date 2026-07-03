@@ -61,7 +61,7 @@ pub fn interchange_content(
     manifest: &MediaManifest,
 ) -> Option<String> {
     match mode {
-        ExportMode::Xml => Some(XmlExport::export(timeline)),
+        ExportMode::Xml => Some(XmlExport::export_with_manifest(timeline, manifest)),
         ExportMode::Fcpxml => Some(FcpxmlExport::export(timeline, manifest)),
         ExportMode::Video | ExportMode::PalmierProject => None,
     }

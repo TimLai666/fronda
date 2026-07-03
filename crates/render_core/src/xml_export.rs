@@ -1,5 +1,5 @@
-use core_model::{Clip, ClipType, Timeline, Track};
-use std::collections::HashMap;
+use core_model::{Clip, ClipType, MediaManifest, MediaSource, Timeline, Track};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 /// A source's start timecode: frame number in the timecode track's own quanta rate,
@@ -65,13 +65,23 @@ impl XmlExport {
     /// XML-014: Flip state is not preserved.
     /// XML-015: Keyframe easing curves not preserved.
     pub fn export(timeline: &Timeline) -> String {
-        Self::export_with_timecodes(timeline, None)
+        Self::export_with_timecodes(timeline, None, None)
+    }
+
+    /// Like [`XmlExport::export`] but resolves real media file paths (as
+    /// `file://localhost//…` pathurls) and dedupes repeated files from `manifest`.
+    pub fn export_with_manifest(timeline: &Timeline, manifest: &MediaManifest) -> String {
+        Self::export_with_timecodes(timeline, None, Some(manifest))
     }
 
     fn export_with_timecodes(
         timeline: &Timeline,
         media_timecodes: Option<&HashMap<String, SourceTimecode>>,
+        manifest: Option<&MediaManifest>,
     ) -> String {
+        // XML-011 dedup: a full <file> is emitted once per (media_ref, is_audio);
+        // later uses become self-closing <file id="…"/> references.
+        let mut emitted: HashSet<String> = HashSet::new();
         let mut xml = String::new();
         writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").ok();
         writeln!(xml, "<!DOCTYPE xmeml>").ok();
@@ -115,7 +125,7 @@ impl XmlExport {
                     continue;
                 }
                 let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
-                write_clip(&mut xml, clip, timeline.fps, tc);
+                write_clip(&mut xml, clip, timeline.fps, tc, manifest, false, &mut emitted);
             }
             writeln!(xml, "          </videotrack>").ok();
             writeln!(xml, "        </track>").ok();
@@ -142,7 +152,7 @@ impl XmlExport {
             writeln!(xml, "            <locked>FALSE</locked>").ok();
             for clip in &track.clips {
                 let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
-                write_clip(&mut xml, clip, timeline.fps, tc);
+                write_clip(&mut xml, clip, timeline.fps, tc, manifest, true, &mut emitted);
             }
             writeln!(xml, "          </audiotrack>").ok();
             writeln!(xml, "        </track>").ok();
@@ -168,11 +178,20 @@ fn timeline_total_frames(timeline: &Timeline) -> i64 {
 
 /// Write a single clip element.
 /// XML-002~008: preserves clip placement, trims, speed, volume, opacity, transform, crop, fades.
-/// XML-011: emits one full <file> element per clip (simplified — no dedup since
-///          we don't have media manifest here).
+/// XML-011: a full `<file>` is emitted once per (media_ref, is_audio); repeats
+///          become self-closing `<file id="…"/>` references. When `manifest`
+///          resolves the media, the pathurl is the real `file://localhost//…` path.
 /// XML-012: clips without media_ref are skipped.
 /// `timecode` is the optional SourceTimecode from the tmcd track. Upstream PR #136.
-fn write_clip(xml: &mut String, clip: &Clip, fps: i64, timecode: Option<SourceTimecode>) {
+fn write_clip(
+    xml: &mut String,
+    clip: &Clip,
+    fps: i64,
+    timecode: Option<SourceTimecode>,
+    manifest: Option<&MediaManifest>,
+    is_audio: bool,
+    emitted: &mut HashSet<String>,
+) {
     if clip.media_ref.is_empty() {
         // XML-012: skip unresolved media
         return;
@@ -297,10 +316,29 @@ fn write_clip(xml: &mut String, clip: &Clip, fps: i64, timecode: Option<SourceTi
         writeln!(xml, "              </link>").ok();
     }
 
-    // File reference (XML-011)
-    writeln!(xml, "              <file>").ok();
-    writeln!(xml, "                <name>{}</name>", clip.media_ref).ok();
-    writeln!(xml, "                <pathurl>{}</pathurl>", clip.media_ref).ok();
+    // File reference (XML-011): dedup by (media_ref, is_audio); resolve real path.
+    let file_id = format!("{}-{}", clip.media_ref, if is_audio { "a" } else { "v" });
+    if emitted.contains(&file_id) {
+        writeln!(xml, "              <file id=\"{}\"/>", xml_escape(&file_id)).ok();
+        writeln!(xml, "            </clipitem>").ok();
+        return;
+    }
+    emitted.insert(file_id.clone());
+    let entry = manifest.and_then(|m| m.entry_for(&clip.media_ref));
+    let name = entry
+        .map(|e| e.name.clone())
+        .unwrap_or_else(|| clip.media_ref.clone());
+    let pathurl = entry
+        .map(|e| media_src(&e.source))
+        .unwrap_or_else(|| clip.media_ref.clone());
+    writeln!(xml, "              <file id=\"{}\">", xml_escape(&file_id)).ok();
+    writeln!(xml, "                <name>{}</name>", xml_escape(&name)).ok();
+    writeln!(
+        xml,
+        "                <pathurl>{}</pathurl>",
+        xml_escape(&pathurl)
+    )
+    .ok();
     writeln!(xml, "                <rate>").ok();
     writeln!(xml, "                  <timebase>{}</timebase>", fps).ok();
     writeln!(xml, "                </rate>").ok();
@@ -329,6 +367,33 @@ fn write_clip(xml: &mut String, clip: &Clip, fps: i64, timecode: Option<SourceTi
     writeln!(xml, "              </file>").ok();
 
     writeln!(xml, "            </clipitem>").ok();
+}
+
+/// Build a Premiere-friendly `file://localhost//…` pathurl from a media source
+/// (upstream #14). Project-relative media keeps its relative path.
+fn media_src(source: &MediaSource) -> String {
+    match source {
+        MediaSource::External { absolute_path } => {
+            let p = absolute_path.replace('\\', "/");
+            format!("file://localhost//{}", p.trim_start_matches('/'))
+        }
+        MediaSource::Project { relative_path } => relative_path.clone(),
+    }
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -388,6 +453,125 @@ mod tests {
             transcription_language: None,
             compound_timelines: std::collections::HashMap::new(),
         }
+    }
+
+    fn mk_clip(id: &str, media_ref: &str, kind: ClipType, start: i64) -> Clip {
+        Clip {
+            id: id.into(),
+            media_ref: media_ref.into(),
+            media_type: kind.clone(),
+            source_clip_type: kind,
+            start_frame: start,
+            duration_frames: 30,
+            trim_start_frame: 0,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            opacity: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            transform: core_model::Transform::default(),
+            crop: core_model::Crop::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+            effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
+            compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
+        }
+    }
+
+    fn tl_with(clips: Vec<Clip>) -> Timeline {
+        Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            tracks: vec![Track {
+                id: "v1".into(),
+                r#type: ClipType::Video,
+                muted: false,
+                hidden: false,
+                sync_locked: false,
+                clips,
+            }],
+            settings_configured: true,
+            selected_clip_ids: std::collections::HashSet::new(),
+            transcription_language: None,
+            compound_timelines: std::collections::HashMap::new(),
+        }
+    }
+
+    fn manifest_with(media_ref: &str, name: &str, path: &str) -> MediaManifest {
+        let mut m = MediaManifest::default();
+        m.entries.push(core_model::MediaManifestEntry {
+            id: media_ref.into(),
+            name: name.into(),
+            r#type: ClipType::Video,
+            source: MediaSource::External {
+                absolute_path: path.into(),
+            },
+            duration: 5.0,
+            generation_input: None,
+            source_width: Some(1920),
+            source_height: Some(1080),
+            source_fps: Some(30.0),
+            has_audio: Some(true),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+        });
+        m
+    }
+
+    #[test]
+    fn xml_014_manifest_resolves_file_localhost_pathurl() {
+        let timeline = tl_with(vec![mk_clip("c1", "m1", ClipType::Video, 0)]);
+        let m = manifest_with("m1", "shot.mp4", "/media/shot.mp4");
+        let xml = XmlExport::export_with_manifest(&timeline, &m);
+        assert!(
+            xml.contains("<pathurl>file://localhost//media/shot.mp4</pathurl>"),
+            "{xml}"
+        );
+        assert!(xml.contains("<name>shot.mp4</name>"));
+        // Without a manifest, pathurl falls back to the media_ref (unchanged).
+        assert!(XmlExport::export(&timeline).contains("<pathurl>m1</pathurl>"));
+    }
+
+    #[test]
+    fn xml_015_file_dedup_emits_one_full_and_self_closing_repeats() {
+        let timeline = tl_with(vec![
+            mk_clip("c1", "m1", ClipType::Video, 0),
+            mk_clip("c2", "m1", ClipType::Video, 30),
+        ]);
+        let xml = XmlExport::export(&timeline);
+        assert_eq!(
+            xml.matches("<file id=\"m1-v\">").count(),
+            1,
+            "one full <file> for the shared media"
+        );
+        assert_eq!(
+            xml.matches("<file id=\"m1-v\"/>").count(),
+            1,
+            "the repeat is a self-closing reference"
+        );
     }
 
     #[test]
@@ -698,7 +882,7 @@ mod tests {
             },
         );
         // Access via private method through XmlExport
-        let xml = XmlExport::export_with_timecodes(&timeline, Some(&map));
+        let xml = XmlExport::export_with_timecodes(&timeline, Some(&map), None);
         assert!(xml.contains("<timecode>"));
         assert!(xml.contains("<string>00:00:03:10</string>")); // frame 100 at 30fps
         assert!(xml.contains("<displayformat>NDF</displayformat>"));
