@@ -81,6 +81,7 @@ pub fn parse_response(resp: &Value) -> ParsedResponse {
 #[derive(Debug, Clone)]
 pub struct ToolCallRecord {
     pub name: String,
+    pub input: Value,
     pub result: Result<Value, String>,
 }
 
@@ -187,6 +188,7 @@ pub fn run_agent_turn(
             result_blocks.push(tool_result_block(&tu.id, &result));
             tool_calls.push(ToolCallRecord {
                 name: tu.name.clone(),
+                input: tu.input.clone(),
                 result,
             });
         }
