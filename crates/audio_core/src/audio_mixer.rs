@@ -86,6 +86,40 @@ pub fn mix(placements: &[AudioPlacement], channels: usize, min_frames: usize) ->
     out
 }
 
+/// Resample interleaved PCM to exactly `out_frames` per-channel frames with
+/// linear interpolation (time-stretch / speed change). Empty input yields
+/// `out_frames` of silence; a single input frame is held.
+pub fn resample_linear(samples: &[f32], channels: usize, out_frames: usize) -> Vec<f32> {
+    if channels == 0 || out_frames == 0 {
+        return Vec::new();
+    }
+    let in_frames = samples.len() / channels;
+    let mut out = vec![0.0f32; out_frames * channels];
+    if in_frames == 0 {
+        return out;
+    }
+    if in_frames == 1 {
+        for f in 0..out_frames {
+            for c in 0..channels {
+                out[f * channels + c] = samples[c];
+            }
+        }
+        return out;
+    }
+    for f in 0..out_frames {
+        let pos = f as f64 * in_frames as f64 / out_frames as f64;
+        let i0 = (pos.floor() as usize).min(in_frames - 1);
+        let i1 = (i0 + 1).min(in_frames - 1);
+        let t = (pos - i0 as f64) as f32;
+        for c in 0..channels {
+            let a = samples[i0 * channels + c];
+            let b = samples[i1 * channels + c];
+            out[f * channels + c] = a + (b - a) * t;
+        }
+    }
+    out
+}
+
 /// Downsample interleaved PCM to `bucket_count` peak amplitudes for waveform
 /// display. Each bucket is the maximum absolute sample across all channels in
 /// its slice of frames. Returns at most `bucket_count` values (fewer when there
@@ -219,6 +253,39 @@ mod tests {
     fn empty_input_is_empty() {
         assert!(mix(&[], 2, 0).is_empty());
         assert!(mix(&[placement(0, vec![1.0], 1.0)], 0, 0).is_empty());
+    }
+
+    #[test]
+    fn resample_upsamples_with_interpolation() {
+        // 2 mono frames [0, 1] → 4 frames interpolates the ramp.
+        let out = resample_linear(&[0.0, 1.0], 1, 4);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0], 0.0);
+        assert!(out[1] > 0.0 && out[1] < out[2], "monotonic ramp");
+        assert!(out[3] >= out[2]);
+    }
+
+    #[test]
+    fn resample_downsamples() {
+        // 4 frames → 2 frames (2x speed): roughly half the samples.
+        let out = resample_linear(&[0.0, 0.25, 0.5, 0.75], 1, 2);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], 0.0);
+    }
+
+    #[test]
+    fn resample_stereo_keeps_channels() {
+        // 2 stereo frames → 3 frames, channels stay separate.
+        let out = resample_linear(&[0.0, 1.0, 1.0, 0.0], 2, 3);
+        assert_eq!(out.len(), 6);
+        assert_eq!(out[0], 0.0); // L of frame 0
+        assert_eq!(out[1], 1.0); // R of frame 0
+    }
+
+    #[test]
+    fn resample_empty_and_single() {
+        assert_eq!(resample_linear(&[], 1, 3), vec![0.0, 0.0, 0.0]);
+        assert_eq!(resample_linear(&[0.7], 1, 2), vec![0.7, 0.7]);
     }
 
     #[test]

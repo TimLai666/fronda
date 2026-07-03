@@ -6,7 +6,7 @@
 //! (platform adapter, like the compositor's `fetch_source`), so this is pure and
 //! unit-tested with synthetic PCM.
 
-use audio_core::audio_mixer::{mix, samples_per_frame, AudioPlacement};
+use audio_core::audio_mixer::{mix, resample_linear, samples_per_frame, AudioPlacement};
 use core_model::{Clip, Timeline};
 use timeline_core::TimelineMathExt;
 
@@ -24,6 +24,28 @@ pub fn clip_placement_geometry(
     (start, fade_in, fade_out, clip.volume as f32)
 }
 
+/// Take the clip's trimmed source range from the full decoded `source` PCM and
+/// time-stretch it to the clip's timeline duration (so `speed != 1` changes both
+/// duration and pitch, matching a classic speed change). `spf` is samples per
+/// project frame. Returns silence-padded output of exactly `duration * spf`
+/// per-channel frames.
+fn extract_clip_audio(source: &[f32], channels: usize, clip: &Clip, spf: usize) -> Vec<f32> {
+    let out_frames = (clip.duration_frames.max(0) as usize) * spf;
+    if channels == 0 || out_frames == 0 {
+        return Vec::new();
+    }
+    let total_frames = source.len() / channels;
+    // Source range the clip consumes: [trim_start, trim_start + duration*speed)
+    // in project frames → sample frames.
+    let consumed = (clip.duration_frames as f64 * clip.speed.max(0.0)).round() as i64;
+    let src_start = (clip.trim_start_frame.max(0) as usize * spf).min(total_frames);
+    let src_end = ((clip.trim_start_frame.max(0) + consumed.max(0)) as usize * spf)
+        .min(total_frames)
+        .max(src_start);
+    let excerpt = &source[src_start * channels..src_end * channels];
+    resample_linear(excerpt, channels, out_frames)
+}
+
 /// Mix all audio-bearing clips of `timeline` into one interleaved buffer at
 /// `sample_rate`/`channels`. `fetch_pcm(clip)` returns the clip's decoded
 /// interleaved PCM at the mix rate/channels, or `None` when the clip has no
@@ -36,15 +58,19 @@ pub fn mix_timeline_audio(
     mut fetch_pcm: impl FnMut(&Clip) -> Option<Vec<f32>>,
 ) -> Vec<f32> {
     let fps = timeline.fps;
+    let spf = samples_per_frame(sample_rate, fps);
     let mut placements: Vec<AudioPlacement> = Vec::new();
     for track in &timeline.tracks {
         if track.muted {
             continue;
         }
         for clip in &track.clips {
-            let Some(samples) = fetch_pcm(clip) else {
+            let Some(source) = fetch_pcm(clip) else {
                 continue;
             };
+            // `fetch_pcm` returns the whole source; take only the clip's
+            // trimmed range and time-stretch it (speed) to its timeline length.
+            let samples = extract_clip_audio(&source, channels, clip, spf);
             let (start, fade_in, fade_out, volume) =
                 clip_placement_geometry(clip, sample_rate, fps);
             placements.push(AudioPlacement {
@@ -148,6 +174,32 @@ mod tests {
         let out = mix_timeline_audio(&tl, 30, 1, |_| Some(vec![0.5, 0.5, 0.5]));
         assert_eq!(out[0], 0.0, "frame 0 silent");
         assert_eq!(out[1], 0.5, "clip starts at frame 1 → sample 1");
+    }
+
+    #[test]
+    fn trim_start_offsets_into_the_source() {
+        // 30 Hz / 30 fps → 1 sample/frame. Clip trims 2 frames in, 4 frames long.
+        let mut clip = audio_clip("c", 0, 4, 1.0);
+        clip.trim_start_frame = 2;
+        let tl = timeline_with(vec![track("a", false, vec![clip])]);
+        // Source of 10 mono frames 0.0, 0.1, ... 0.9.
+        let source: Vec<f32> = (0..10).map(|i| i as f32 / 10.0).collect();
+        let out = mix_timeline_audio(&tl, 30, 1, |_| Some(source.clone()));
+        // Placed from frame 0: the trimmed excerpt starts at source frame 2.
+        assert!((out[0] - 0.2).abs() < 1e-6, "trim skips to 0.2, got {}", out[0]);
+        assert!((out[3] - 0.5).abs() < 1e-6, "got {}", out[3]);
+    }
+
+    #[test]
+    fn speed_time_stretches_to_timeline_length() {
+        // 2x speed, 2-frame clip consumes 4 source frames, output stays 2 frames.
+        let mut clip = audio_clip("c", 0, 2, 2.0);
+        clip.trim_start_frame = 0;
+        let tl = timeline_with(vec![track("a", false, vec![clip])]);
+        let source: Vec<f32> = (0..8).map(|i| i as f32 / 10.0).collect();
+        let out = mix_timeline_audio(&tl, 30, 1, |_| Some(source.clone()));
+        // Timeline length is 2 frames, so exactly 2 output samples for the clip.
+        assert_eq!(out.len(), 2, "output matches the timeline duration, not the source");
     }
 
     #[test]
