@@ -165,6 +165,30 @@ impl Default for SettingsState {
     }
 }
 
+impl SettingsState {
+    /// Whether a model id is enabled (i.e. not in `disabled_models`).
+    /// Models are enabled by default. Mirrors Swift `ModelPreferences`.
+    pub fn is_model_enabled(&self, id: &str) -> bool {
+        !self.disabled_models.iter().any(|m| m == id)
+    }
+
+    /// Enable or disable a model id, keeping `disabled_models` a de-duplicated set.
+    pub fn set_model_enabled(&mut self, id: &str, enabled: bool) {
+        if enabled {
+            self.disabled_models.retain(|m| m != id);
+        } else if !self.disabled_models.iter().any(|m| m == id) {
+            self.disabled_models.push(id.to_string());
+        }
+    }
+
+    /// Flip a model id's enabled state; returns the new enabled value.
+    pub fn toggle_model(&mut self, id: &str) -> bool {
+        let now_enabled = !self.is_model_enabled(id);
+        self.set_model_enabled(id, now_enabled);
+        now_enabled
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +275,25 @@ mod tests {
         assert!(state.mcp_enabled);
         assert_eq!(state.agent_model, "sonnet5");
         assert!(state.disabled_models.is_empty());
+    }
+
+    #[test]
+    fn model_enable_toggle_and_dedup() {
+        let mut s = SettingsState::default();
+        assert!(s.is_model_enabled("claude-opus-4-8"), "enabled by default");
+
+        s.set_model_enabled("claude-opus-4-8", false);
+        assert!(!s.is_model_enabled("claude-opus-4-8"));
+        assert_eq!(s.disabled_models, vec!["claude-opus-4-8".to_string()]);
+        // Disabling again does not duplicate.
+        s.set_model_enabled("claude-opus-4-8", false);
+        assert_eq!(s.disabled_models.len(), 1);
+
+        s.set_model_enabled("claude-opus-4-8", true);
+        assert!(s.is_model_enabled("claude-opus-4-8"));
+        assert!(s.disabled_models.is_empty());
+
+        assert!(!s.toggle_model("m"), "toggle disables");
+        assert!(s.toggle_model("m"), "toggle re-enables");
     }
 }

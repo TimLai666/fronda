@@ -270,6 +270,66 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Metadata / value formatting (Swift: InspectorView helpers, VolumeScale)
+// ---------------------------------------------------------------------------
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let (mut a, mut b) = (a.abs(), b.abs());
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
+/// Reduced aspect ratio string, e.g. `format_aspect_ratio(1920, 1080) == "16:9"`.
+/// Non-positive inputs yield `"0:0"`. Mirrors Swift `formatAspectRatio`.
+pub fn format_aspect_ratio(width: i64, height: i64) -> String {
+    if width <= 0 || height <= 0 {
+        return "0:0".to_string();
+    }
+    let g = gcd(width, height);
+    format!("{}:{}", width / g, height / g)
+}
+
+/// Duration as `h:mm:ss` (with hours) or `m:ss`. Mirrors Swift `formatDuration`.
+pub fn format_duration(seconds: f64) -> String {
+    let total = (seconds.round() as i64).max(0);
+    let hours = total / 3600;
+    let mins = (total % 3600) / 60;
+    let secs = total % 60;
+    if hours > 0 {
+        format!("{hours}:{mins:02}:{secs:02}")
+    } else {
+        format!("{mins}:{secs:02}")
+    }
+}
+
+/// Volume-slider floor (hard mute, rendered as "-∞ dB"). Swift: `VolumeScale.floorDb`.
+pub const VOLUME_FLOOR_DB: f64 = -60.0;
+/// Volume-slider ceiling. Swift: `VolumeScale.ceilingDb`.
+pub const VOLUME_CEILING_DB: f64 = 15.0;
+
+/// Linear amplitude → dB, clamped to [floor, ceiling]; `<= 0` linear → floor.
+/// Mirrors Swift `VolumeScale.dbFromLinear`.
+pub fn db_from_linear(linear: f64) -> f64 {
+    if linear <= 0.0 {
+        return VOLUME_FLOOR_DB;
+    }
+    (20.0 * linear.log10()).clamp(VOLUME_FLOOR_DB, VOLUME_CEILING_DB)
+}
+
+/// dB → linear amplitude; at/below the floor → true 0 (hard mute).
+/// Mirrors Swift `VolumeScale.linearFromDb`.
+pub fn linear_from_db(db: f64) -> f64 {
+    if db <= VOLUME_FLOOR_DB {
+        return 0.0;
+    }
+    10f64.powf(db.min(VOLUME_CEILING_DB) / 20.0)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -277,6 +337,34 @@ where
 mod tests {
     use super::*;
     use core_model::{ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, Transform};
+
+    #[test]
+    fn format_aspect_ratio_reduces() {
+        assert_eq!(format_aspect_ratio(1920, 1080), "16:9");
+        assert_eq!(format_aspect_ratio(1024, 1024), "1:1");
+        assert_eq!(format_aspect_ratio(1080, 1920), "9:16");
+        assert_eq!(format_aspect_ratio(0, 1080), "0:0");
+    }
+
+    #[test]
+    fn format_duration_hours_and_minutes() {
+        assert_eq!(format_duration(3661.0), "1:01:01");
+        assert_eq!(format_duration(65.0), "1:05");
+        assert_eq!(format_duration(9.4), "0:09");
+        assert_eq!(format_duration(0.0), "0:00");
+    }
+
+    #[test]
+    fn volume_db_linear_round_trip_and_floor() {
+        assert!((db_from_linear(1.0) - 0.0).abs() < 1e-9);
+        assert_eq!(db_from_linear(0.0), VOLUME_FLOOR_DB);
+        assert_eq!(linear_from_db(VOLUME_FLOOR_DB), 0.0);
+        // -6 dB ≈ 0.501 linear; round-trip within tolerance.
+        let l = linear_from_db(-6.0);
+        assert!((db_from_linear(l) - (-6.0)).abs() < 1e-6);
+        // Ceiling clamp.
+        assert_eq!(db_from_linear(100.0), VOLUME_CEILING_DB);
+    }
 
     fn make_clip() -> Clip {
         Clip {

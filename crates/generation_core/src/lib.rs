@@ -1101,10 +1101,11 @@ impl CostCalculator {
         Some(cost.ceil() as i64)
     }
 
-    /// Format credits into a human-readable string.
+    /// Format credits into a human-readable string. `None` renders as an em dash,
+    /// matching Swift `CostEstimator.format`.
     pub fn format_cost(credits: Option<i64>) -> String {
         match credits {
-            None => "--".to_string(),
+            None => "—".to_string(),
             Some(0) => "0 credits".to_string(),
             Some(1) => "1 credit".to_string(),
             Some(n) => format!("{n} credits"),
@@ -2353,7 +2354,7 @@ mod tests {
 
     #[test]
     fn cost_008_cost_formatting() {
-        assert_eq!(CostCalculator::format_cost(None), "--");
+        assert_eq!(CostCalculator::format_cost(None), "—");
         assert_eq!(CostCalculator::format_cost(Some(0)), "0 credits");
         assert_eq!(CostCalculator::format_cost(Some(1)), "1 credit");
         assert_eq!(CostCalculator::format_cost(Some(50)), "50 credits");

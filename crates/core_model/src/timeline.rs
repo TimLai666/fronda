@@ -125,6 +125,26 @@ impl ClipType {
         }
     }
 
+    /// MIME content-type for a supported media file extension (case-insensitive),
+    /// or `None` if the extension is not a recognized import type. Inverse of the
+    /// Swift import mime↔extension table; used for reference uploads.
+    pub fn content_type_for_extension(ext: &str) -> Option<&'static str> {
+        match ext.to_lowercase().as_str() {
+            "mp4" | "m4v" => Some("video/mp4"),
+            "mov" => Some("video/quicktime"),
+            "mp3" => Some("audio/mpeg"),
+            "wav" => Some("audio/wav"),
+            "aac" => Some("audio/aac"),
+            "m4a" => Some("audio/mp4"),
+            "png" => Some("image/png"),
+            "jpg" | "jpeg" => Some("image/jpeg"),
+            "tiff" | "tif" => Some("image/tiff"),
+            "heic" | "heif" => Some("image/heic"),
+            "json" | "lottie" => Some("application/json"),
+            _ => None,
+        }
+    }
+
     /// Human-readable name for this clip type.
     pub fn name(&self) -> &'static str {
         match self {
@@ -734,6 +754,17 @@ mod tests {
         assert_eq!(ClipType::from_extension("txt"), None);
         assert_eq!(ClipType::from_extension(""), None);
         assert_eq!(ClipType::from_extension("exe"), None);
+    }
+
+    #[test]
+    fn content_type_for_extension_maps_known_types() {
+        assert_eq!(ClipType::content_type_for_extension("mov"), Some("video/quicktime"));
+        assert_eq!(ClipType::content_type_for_extension("MP4"), Some("video/mp4"));
+        assert_eq!(ClipType::content_type_for_extension("m4a"), Some("audio/mp4"));
+        assert_eq!(ClipType::content_type_for_extension("mp3"), Some("audio/mpeg"));
+        assert_eq!(ClipType::content_type_for_extension("jpeg"), Some("image/jpeg"));
+        assert_eq!(ClipType::content_type_for_extension("heic"), Some("image/heic"));
+        assert_eq!(ClipType::content_type_for_extension("txt"), None);
     }
 
     #[test]
