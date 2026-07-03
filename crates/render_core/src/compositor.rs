@@ -447,24 +447,19 @@ pub fn apply_chroma_key(img: &mut RgbaImage, key: &ChromaKey) {
         if d <= cutoff {
             px[3] = 0;
         } else if spill > 0.0 {
-            // Pull the key colour's dominant channel toward the other two.
-            let avg = ((r + g + b) - key_channel(kr, kg, kb, r, g, b)) / 2.0;
+            // Spill suppression: where the key's dominant channel exceeds the
+            // average of the other two (key-colour bleed), pull it down toward
+            // that average by `spill`. Independent of the keying distance.
             let (ci, cv) = dominant_channel(kr, kg, kb);
             if cv > 0.5 {
-                let cur = px[ci] as f64 / 255.0;
-                let reduced = cur + (avg - cur) * spill * (1.0 - (d / cutoff).min(1.0)).max(0.0);
-                px[ci] = (reduced * 255.0).round().clamp(0.0, 255.0) as u8;
+                let chans = [r, g, b];
+                let others = (chans[0] + chans[1] + chans[2] - chans[ci]) / 2.0;
+                if chans[ci] > others {
+                    let reduced = chans[ci] + (others - chans[ci]) * spill;
+                    px[ci] = (reduced * 255.0).round().clamp(0.0, 255.0) as u8;
+                }
             }
         }
-    }
-}
-
-/// Value of the channel that is the key's dominant one, read from a pixel.
-fn key_channel(kr: f64, kg: f64, kb: f64, r: f64, g: f64, b: f64) -> f64 {
-    match dominant_channel(kr, kg, kb).0 {
-        0 => r,
-        1 => g,
-        _ => b,
     }
 }
 
@@ -1052,6 +1047,25 @@ mod tests {
         // Fully desaturated red → its luma in every channel (~76).
         assert!(p[0] == p[1] && p[1] == p[2], "grey: {p:?}");
         assert!((p[0] as i32 - 76).abs() <= 1, "luma of red, got {}", p[0]);
+    }
+
+    #[test]
+    fn chroma_key_spill_suppression_reduces_green_bleed() {
+        // A greenish pixel that is NOT close enough to be keyed out.
+        let mut img = RgbaImage::solid(1, 1, [77, 204, 77, 255]); // ~[0.3, 0.8, 0.3]
+        let key = core_model::ChromaKey {
+            enabled: true,
+            key_r: 0.0,
+            key_g: 1.0,
+            key_b: 0.0,
+            tolerance: 0.2, // cutoff ~0.35; this pixel's distance ~0.47 → kept
+            spill_suppression: 1.0,
+        };
+        apply_chroma_key(&mut img, &key);
+        let p = px(&img, 0, 0);
+        assert_eq!(p[3], 255, "not keyed out");
+        assert!(p[1] < 204, "green spill reduced (was 204, now {})", p[1]);
+        assert!(p[1] <= 78, "pulled toward the ~0.3 of the other channels");
     }
 
     #[test]
