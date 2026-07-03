@@ -94,14 +94,22 @@ pub struct AgentOutcome {
 }
 
 fn tools_json(tools: &[ToolDefinition]) -> Vec<Value> {
+    let last = tools.len().saturating_sub(1);
     tools
         .iter()
-        .map(|t| {
-            json!({
+        .enumerate()
+        .map(|(i, t)| {
+            let mut v = json!({
                 "name": t.name,
                 "description": t.description,
                 "input_schema": t.input_schema,
-            })
+            });
+            // Cache the (static) tool set across turns: a breakpoint on the last
+            // tool caches all of them (Anthropic prompt caching).
+            if i == last {
+                v["cache_control"] = json!({ "type": "ephemeral" });
+            }
+            v
         })
         .collect()
 }
@@ -160,7 +168,13 @@ pub fn run_agent_turn(
         let request = json!({
             "model": model,
             "max_tokens": max_tokens,
-            "system": system,
+            // System prompt as a cached content block — it's static across the
+            // turn's iterations, so caching it cuts input-token cost.
+            "system": [{
+                "type": "text",
+                "text": system,
+                "cache_control": { "type": "ephemeral" },
+            }],
             "tools": tools,
             "messages": messages,
         });
@@ -348,6 +362,31 @@ mod tests {
         let second = &transport.seen_requests[1];
         let block = &second["messages"][2]["content"][0];
         assert_eq!(block["is_error"], true);
+    }
+
+    #[test]
+    fn request_marks_system_and_last_tool_for_caching() {
+        let mut transport = ScriptedTransport::new(vec![text_response("done")]);
+        let mut executor =
+            ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
+        let tools = crate::all_tools();
+        run_agent_turn(
+            &mut transport,
+            |name, args| executor.execute(name, args),
+            "m",
+            1024,
+            "SYS",
+            &tools,
+            "hi",
+            4,
+        )
+        .unwrap();
+        let req = &transport.seen_requests[0];
+        assert_eq!(req["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(req["system"][0]["text"], "SYS");
+        let arr = req["tools"].as_array().unwrap();
+        assert_eq!(arr.last().unwrap()["cache_control"]["type"], "ephemeral");
+        assert!(arr[0].get("cache_control").is_none(), "only the last tool is a breakpoint");
     }
 
     #[test]
