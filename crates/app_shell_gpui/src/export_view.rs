@@ -705,7 +705,7 @@ impl Render for ExportView {
                                             .spawn(async move {
                                                 let w = timeline.width.max(2) as u32;
                                                 let h = timeline.height.max(2) as u32;
-                                                crate::video_export::export_project(
+                                                crate::audio_export::export_project_with_audio(
                                                     &timeline, &manifest, &root, &out, w, h,
                                                 )
                                                 .map(|()| out.clone())

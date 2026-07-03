@@ -137,6 +137,69 @@ pub fn clip_waveform_peaks(source: &Path, buckets: usize) -> Option<Vec<f32>> {
     Some(audio_core::audio_mixer::compute_peaks(&pcm, 1, buckets))
 }
 
+/// Export a project timeline to an mp4 with both video and audio. Composites
+/// each frame (reusing one decoder per source), mixes the timeline audio, and
+/// muxes an AAC stream when there is any non-silent audio (otherwise video-only).
+/// Both streams start at PTS 0, so they stay in sync.
+pub fn export_project_with_audio(
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+    project_root: &Path,
+    output: &Path,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    use crate::video_export::{
+        source_time_seconds, Mp4Encoder, SourceDecoder,
+    };
+    use render_core::compositor::compose_frame;
+    use timeline_core::TimelineMathExt;
+
+    let total = timeline.total_frames();
+    if total <= 0 {
+        return Err("timeline has no frames to export".into());
+    }
+    let fps = timeline.fps;
+    let (arate, ach) = (48_000u32, 2u16);
+
+    let paths: HashMap<String, PathBuf> = manifest
+        .entries
+        .iter()
+        .filter_map(|e| source_path(e, project_root).map(|p| (e.id.clone(), p)))
+        .collect();
+
+    let mixed = mix_timeline_audio(timeline, arate, ach as usize, |clip: &Clip| {
+        let path = paths.get(clip.media_ref.as_str())?;
+        decode_audio_pcm(path, arate, ach)
+    });
+    let has_audio = mixed.iter().any(|&s| s != 0.0);
+
+    let mut enc = if has_audio {
+        Mp4Encoder::new_with_audio(output, width, height, fps as i32, arate, ach)?
+    } else {
+        Mp4Encoder::new(output, width, height, fps as i32)?
+    };
+
+    let ew = (width & !1).max(2) as usize;
+    let eh = (height & !1).max(2) as usize;
+    let mut decoders: HashMap<String, Option<SourceDecoder>> = HashMap::new();
+    for frame in 0..total {
+        let img = compose_frame(timeline, manifest, frame, ew, eh, |clip| {
+            let path = paths.get(clip.media_ref.as_str())?;
+            decoders
+                .entry(clip.media_ref.clone())
+                .or_insert_with(|| SourceDecoder::open(path))
+                .as_mut()?
+                .frame_at_seconds(source_time_seconds(clip, frame, fps))
+        });
+        enc.write_frame(&img)?;
+    }
+    if has_audio {
+        enc.write_audio(&mixed)?;
+    }
+    enc.finish()
+}
+
 /// Mix every audio-bearing clip of `timeline` and write a WAV stem to `out`.
 pub fn export_audio_wav(
     timeline: &Timeline,
@@ -266,6 +329,103 @@ mod tests {
             blend_mode: Default::default(),
             chroma_key: None,
         }
+    }
+
+    fn video_clip(media_ref: &str, start: i64, dur: i64) -> Clip {
+        let mut c = audio_clip(media_ref, start, dur);
+        c.media_type = ClipType::Video;
+        c.source_clip_type = ClipType::Video;
+        c.transform = Transform::from_top_left(0.0, 0.0, 1.0, 1.0);
+        c
+    }
+
+    fn external_entry(id: &str, path: &Path, kind: ClipType, has_audio: bool) -> MediaManifestEntry {
+        MediaManifestEntry {
+            id: id.into(),
+            name: id.into(),
+            r#type: kind,
+            source: MediaSource::External {
+                absolute_path: path.to_string_lossy().into_owned(),
+            },
+            duration: 1.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: Some(has_audio),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+        }
+    }
+
+    fn external_entry_video(id: &str, path: &Path) -> MediaManifestEntry {
+        external_entry(id, path, ClipType::Video, false)
+    }
+
+    fn external_entry_audio(id: &str, path: &Path) -> MediaManifestEntry {
+        external_entry(id, path, ClipType::Audio, true)
+    }
+
+    #[test]
+    fn export_project_with_audio_muxes_video_and_audio() {
+        use crate::video_export::encoder_available;
+        if !encoder_available()
+            || ffmpeg::encoder::find(ffmpeg::codec::Id::AAC).is_none()
+        {
+            eprintln!("skipping: no video/AAC encoder");
+            return;
+        }
+        let dir = temp_dir("project-av");
+        // Audio source (WAV) + a video source (the committed fixture).
+        let wav = dir.join("a.wav");
+        make_wav(&wav, 48_000, 2, 9600); // 0.2s stereo
+        let video_fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
+
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(external_entry_video("v1", &video_fixture));
+        manifest.entries.push(external_entry_audio("a1", &wav));
+
+        let timeline = Timeline {
+            fps: 15,
+            width: 64,
+            height: 48,
+            tracks: vec![
+                Track {
+                    id: "vid".into(),
+                    r#type: ClipType::Video,
+                    muted: false,
+                    hidden: false,
+                    sync_locked: false,
+                    clips: vec![video_clip("v1", 0, 3)],
+                },
+                Track {
+                    id: "aud".into(),
+                    r#type: ClipType::Audio,
+                    muted: false,
+                    hidden: false,
+                    sync_locked: false,
+                    clips: vec![audio_clip("a1", 0, 3)],
+                },
+            ],
+            settings_configured: true,
+            selected_clip_ids: Default::default(),
+            transcription_language: None,
+            compound_timelines: Default::default(),
+        };
+
+        let out = dir.join("out.mp4");
+        export_project_with_audio(&timeline, &manifest, &dir, &out, 64, 48).expect("av export");
+        assert!(std::fs::metadata(&out).unwrap().len() > 0);
+        assert!(decode_audio_pcm(&out, 48_000, 2).is_some_and(|p| !p.is_empty()));
+        assert!(crate::video_export::decode_frame_rgba(&out, 0.0).is_some());
     }
 
     #[test]

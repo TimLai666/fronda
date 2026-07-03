@@ -10,7 +10,9 @@
 
 use core_model::{Clip, MediaManifest, MediaSource, Timeline};
 use ffmpeg_the_third as ffmpeg;
-use ffmpeg::format::Pixel;
+use ffmpeg::format::sample::Type as SampleType;
+use ffmpeg::format::{Pixel, Sample};
+use ffmpeg::util::channel_layout::ChannelLayout;
 use ffmpeg::Rational;
 use render_core::compositor::{compose_frame, RgbaImage};
 use std::collections::HashMap;
@@ -43,8 +45,20 @@ fn err<T>(context: &str, e: ffmpeg::Error) -> Result<T, String> {
     Err(format!("{context}: {e}"))
 }
 
-/// Incremental RGBA → mp4 encoder. Feed frames with [`write_frame`], then
-/// [`finish`] to flush and mux the trailer.
+/// AAC audio stream muxed alongside the video (optional).
+struct AudioTrack {
+    encoder: ffmpeg::codec::encoder::audio::Encoder,
+    stream_index: usize,
+    enc_time_base: Rational,
+    ost_time_base: Rational,
+    frame_size: usize,
+    channels: usize,
+    layout_mask: ffmpeg::util::channel_layout::ChannelLayoutMask,
+    next_pts: i64,
+}
+
+/// Incremental RGBA → mp4 encoder. Feed frames with [`write_frame`], optionally
+/// audio with [`write_audio`], then [`finish`] to flush and mux the trailer.
 pub struct Mp4Encoder {
     octx: ffmpeg::format::context::Output,
     encoder: ffmpeg::codec::encoder::video::Encoder,
@@ -55,13 +69,36 @@ pub struct Mp4Encoder {
     enc_time_base: Rational,
     ost_time_base: Rational,
     next_pts: i64,
+    audio: Option<AudioTrack>,
     finished: bool,
 }
 
 impl Mp4Encoder {
-    /// Open `output` for writing at `width`x`height` (rounded down to even, as
-    /// YUV420P requires) and `fps` frames per second.
+    /// Open `output` for writing video at `width`x`height` and `fps`.
     pub fn new(output: &Path, width: u32, height: u32, fps: i32) -> Result<Self, String> {
+        Self::build(output, width, height, fps, None)
+    }
+
+    /// Like [`new`] but also muxes an AAC audio stream at `audio_rate` /
+    /// `audio_channels`; feed samples with [`write_audio`].
+    pub fn new_with_audio(
+        output: &Path,
+        width: u32,
+        height: u32,
+        fps: i32,
+        audio_rate: u32,
+        audio_channels: u16,
+    ) -> Result<Self, String> {
+        Self::build(output, width, height, fps, Some((audio_rate, audio_channels)))
+    }
+
+    fn build(
+        output: &Path,
+        width: u32,
+        height: u32,
+        fps: i32,
+        audio: Option<(u32, u16)>,
+    ) -> Result<Self, String> {
         init_ffmpeg();
         let width = width & !1;
         let height = height & !1;
@@ -114,6 +151,15 @@ impl Mp4Encoder {
             stream_index = ost.index();
         }
 
+        // Build the audio encoder + stream before write_header (both streams
+        // must exist first).
+        let mut audio_track = match audio {
+            Some((rate, channels)) => {
+                Some(build_audio_track(&mut octx, rate, channels, global_header)?)
+            }
+            None => None,
+        };
+
         if let Err(e) = octx.write_header() {
             return err("write header", e);
         }
@@ -121,6 +167,12 @@ impl Mp4Encoder {
             .stream(stream_index)
             .map(|s| s.time_base())
             .unwrap_or(enc_time_base);
+        if let Some(track) = audio_track.as_mut() {
+            track.ost_time_base = octx
+                .stream(track.stream_index)
+                .map(|s| s.time_base())
+                .unwrap_or(track.enc_time_base);
+        }
 
         let scaler = match ffmpeg::software::scaling::Context::get(
             Pixel::RGBA,
@@ -145,8 +197,52 @@ impl Mp4Encoder {
             enc_time_base,
             ost_time_base,
             next_pts: 0,
+            audio: audio_track,
             finished: false,
         })
+    }
+
+    /// Encode interleaved f32 PCM (at the audio rate/channels passed to
+    /// [`new_with_audio`]) into the audio stream. No-op without an audio track.
+    pub fn write_audio(&mut self, pcm: &[f32]) -> Result<(), String> {
+        let Some(track) = self.audio.as_mut() else {
+            return Ok(());
+        };
+        let ch = track.channels;
+        let fs = track.frame_size.max(1);
+        for chunk in pcm.chunks(fs * ch) {
+            let n = chunk.len() / ch;
+            let mut frame =
+                ffmpeg::frame::Audio::new(Sample::F32(SampleType::Planar), fs, track.layout_mask);
+            for c in 0..ch {
+                let plane = frame.plane_mut::<f32>(c);
+                for (i, slot) in plane.iter_mut().enumerate().take(fs) {
+                    *slot = if i < n { chunk[i * ch + c] } else { 0.0 };
+                }
+            }
+            frame.set_pts(Some(track.next_pts));
+            track.next_pts += fs as i64;
+            if let Err(e) = track.encoder.send_frame(&frame) {
+                return err("send audio frame", e);
+            }
+            Self::drain_audio(track, &mut self.octx)?;
+        }
+        Ok(())
+    }
+
+    fn drain_audio(
+        track: &mut AudioTrack,
+        octx: &mut ffmpeg::format::context::Output,
+    ) -> Result<(), String> {
+        let mut packet = ffmpeg::codec::packet::Packet::empty();
+        while track.encoder.receive_packet(&mut packet).is_ok() {
+            packet.set_stream(track.stream_index);
+            packet.rescale_ts(track.enc_time_base, track.ost_time_base);
+            if let Err(e) = packet.write_interleaved(octx) {
+                return err("write audio packet", e);
+            }
+        }
+        Ok(())
     }
 
     /// Encode one RGBA frame. Its dimensions must match the encoder's.
@@ -206,6 +302,12 @@ impl Mp4Encoder {
             return err("send eof", e);
         }
         self.drain()?;
+        if let Some(track) = self.audio.as_mut() {
+            if let Err(e) = track.encoder.send_eof() {
+                return err("send audio eof", e);
+            }
+            Self::drain_audio(track, &mut self.octx)?;
+        }
         if let Err(e) = self.octx.write_trailer() {
             return err("write trailer", e);
         }
@@ -218,6 +320,66 @@ impl Drop for Mp4Encoder {
         // Best-effort flush if the caller dropped without finish().
         let _ = self.finish_inner();
     }
+}
+
+/// Build and open the AAC audio encoder + add its stream to `octx`. The mix rate
+/// must match `rate` so no resampling is needed (packed f32 → planar frames).
+fn build_audio_track(
+    octx: &mut ffmpeg::format::context::Output,
+    rate: u32,
+    channels: u16,
+    global_header: bool,
+) -> Result<AudioTrack, String> {
+    let acodec = ffmpeg::encoder::find(ffmpeg::codec::Id::AAC)
+        .ok_or("no AAC encoder in linked ffmpeg")?;
+    let layout = ChannelLayout::default_for_channels(channels as u32);
+    let layout_mask = layout.mask().ok_or("audio channel layout has no mask")?;
+    let enc_time_base = Rational(1, rate as i32);
+
+    let actx = ffmpeg::codec::context::Context::new_with_codec(acodec);
+    let mut aenc = match actx.encoder().audio() {
+        Ok(e) => e,
+        Err(e) => return err("create audio encoder", e),
+    };
+    aenc.set_rate(rate as i32);
+    aenc.set_ch_layout(layout);
+    aenc.set_format(Sample::F32(SampleType::Planar));
+    aenc.set_bit_rate(128_000);
+    aenc.set_time_base(enc_time_base);
+    if global_header {
+        aenc.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
+    }
+    let encoder = match aenc.open_as(acodec) {
+        Ok(e) => e,
+        Err(e) => return err("open audio encoder", e),
+    };
+    // AAC reports 1024; fall back to 1024 if a codec reports 0 (variable).
+    let frame_size = match encoder.frame_size() as usize {
+        0 => 1024,
+        n => n,
+    };
+
+    let stream_index;
+    {
+        let mut ost = match octx.add_stream(acodec) {
+            Ok(s) => s,
+            Err(e) => return err("add audio stream", e),
+        };
+        ost.set_parameters(ffmpeg::codec::Parameters::from(&encoder));
+        ost.set_time_base(enc_time_base);
+        stream_index = ost.index();
+    }
+
+    Ok(AudioTrack {
+        encoder,
+        stream_index,
+        enc_time_base,
+        ost_time_base: enc_time_base,
+        frame_size,
+        channels: channels as usize,
+        layout_mask,
+        next_pts: 0,
+    })
 }
 
 /// Target bit rate heuristic: ~0.1 bits per pixel-second, floored so tiny test
@@ -686,6 +848,38 @@ mod tests {
         let entry = external_entry("m", Path::new("/media/clip.mp4"));
         let p = source_path(&entry, Path::new("/project")).unwrap();
         assert_eq!(p, PathBuf::from("/media/clip.mp4"));
+    }
+
+    #[test]
+    fn encode_video_plus_audio_muxes_both_streams() {
+        if ffmpeg::encoder::find(ffmpeg::codec::Id::AAC).is_none() || !encoder_available() {
+            eprintln!("skipping: no AAC or video encoder in linked ffmpeg");
+            return;
+        }
+        let dir = temp_dir("av");
+        let out = dir.join("av.mp4");
+        let (w, h, fps) = (64u32, 48u32, 15i32);
+
+        let mut enc = Mp4Encoder::new_with_audio(&out, w, h, fps, 48_000, 2).expect("open av");
+        for _ in 0..10 {
+            enc.write_frame(&RgbaImage::solid(w as usize, h as usize, [200, 30, 30, 255]))
+                .unwrap();
+        }
+        // ~0.5s of a quiet stereo tone at 48 kHz.
+        let samples: Vec<f32> = (0..48_000)
+            .flat_map(|i| {
+                let v = ((i as f32 * 0.05).sin()) * 0.2;
+                [v, v]
+            })
+            .collect();
+        enc.write_audio(&samples).unwrap();
+        enc.finish().unwrap();
+
+        assert!(std::fs::metadata(&out).unwrap().len() > 0);
+        // Both streams must survive the mux and re-decode.
+        let audio = crate::audio_export::decode_audio_pcm(&out, 48_000, 2);
+        assert!(audio.as_ref().is_some_and(|p| !p.is_empty()), "audio stream decodes");
+        assert!(decode_frame_rgba(&out, 0.0).is_some(), "video stream decodes");
     }
 
     #[test]
