@@ -301,6 +301,48 @@ pub fn blit_scaled(
     }
 }
 
+/// Separable box blur with the given pixel `radius` (a fast gaussian approx).
+/// Averages each channel — including alpha — over the `2*radius+1` window,
+/// clamping at edges. No-op for radius 0. PR #8 blur path.
+pub fn apply_blur(img: &mut RgbaImage, radius: usize) {
+    if radius == 0 || img.width == 0 || img.height == 0 {
+        return;
+    }
+    let (w, h) = (img.width, img.height);
+    // Horizontal pass into a temp buffer.
+    let mut tmp = vec![0u8; img.pixels.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let lo = x.saturating_sub(radius);
+            let hi = (x + radius).min(w - 1);
+            for c in 0..4 {
+                let mut sum = 0.0;
+                for sx in lo..=hi {
+                    sum += img.pixels[(y * w + sx) * 4 + c] as f64;
+                }
+                // Divide by the full window (edge samples clamp-repeat conceptually).
+                let count = (hi - lo + 1) as f64;
+                tmp[(y * w + x) * 4 + c] = (sum / count).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    // Vertical pass back into the image.
+    for y in 0..h {
+        for x in 0..w {
+            let lo = y.saturating_sub(radius);
+            let hi = (y + radius).min(h - 1);
+            for c in 0..4 {
+                let mut sum = 0.0;
+                for sy in lo..=hi {
+                    sum += tmp[(sy * w + x) * 4 + c] as f64;
+                }
+                let count = (hi - lo + 1) as f64;
+                img.pixels[(y * w + x) * 4 + c] = (sum / count).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
 /// Apply a per-channel RGB function (result clamped to `0..=255`), leaving alpha.
 fn map_rgb(img: &mut RgbaImage, f: impl Fn(f64) -> f64) {
     for px in img.pixels.chunks_exact_mut(4) {
@@ -540,6 +582,14 @@ pub fn compose_frame(
             let fx = crate::effects::analyze_clip_effects(clip, rel);
             if fx.has_color_adjustments {
                 apply_color_adjustments(&mut src, &fx.effects);
+            }
+            if fx.has_blur_or_vignette {
+                for e in &fx.effects {
+                    if e.enabled && matches!(e.effect_type.as_str(), "blur.gaussian" | "blur") {
+                        let radius = e.params.values().next().copied().unwrap_or(0.0);
+                        apply_blur(&mut src, radius.max(0.0).round() as usize);
+                    }
+                }
             }
             let c = timeline_core::resolved_crop_at(clip, rel);
             let region = (
@@ -892,6 +942,34 @@ mod tests {
             params,
             grade_curve: None,
         }
+    }
+
+    #[test]
+    fn blur_uniform_image_is_unchanged() {
+        let mut img = RgbaImage::solid(5, 5, [100, 150, 200, 255]);
+        apply_blur(&mut img, 1);
+        assert_eq!(px(&img, 2, 2), [100, 150, 200, 255]);
+    }
+
+    #[test]
+    fn blur_spreads_a_bright_pixel() {
+        // A single white pixel on black; after blur its neighbours brighten and
+        // its own value drops.
+        let mut img = RgbaImage::new(5, 5);
+        let ci = (2 * 5 + 2) * 4;
+        img.pixels[ci..ci + 4].copy_from_slice(&[255, 255, 255, 255]);
+        apply_blur(&mut img, 1);
+        assert!(px(&img, 2, 2)[0] < 255, "center spread out");
+        assert!(px(&img, 1, 2)[0] > 0, "neighbour picked up brightness");
+    }
+
+    #[test]
+    fn blur_radius_zero_is_noop() {
+        let mut img = RgbaImage::new(3, 3);
+        img.pixels[0..4].copy_from_slice(&[10, 20, 30, 255]);
+        let before = img.pixels.clone();
+        apply_blur(&mut img, 0);
+        assert_eq!(img.pixels, before);
     }
 
     #[test]
