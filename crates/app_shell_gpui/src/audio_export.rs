@@ -126,6 +126,17 @@ pub fn decode_audio_pcm(
     Some(out)
 }
 
+/// Decode `source`'s audio and downsample it to `buckets` waveform peaks for
+/// timeline display. `None` when the source has no decodable audio.
+pub fn clip_waveform_peaks(source: &Path, buckets: usize) -> Option<Vec<f32>> {
+    // Mono at a modest rate is plenty for a display envelope.
+    let pcm = decode_audio_pcm(source, 8_000, 1)?;
+    if pcm.is_empty() {
+        return None;
+    }
+    Some(audio_core::audio_mixer::compute_peaks(&pcm, 1, buckets))
+}
+
 /// Mix every audio-bearing clip of `timeline` and write a WAV stem to `out`.
 pub fn export_audio_wav(
     timeline: &Timeline,
@@ -192,6 +203,17 @@ mod tests {
         // Values stay in range and are non-trivial (not all silence).
         assert!(pcm.iter().all(|s| s.abs() <= 1.0));
         assert!(pcm.iter().any(|s| s.abs() > 0.1));
+    }
+
+    #[test]
+    fn waveform_peaks_from_generated_wav() {
+        let dir = temp_dir("peaks");
+        let src = dir.join("tone.wav");
+        make_wav(&src, 48_000, 1, 4800); // ramps 0..0.5 repeatedly
+        let peaks = clip_waveform_peaks(&src, 16).expect("wav has audio");
+        assert_eq!(peaks.len(), 16);
+        assert!(peaks.iter().all(|&p| (0.0..=1.0).contains(&p)));
+        assert!(peaks.iter().any(|&p| p > 0.1), "envelope is non-trivial");
     }
 
     #[test]
