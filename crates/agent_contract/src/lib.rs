@@ -17,8 +17,8 @@ pub use tools::{skill_prompt_index, system_instruction_with_skills};
 pub use undo::{UndoCommand, UndoError, UndoStack};
 
 pub use prompt_caching::{
-    build_cached_conversation, CacheBreakpoint, CacheStrategy, CachedContent, CachedConversation,
-    CachedMessage,
+    build_agent_request, build_cached_conversation, CacheBreakpoint, CacheStrategy, CachedContent,
+    CachedConversation, CachedMessage,
 };
 pub use tools::{all_tools, ToolDefinition, SYSTEM_INSTRUCTION};
 

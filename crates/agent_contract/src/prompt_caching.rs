@@ -144,9 +144,120 @@ pub fn build_cached_conversation(
     }
 }
 
+fn content_block(c: &CachedContent) -> serde_json::Value {
+    let mut b = serde_json::json!({ "type": "text", "text": c.content });
+    if c.breakpoint.is_some() {
+        b["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+    }
+    b
+}
+
+/// Assemble an Anthropic Messages API request body from a cache-annotated
+/// conversation, the tool set, and model params. System prompt and messages
+/// carry `cache_control: {type: ephemeral}` wherever the conversation marked a
+/// breakpoint; the tool set is emitted as the `tools` array. Pure — an HTTP
+/// client serializes and sends the returned JSON.
+pub fn build_agent_request(
+    model: &str,
+    max_tokens: u32,
+    tools: &[crate::tools::ToolDefinition],
+    conversation: &CachedConversation,
+) -> serde_json::Value {
+    let mut req = serde_json::json!({
+        "model": model,
+        "max_tokens": max_tokens,
+    });
+
+    if let Some(sys) = &conversation.system_prompt {
+        req["system"] = serde_json::json!([content_block(sys)]);
+    }
+
+    req["tools"] = serde_json::Value::Array(
+        tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                })
+            })
+            .collect(),
+    );
+
+    let messages: Vec<serde_json::Value> = conversation
+        .messages
+        .iter()
+        .map(|m| {
+            let mut blocks: Vec<serde_json::Value> = m.content.iter().map(content_block).collect();
+            // A message-level breakpoint caches its final content block.
+            if m.breakpoint.is_some() {
+                if let Some(last) = blocks.last_mut() {
+                    last["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+                }
+            }
+            serde_json::json!({ "role": m.role, "content": blocks })
+        })
+        .collect();
+    req["messages"] = serde_json::Value::Array(messages);
+
+    req
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_agent_request_assembles_anthropic_body() {
+        let conversation = CachedConversation {
+            system_prompt: Some(CachedContent {
+                content: "SYS".into(),
+                breakpoint: Some(CacheBreakpoint::Ephemeral),
+            }),
+            messages: vec![
+                CachedMessage {
+                    role: "user".into(),
+                    content: vec![CachedContent {
+                        content: "hi".into(),
+                        breakpoint: None,
+                    }],
+                    breakpoint: Some(CacheBreakpoint::Ephemeral),
+                },
+                CachedMessage {
+                    role: "assistant".into(),
+                    content: vec![CachedContent {
+                        content: "hello".into(),
+                        breakpoint: None,
+                    }],
+                    breakpoint: None,
+                },
+            ],
+        };
+        let tools = crate::tools::all_tools();
+        let req = build_agent_request("claude-sonnet-5", 4096, &tools, &conversation);
+
+        assert_eq!(req["model"], "claude-sonnet-5");
+        assert_eq!(req["max_tokens"], 4096);
+        // System is a cache-controlled text block.
+        assert_eq!(req["system"][0]["text"], "SYS");
+        assert_eq!(req["system"][0]["cache_control"]["type"], "ephemeral");
+        // Tools array mirrors the tool set.
+        assert_eq!(
+            req["tools"].as_array().unwrap().len(),
+            tools.len()
+        );
+        assert!(req["tools"][0]["input_schema"].is_object());
+        // Messages preserved; the user message's breakpoint caches its last block.
+        assert_eq!(req["messages"][0]["role"], "user");
+        assert_eq!(req["messages"][0]["content"][0]["text"], "hi");
+        assert_eq!(
+            req["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
+        assert_eq!(req["messages"][1]["role"], "assistant");
+        assert!(req["messages"][1]["content"][0].get("cache_control").is_none());
+    }
 
     fn msg(role: &str, content: &str) -> (String, String) {
         (role.to_string(), content.to_string())
