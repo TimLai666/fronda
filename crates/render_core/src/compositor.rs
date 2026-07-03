@@ -9,7 +9,7 @@
 //! opacity with source-over alpha blending (nearest-neighbour sampling).
 //! Rotation, blend modes, effects, and bilinear sampling are follow-ups.
 
-use core_model::{Clip, ClipType, MediaManifest, Timeline};
+use core_model::{BlendMode, Clip, ClipType, MediaManifest, Timeline};
 
 /// An RGBA8 image (row-major, 4 bytes/pixel: R, G, B, A).
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +54,63 @@ impl RgbaImage {
     }
 }
 
+/// Separable blend function for one colour channel (both in `0..=1`). Issue #203.
+/// The four non-separable HSL modes (Hue/Saturation/Color/Luminosity) fall back
+/// to `Normal` for now (they need whole-pixel HSL math).
+pub fn blend_channel(mode: BlendMode, s: f64, d: f64) -> f64 {
+    use BlendMode::*;
+    let r = match mode {
+        Normal | Hue | Saturation | Color | Luminosity => s,
+        Multiply => s * d,
+        Screen => 1.0 - (1.0 - s) * (1.0 - d),
+        Overlay => {
+            if d <= 0.5 {
+                2.0 * s * d
+            } else {
+                1.0 - 2.0 * (1.0 - s) * (1.0 - d)
+            }
+        }
+        Darken => s.min(d),
+        Lighten => s.max(d),
+        ColorDodge => {
+            if s >= 1.0 {
+                1.0
+            } else {
+                (d / (1.0 - s)).min(1.0)
+            }
+        }
+        ColorBurn => {
+            if s <= 0.0 {
+                0.0
+            } else {
+                1.0 - ((1.0 - d) / s).min(1.0)
+            }
+        }
+        HardLight => {
+            if s <= 0.5 {
+                2.0 * s * d
+            } else {
+                1.0 - 2.0 * (1.0 - s) * (1.0 - d)
+            }
+        }
+        SoftLight => {
+            if s <= 0.5 {
+                d - (1.0 - 2.0 * s) * d * (1.0 - d)
+            } else {
+                let dd = if d <= 0.25 {
+                    ((16.0 * d - 12.0) * d + 4.0) * d
+                } else {
+                    d.sqrt()
+                };
+                d + (2.0 * s - 1.0) * (dd - d)
+            }
+        }
+        Difference => (s - d).abs(),
+        Exclusion => s + d - 2.0 * s * d,
+    };
+    r.clamp(0.0, 1.0)
+}
+
 /// Composite `src` into `canvas` scaled to fill the pixel rect `dst`, rotated
 /// `rotation_degrees` about the rect's centre, sampling only the normalized
 /// sub-rectangle `src_region` of the source (for crop), with `opacity` (0..1)
@@ -70,6 +127,7 @@ pub fn blit_scaled(
     dst: (f64, f64, f64, f64),
     opacity: f64,
     rotation_degrees: f64,
+    blend: BlendMode,
 ) {
     let (dx, dy, dw, dh) = dst;
     if dw <= 0.0 || dh <= 0.0 || src.width == 0 || src.height == 0 || opacity <= 0.0 {
@@ -123,9 +181,11 @@ pub fn blit_scaled(
             }
             let ci = (py * canvas.width + px) * 4;
             for k in 0..3 {
-                let s = [sr, sg, sb][k] as f64;
-                let d = canvas.pixels[ci + k] as f64;
-                canvas.pixels[ci + k] = (s * a + d * (1.0 - a)).round().clamp(0.0, 255.0) as u8;
+                let s = [sr, sg, sb][k] as f64 / 255.0;
+                let d = canvas.pixels[ci + k] as f64 / 255.0;
+                let b = blend_channel(blend, s, d);
+                canvas.pixels[ci + k] =
+                    ((b * a + d * (1.0 - a)) * 255.0).round().clamp(0.0, 255.0) as u8;
             }
             // Straight-alpha over: out_a = src_a + dst_a*(1-src_a).
             let da = canvas.pixels[ci + 3] as f64 / 255.0;
@@ -201,6 +261,7 @@ pub fn compose_frame(
             (dx, dy, dw, dh),
             clip.opacity,
             t.rotation,
+            clip.blend_mode,
         );
     }
 
@@ -279,7 +340,15 @@ mod tests {
         let mut canvas = RgbaImage::new(4, 4);
         let red = RgbaImage::solid(2, 2, [255, 0, 0, 255]);
         // Fill the whole 4x4 canvas.
-        blit_scaled(&mut canvas, &red, (0.0, 0.0, 1.0, 1.0), (0.0, 0.0, 4.0, 4.0), 1.0, 0.0);
+        blit_scaled(
+            &mut canvas,
+            &red,
+            (0.0, 0.0, 1.0, 1.0),
+            (0.0, 0.0, 4.0, 4.0),
+            1.0,
+            0.0,
+            BlendMode::Normal,
+        );
         for y in 0..4 {
             for x in 0..4 {
                 assert_eq!(px(&canvas, x, y), [255, 0, 0, 255], "({x},{y})");
@@ -291,7 +360,15 @@ mod tests {
     fn blit_half_opacity_blends_over_black() {
         let mut canvas = RgbaImage::solid(2, 2, [0, 0, 0, 255]);
         let white = RgbaImage::solid(1, 1, [255, 255, 255, 255]);
-        blit_scaled(&mut canvas, &white, (0.0, 0.0, 1.0, 1.0), (0.0, 0.0, 2.0, 2.0), 0.5, 0.0);
+        blit_scaled(
+            &mut canvas,
+            &white,
+            (0.0, 0.0, 1.0, 1.0),
+            (0.0, 0.0, 2.0, 2.0),
+            0.5,
+            0.0,
+            BlendMode::Normal,
+        );
         // 255*0.5 + 0*0.5 = 127.5 → 128.
         assert_eq!(px(&canvas, 0, 0), [128, 128, 128, 255]);
     }
@@ -303,7 +380,15 @@ mod tests {
         let mut canvas = RgbaImage::new(8, 8);
         let green = RgbaImage::solid(1, 1, [0, 255, 0, 255]);
         // dst rect (x=2,y=3,w=4,h=2) → center (4,4); rotated 90° spans x∈[3,5), y∈[2,6).
-        blit_scaled(&mut canvas, &green, (0.0, 0.0, 1.0, 1.0), (2.0, 3.0, 4.0, 2.0), 1.0, 90.0);
+        blit_scaled(
+            &mut canvas,
+            &green,
+            (0.0, 0.0, 1.0, 1.0),
+            (2.0, 3.0, 4.0, 2.0),
+            1.0,
+            90.0,
+            BlendMode::Normal,
+        );
         // Center is filled; a point on the (now narrow) horizontal axis is empty.
         assert_eq!(px(&canvas, 4, 4), [0, 255, 0, 255], "center filled");
         assert_eq!(px(&canvas, 4, 2), [0, 255, 0, 255], "extends vertically");
@@ -353,5 +438,35 @@ mod tests {
         });
         assert!(!fetched, "clip not fetched when off-frame");
         assert_eq!(px(&out, 0, 0), [0, 0, 0, 0], "empty canvas");
+    }
+
+    #[test]
+    fn blend_channel_separable_modes() {
+        use BlendMode::*;
+        assert!((blend_channel(Normal, 0.3, 0.7) - 0.3).abs() < 1e-9);
+        assert!((blend_channel(Multiply, 0.5, 0.5) - 0.25).abs() < 1e-9);
+        assert!((blend_channel(Screen, 0.5, 0.5) - 0.75).abs() < 1e-9);
+        assert!((blend_channel(Darken, 0.3, 0.7) - 0.3).abs() < 1e-9);
+        assert!((blend_channel(Lighten, 0.3, 0.7) - 0.7).abs() < 1e-9);
+        assert!((blend_channel(Difference, 0.7, 0.3) - 0.4).abs() < 1e-9);
+        // Non-separable HSL modes fall back to Normal (src) for now.
+        assert!((blend_channel(Color, 0.3, 0.7) - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compose_applies_blend_mode() {
+        let bg = clip("bg", "m1", 0, 30);
+        let mut top = clip("top", "m2", 0, 30);
+        top.blend_mode = BlendMode::Multiply;
+        let timeline = tl(vec![bg, top]);
+        let out = compose_frame(&timeline, &MediaManifest::default(), 0, 2, 2, |c| {
+            if c.id == "bg" {
+                Some(RgbaImage::solid(2, 2, [255, 255, 255, 255])) // white
+            } else {
+                Some(RgbaImage::solid(2, 2, [128, 128, 128, 255])) // gray, multiply
+            }
+        });
+        // Multiply gray over white ≈ gray.
+        assert_eq!(px(&out, 0, 0), [128, 128, 128, 255]);
     }
 }
