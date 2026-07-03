@@ -110,4 +110,10 @@ jobs:
         run: swift build
 
       - name: Test
-        run: swift test
+        # The selected Xcode's Swift (6.2) is newer than the runner OS
+        # runtime in /usr/lib/swift, so the test bundle dlopen-s a Swift
+        # overlay dylib that only exists in the toolchain. Point the loader
+        # at the toolchain runtime for the test process.
+        run: |
+          TOOLCHAIN_SWIFT="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx"
+          DYLD_FALLBACK_LIBRARY_PATH="$TOOLCHAIN_SWIFT:${DYLD_FALLBACK_LIBRARY_PATH:-/usr/local/lib:/usr/lib}" swift test
