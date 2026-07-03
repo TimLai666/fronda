@@ -36,11 +36,11 @@ pub use edit::{
     place_clips, prune_empty_tracks, remove_clips, split_clip, ClipLocation,
 };
 pub use inspector::{
-    clamp_crop_visibility, constrain_crop_aspect, db_from_linear, fit_text_clip_to_content,
-    format_aspect_ratio, format_duration, linear_from_db, resize_preserving_aspect,
-    resize_text_font, resolved_crop_at, resolved_opacity_at, resolved_transform_at,
-    resolved_volume_at, unrotate_crop_delta,
-    AspectConstraint, VOLUME_CEILING_DB, VOLUME_FLOOR_DB,
+    clamp_crop_visibility, clip_at_point, constrain_crop_aspect, db_from_linear,
+    fit_text_clip_to_content, format_aspect_ratio, format_duration, linear_from_db,
+    resize_preserving_aspect, resize_text_font, resolved_crop_at, resolved_opacity_at,
+    resolved_transform_at, resolved_volume_at, unrotate_crop_delta, AspectConstraint,
+    VOLUME_CEILING_DB, VOLUME_FLOOR_DB,
 };
 pub use linking::{
     build_link_index, expand_to_link_group, link_clips, link_group_offsets, linked_partner_ids,

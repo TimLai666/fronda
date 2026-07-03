@@ -332,6 +332,38 @@ pub fn format_duration(seconds: f64) -> String {
     }
 }
 
+/// Topmost clip whose transformed rect contains a point (upstream #191, preview
+/// double-click select). `clips` are `(id, transform)` in top-to-bottom render
+/// order; `point` is in normalized canvas coords (0..1). Hit-testing is done in
+/// pixel space (aspect-correct) and accounts for each clip's rotation. Returns
+/// the first (topmost) clip that contains the point.
+pub fn clip_at_point(
+    clips: &[(String, Transform)],
+    point: (f64, f64),
+    canvas_width: f64,
+    canvas_height: f64,
+) -> Option<String> {
+    let px = point.0 * canvas_width;
+    let py = point.1 * canvas_height;
+    for (id, t) in clips {
+        let cx = t.center_x * canvas_width;
+        let cy = t.center_y * canvas_height;
+        let hw = (t.width * canvas_width).abs() / 2.0;
+        let hh = (t.height * canvas_height).abs() / 2.0;
+        // Un-rotate the point into the clip's local (axis-aligned) frame.
+        let rad = -t.rotation * PI / 180.0;
+        let (s, c) = (rad.sin(), rad.cos());
+        let dx = px - cx;
+        let dy = py - cy;
+        let lx = dx * c - dy * s;
+        let ly = dx * s + dy * c;
+        if lx.abs() <= hw && ly.abs() <= hh {
+            return Some(id.clone());
+        }
+    }
+    None
+}
+
 /// Volume-slider floor (hard mute, rendered as "-∞ dB"). Swift: `VolumeScale.floorDb`.
 pub const VOLUME_FLOOR_DB: f64 = -60.0;
 /// Volume-slider ceiling. Swift: `VolumeScale.ceilingDb`.
@@ -378,6 +410,54 @@ mod tests {
         assert_eq!(format_duration(65.0), "1:05");
         assert_eq!(format_duration(9.4), "0:09");
         assert_eq!(format_duration(0.0), "0:00");
+    }
+
+    #[test]
+    fn clip_at_point_topmost_and_rotation() {
+        let full = Transform::from_top_left(0.0, 0.0, 1.0, 1.0); // covers whole canvas
+        let quarter = Transform {
+            center_x: 0.5,
+            center_y: 0.5,
+            width: 0.5,
+            height: 0.5,
+            rotation: 0.0,
+            flip_horizontal: false,
+            flip_vertical: false,
+        };
+        // Topmost (first) clip containing the point wins.
+        let clips = vec![("top".to_string(), quarter), ("bg".to_string(), full)];
+        assert_eq!(
+            clip_at_point(&clips, (0.5, 0.5), 1920.0, 1080.0).as_deref(),
+            Some("top")
+        );
+        // A point outside the small clip falls through to the background.
+        assert_eq!(
+            clip_at_point(&clips, (0.05, 0.05), 1920.0, 1080.0).as_deref(),
+            Some("bg")
+        );
+        // A point outside every clip → None.
+        let only = vec![("q".to_string(), quarter)];
+        assert_eq!(clip_at_point(&only, (0.1, 0.1), 1920.0, 1080.0), None);
+
+        // Rotation: a wide clip rotated 90° becomes tall — a point above/below
+        // center (in the rotated extent) hits it, one to the side does not.
+        let wide = Transform {
+            center_x: 0.5,
+            center_y: 0.5,
+            width: 0.8,
+            height: 0.2,
+            rotation: 90.0,
+            flip_horizontal: false,
+            flip_vertical: false,
+        };
+        let rot = vec![("r".to_string(), wide)];
+        // On a square canvas the rotated rect spans tall; (0.5, 0.15) is inside.
+        assert_eq!(
+            clip_at_point(&rot, (0.5, 0.15), 1000.0, 1000.0).as_deref(),
+            Some("r")
+        );
+        // A point far to the side is outside the (now narrow) rotated width.
+        assert_eq!(clip_at_point(&rot, (0.85, 0.5), 1000.0, 1000.0), None);
     }
 
     #[test]
