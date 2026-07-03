@@ -133,7 +133,8 @@ pub const MCP_DEFAULT_PORT: u16 = 19789;
 pub const AGENT_MODEL_KEY: &str = "agentModel";
 
 /// Default agent model id (SETUI-012).
-pub const AGENT_DEFAULT_MODEL: &str = "sonnet46";
+/// Upstream palmier-pro #243: Sonnet 4.6 → Sonnet 5.
+pub const AGENT_DEFAULT_MODEL: &str = "sonnet5";
 
 /// Storage preference key constants.
 pub struct StoragePreferenceKeys;
@@ -238,7 +239,7 @@ mod tests {
     #[test]
     fn agent_model_defaults() {
         assert_eq!(AGENT_MODEL_KEY, "agentModel");
-        assert_eq!(AGENT_DEFAULT_MODEL, "sonnet46");
+        assert_eq!(AGENT_DEFAULT_MODEL, "sonnet5");
     }
 
     // Default settings
@@ -248,7 +249,7 @@ mod tests {
         assert!(state.notifications_enabled);
         assert!(state.telemetry_enabled);
         assert!(state.mcp_enabled);
-        assert_eq!(state.agent_model, "sonnet46");
+        assert_eq!(state.agent_model, "sonnet5");
         assert!(state.disabled_models.is_empty());
     }
 }

@@ -103,19 +103,25 @@ fn skips_corrupt_chat_files() {
 }
 
 #[test]
-fn invalid_media_json_is_fatal() {
+fn invalid_media_json_recovers_to_empty_manifest() {
+    // Upstream palmier-pro #224: a corrupt media.json must not block the open.
+    // The project loads with an empty manifest (media offline) and the
+    // original file is preserved on disk until the next save.
     let temp = tempdir().unwrap();
     let destination = temp.path().join("modern-rich.palmier");
     copy_dir_all(&fixture_bundle_path("modern-rich.palmier"), &destination);
     fs::write(destination.join(MANIFEST_FILENAME), "{ definitely-bad").unwrap();
 
-    let error = ProjectBundle::open(&destination).unwrap_err();
-    match error {
-        BundleError::DecodeJson { path, .. } => {
-            assert!(path.ends_with(MANIFEST_FILENAME));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    let bundle = ProjectBundle::open(&destination).expect("open should recover");
+    let manifest = bundle.manifest.expect("corrupt manifest degrades to empty");
+    assert!(
+        manifest.entries.is_empty(),
+        "recovered manifest should have no entries"
+    );
+
+    // Original corrupt file is left untouched on open.
+    let raw = fs::read_to_string(destination.join(MANIFEST_FILENAME)).unwrap();
+    assert_eq!(raw, "{ definitely-bad");
 }
 
 #[test]

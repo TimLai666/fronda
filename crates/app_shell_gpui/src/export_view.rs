@@ -357,8 +357,33 @@ impl Render for ExportView {
                                         div()
                                             .text_color(Text::SECONDARY)
                                             .text_size(px(FontSize::SM))
-                                            .child("Exports an XMEML timeline file compatible with Final Cut Pro, Premiere, and DaVinci Resolve."),
+                                            .child("Exports an XMEML timeline file compatible with Final Cut Pro 7, Premiere, and DaVinci Resolve."),
                                     )
+                                    .children(self.model.status_text().map(|s| {
+                                        div()
+                                            .text_color(Text::PRIMARY)
+                                            .text_size(px(FontSize::XS))
+                                            .child(s.to_string())
+                                    }))
+                                    .into_any_element(),
+                                ExportMode::Fcpxml => div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(Spacing::SM))
+                                    .px(px(Spacing::LG))
+                                    .py(px(Spacing::MD))
+                                    .child(
+                                        div()
+                                            .text_color(Text::SECONDARY)
+                                            .text_size(px(FontSize::SM))
+                                            .child("Exports an FCPXML 1.10 timeline file for Final Cut Pro X and DaVinci Resolve."),
+                                    )
+                                    .children(self.model.status_text().map(|s| {
+                                        div()
+                                            .text_color(Text::PRIMARY)
+                                            .text_size(px(FontSize::XS))
+                                            .child(s.to_string())
+                                    }))
                                     .into_any_element(),
                                 ExportMode::PalmierProject => {
                                     let missing = self.model.missing_file_count;
@@ -577,7 +602,40 @@ impl Render for ExportView {
                             .bg(if can_start { Accent::PRIMARY } else { Background::PROMINENT })
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _: &ClickEvent, _: &mut Window, cx| {
-                                if this.model.can_start_export() {
+                                if !this.model.can_start_export() {
+                                    return;
+                                }
+                                let mode = this.model.mode;
+                                if let Some(ext) = mode.interchange_extension() {
+                                    // Interchange export: pick a path, then generate + write.
+                                    let start_dir =
+                                        std::env::home_dir().unwrap_or_else(|| ".".into());
+                                    let default_name = format!("Timeline.{ext}");
+                                    let rx = cx
+                                        .prompt_for_new_path(&start_dir, Some(default_name.as_str()));
+                                    cx.spawn(async move |this, cx| {
+                                        if let Ok(Ok(Some(path))) = rx.await {
+                                            let result = {
+                                                let hub =
+                                                    crate::editor_state_hub::EditorStateHub::global();
+                                                let exec = hub.executor();
+                                                let guard = exec.lock().unwrap();
+                                                crate::export_model::write_interchange(
+                                                    mode,
+                                                    guard.timeline(),
+                                                    guard.media_manifest(),
+                                                    &path,
+                                                )
+                                                .map(|()| path.clone())
+                                            };
+                                            let _ = this.update(cx, |view, cx| {
+                                                view.model.set_interchange_result(result);
+                                                cx.notify();
+                                            });
+                                        }
+                                    })
+                                    .detach();
+                                } else {
                                     this.model.start();
                                     cx.notify();
                                 }

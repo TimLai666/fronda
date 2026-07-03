@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub mod bundle_export;
 pub mod effects;
 pub mod export_stall_watchdog;
+pub mod fcpxml_export;
 pub mod xml_export;
 pub mod xml_import;
 pub use effects::{

@@ -3,7 +3,10 @@
 //! Mirrors Swift ExportMode / VideoCodec / ExportView state without any
 //! platform dependencies. The view reads this and mutates it via actions.
 
+use core_model::{MediaManifest, Timeline};
 use generation_core::export_panel::{ExportPanelState, ExportStage};
+use render_core::fcpxml_export::FcpxmlExport;
+use render_core::xml_export::XmlExport;
 use render_core::{ExportFormat, ExportResolution};
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +15,10 @@ use serde::{Deserialize, Serialize};
 pub enum ExportMode {
     #[default]
     Video,
-    /// XMEML timeline interchange (for FCP, Premiere, DaVinci).
+    /// XMEML timeline interchange (for FCP 7, Premiere, DaVinci).
     Xml,
+    /// FCPXML 1.10 timeline interchange (for Final Cut Pro X, DaVinci Resolve).
+    Fcpxml,
     /// `.palmier` project bundle.
     PalmierProject,
 }
@@ -23,6 +28,7 @@ impl ExportMode {
         match self {
             ExportMode::Video => "Video (.mp4 / .mov)",
             ExportMode::Xml => "Timeline (.xml)",
+            ExportMode::Fcpxml => "Final Cut Pro (.fcpxml)",
             ExportMode::PalmierProject => "Palmier Project (.palmier)",
         }
     }
@@ -31,9 +37,47 @@ impl ExportMode {
         &[
             ExportMode::Video,
             ExportMode::Xml,
+            ExportMode::Fcpxml,
             ExportMode::PalmierProject,
         ]
     }
+
+    /// File extension for the text interchange modes; `None` for Video and
+    /// the `.palmier` bundle (handled by their own writers).
+    pub fn interchange_extension(self) -> Option<&'static str> {
+        match self {
+            ExportMode::Xml => Some("xml"),
+            ExportMode::Fcpxml => Some("fcpxml"),
+            ExportMode::Video | ExportMode::PalmierProject => None,
+        }
+    }
+}
+
+/// Generate the interchange-file text for the interchange export modes.
+/// Returns `None` for modes that do not produce a text interchange file.
+pub fn interchange_content(
+    mode: ExportMode,
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+) -> Option<String> {
+    match mode {
+        ExportMode::Xml => Some(XmlExport::export(timeline)),
+        ExportMode::Fcpxml => Some(FcpxmlExport::export(timeline, manifest)),
+        ExportMode::Video | ExportMode::PalmierProject => None,
+    }
+}
+
+/// Generate and write the interchange file for `mode` to `path`.
+/// Errors if `mode` is not a text interchange mode or the write fails.
+pub fn write_interchange(
+    mode: ExportMode,
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let content = interchange_content(mode, timeline, manifest)
+        .ok_or_else(|| format!("{mode:?} is not a text interchange mode"))?;
+    std::fs::write(path, content).map_err(|e| format!("Failed to write {}: {e}", path.display()))
 }
 
 /// Complete export panel state used by the gpui view.
@@ -92,6 +136,21 @@ impl ExportViewModel {
     pub fn status_text(&self) -> Option<&str> {
         self.panel.status_message.as_deref()
     }
+
+    /// Record the outcome of an interchange (Xml/Fcpxml) export so the view can
+    /// show success or failure instead of silently finishing.
+    pub fn set_interchange_result(&mut self, result: Result<std::path::PathBuf, String>) {
+        match result {
+            Ok(path) => {
+                self.panel.stage = ExportStage::Done;
+                self.panel.status_message = Some(format!("Exported to {}", path.display()));
+            }
+            Err(reason) => {
+                self.panel.stage = ExportStage::Failed;
+                self.panel.status_message = Some(format!("Export failed: {reason}"));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -106,8 +165,76 @@ mod tests {
     }
 
     #[test]
-    fn export_mode_all_has_three_entries() {
-        assert_eq!(ExportMode::all().len(), 3);
+    fn export_mode_all_has_four_entries() {
+        assert_eq!(ExportMode::all().len(), 4);
+    }
+
+    #[test]
+    fn interchange_content_matches_mode() {
+        let tl = Timeline::default();
+        let m = MediaManifest::default();
+        let xml = interchange_content(ExportMode::Xml, &tl, &m).unwrap();
+        assert!(xml.contains("<xmeml"), "Xml mode produces XMEML");
+        let fcp = interchange_content(ExportMode::Fcpxml, &tl, &m).unwrap();
+        assert!(
+            fcp.contains("<fcpxml version=\"1.10\">"),
+            "Fcpxml mode produces FCPXML"
+        );
+        assert!(interchange_content(ExportMode::Video, &tl, &m).is_none());
+        assert!(interchange_content(ExportMode::PalmierProject, &tl, &m).is_none());
+    }
+
+    #[test]
+    fn interchange_extensions() {
+        assert_eq!(ExportMode::Xml.interchange_extension(), Some("xml"));
+        assert_eq!(ExportMode::Fcpxml.interchange_extension(), Some("fcpxml"));
+        assert_eq!(ExportMode::Video.interchange_extension(), None);
+    }
+
+    #[test]
+    fn write_interchange_writes_fcpxml_file() {
+        let dir = std::env::temp_dir().join("fronda-export-model-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("timeline.fcpxml");
+        let _ = std::fs::remove_file(&path);
+
+        write_interchange(
+            ExportMode::Fcpxml,
+            &Timeline::default(),
+            &MediaManifest::default(),
+            &path,
+        )
+        .unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("<fcpxml version=\"1.10\">"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_interchange_result_reports_success_and_failure() {
+        let mut vm = ExportViewModel::new();
+        vm.set_interchange_result(Ok(std::path::PathBuf::from("/tmp/Timeline.fcpxml")));
+        assert_eq!(vm.panel.stage, ExportStage::Done);
+        assert!(vm.status_text().unwrap().contains("Exported to"));
+        assert!(vm.status_text().unwrap().contains("Timeline.fcpxml"));
+
+        vm.set_interchange_result(Err("disk full".into()));
+        assert_eq!(vm.panel.stage, ExportStage::Failed);
+        assert!(vm.status_text().unwrap().contains("Export failed: disk full"));
+    }
+
+    #[test]
+    fn write_interchange_rejects_video_mode() {
+        let path = std::env::temp_dir().join("fronda-export-should-not-exist.bin");
+        let err = write_interchange(
+            ExportMode::Video,
+            &Timeline::default(),
+            &MediaManifest::default(),
+            &path,
+        )
+        .unwrap_err();
+        assert!(err.contains("not a text interchange"), "err={err}");
     }
 
     #[test]

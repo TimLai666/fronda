@@ -37,6 +37,7 @@ pub mod keyframes_view;
 pub mod mcp_service;
 pub mod media_import;
 pub mod media_panel_model;
+pub mod skill_store;
 #[cfg(feature = "desktop-app")]
 pub mod media_panel_view;
 #[cfg(feature = "desktop-app")]

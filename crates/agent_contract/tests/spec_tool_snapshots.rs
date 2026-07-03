@@ -13,8 +13,8 @@ fn tdef_001_exactly_54_tools() {
     let tools = all_tools();
     assert_eq!(
         tools.len(),
-        54,
-        "TDEF-001: exactly 54 tools (42 + Issues #172/174/157/165/158/155/154)"
+        56,
+        "TDEF-001: 56 tools (55 + read_skill, upstream #199)"
     );
 }
 
@@ -45,7 +45,7 @@ fn tdef_002_all_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 54, "all 54 tool names must be unique");
+    assert_eq!(names.len(), 56, "all 56 tool names must be unique");
 }
 
 // ── TDEF-003: Each tool has a valid JSON schema ──────────────────────────────
@@ -86,18 +86,18 @@ fn tdef_003_schema_snapshot_get_timeline() {
 }
 
 #[test]
-fn tdef_003_schema_snapshot_split_clip() {
+fn tdef_003_schema_snapshot_split_clips() {
     let tools = all_tools();
-    let tool = tools.iter().find(|t| t.name == "split_clip").unwrap();
+    let tool = tools.iter().find(|t| t.name == "split_clips").unwrap();
     let json = serde_json::to_string_pretty(&tool.input_schema).unwrap();
     let schema: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let required: Vec<&str> = schema
-        .pointer("/required")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-        .unwrap_or_default();
-    assert!(required.contains(&"clipId"), "split_clip requires clipId");
-    assert!(required.contains(&"frame"), "split_clip requires frame");
+    let props = schema
+        .pointer("/properties")
+        .and_then(|v| v.as_object())
+        .expect("split_clips schema has properties");
+    assert!(props.contains_key("splits"), "split_clips has splits");
+    assert!(props.contains_key("trackIndex"), "split_clips has trackIndex");
+    assert!(props.contains_key("frames"), "split_clips has frames");
 }
 
 // ── TDEF-004: System instruction is present and non-empty ────────────────────

@@ -1005,6 +1005,14 @@ pub fn open_main_window(cx: &mut App) {
         );
     });
 
+    // Load local ~/.palmier/skills into the in-app agent (upstream #199).
+    if let Ok(mut guard) = crate::editor_state_hub::EditorStateHub::global()
+        .executor()
+        .lock()
+    {
+        crate::skill_store::load_skills_into_executor(&mut guard);
+    }
+
     let cfg = WindowConfig::for_home();
     let size = size(px(cfg.default_width as f32), px(cfg.default_height as f32));
     let mut bounds = Bounds::centered(None, size, cx);

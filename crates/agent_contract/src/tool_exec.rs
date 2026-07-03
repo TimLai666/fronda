@@ -15,6 +15,161 @@ use core_model::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+const DEFAULT_CLIP_DURATION_FRAMES: i64 = 150;
+
+/// Resolved clip placement geometry from optional agent args + manifest entry.
+struct ResolvedPlacement {
+    media_type: ClipType,
+    duration_frames: i64,
+    trim_start_frame: i64,
+    trim_end_frame: i64,
+    fps_warning: Option<String>,
+}
+
+/// Resolve a clip's type, duration, and symmetric trim from the manifest entry
+/// and optional `trimStartFrame` / `trimEndFrame` / `durationFrames` args.
+///
+/// Symmetric trim model (upstream palmier-pro #236): `trimStartFrame` trims the
+/// head (in-point), `trimEndFrame` trims the tail (out-point), and
+/// `durationFrames` is derivable and mutually exclusive with `trimEndFrame`.
+/// Trims and durations are clamped to the source length; synthetic clips
+/// (image/text/shape) may run any duration.
+///
+/// Project fps is authoritative (upstream #233): a divergent source fps only
+/// yields a warning, it never changes project fps.
+fn resolve_placement(
+    entry: Option<&MediaManifestEntry>,
+    args: &Value,
+    project_fps: i64,
+) -> Result<ResolvedPlacement, String> {
+    let media_type = entry.map(|e| e.r#type.clone()).unwrap_or(ClipType::Video);
+    let synthetic = matches!(
+        media_type,
+        ClipType::Image | ClipType::Text | ClipType::Shape
+    );
+
+    let arg_i64 = |key: &str| args.get(key).and_then(Value::as_i64);
+    let trim_start_in = arg_i64("trimStartFrame").unwrap_or(0).max(0);
+    let duration_in = arg_i64("durationFrames");
+    let trim_end_in = arg_i64("trimEndFrame");
+
+    if duration_in.is_some() && trim_end_in.is_some() {
+        return Err("Provide either durationFrames or trimEndFrame, not both".to_string());
+    }
+
+    // Source length expressed in project frames. Project fps is authoritative,
+    // so seconds-based source duration is scaled by project fps, not source fps.
+    let source_total = entry
+        .filter(|_| !synthetic)
+        .map(|e| (e.duration * project_fps as f64).round() as i64)
+        .filter(|&total| total > 0);
+
+    let (trim_start_frame, duration_frames, trim_end_frame) = match source_total {
+        Some(total) => {
+            let trim_start = trim_start_in.min((total - 1).max(0));
+            let remaining = (total - trim_start).max(1);
+            match (duration_in, trim_end_in) {
+                (Some(d), _) => {
+                    let d = d.clamp(1, remaining);
+                    (trim_start, d, remaining - d)
+                }
+                (None, Some(te)) => {
+                    let te = te.clamp(0, remaining - 1);
+                    (trim_start, remaining - te, te)
+                }
+                (None, None) => (trim_start, remaining, 0),
+            }
+        }
+        // Synthetic clip or no source metadata: any duration, no source trim.
+        None => {
+            let d = duration_in.unwrap_or(DEFAULT_CLIP_DURATION_FRAMES).max(1);
+            (0, d, 0)
+        }
+    };
+
+    let fps_warning = entry.and_then(|e| e.source_fps).and_then(|source_fps| {
+        if source_fps > 0.0 && (source_fps - project_fps as f64).abs() > 0.01 {
+            Some(format!(
+                "Source fps {source_fps:.3} differs from project fps {project_fps}; \
+                 project fps kept unchanged and the clip conforms to it. \
+                 Use set_project_settings to change project fps."
+            ))
+        } else {
+            None
+        }
+    });
+
+    Ok(ResolvedPlacement {
+        media_type,
+        duration_frames,
+        trim_start_frame,
+        trim_end_frame,
+        fps_warning,
+    })
+}
+
+/// Base pixel dimensions for an aspect-ratio preset (upstream #177).
+/// Mirrors Swift `AspectPreset.width/height`.
+fn aspect_preset_dims(aspect: &str) -> Result<(i64, i64), String> {
+    match aspect {
+        "16:9" => Ok((1920, 1080)),
+        "9:14" => Ok((1080, 1680)),
+        "9:16" => Ok((1080, 1920)),
+        "1:1" => Ok((1080, 1080)),
+        "4:3" => Ok((1440, 1080)),
+        "2.4:1" => Ok((2560, 1080)),
+        other => Err(format!(
+            "Unknown aspectRatio '{other}'. Use one of: 16:9, 9:16, 1:1, 4:3, 2.4:1, 9:14"
+        )),
+    }
+}
+
+/// Scale a resolution to a quality preset's short edge, preserving aspect
+/// (upstream #177). Mirrors Swift `QualityPreset.resolution` (truncating, like
+/// Swift's `Int(Double)`).
+fn quality_resolution(
+    quality: &str,
+    current_width: i64,
+    current_height: i64,
+) -> Result<(i64, i64), String> {
+    let short_edge: i64 = match quality {
+        "720p" => 720,
+        "1080p" => 1080,
+        "2K" => 1440,
+        "4K" => 2160,
+        other => {
+            return Err(format!(
+                "Unknown quality '{other}'. Use one of: 720p, 1080p, 2K, 4K"
+            ))
+        }
+    };
+    if current_width <= 0 || current_height <= 0 {
+        return Err("Cannot apply quality preset to a non-positive resolution".to_string());
+    }
+    let (w, h) = if current_width <= current_height {
+        (
+            short_edge,
+            (short_edge as f64 * current_height as f64 / current_width as f64) as i64,
+        )
+    } else {
+        (
+            (short_edge as f64 * current_width as f64 / current_height as f64) as i64,
+            short_edge,
+        )
+    };
+    Ok((w, h))
+}
+
+/// A skill available to the in-app agent (upstream #199). The app scans
+/// `~/.palmier/skills` and loads these; `read_skill` returns the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSkill {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub body: String,
+}
+
 /// Runtime state for executing agent timeline tools.
 pub struct ToolExecutor {
     timeline: Timeline,
@@ -25,6 +180,8 @@ pub struct ToolExecutor {
     search_status: String,
     /// Strictly increases after each successful mutating tool execution.
     revision: u64,
+    /// Skills loaded from `~/.palmier/skills`, sorted by id (upstream #199).
+    skills: Vec<AgentSkill>,
 }
 
 /// Read-only tools: successful execution does not bump the revision.
@@ -38,6 +195,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "inspect_timeline",
     "get_transcript",
     "inspect_color",
+    "read_skill",
 ];
 
 impl ToolExecutor {
@@ -48,7 +206,18 @@ impl ToolExecutor {
             undo_stack: UndoStack::new(),
             search_status: String::new(),
             revision: 0,
+            skills: Vec::new(),
         }
+    }
+
+    /// Load the in-app agent's skills (upstream #199). The app scans
+    /// `~/.palmier/skills` and passes the parsed skills here.
+    pub fn set_skills(&mut self, skills: Vec<AgentSkill>) {
+        self.skills = skills;
+    }
+
+    pub fn skills(&self) -> &[AgentSkill] {
+        &self.skills
     }
 
     /// Change counter for UI invalidation: bumps on successful mutations.
@@ -157,7 +326,7 @@ impl ToolExecutor {
             "get_timeline" => self.cmd_get_timeline(),
 
             // ── Mutation tools (undo-tracked) ────────────────────────────
-            "split_clip" => self.exec_mut(tool_name, ToolExecutor::cmd_split_clip, args),
+            "split_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_split_clips, args),
             "remove_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_clips, args),
             "move_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_move_clips, args),
             "move_clips_linked" => {
@@ -180,6 +349,9 @@ impl ToolExecutor {
             "set_chroma_key" => self.exec_mut(tool_name, ToolExecutor::cmd_set_chroma_key, args),
             "set_blend_mode" => self.exec_mut(tool_name, ToolExecutor::cmd_set_blend_mode, args),
             "set_color_grade" => self.exec_mut(tool_name, ToolExecutor::cmd_set_color_grade, args),
+            "set_project_settings" => {
+                self.exec_mut(tool_name, ToolExecutor::cmd_set_project_settings, args)
+            }
             "undo" => self.cmd_undo(),
             "redo" => self.cmd_redo(),
 
@@ -202,6 +374,7 @@ impl ToolExecutor {
             "inspect_media" => self.cmd_inspect_media(args),
             "inspect_timeline" => self.cmd_inspect_timeline(),
             "get_transcript" => self.cmd_get_transcript(args),
+            "read_skill" => self.cmd_read_skill(args),
 
             // ── Generation tools (stub — need remote API) ────────────────
             "generate_video" => self.cmd_generate_video(args),
@@ -260,22 +433,116 @@ impl ToolExecutor {
         }))
     }
 
-    fn cmd_split_clip(&mut self, args: &Value) -> Result<Value, String> {
-        let clip_id = args
-            .get("clipId")
+    /// READ_SKILL: return a loaded skill's full SKILL.md body by id (upstream #199).
+    fn cmd_read_skill(&self, args: &Value) -> Result<Value, String> {
+        let id = args
+            .get("id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing clipId".to_string())?;
-        let frame = args
-            .get("frame")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| "Missing or invalid frame".to_string())?;
-
-        let new_ids = timeline_core::split_clip(&mut self.timeline, clip_id, frame);
+            .ok_or_else(|| "Missing id".to_string())?;
+        let skill = self
+            .skills
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| format!("Skill '{id}' not found"))?;
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": format!("Split clip '{clip_id}' at frame {frame}. Created {} new clip(s): {new_ids:?}",
-                    new_ids.len())
+                "text": skill.body.clone(),
+            }]
+        }))
+    }
+
+    fn cmd_split_clips(&mut self, args: &Value) -> Result<Value, String> {
+        use timeline_core::ClipMathExt;
+
+        // Resolve every cut to (track_index, frame), validating up-front so one
+        // bad point rejects the whole call with no partial state (upstream #186).
+        let mut cuts: Vec<(usize, i64)> = Vec::new();
+
+        let splits = args.get("splits").and_then(|v| v.as_array());
+        let has_splits = splits.map(|a| !a.is_empty()).unwrap_or(false);
+
+        if has_splits {
+            for (i, item) in splits.unwrap().iter().enumerate() {
+                let clip_id = item
+                    .get("clipId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| format!("splits[{i}]: missing clipId"))?;
+                let at_frame = item
+                    .get("atFrame")
+                    .and_then(|v| v.as_i64())
+                    .ok_or_else(|| format!("splits[{i}]: missing atFrame"))?;
+                let located = self.timeline.tracks.iter().enumerate().find_map(|(ti, t)| {
+                    t.clips
+                        .iter()
+                        .find(|c| c.id == clip_id)
+                        .map(|c| (ti, c.start_frame, c.end_frame()))
+                });
+                let (ti, start, end) =
+                    located.ok_or_else(|| format!("splits[{i}]: clip '{clip_id}' not found"))?;
+                if at_frame <= start || at_frame >= end {
+                    return Err(format!(
+                        "splits[{i}]: atFrame {at_frame} must be strictly inside clip '{clip_id}' [{start}, {end})"
+                    ));
+                }
+                cuts.push((ti, at_frame));
+            }
+        } else {
+            let track_index = args
+                .get("trackIndex")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "Provide either 'splits' or 'trackIndex' + 'frames'".to_string())?
+                as usize;
+            let frames = args
+                .get("frames")
+                .and_then(|v| v.as_array())
+                .filter(|a| !a.is_empty())
+                .ok_or_else(|| "'frames' array required with trackIndex".to_string())?;
+            if track_index >= self.timeline.tracks.len() {
+                return Err(format!("Track index {track_index} out of bounds"));
+            }
+            for f in frames {
+                let frame = f
+                    .as_i64()
+                    .ok_or_else(|| "frames must be integers".to_string())?;
+                let inside = self.timeline.tracks[track_index]
+                    .clips
+                    .iter()
+                    .any(|c| frame > c.start_frame && frame < c.end_frame());
+                if !inside {
+                    return Err(format!(
+                        "frame {frame} is not strictly inside any clip on track {track_index}"
+                    ));
+                }
+                cuts.push((track_index, frame));
+            }
+        }
+
+        cuts.sort_unstable();
+        cuts.dedup();
+
+        // Apply — resolve each cut against the CURRENT sub-clips so repeated cuts
+        // on the same original clip land on the right piece.
+        let mut new_ids: Vec<String> = Vec::new();
+        for (ti, frame) in &cuts {
+            let clip_id = self.timeline.tracks[*ti]
+                .clips
+                .iter()
+                .find(|c| *frame > c.start_frame && *frame < c.end_frame())
+                .map(|c| c.id.clone());
+            if let Some(cid) = clip_id {
+                new_ids.extend(timeline_core::split_clip(&mut self.timeline, &cid, *frame));
+            }
+        }
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": format!(
+                    "Split at {} cut point(s). Created {} new clip(s): {new_ids:?}",
+                    cuts.len(),
+                    new_ids.len()
+                )
             }]
         }))
     }
@@ -625,6 +892,84 @@ impl ToolExecutor {
         }))
     }
 
+    fn cmd_set_project_settings(&mut self, args: &Value) -> Result<Value, String> {
+        let fps_in = args.get("fps").and_then(Value::as_i64);
+        let width_in = args.get("width").and_then(Value::as_i64);
+        let height_in = args.get("height").and_then(Value::as_i64);
+        let aspect_in = args.get("aspectRatio").and_then(Value::as_str);
+        let quality_in = args.get("quality").and_then(Value::as_str);
+
+        if fps_in.is_none()
+            && width_in.is_none()
+            && height_in.is_none()
+            && aspect_in.is_none()
+            && quality_in.is_none()
+        {
+            return Err(
+                "Provide at least one of: fps, width, height, aspectRatio, quality".to_string(),
+            );
+        }
+        if aspect_in.is_some() && (width_in.is_some() || height_in.is_some()) {
+            return Err(
+                "'aspectRatio' and explicit 'width'/'height' are mutually exclusive".to_string(),
+            );
+        }
+        if let Some(fps) = fps_in {
+            if !(1..=120).contains(&fps) {
+                return Err(format!("fps must be between 1 and 120 (got {fps})"));
+            }
+        }
+
+        let new_fps = fps_in.unwrap_or(self.timeline.fps);
+
+        let (new_width, new_height) = if let Some(aspect) = aspect_in {
+            let (base_w, base_h) = aspect_preset_dims(aspect)?;
+            match quality_in {
+                Some(q) => quality_resolution(q, base_w, base_h)?,
+                None => (base_w, base_h),
+            }
+        } else if let Some(q) = quality_in {
+            quality_resolution(q, self.timeline.width, self.timeline.height)?
+        } else {
+            (
+                width_in.unwrap_or(self.timeline.width),
+                height_in.unwrap_or(self.timeline.height),
+            )
+        };
+
+        if new_width <= 0 || new_height <= 0 {
+            return Err("Resolution must have positive width and height".to_string());
+        }
+
+        let prev_fps = self.timeline.fps;
+        let prev_width = self.timeline.width;
+        let prev_height = self.timeline.height;
+
+        timeline_core::apply_settings(&mut self.timeline, new_fps, new_width, new_height, |c| {
+            c.transform == Transform::default()
+        });
+
+        let mut changes: Vec<String> = Vec::new();
+        if new_fps != prev_fps {
+            changes.push(format!("fps {prev_fps} -> {new_fps}"));
+        }
+        if new_width != prev_width || new_height != prev_height {
+            changes.push(format!(
+                "resolution {prev_width}x{prev_height} -> {new_width}x{new_height}"
+            ));
+        }
+
+        let text = if changes.is_empty() {
+            format!("No change - settings already match: {new_width}x{new_height} @ {new_fps}fps")
+        } else {
+            format!(
+                "Updated: {}. Now {new_width}x{new_height} @ {new_fps}fps.",
+                changes.join(", ")
+            )
+        };
+        Ok(json!({ "content": [{ "type": "text", "text": text }] }))
+    }
+
     fn cmd_add_clips(&mut self, args: &Value) -> Result<Value, String> {
         let media_ids: Vec<String> = args
             .get("mediaIds")
@@ -647,17 +992,26 @@ impl ToolExecutor {
             return Err(format!("Track index {track_index} out of bounds"));
         }
 
-        let clips: Vec<Clip> = media_ids
-            .iter()
-            .map(|media_id| Clip {
+        let project_fps = self.timeline.fps;
+        let mut warnings: Vec<String> = Vec::new();
+        let mut clips: Vec<Clip> = Vec::with_capacity(media_ids.len());
+        for media_id in &media_ids {
+            let entry = self.media_manifest.entry_for(media_id);
+            let placement = resolve_placement(entry, args, project_fps)?;
+            if let Some(warning) = placement.fps_warning {
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
+                }
+            }
+            clips.push(Clip {
                 id: Uuid::new_v4().to_string(),
                 media_ref: media_id.clone(),
-                media_type: ClipType::Video,
-                source_clip_type: ClipType::Video,
+                media_type: placement.media_type.clone(),
+                source_clip_type: placement.media_type,
                 start_frame: 0,
-                duration_frames: 150,
-                trim_start_frame: 0,
-                trim_end_frame: 0,
+                duration_frames: placement.duration_frames,
+                trim_start_frame: placement.trim_start_frame,
+                trim_end_frame: placement.trim_end_frame,
                 speed: 1.0,
                 volume: 1.0,
                 fade_in_frames: 0,
@@ -683,15 +1037,22 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
-            })
-            .collect();
+            });
+        }
 
         let placed_ids = timeline_core::place_clips(&mut self.timeline, track_index, 0, &clips);
+        let mut text = format!(
+            "Added {} clip(s) to track {track_index}: {placed_ids:?}",
+            placed_ids.len()
+        );
+        for warning in &warnings {
+            text.push('\n');
+            text.push_str(warning);
+        }
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": format!("Added {} clip(s) to track {track_index}: {placed_ids:?}",
-                    placed_ids.len())
+                "text": text
             }]
         }))
     }
@@ -719,15 +1080,25 @@ impl ToolExecutor {
             return Err(format!("Track index {track_index} out of bounds"));
         }
 
-        let clip_specs: Vec<timeline_core::RippleInsertClipSpec> = media_ids
-            .iter()
-            .map(|_| timeline_core::RippleInsertClipSpec {
-                asset_id: Uuid::new_v4().to_string(),
-                duration_frames: 150,
-                trim_start_frame: None,
-                trim_end_frame: None,
-            })
-            .collect();
+        let project_fps = self.timeline.fps;
+        let mut warnings: Vec<String> = Vec::new();
+        let mut clip_specs: Vec<timeline_core::RippleInsertClipSpec> =
+            Vec::with_capacity(media_ids.len());
+        for media_id in &media_ids {
+            let entry = self.media_manifest.entry_for(media_id);
+            let placement = resolve_placement(entry, args, project_fps)?;
+            if let Some(warning) = placement.fps_warning {
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
+                }
+            }
+            clip_specs.push(timeline_core::RippleInsertClipSpec {
+                asset_id: media_id.clone(),
+                duration_frames: placement.duration_frames,
+                trim_start_frame: Some(placement.trim_start_frame),
+                trim_end_frame: Some(placement.trim_end_frame),
+            });
+        }
 
         let config = timeline_core::RippleInsertConfig {
             track_index,
@@ -764,11 +1135,17 @@ impl ToolExecutor {
                     .insert
                     .clips
                     .iter()
-                    .map(|spec| Clip {
+                    .map(|spec| {
+                        let media_type = self
+                            .media_manifest
+                            .entry_for(&spec.asset_id)
+                            .map(|e| e.r#type.clone())
+                            .unwrap_or(ClipType::Video);
+                        Clip {
                         id: Uuid::new_v4().to_string(),
                         media_ref: spec.asset_id.clone(),
-                        media_type: ClipType::Video,
-                        source_clip_type: ClipType::Video,
+                        media_type: media_type.clone(),
+                        source_clip_type: media_type,
                         start_frame: plan.insert.insert_frame,
                         duration_frames: spec.duration_frames,
                         trim_start_frame: spec.trim_start_frame.unwrap_or(0),
@@ -798,6 +1175,7 @@ impl ToolExecutor {
                         compound_timeline_id: None,
                         blend_mode: Default::default(),
                         chroma_key: None,
+                        }
                     })
                     .collect();
 
@@ -808,15 +1186,20 @@ impl ToolExecutor {
                     &new_clips,
                 );
 
+                let mut text = format!(
+                    "Inserted {} clip(s) at track {} frame {}",
+                    placed.len(),
+                    plan.insert.track_index,
+                    plan.insert.insert_frame
+                );
+                for warning in &warnings {
+                    text.push('\n');
+                    text.push_str(warning);
+                }
                 Ok(json!({
                     "content": [{
                         "type": "text",
-                        "text": format!(
-                            "Inserted {} clip(s) at track {} frame {}",
-                            placed.len(),
-                            plan.insert.track_index,
-                            plan.insert.insert_frame
-                        )
+                        "text": text
                     }]
                 }))
             }
@@ -2459,6 +2842,250 @@ mod tests {
     }
 
     #[test]
+    fn add_clips_resolves_type_and_full_source_duration() {
+        // Upstream #236: omitting trim/duration places the full source length,
+        // and the clip type comes from the manifest — not a hardcoded Video/150.
+        let mut exec = make_executor_with_media();
+        let fps = exec.timeline().fps;
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 0}))
+            .unwrap();
+        let clip = &exec.timeline().tracks[0].clips[0];
+        assert!(matches!(clip.media_type, ClipType::Video));
+        assert_eq!(clip.duration_frames, (10.0 * fps as f64).round() as i64);
+        assert_eq!(clip.trim_start_frame, 0);
+        assert_eq!(clip.trim_end_frame, 0);
+    }
+
+    #[test]
+    fn add_clips_honors_symmetric_trim_and_duration() {
+        // Upstream #236: trimStartFrame + durationFrames derive trimEndFrame.
+        let mut exec = make_executor_with_media();
+        let fps = exec.timeline().fps;
+        let total = (10.0 * fps as f64).round() as i64;
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_clips",
+            &json!({
+                "mediaIds": ["media-001"],
+                "trackIndex": 0,
+                "trimStartFrame": 10,
+                "durationFrames": 50
+            }),
+        )
+        .unwrap();
+        let clip = &exec.timeline().tracks[0].clips[0];
+        assert_eq!(clip.trim_start_frame, 10);
+        assert_eq!(clip.duration_frames, 50);
+        assert_eq!(clip.trim_end_frame, total - 10 - 50);
+    }
+
+    #[test]
+    fn add_clips_rejects_duration_and_trim_end_together() {
+        // Upstream #236: durationFrames and trimEndFrame are mutually exclusive.
+        let mut exec = make_executor_with_media();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "add_clips",
+                &json!({
+                    "mediaIds": ["media-001"],
+                    "trackIndex": 0,
+                    "durationFrames": 50,
+                    "trimEndFrame": 10
+                }),
+            )
+            .unwrap_err();
+        assert!(err.contains("not both"), "err={err}");
+    }
+
+    #[test]
+    fn add_clips_warns_on_source_fps_divergence_without_changing_project_fps() {
+        // Upstream #233: project fps is authoritative; a divergent source fps
+        // only warns and points at set_project_settings.
+        let mut exec = make_executor_with_media();
+        exec.timeline_mut().fps = 24; // source asset is 30 fps
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let result = exec
+            .execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 0}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Source fps"), "text={text}");
+        assert!(text.contains("set_project_settings"), "text={text}");
+        assert_eq!(exec.timeline().fps, 24, "project fps must be unchanged");
+    }
+
+    #[test]
+    fn set_project_settings_requires_at_least_one_arg() {
+        let mut exec = make_executor();
+        let err = exec.execute("set_project_settings", &json!({})).unwrap_err();
+        assert!(err.contains("at least one"), "err={err}");
+    }
+
+    #[test]
+    fn set_project_settings_aspect_and_explicit_dims_conflict() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute(
+                "set_project_settings",
+                &json!({"aspectRatio": "16:9", "width": 1920}),
+            )
+            .unwrap_err();
+        assert!(err.contains("mutually exclusive"), "err={err}");
+    }
+
+    #[test]
+    fn set_project_settings_aspect_preset_sets_dims() {
+        let mut exec = make_executor(); // default 1920x1080 @30
+        exec.execute("set_project_settings", &json!({"aspectRatio": "9:16"}))
+            .unwrap();
+        assert_eq!(exec.timeline().width, 1080);
+        assert_eq!(exec.timeline().height, 1920);
+        assert!(exec.timeline().settings_configured);
+    }
+
+    #[test]
+    fn set_project_settings_quality_scales_short_edge() {
+        let mut exec = make_executor(); // 1920x1080 landscape
+        exec.execute("set_project_settings", &json!({"quality": "4K"}))
+            .unwrap();
+        // short edge 2160, landscape -> (2160*1920/1080, 2160)
+        assert_eq!(exec.timeline().width, 3840);
+        assert_eq!(exec.timeline().height, 2160);
+    }
+
+    #[test]
+    fn set_project_settings_fps_rescales_clips_and_is_undoable() {
+        let mut exec = make_executor_with_media(); // default 30fps
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_clips",
+            &json!({"mediaIds": ["media-001"], "trackIndex": 0, "durationFrames": 50}),
+        )
+        .unwrap();
+        assert_eq!(exec.timeline().tracks[0].clips[0].duration_frames, 50);
+
+        exec.execute("set_project_settings", &json!({"fps": 60}))
+            .unwrap();
+        assert_eq!(exec.timeline().fps, 60);
+        assert_eq!(exec.timeline().tracks[0].clips[0].duration_frames, 100);
+
+        exec.execute("undo", &json!({})).unwrap();
+        assert_eq!(exec.timeline().fps, 30);
+        assert_eq!(exec.timeline().tracks[0].clips[0].duration_frames, 50);
+    }
+
+    #[test]
+    fn set_project_settings_fps_out_of_range_rejected() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute("set_project_settings", &json!({"fps": 500}))
+            .unwrap_err();
+        assert!(err.contains("between 1 and 120"), "err={err}");
+    }
+
+    #[test]
+    fn split_clips_explicit_mode_two_cuts_on_same_clip() {
+        let mut exec = make_executor_with_media();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_clips",
+            &json!({"mediaIds": ["media-001"], "trackIndex": 0, "durationFrames": 100}),
+        )
+        .unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        exec.execute(
+            "split_clips",
+            &json!({"splits": [
+                {"clipId": clip_id, "atFrame": 30},
+                {"clipId": clip_id, "atFrame": 60}
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(exec.timeline().tracks[0].clips.len(), 3);
+    }
+
+    #[test]
+    fn split_clips_track_mode_and_dedup() {
+        let mut exec = make_executor_with_media();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_clips",
+            &json!({"mediaIds": ["media-001"], "trackIndex": 0, "durationFrames": 100}),
+        )
+        .unwrap();
+        // Duplicate cut points must dedup to a single split.
+        exec.execute("split_clips", &json!({"trackIndex": 0, "frames": [50, 50, 50]}))
+            .unwrap();
+        assert_eq!(exec.timeline().tracks[0].clips.len(), 2);
+    }
+
+    #[test]
+    fn split_clips_rejects_bad_point_with_no_partial_state() {
+        let mut exec = make_executor_with_media();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_clips",
+            &json!({"mediaIds": ["media-001"], "trackIndex": 0, "durationFrames": 100}),
+        )
+        .unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let err = exec
+            .execute(
+                "split_clips",
+                &json!({"splits": [
+                    {"clipId": clip_id, "atFrame": 30},
+                    {"clipId": clip_id, "atFrame": 999}
+                ]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("strictly inside"), "err={err}");
+        assert_eq!(
+            exec.timeline().tracks[0].clips.len(),
+            1,
+            "no partial split on rejection"
+        );
+    }
+
+    #[test]
+    fn read_skill_returns_body_for_loaded_skill() {
+        let mut exec = make_executor();
+        exec.set_skills(vec![AgentSkill {
+            id: "captions".into(),
+            name: "Captions".into(),
+            description: "burn in captions".into(),
+            body: "1. Transcribe\n2. Style".into(),
+        }]);
+        let result = exec.execute("read_skill", &json!({"id": "captions"})).unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Transcribe"));
+        assert!(text.contains("Style"));
+    }
+
+    #[test]
+    fn read_skill_unknown_id_errors() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute("read_skill", &json!({"id": "nope"}))
+            .unwrap_err();
+        assert!(err.contains("not found"), "err={err}");
+    }
+
+    #[test]
+    fn read_skill_is_read_only_no_revision_bump() {
+        let mut exec = make_executor();
+        exec.set_skills(vec![AgentSkill {
+            id: "a".into(),
+            name: "A".into(),
+            description: "d".into(),
+            body: "body".into(),
+        }]);
+        let before = exec.revision();
+        exec.execute("read_skill", &json!({"id": "a"})).unwrap();
+        assert_eq!(exec.revision(), before, "read_skill must not bump revision");
+    }
+
+    #[test]
     fn exec_001_get_timeline_returns_default() {
         let mut exec = make_executor();
         let result = exec.execute("get_timeline", &json!({})).unwrap();
@@ -2476,10 +3103,10 @@ mod tests {
     }
 
     #[test]
-    fn exec_003_split_clip_missing_args() {
+    fn exec_003_split_clips_missing_args() {
         let mut exec = make_executor();
-        let err = exec.execute("split_clip", &json!({})).unwrap_err();
-        assert!(err.contains("Missing clipId"));
+        let err = exec.execute("split_clips", &json!({})).unwrap_err();
+        assert!(err.contains("Provide either"), "err={err}");
     }
 
     #[test]
@@ -3529,7 +4156,7 @@ mod tests {
         let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
         exec.execute("create_folder", &json!({"name": "B-roll"}))
             .unwrap();
-        assert!(exec.execute("split_clip", &json!({})).is_err());
+        assert!(exec.execute("split_clips", &json!({})).is_err());
         assert_eq!(exec.revision(), 1);
     }
 

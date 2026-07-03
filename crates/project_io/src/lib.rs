@@ -89,7 +89,10 @@ impl ProjectBundle {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, BundleError> {
         let root = path.as_ref().to_path_buf();
         let timeline = read_required_json(&root.join(TIMELINE_FILENAME))?;
-        let manifest = read_optional_json(&root.join(MANIFEST_FILENAME))?;
+        // A corrupt media.json degrades to an empty manifest (media offline)
+        // rather than failing the whole open. Upstream palmier-pro #224.
+        let manifest =
+            read_optional_json_defaulting_on_decode_error(&root.join(MANIFEST_FILENAME))?;
         let generation_log =
             read_optional_json_ignoring_decode_errors(&root.join(GENERATION_LOG_FILENAME))?;
 
@@ -188,17 +191,6 @@ where
     read_json(path)
 }
 
-fn read_optional_json<T>(path: &Path) -> Result<Option<T>, BundleError>
-where
-    T: DeserializeOwned,
-{
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    read_json(path).map(Some)
-}
-
 fn read_optional_json_ignoring_decode_errors<T>(path: &Path) -> Result<Option<T>, BundleError>
 where
     T: DeserializeOwned,
@@ -210,6 +202,25 @@ where
     match read_json(path) {
         Ok(value) => Ok(Some(value)),
         Err(BundleError::DecodeJson { .. }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Reads optional JSON, but a decode failure yields `T::default()` instead of
+/// propagating. Used for `media.json`, where a corrupt manifest
+/// should open the project with media offline rather than block it entirely.
+/// The original file is left untouched until the next save.
+fn read_optional_json_defaulting_on_decode_error<T>(path: &Path) -> Result<Option<T>, BundleError>
+where
+    T: DeserializeOwned + Default,
+{
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    match read_json(path) {
+        Ok(value) => Ok(Some(value)),
+        Err(BundleError::DecodeJson { .. }) => Ok(Some(T::default())),
         Err(error) => Err(error),
     }
 }

@@ -16,7 +16,7 @@ use gpui::{
 use std::collections::HashSet;
 use std::time::Duration;
 
-const AVAILABLE_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
+const AVAILABLE_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"];
 
 /// Starter prompt entries shown in empty state (Swift: 7 preset action buttons).
 const STARTER_PROMPTS: &[(&str, &str)] = &[
@@ -95,7 +95,7 @@ impl ChatView {
             session_mgr: SessionManager::new(),
             mention_picker: MentionPickerState::new(mention_candidates),
             shift_held: false,
-            selected_model_idx: 1, // claude-sonnet-4-6 as default
+            selected_model_idx: 1, // claude-sonnet-5 as default
             model_picker_open: false,
             history_open: false,
             expanded_tool_rows: HashSet::new(),

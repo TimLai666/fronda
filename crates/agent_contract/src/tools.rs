@@ -73,10 +73,12 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         set_clip_properties(),
         set_color_grade(),
         set_keyframes(),
+        set_project_settings(),
+        read_skill(),
         save_clip_preset(),
         set_clip_audio_effects(),
         set_clip_noise_reduction(),
-        split_clip(),
+        split_clips(),
         undo(),
         upscale_media(),
     ]
@@ -93,6 +95,29 @@ When helping the user edit their project:
 - Generation operations require explicit user confirmation before execution.
 - Keep replies terse and outcome-first.
 - Always verify clip and track IDs exist before referencing them."#;
+
+/// The always-on skill index appended to the system prompt (upstream #199).
+/// Empty when no skills are loaded. Mirrors Swift `SkillStore.promptIndex`.
+pub fn skill_prompt_index(skills: &[crate::tool_exec::AgentSkill]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+    let lines = skills
+        .iter()
+        .map(|s| format!("- {}: {}", s.id, s.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "\n\n# Skills\nPlaybooks for specific tasks. Before a task that matches one, \
+call read_skill(id) to load its full procedure, then follow it.\n{lines}"
+    )
+}
+
+/// The system instruction with the skill index appended (upstream #199). The
+/// app builds the agent request from this so the model knows what skills exist.
+pub fn system_instruction_with_skills(skills: &[crate::tool_exec::AgentSkill]) -> String {
+    format!("{SYSTEM_INSTRUCTION}{}", skill_prompt_index(skills))
+}
 
 // ---------------------------------------------------------------------------
 // Tool factory functions
@@ -114,12 +139,29 @@ fn add_captions() -> ToolDefinition {
 fn add_clips() -> ToolDefinition {
     ToolDefinition {
         name: "add_clips",
-        description: "Add media clips to the end of the timeline.",
+        description: "Add media clips to the end of the timeline. Clip type and \
+            full source length are taken from the media asset; project fps is \
+            authoritative and is not changed to match the source.",
         input_schema: object(&[
             ("mediaIds", array("Media asset ids to add")),
             (
                 "trackIndex",
                 integer("Target track index (0-based, default: first visual/audio track)"),
+            ),
+            (
+                "trimStartFrame",
+                integer("Optional head trim (in-point), in project frames. Default 0."),
+            ),
+            (
+                "trimEndFrame",
+                integer("Optional tail trim (out-point), in project frames. \
+                    Mutually exclusive with durationFrames. Omit both to place \
+                    the full remaining source (extendable)."),
+            ),
+            (
+                "durationFrames",
+                integer("Optional visible duration, in project frames. Derived from \
+                    the source when omitted. Mutually exclusive with trimEndFrame."),
             ),
         ]),
     }
@@ -233,11 +275,72 @@ fn import_media() -> ToolDefinition {
 fn insert_clips() -> ToolDefinition {
     ToolDefinition {
         name: "insert_clips",
-        description: "Insert clips at a specific frame position, pushing existing content later.",
+        description: "Insert clips at a specific frame position, pushing existing \
+            content later. Clip type and source length come from the media asset; \
+            project fps is authoritative and is not changed to match the source.",
         input_schema: object(&[
             ("mediaIds", array("Media asset ids to insert")),
             ("frame", integer("Insertion frame position")),
+            (
+                "trimStartFrame",
+                integer("Optional head trim (in-point), in project frames. Default 0."),
+            ),
+            (
+                "trimEndFrame",
+                integer("Optional tail trim (out-point), in project frames. \
+                    Mutually exclusive with durationFrames."),
+            ),
+            (
+                "durationFrames",
+                integer("Optional visible duration, in project frames. Derived from \
+                    the source when omitted. Mutually exclusive with trimEndFrame."),
+            ),
         ]),
+    }
+}
+
+fn set_project_settings() -> ToolDefinition {
+    ToolDefinition {
+        name: "set_project_settings",
+        description: "Change the project's frame rate, resolution, or aspect ratio. \
+            Pass any combination of fps, explicit width+height, aspectRatio, and \
+            quality. aspectRatio and explicit width/height are mutually exclusive; \
+            quality scales the current aspect ratio (or the aspectRatio preset when \
+            combined). Existing clips are re-fitted automatically: auto-fit transforms \
+            reset to the new canvas, and all frame positions/durations rescale when \
+            fps changes. Undoable.",
+        input_schema: object_optional(&[
+            (
+                "fps",
+                integer("Frame rate (1-120). Common: 24, 25, 30, 48, 50, 60."),
+            ),
+            (
+                "width",
+                integer("Canvas width in px. Use with height. Mutually exclusive with aspectRatio."),
+            ),
+            (
+                "height",
+                integer("Canvas height in px. Use with width. Mutually exclusive with aspectRatio."),
+            ),
+            (
+                "aspectRatio",
+                string("Preset aspect ratio: 16:9, 9:16, 1:1, 4:3, 2.4:1, or 9:14. Mutually exclusive with width/height."),
+            ),
+            (
+                "quality",
+                string("Resolution preset: 720p, 1080p, 2K, or 4K. Scales the short edge, preserving aspect."),
+            ),
+        ]),
+    }
+}
+
+fn read_skill() -> ToolDefinition {
+    ToolDefinition {
+        name: "read_skill",
+        description: "Load a skill's full SKILL.md procedure by id. The system \
+            prompt lists available skills; before a task that matches one, call \
+            read_skill(id) and follow the returned playbook.",
+        input_schema: object(&[("id", string("Skill id (its folder name)."))]),
     }
 }
 
@@ -395,13 +498,28 @@ fn set_keyframes() -> ToolDefinition {
     }
 }
 
-fn split_clip() -> ToolDefinition {
+fn split_clips() -> ToolDefinition {
     ToolDefinition {
-        name: "split_clip",
-        description: "Split a clip at the given frame.",
-        input_schema: object(&[
-            ("clipId", string("Clip id to split")),
-            ("frame", integer("Frame position to split at")),
+        name: "split_clips",
+        description: "Split clips at one or more cut points in a single undoable \
+            action. A split only inserts a boundary — nothing trims or shifts. Pass \
+            exactly one mode: 'splits' (array of {clipId, atFrame} in project frames) \
+            or 'trackIndex' + 'frames' (cut one track at the given project frames, \
+            each matched to the clip containing it). Every frame must fall strictly \
+            between a clip's start and end; multiple cuts on the same clip are \
+            allowed; duplicate points are ignored. Linked audio/video partners are \
+            split at the same frame and their right halves regrouped. One bad cut \
+            point rejects the whole call with no partial state.",
+        input_schema: object_optional(&[
+            (
+                "splits",
+                array("Explicit cuts; each item is an object {clipId, atFrame} with atFrame a project frame strictly inside the clip."),
+            ),
+            ("trackIndex", integer("Track to cut (use with 'frames').")),
+            (
+                "frames",
+                array("Project frames to cut on trackIndex; each matched to the clip containing it."),
+            ),
         ]),
     }
 }
@@ -585,6 +703,21 @@ fn object(props: &[(&str, Value)]) -> Value {
         properties.insert(name.to_string(), schema.clone());
     }
     map.insert("required".to_string(), Value::Array(required));
+    map.insert("properties".to_string(), Value::Object(properties));
+    Value::Object(map)
+}
+
+/// Like [`object`] but every property is optional (empty `required`). For tools
+/// whose parameters are all optional or "exactly one of" — over-declaring them
+/// required makes strict MCP clients reject valid calls.
+fn object_optional(props: &[(&str, Value)]) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("type".to_string(), Value::String("object".to_string()));
+    map.insert("required".to_string(), Value::Array(Vec::new()));
+    let mut properties = serde_json::Map::new();
+    for (name, schema) in props {
+        properties.insert(name.to_string(), schema.clone());
+    }
     map.insert("properties".to_string(), Value::Object(properties));
     Value::Object(map)
 }
@@ -877,8 +1010,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            54,
-            "TDEF-001: 54 tools (42 + Issues #172/174/157/165/158/155/154)"
+            56,
+            "TDEF-001: 56 tools (55 + read_skill, upstream #199)"
         );
     }
 
@@ -907,7 +1040,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 54, "all 54 tool names must be unique");
+        assert_eq!(names.len(), 56, "all 56 tool names must be unique");
     }
 
     #[test]
@@ -946,18 +1079,43 @@ mod tests {
     }
 
     #[test]
-    fn tdef_003_schema_snapshot_split_clip() {
+    fn tdef_003_schema_snapshot_split_clips() {
         let tools = all_tools();
-        let tool = tools.iter().find(|t| t.name == "split_clip").unwrap();
+        let tool = tools.iter().find(|t| t.name == "split_clips").unwrap();
         let json = serde_json::to_string_pretty(&tool.input_schema).unwrap();
         let schema: Value = serde_json::from_str(&json).unwrap();
-        let required: Vec<&str> = schema
+        let props = schema
+            .pointer("/properties")
+            .and_then(|v| v.as_object())
+            .expect("split_clips schema has properties");
+        assert!(props.contains_key("splits"), "split_clips has splits");
+        assert!(props.contains_key("trackIndex"), "split_clips has trackIndex");
+        assert!(props.contains_key("frames"), "split_clips has frames");
+        // Modes are exactly-one-of, so nothing is unconditionally required.
+        let required = schema
             .pointer("/required")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-            .unwrap_or_default();
-        assert!(required.contains(&"clipId"), "split_clip requires clipId");
-        assert!(required.contains(&"frame"), "split_clip requires frame");
+            .expect("has required array");
+        assert!(required.is_empty(), "split_clips has no required props");
+    }
+
+    #[test]
+    fn system_instruction_with_skills_appends_index() {
+        use crate::tool_exec::AgentSkill;
+        // No skills → unchanged.
+        assert_eq!(system_instruction_with_skills(&[]), SYSTEM_INSTRUCTION);
+        // With skills → index appended.
+        let skills = vec![AgentSkill {
+            id: "captions".into(),
+            name: "Captions".into(),
+            description: "burn in captions".into(),
+            body: String::new(),
+        }];
+        let prompt = system_instruction_with_skills(&skills);
+        assert!(prompt.starts_with(SYSTEM_INSTRUCTION));
+        assert!(prompt.contains("# Skills"));
+        assert!(prompt.contains("- captions: burn in captions"));
+        assert!(prompt.contains("read_skill(id)"));
     }
 
     #[test]

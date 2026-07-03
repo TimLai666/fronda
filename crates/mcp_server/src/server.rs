@@ -658,8 +658,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            54,
-            "MCP-003: exactly 54 tools (42 + Issues #172/174/157/165/158/155/154)"
+            56,
+            "MCP-003: 56 tools (54 + set_project_settings #177 + read_skill #199)"
         );
     }
 
@@ -730,13 +730,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_call_split_clip_with_missing_args() {
+    fn tools_call_split_clips_with_missing_args() {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: json!(1),
             method: "tools/call".into(),
             params: json!({
-                "name": "split_clip",
+                "name": "split_clips",
                 "arguments": {},
             }),
         };
@@ -746,7 +746,7 @@ mod tests {
         let result = resp.result.unwrap();
         let content = result.get("content").and_then(|v| v.as_array()).unwrap();
         let text = content[0].get("text").and_then(|v| v.as_str()).unwrap();
-        assert!(text.contains("Missing clipId") || text.contains("error"));
+        assert!(text.contains("Provide either") || text.contains("error"));
     }
 
     #[test]

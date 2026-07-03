@@ -1,10 +1,15 @@
 # Upstream PR Audit — Rust Rewrite Applicability
 
-Audit date: 2026-06-25
-Upstream HEAD: `b9b4ad9` (palmier-io/palmier-pro main)
+Latest re-audit: 2026-07-03
+Upstream HEAD: `9a3ae50` (palmier-io/palmier-pro main, v0.5.2)
+Previous audit: 2026-06-25 at `b9b4ad9`
 
 This file catalogs every upstream PR (from the Swift `palmier-pro` repo), its
 current porting status in Fronda, and any action items.
+
+The **2026-07-03 Re-audit** section below covers the 86 new commits in
+`b9b4ad9..9a3ae50` (PRs roughly #148–#254). The historical tables further down
+remain valid for pre-`b9b4ad9` PRs.
 
 ## Legend
 
@@ -14,6 +19,101 @@ current porting status in Fronda, and any action items.
   Apple-only APIs. No Rust equivalent needed.
 - **N/A (Reverted)** — Was merged then reverted upstream; not applicable.
 - **DEFERRED** — Applicable but blocked on larger infra or spec work first.
+
+---
+
+# 2026-07-03 Re-audit (b9b4ad9 → 9a3ae50, 86 commits)
+
+Method: each commit's real diff was read with `git show` and compared against
+current Rust source. Rust-relevance judged per subsystem (not from title alone).
+
+Key cross-cutting judgment: **Swift `Int(Double)` traps on overflow; Rust `as`
+casts saturate and `serde_json::Number::as_i64()` returns `None` out-of-range.**
+So Swift crash-hardening PRs (e.g. #201) are SWIFT-ONLY for the crash itself;
+only their *validation semantics* (reject vs clamp) are portable, and low value.
+
+## Tier 0 — Already satisfied in Rust (verify-only, no port)
+
+| PR | Item | Evidence |
+|----|------|----------|
+| #163 | trimEndFrame stored as tail amount, not out-point | `timeline_core/src/lib.rs:89-95` `source_frames_consumed`/`source_duration_frames` bake the invariant `consumed + trim_start + trim_end == source`. |
+| #203 | Per-clip blend modes (data model) | `core_model/src/timeline.rs` `BlendMode` enum (16 modes) + `Clip.blend_mode`. Rendering application still TODO (Tier 3). |
+| #151 | Timeline zoom buttons clickable | `app_shell_gpui/src/toolbar_view.rs:242-296`. Only mismatch: step factor 1.5 vs Swift 1.25 — trivial parity tweak. |
+| #232 | Deterministic transcripts (filtering half) | `search_core` `Transcript::filter_range` (TRN-005/006). Full-file cache identity is a platform-layer concern. |
+| #189 | Caption phrase timing from per-word timestamps | `search_core/src/caption.rs:279` `phrases_from_words` already times each phrase by its first word's `start_seconds` and last word's `end_seconds`, and builds phrase text from the words themselves — so the Swift char-distribution→per-word-timestamp change and the phrase/word alignment concern are structurally absent. Verified 2026-07-03. Minor divergence: Rust drops words with invalid (negative) timestamps rather than char-distributing them. |
+
+## Tier 0 — Not applicable to Rust (SWIFT-ONLY)
+
+| PR | Reason |
+|----|--------|
+| #201 | `Int(Double)` overflow trap. Rust saturates / returns `None`; no crash path. Validation-reject semantics optional, low value. |
+| #253 | AVFoundation audio-extraction concurrency gate. No Rust audio extraction pipeline. |
+| #184 | Swift main-actor offloading. Rust backend is already async; gpui shell does not hang. |
+| #148 | Off-main image decode is Swift actor isolation. Minor: `id_short` micro-opt could still be applied if it is O(n²). |
+| #66c1e10 | Restore manifest before window mount — Rust load order already correct; verify only. |
+| #217 | "generating" (not offline) preview overlay — pure UI, unblocks after #216 data model. |
+
+## Tier 1 — High-value pure-logic ports (testable, low risk) — DO FIRST
+
+| PR | Port | Target | Effort | Status |
+|----|------|--------|--------|--------|
+| #236 | Symmetric trim `resolvePlacement` for add_clips/insert_clips | `agent_contract/tool_exec.rs` cmd_add_clips/cmd_insert_clips | M | **DONE 2026-07-03** — `resolve_placement` helper; type/source-length from manifest; symmetric trim + mutual-exclusivity; also fixed insert_clips `asset_id` (was a random UUID). 4 tests. |
+| #233 | add_clips keeps project fps fixed; warn on source-fps divergence | same code path as #236 | S | **DONE 2026-07-03** — source seconds scaled by project fps; divergent source fps warns and points at set_project_settings; project fps never changed. Test covers it. |
+| #224 | Open project with corrupt media.json (degrade to empty, not fatal) | `project_io/src/lib.rs` | S | **DONE 2026-07-03** — `read_optional_json_defaulting_on_decode_error`; corrupt manifest → empty, original file preserved. Test flipped. |
+| #218 | Aspect-ratio distortion: refit auto-fitted clips on canvas change | `timeline_core::refit_transforms` (exists) + trigger | S-M | **Core existed + now wired**: `refit_transforms` resets auto-fit clips on resolution change and is invoked by `set_project_settings` (#177). Remaining refinement: Swift's aspect-preserving proportional scale + active-scale-keyframe scaling (Rust currently resets auto-fit to full-canvas default). |
+| #207 | ripple_delete_ranges: per-call sync-lock exemption (`ignoreSyncLockedTracks`) | `timeline_core/src/workflow.rs` RippleDeleteConfig | M | Missing param. |
+| #227 | Master audio: sync-locked follower tracks are CUT (cleared), not just shifted | `timeline_core/src/workflow.rs` compute_ripple_delete | M | Missing sync-lock clear loop. Correctness. |
+| #243 | Default agent model → Sonnet 5 | `app_contract/settings_storage.rs` AGENT_DEFAULT_MODEL, `chat_view.rs` model list | XS | **DONE 2026-07-03** — `sonnet46`→`sonnet5`; chat list `claude-sonnet-4-6`→`claude-sonnet-5`. Backend accepts both during rollout. Tests updated. |
+
+## Tier 2 — New agent tools / schema (medium) — parity features
+
+| PR | Tool / change | Target | Effort |
+|----|---------------|--------|--------|
+| #177 | `set_project_settings` tool + auto-match timeline on empty add | agent_contract | H | **DONE 2026-07-03** (tool + presets + fps rescale + refit + undo; 6 tests). The rescale/refit core (`apply_fps`/`refit_transforms`/`apply_settings`) already existed in `timeline_core/src/project_settings.rs`; only the tool layer was missing. **Auto-match-on-add (`applySettingsIfNeededForAgent`) still deferred.** |
+| #186 | `split_clip` → `split_clips` batch (two modes, dedup, A/V regroup) | agent_contract | M | **DONE 2026-07-03** — renamed tool; explicit `splits` + `trackIndex`/`frames` modes; validate-all-then-apply (no partial state); dedup; re-resolves each cut against current sub-clips; reuses `timeline_core::split_clip` (already does linked A/V regroup). 3 tests. Also added `object_optional` schema helper (the shared `object()` marked every prop required — wrong for exactly-one-of tools; now used by split_clips + set_project_settings for correct MCP schemas). |
+| #178 | `language` (BCP-47) param threaded into get_transcript/inspect_media | agent_contract read path | M (schemas already list it) |
+| #160 | `remove_words` tool (word→frame, ripple linked partners) | agent_contract | M |
+| #152 | `send_feedback` tool (session dedup + 8/session cap + diagnostics) | agent_contract | L |
+| #245 | `TranscribedWord.speaker` field + `remove_words` `matches` filler-token arg | search_core, agent_contract | L-M (cloud provider itself is SWIFT-ONLY) |
+| #249 | `paid_only` on model catalog + free-tier gating in list_models | generation_core, agent_contract | M |
+| #219 | `import_status` field on manifest entry (preparing/downloading/failed) | core_model, agent_contract | M |
+| #242 | `create_matte` tool + `ClipType::Matte` + MatteAspect presets | core_model, agent_contract | M |
+
+## Tier 3 — Large new subsystems — need own sub-spec each
+
+| PR(s) | Subsystem | Target | Effort |
+|-------|-----------|--------|--------|
+| #193 | **FCPXML export v1 baseline** | `render_core/src/fcpxml_export.rs` | XL | **v1 DONE 2026-07-03** — valid FCPXML 1.10: `<resources>` (format + deduped assets w/ media-rep src), `<library>/<event>/<project>/<sequence>/<spine>` with a full-length `<gap>` anchoring every clip as a connected `<asset-clip>` at absolute offset, lane per track (video +, audio −), rational project time. 6 tests. **Wired into the export UI + execution**: `ExportMode::Fcpxml` ("Final Cut Pro (.fcpxml)"), pure `interchange_content()` generator (also covers XMEML), and `write_interchange()`. The Export button now opens a save dialog (`prompt_for_new_path`) and writes the `.xml`/`.fcpxml` file from the live editor timeline+manifest — so both interchange formats actually produce files, and the panel shows a success ("Exported to …") or failure message (`set_interchange_result`). (Video render execution + `.palmier` bundle write are separate, still TODO.) |
+| #214 | FCPXML format naming + Rec.709 colorspace | `render_core/src/fcpxml_export.rs` | L | **DONE 2026-07-03** — `format_rate_suffix`/`recognized_video_format_name`/`sequence_format_name`/`frame_duration_str` (NTSC-aware); sequence `<format>` now named (`FFVideoFormat1080p30`, else `FFVideoFormatRateUndefined`) with `colorSpace="1-1-1 (Rec. 709)"`. 3 helper tests + updated exporter tests. Per-asset formats still shared with the sequence (full per-asset formats come with #206). |
+| #206 | FCPXML per-asset formats (partial) | `render_core/src/fcpxml_export.rs` | M | **Per-asset formats DONE 2026-07-03** — each visual asset now emits its own `<format>` from its source width/height/fps (`video_format_name`, `frame_duration_str`); audio assets carry no format; visual assets without source dims fall back to `r1`. Assets already dedup by media_ref (same-source A/V collapses to one asset w/ hasVideo+hasAudio). 1 new test + updated resource-id tests. **Still to port**: cross-file synced A/V linked-audio collapse into ref-clips. |
+| #197 #247 #254 | FCPXML refinements on the v1 baseline | `render_core/src/fcpxml_export.rs` | L each | retime `<ref-clip>` compound wrapping (#197), source timecode (#247), per-target (Resolve/FCP) transform/crop/blend calibration + text stroke (#254). |
+| #183 | Export write-failure surfacing (`export` returns `String`, not `Result`) | render_core, export_model | S (prereq for FCPXML robustness) |
+| #226 c9222fe #1a5aa2c | **apply_layout** — VideoLayout enum (10 layouts), LayoutSlot, transform/crop math, batch clips per slot | core_model, agent_contract | XL | **Layout catalog/geometry + placement math DONE 2026-07-03** — `core_model/src/video_layout.rs`: `VideoLayout` (10 layouts, exact Swift slot rects, pip inset 0.28 / margin 0.035, z-order), plus `media_canvas_aspect`, `crop_fitting_aspect`, `layout_placement` (fill/fit → Transform+Crop with anchors; unknown dims degrade to filling the slot). 14 tests. **Still to port**: the `apply_layout` agent tool (place-new vs re-layout modes, per-slot mediaRef/clipId, anchor parsing, overlap checks, stacked tracks per slot) wiring on top of these pure functions. |
+| #225 | **Text animation** — TextAnimation/WordTiming/preset enums + agent args (data model portable; renderer is UI) | core_model, agent_contract | L |
+| #216 | **Generation recovery** — backend_job_id/result_urls persistence, resume in-flight jobs, generation_status enum | core_model, generation_core | XL |
+| #250 | **MCP stateful sessions** — Mcp-Session-Id routing, per-session Server, Content-Length framing, LRU(32)+1h prune, SSE, tools/list_changed | mcp_server | XL |
+| #238 | **MCP project navigation** — get/open/new_project tools + app-layer project registry + `.system` message role | agent_contract, app layer | L-XL |
+
+## Tier 4 — UI parity (gpui) — visual/interaction match
+
+| PR | UI change | Target | Effort |
+|----|-----------|--------|--------|
+| #199 #235 b05913b 0cb8848 | **Skills** — SkillStore (~/.palmier/skills SKILL.md), SkillCatalog (GitHub), Settings tab, read_skill tool, prompt index. Largest single gap. | new modules + settings_view + agent | XL | **Store + agent wiring DONE 2026-07-03**: (1) `skill_store.rs` — `parse_frontmatter`, `load_skills`, `load_agent_skills` (with bodies), `prompt_index`. (2) agent_contract — `AgentSkill`, `read_skill` tool (56 tools), `ToolExecutor::set_skills`, `system_instruction_with_skills`/`skill_prompt_index`. (3) boot loads `~/.palmier/skills` into the executor so the in-app agent can discover + `read_skill`. 14 tests total. **Still to port**: SkillCatalog (GitHub install/refresh), Settings > Skills pane UI, tour entry points, copy-to-agent; and the agent-request builder must call `system_instruction_with_skills`. |
+| #168 | Project settings as editable dropdowns in inspector (Resolution/FPS/Aspect presets) | inspector_view | H |
+| #196 | Update badge redesign — UpdateSidebarCard (home) + UpdateProjectBadge (titlebar) + focus/staleness observers | home_view, titlebar_view | M |
+| #204 | Window sizing — Home 1200×880, Settings 1200×900 (min 860×640), Project maximizes to screen | window.rs, settings_view | M | **Sizes DONE 2026-07-03** — `WindowConfig::for_home` 1200×880, `for_settings` 1200×900 min 860×640 (exact Swift #204 values; home size is applied at window open). Project "maximize to visible screen" deferred — Rust is single-window/ActiveScreen so it doesn't map to Swift's per-window model; needs display-bounds resize. |
+| #191 | Double-click preview selects clip under cursor (spatial hit-test w/ transform/crop/rotation) | preview_view | H |
+| #159 | Chat input focus restore after backspace clears field | chat_view | L |
+| #248 | Login-incentive free-credits CTA in chat panel | chat_view | L |
+
+## Recommended execution order
+
+1. **Tier 1 batch** (correctness, testable): #236+#233 (add_clips), #224, #218, #207+#227, #189, #243.
+2. **Tier 2 agent tools**: #177 → #186 → #178 → #160 → #152 → #249/#219/#242/#245.
+3. **Tier 3 by sub-spec**: FCPXML export (largest interchange gap) → apply_layout → text animation → MCP stateful sessions → generation recovery → MCP project nav.
+4. **Tier 4 UI**: window sizing (#204) + zoom factor first (quick parity), then Skills (#199), inspector settings (#168), update badge (#196), preview double-click (#191), chat focus (#159).
+
+Each Tier 3 subsystem gets its own spec file before implementation.
 
 ---
 

@@ -7,6 +7,7 @@ pub mod media_manifest;
 pub mod project_registry;
 pub mod shape_style;
 pub mod timeline;
+pub mod video_layout;
 
 pub use agent::{
     AgentContentBlock, AgentMention, AgentMessage, AgentMessageRole, AgentTimelineRangeMention,
@@ -26,6 +27,7 @@ pub use timeline::{
     AnimPair, BlendMode, ChromaKey, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack,
     TextAlignment, TextFill, TextRgba, TextShadow, TextStyle, Timeline, Track, Transform,
 };
+pub use video_layout::{LayoutFit, LayoutRect, LayoutSlot, VideoLayout};
 
 pub const PROJECT_EXTENSION: &str = "palmier";
 pub const TIMELINE_FILENAME: &str = "project.json";

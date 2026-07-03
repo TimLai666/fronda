@@ -12,7 +12,8 @@ pub mod tool_exec;
 pub mod tools;
 pub mod undo;
 
-pub use tool_exec::ToolExecutor;
+pub use tool_exec::{AgentSkill, ToolExecutor};
+pub use tools::{skill_prompt_index, system_instruction_with_skills};
 pub use undo::{UndoCommand, UndoError, UndoStack};
 
 pub use prompt_caching::{

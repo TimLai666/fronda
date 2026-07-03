@@ -125,8 +125,10 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 
 ## Upstream PR management
 
-- Upstream PRs were audited once on 2026-06-25 (upstream HEAD `b9b4ad9`).
-  Results are in `specs/rust-rewrite/97-upstream-pr-audit.md`.
+- Upstream PRs were re-audited on 2026-07-03 (upstream HEAD `9a3ae50`, v0.5.2),
+  covering the 86 new commits `b9b4ad9..9a3ae50` (PRs ~#148–#254). The prior
+  audit was 2026-06-25 at `b9b4ad9`. Full tiered results and the porting
+  execution order are in `specs/rust-rewrite/97-upstream-pr-audit.md`.
 - Do NOT re-fetch upstream or re-audit PRs unless there are new commits on
   the upstream `main` branch. Check with `git fetch upstream && git --no-pager log upstream/main --oneline | head -5` first.
 - Only port upstream PRs that are explicitly requested or contain Rust-relevant
@@ -149,6 +151,19 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 | #144 | Validate speed/volume/opacity/trim      | DONE        | agent_contract (mutation.rs)                 |
 | #94  | Export resolutions (2K, Match Timeline) | DONE        | render_core (ExportResolution)               |
 | #135 | Missing-media cache pattern             | DONE        | core_model, agent_contract                   |
+| #224 | Open project with corrupt media.json    | DONE        | project_io (degrade to empty manifest)       |
+| #236 | Symmetric trim model for add/insert     | DONE        | agent_contract (resolve_placement)           |
+| #233 | add_clips keeps project fps fixed        | DONE        | agent_contract (source-fps warning)          |
+| #243 | Default agent model → Sonnet 5           | DONE        | app_contract, app_shell_gpui (chat list)     |
+| #189 | Caption phrase timing from word stamps   | DONE (already) | search_core (phrases_from_words)          |
+| #177 | set_project_settings tool + presets      | DONE        | agent_contract (auto-match-on-add deferred)  |
+| #186 | split_clip → split_clips batch           | DONE        | agent_contract (two modes, dedup, A/V)       |
+| #193 | FCPXML export v1 baseline                | DONE (v1)   | render_core (fcpxml_export.rs) + ExportMode::Fcpxml + write_interchange (save dialog writes .xml/.fcpxml); refinements #197/#206/#214/#247/#254 pending |
+| #204 | Window sizing (Home/Settings)           | DONE        | app_shell_gpui window.rs (project maximize-to-screen deferred) |
+| #214 | FCPXML format naming + Rec.709           | DONE        | render_core fcpxml_export.rs (NTSC-aware naming) |
+| #206 | FCPXML per-asset formats (partial)       | PARTIAL     | render_core fcpxml_export.rs; cross-file A/V linked collapse pending |
+| #226 | apply_layout geometry + placement math    | PARTIAL     | core_model video_layout.rs (10 layouts + fill/fit placement); agent tool wiring pending |
+| #199 | Skills: store + read_skill tool + prompt | PARTIAL     | skill_store.rs + agent_contract read_skill/set_skills/prompt inject + boot load; catalog/UI pending |
 | #74  | naturalTimeScale for clip inserts       | DEFERRED    | AVFoundation-specific                        |
 | #119 | Audio syncing multiple tracks           | NOT_STARTED | Swift-only, large feature                    |
 | #133 | Project thumbnail main-thread hang      | DEFERRED    | Swift-specific pattern                       |
