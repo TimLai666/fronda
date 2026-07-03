@@ -72,6 +72,7 @@ pub mod tour_overlay_view;
 pub mod transform_overlay_view;
 #[cfg(feature = "desktop-app")]
 pub mod update_overlay_view;
+pub mod video_thumbnails;
 pub mod window;
 
 #[cfg(feature = "desktop-app")]

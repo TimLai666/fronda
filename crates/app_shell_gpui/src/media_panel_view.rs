@@ -243,9 +243,14 @@ fn media_grid(items: &[crate::media_panel_model::MediaItem]) -> impl IntoElement
         .gap(px(Spacing::SM_MD))
         .p(px(Spacing::SM_MD));
     for item in items {
-        let image = (item.kind == core_model::ClipType::Image)
-            .then(|| item.source_path.clone())
-            .flatten();
+        let image = match item.kind {
+            core_model::ClipType::Image => item.source_path.clone(),
+            core_model::ClipType::Video => item
+                .source_path
+                .as_deref()
+                .and_then(crate::video_thumbnails::request_thumbnail),
+            _ => None,
+        };
         if let Some(path) = image {
             grid = grid.child(image_tile(&item.id, &item.name, path));
         } else {
