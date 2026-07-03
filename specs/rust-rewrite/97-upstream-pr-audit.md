@@ -106,6 +106,24 @@ only their *validation semantics* (reject vs clamp) are portable, and low value.
 | #159 | Chat input focus restore after backspace clears field | chat_view | L |
 | #248 | Login-incentive free-credits CTA in chat panel | chat_view | L |
 
+## Non-PR parity (Swift↔Rust gap sweep, 2026-07-03)
+
+Beyond upstream PRs, a multi-agent sweep mapped Swift capabilities missing in
+Rust. Landed pure-logic wins (all unit-tested): `format_aspect_ratio`,
+`format_duration`, `db_from_linear`/`linear_from_db` (timeline_core::inspector);
+`ClipType::content_type_for_extension` (core_model); `SettingsState` model
+toggle (app_contract); `format_cost` em-dash fix (generation_core); moment
+drag-segment `#start-end` (timeline_core::drag_payload); `EmbeddingStore`
+binary `to_bytes`/`from_bytes` (search_visual).
+
+Still-open pure-logic items: pack the 144-line Swift AgentInstructions into
+`SYSTEM_INSTRUCTION`; keyframed XMEML export + `file://` path norm + `<file>`
+dedup + fade→transitionitem (all need the media manifest threaded into
+`xml_export` as done for FCPXML); SHA256 transcript cache identity (needs `sha2`).
+The sweep also confirmed many suspected gaps are already DONE (keyframe
+smoothstep interpolation, folder-drag, `resolved_transform_at`/`crop_at`,
+model-config validate/discount).
+
 ## Recommended execution order
 
 1. **Tier 1 batch** (correctness, testable): #236+#233 (add_clips), #224, #218, #207+#227, #189, #243.
