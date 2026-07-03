@@ -4,6 +4,7 @@ use core_model::{ClipType, Interpolation, Timeline};
 use core_model::{Clip, Crop, Transform};
 use serde::{Deserialize, Serialize};
 
+pub mod audio_plan;
 pub mod bundle_export;
 pub mod compositor;
 pub mod effects;
