@@ -369,6 +369,25 @@ pub fn apply_vignette(img: &mut RgbaImage, amount: f64) {
     }
 }
 
+/// Mirror an image horizontally and/or vertically (clip flip). Returns a clone
+/// unchanged when neither flip is set.
+pub fn flip_image(img: &RgbaImage, horizontal: bool, vertical: bool) -> RgbaImage {
+    if !horizontal && !vertical {
+        return img.clone();
+    }
+    let mut out = RgbaImage::new(img.width, img.height);
+    for y in 0..img.height {
+        for x in 0..img.width {
+            let sx = if horizontal { img.width - 1 - x } else { x };
+            let sy = if vertical { img.height - 1 - y } else { y };
+            let si = (sy * img.width + sx) * 4;
+            let di = (y * img.width + x) * 4;
+            out.pixels[di..di + 4].copy_from_slice(&img.pixels[si..si + 4]);
+        }
+    }
+    out
+}
+
 /// Apply a per-channel RGB function (result clamped to `0..=255`), leaving alpha.
 fn map_rgb(img: &mut RgbaImage, f: impl Fn(f64) -> f64) {
     for px in img.pixels.chunks_exact_mut(4) {
@@ -599,6 +618,9 @@ pub fn compose_frame(
             let Some(mut src) = fetch_source(clip) else {
                 continue;
             };
+            if t.flip_horizontal || t.flip_vertical {
+                src = flip_image(&src, t.flip_horizontal, t.flip_vertical);
+            }
             if let Some(key) = clip.chroma_key.as_ref() {
                 apply_chroma_key(&mut src, key);
             }
@@ -977,6 +999,22 @@ mod tests {
         let img = rasterize_shape(&solid_shape(ShapeKind::Oval, [0.0, 0.0, 1.0, 1.0]), 8, 8);
         assert_eq!(px(&img, 4, 4), [0, 0, 255, 255], "center filled");
         assert_eq!(px(&img, 0, 0), [0, 0, 0, 0], "corner transparent");
+    }
+
+    #[test]
+    fn flip_horizontal_mirrors_columns() {
+        let mut img = RgbaImage::new(2, 1);
+        img.pixels[0..4].copy_from_slice(&[255, 0, 0, 255]); // red left
+        img.pixels[4..8].copy_from_slice(&[0, 255, 0, 255]); // green right
+        let f = flip_image(&img, true, false);
+        assert_eq!(px(&f, 0, 0), [0, 255, 0, 255], "green now on the left");
+        assert_eq!(px(&f, 1, 0), [255, 0, 0, 255], "red now on the right");
+    }
+
+    #[test]
+    fn flip_none_is_unchanged() {
+        let img = RgbaImage::solid(2, 2, [10, 20, 30, 255]);
+        assert_eq!(flip_image(&img, false, false).pixels, img.pixels);
     }
 
     #[test]
