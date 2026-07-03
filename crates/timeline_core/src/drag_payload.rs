@@ -5,6 +5,9 @@ use std::fmt;
 pub enum DragItem {
     Asset(String),
     Folder(String),
+    /// A moment/segment drag: an asset id plus a source-time range in seconds
+    /// (`palmier-asset://<id>#<start>-<end>`, from search hits / moment thumbnails).
+    AssetSegment { id: String, start: f64, end: f64 },
 }
 
 /// Parse result for drag payload strings
@@ -18,6 +21,9 @@ impl fmt::Display for DragItem {
         match self {
             DragItem::Asset(id) => write!(f, "asset({id})"),
             DragItem::Folder(id) => write!(f, "folder({id})"),
+            DragItem::AssetSegment { id, start, end } => {
+                write!(f, "asset({id}#{start}-{end})")
+            }
         }
     }
 }
@@ -51,10 +57,24 @@ pub fn parse_drag_payload(input: &str) -> DragPayload {
         .map(|line| line.trim())
         .filter(|line| !line.is_empty())
         .filter_map(|line| {
-            if let Some(id) = line.strip_prefix("palmier-asset://") {
-                if !id.is_empty() {
-                    return Some(DragItem::Asset(id.to_string()));
+            if let Some(rest) = line.strip_prefix("palmier-asset://") {
+                if rest.is_empty() {
+                    return None;
                 }
+                // `<id>#<start>-<end>` → moment segment; a malformed segment is
+                // rejected (dropped) rather than folded into the id.
+                if let Some((id, seg)) = rest.split_once('#') {
+                    let (start, end) = parse_segment(seg)?;
+                    if id.is_empty() {
+                        return None;
+                    }
+                    return Some(DragItem::AssetSegment {
+                        id: id.to_string(),
+                        start,
+                        end,
+                    });
+                }
+                return Some(DragItem::Asset(rest.to_string()));
             }
             if let Some(id) = line.strip_prefix("palmier-folder://") {
                 if !id.is_empty() {
@@ -66,6 +86,32 @@ pub fn parse_drag_payload(input: &str) -> DragPayload {
         .collect();
 
     DragPayload { items }
+}
+
+/// Parse the `start-end` part of a moment drag segment (seconds). Requires two
+/// finite floats with `0 <= start < end`.
+fn parse_segment(seg: &str) -> Option<(f64, f64)> {
+    let (s, e) = seg.split_once('-')?;
+    let start: f64 = s.trim().parse().ok()?;
+    let end: f64 = e.trim().parse().ok()?;
+    if start.is_finite() && end.is_finite() && start >= 0.0 && end > start {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
+/// Parse a single `palmier-asset://<id>#<start>-<end>` moment drag string into
+/// `(id, start, end)`. Returns `None` for a non-asset scheme, empty id, or a
+/// missing/malformed segment.
+pub fn parse_asset_segment(input: &str) -> Option<(String, f64, f64)> {
+    let rest = input.trim().strip_prefix("palmier-asset://")?;
+    let (id, seg) = rest.split_once('#')?;
+    if id.is_empty() {
+        return None;
+    }
+    let (start, end) = parse_segment(seg)?;
+    Some((id.to_string(), start, end))
 }
 
 /// Check if a URL string is an internal drag payload (not a Finder file URL)
@@ -197,6 +243,43 @@ mod tests {
     fn empty_id_ignored() {
         let result = parse_drag_payload("palmier-asset://\npalmier-folder://");
         assert_eq!(result, DragPayload { items: vec![] });
+    }
+
+    #[test]
+    fn moment_segment_parses_start_end() {
+        let result = parse_drag_payload("palmier-asset://a#2.5-5.75");
+        assert_eq!(
+            result,
+            DragPayload {
+                items: vec![DragItem::AssetSegment {
+                    id: "a".into(),
+                    start: 2.5,
+                    end: 5.75,
+                }]
+            }
+        );
+        assert_eq!(
+            parse_asset_segment("palmier-asset://a#2.5-5.75"),
+            Some(("a".to_string(), 2.5, 5.75))
+        );
+    }
+
+    #[test]
+    fn moment_segment_rejects_reversed_or_malformed() {
+        // start >= end → whole item dropped.
+        assert_eq!(parse_drag_payload("palmier-asset://a#5-2").items, vec![]);
+        assert_eq!(parse_asset_segment("palmier-asset://a#5-2"), None);
+        // non-numeric segment dropped.
+        assert_eq!(parse_drag_payload("palmier-asset://a#x-y").items, vec![]);
+        // empty id with segment dropped.
+        assert_eq!(parse_drag_payload("palmier-asset://#1-2").items, vec![]);
+        // no '#' → still a plain asset (unchanged behavior).
+        assert_eq!(
+            parse_drag_payload("palmier-asset://a").items,
+            vec![DragItem::Asset("a".into())]
+        );
+        // parse_asset_segment on a plain asset (no segment) → None.
+        assert_eq!(parse_asset_segment("palmier-asset://a"), None);
     }
 
     // is_internal_drag_payload works for single-line inputs
