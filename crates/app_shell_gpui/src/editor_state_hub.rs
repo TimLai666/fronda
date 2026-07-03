@@ -72,20 +72,34 @@ impl EditorStateHub {
         self.project_root.lock().ok().and_then(|r| r.clone())
     }
 
+    /// Snapshot the shared timeline and manifest under the lock.
+    fn snapshot(&self) -> Result<(Timeline, MediaManifest), String> {
+        let exec = self
+            .executor
+            .lock()
+            .map_err(|_| "Editor state lock poisoned".to_string())?;
+        Ok((exec.timeline().clone(), exec.media_manifest().clone()))
+    }
+
     /// Write the shared timeline and manifest back to the open project.
     /// Clones the state under the lock, writes to disk outside it.
     pub fn save(&self) -> Result<(), String> {
         let Some(root) = self.project_root() else {
             return Err("No project open: nothing to save".into());
         };
-        let (timeline, manifest) = {
-            let exec = self
-                .executor
-                .lock()
-                .map_err(|_| "Editor state lock poisoned".to_string())?;
-            (exec.timeline().clone(), exec.media_manifest().clone())
-        };
+        let (timeline, manifest) = self.snapshot()?;
         project_io::save_project_state(&root, &timeline, &manifest).map_err(|e| e.to_string())
+    }
+
+    /// Write the current state to a new directory and make it the
+    /// project root. On write failure the root is left unchanged.
+    pub fn save_as(&self, root: &Path) -> Result<(), String> {
+        let (timeline, manifest) = self.snapshot()?;
+        project_io::save_project_state(root, &timeline, &manifest).map_err(|e| e.to_string())?;
+        if let Ok(mut current) = self.project_root.lock() {
+            *current = Some(root.to_path_buf());
+        }
+        Ok(())
     }
 }
 
@@ -181,6 +195,36 @@ mod tests {
         let exec = exec.lock().unwrap();
         assert_eq!(exec.timeline().fps, 60);
         assert!(exec
+            .media_manifest()
+            .folders
+            .iter()
+            .any(|f| f.name == "B-roll"));
+    }
+
+    #[test]
+    fn save_as_switches_root_and_save_targets_it() {
+        let dir = temp_bundle_dir("save-as.palmier");
+        let hub = EditorStateHub::new();
+        assert!(hub.project_root().is_none());
+
+        hub.save_as(&dir).unwrap();
+        assert!(dir.join(core_model::TIMELINE_FILENAME).is_file());
+        assert!(dir.join(core_model::MANIFEST_FILENAME).is_file());
+        assert_eq!(hub.project_root(), Some(dir.clone()));
+
+        let exec = hub.executor();
+        exec.lock()
+            .unwrap()
+            .execute("create_folder", &serde_json::json!({"name": "B-roll"}))
+            .unwrap();
+        hub.save().unwrap();
+
+        let fresh = EditorStateHub::new();
+        fresh.load_bundle(&dir).unwrap();
+        let exec = fresh.executor();
+        assert!(exec
+            .lock()
+            .unwrap()
             .media_manifest()
             .folders
             .iter()

@@ -22,8 +22,8 @@ use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
 use gpui::{
     div, prelude::*, px, size, svg, App, Bounds, Context, DragMoveEvent, Entity, FocusHandle,
-    Focusable, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, Window, WindowBounds,
-    WindowOptions,
+    Focusable, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions,
+    Window, WindowBounds, WindowOptions,
 };
 
 /// Drag token for timeline panel resize.
@@ -195,7 +195,21 @@ impl AppRoot {
                 self.open_editor(cx);
             }
             menu::MenuAction::OpenProject => {
-                self.open_editor(cx);
+                let rx = cx.prompt_for_paths(PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some("Open".into()),
+                });
+                cx.spawn(async move |this, cx| {
+                    if let Ok(Ok(Some(paths))) = rx.await {
+                        if let Some(path) = paths.first() {
+                            let path = path.clone();
+                            let _ = this.update(cx, |root, cx| root.open_project_at(&path, cx));
+                        }
+                    }
+                })
+                .detach();
             }
             menu::MenuAction::ToggleMediaPanel => {
                 self.pane_layout.toggle_pane(PaneId::Media);
@@ -229,9 +243,26 @@ impl AppRoot {
                     eprintln!("Save failed: {reason}");
                 }
             }
-            menu::MenuAction::SaveProjectAs
-            | menu::MenuAction::ImportMedia
-            | menu::MenuAction::Export => {}
+            menu::MenuAction::SaveProjectAs => {
+                let hub = crate::editor_state_hub::EditorStateHub::global();
+                let start_dir = hub
+                    .project_root()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                    .or_else(std::env::home_dir)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let rx = cx.prompt_for_new_path(&start_dir, Some("Untitled.palmier"));
+                cx.spawn(async move |_, _| {
+                    if let Ok(Ok(Some(path))) = rx.await {
+                        if let Err(reason) =
+                            crate::editor_state_hub::EditorStateHub::global().save_as(&path)
+                        {
+                            eprintln!("Save As failed: {reason}");
+                        }
+                    }
+                })
+                .detach();
+            }
+            menu::MenuAction::ImportMedia | menu::MenuAction::Export => {}
             menu::MenuAction::Undo
             | menu::MenuAction::Redo
             | menu::MenuAction::Cut
