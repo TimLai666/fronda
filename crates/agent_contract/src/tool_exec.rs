@@ -9,8 +9,8 @@ use crate::read_tools::{
 };
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
-    Clip, ClipType, Effect, GenerationInput, Interpolation, Keyframe, KeyframeTrack, MediaManifest,
-    MediaManifestEntry, MediaSource, TextStyle, Timeline, Transform,
+    Clip, ClipType, Effect, GenerationInput, Interpolation, Keyframe, KeyframeTrack, LayoutFit,
+    MediaManifest, MediaManifestEntry, MediaSource, TextStyle, Timeline, Transform, VideoLayout,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -168,6 +168,44 @@ pub struct AgentSkill {
     pub name: String,
     pub description: String,
     pub body: String,
+}
+
+/// Resolve a layout slot entry's crop anchor (upstream #226). A named `anchor`
+/// picks a preset; `anchorX`/`anchorY` (0..1) override each axis. Default center.
+fn resolve_layout_anchor(entry: &Value) -> Result<(f64, f64), String> {
+    const ANCHORS: &[(&str, (f64, f64))] = &[
+        ("center", (0.5, 0.5)),
+        ("top", (0.5, 0.0)),
+        ("bottom", (0.5, 1.0)),
+        ("left", (0.0, 0.5)),
+        ("right", (1.0, 0.5)),
+        ("top_left", (0.0, 0.0)),
+        ("top_right", (1.0, 0.0)),
+        ("bottom_left", (0.0, 1.0)),
+        ("bottom_right", (1.0, 1.0)),
+    ];
+    let mut anchor = (0.5, 0.5);
+    if let Some(name) = entry.get("anchor").and_then(Value::as_str) {
+        anchor = ANCHORS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, a)| *a)
+            .ok_or_else(|| format!("invalid anchor '{name}'"))?;
+    }
+    for key in ["anchorX", "anchorY"] {
+        if let Some(v) = entry.get(key).and_then(Value::as_f64) {
+            if !(0.0..=1.0).contains(&v) {
+                return Err(format!("{key} must be between 0 and 1 (got {v})"));
+            }
+        }
+    }
+    if let Some(ax) = entry.get("anchorX").and_then(Value::as_f64) {
+        anchor.0 = ax;
+    }
+    if let Some(ay) = entry.get("anchorY").and_then(Value::as_f64) {
+        anchor.1 = ay;
+    }
+    Ok(anchor)
 }
 
 /// Runtime state for executing agent timeline tools.
@@ -342,6 +380,7 @@ impl ToolExecutor {
             "remove_tracks" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_tracks, args),
             "add_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_add_clips, args),
             "insert_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_insert_clips, args),
+            "apply_layout" => self.exec_mut(tool_name, ToolExecutor::cmd_apply_layout, args),
             "add_texts" => self.exec_mut(tool_name, ToolExecutor::cmd_add_texts, args),
             "add_shapes" => self.exec_mut(tool_name, ToolExecutor::cmd_add_shapes, args),
             "apply_color" => self.exec_mut(tool_name, ToolExecutor::cmd_apply_color, args),
@@ -968,6 +1007,140 @@ impl ToolExecutor {
             )
         };
         Ok(json!({ "content": [{ "type": "text", "text": text }] }))
+    }
+
+    fn cmd_apply_layout(&mut self, args: &Value) -> Result<Value, String> {
+        let layout_name = args
+            .get("layout")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Missing layout".to_string())?;
+        let layout = VideoLayout::from_str(layout_name).ok_or_else(|| {
+            let valid: Vec<&str> = VideoLayout::ALL.iter().map(|l| l.as_str()).collect();
+            format!("unknown layout '{layout_name}'. Valid: {}", valid.join(", "))
+        })?;
+        let fit_name = args.get("fit").and_then(Value::as_str).unwrap_or("fill");
+        let fit = LayoutFit::from_str(fit_name)
+            .ok_or_else(|| format!("invalid fit '{fit_name}'. Valid: fill, fit"))?;
+
+        let slots_val = args
+            .get("slots")
+            .and_then(Value::as_array)
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| "apply_layout needs a non-empty 'slots' array".to_string())?;
+
+        let layout_slots = layout.slots();
+
+        // Parse + validate every slot entry before mutating anything.
+        let mut seen_slots: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut seen_clips: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut uses_media = false;
+        // (slot, clip_id, anchor)
+        let mut entries: Vec<(core_model::LayoutSlot, String, (f64, f64))> = Vec::new();
+        for (i, e) in slots_val.iter().enumerate() {
+            let slot_name = e
+                .get("slot")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("slots[{i}]: missing 'slot'"))?;
+            let slot = layout_slots
+                .iter()
+                .find(|s| s.id == slot_name)
+                .ok_or_else(|| {
+                    let ids: Vec<&str> = layout_slots.iter().map(|s| s.id).collect();
+                    format!(
+                        "slots[{i}]: '{slot_name}' is not a slot of '{layout_name}'. Slots: {}",
+                        ids.join(", ")
+                    )
+                })?;
+            if !seen_slots.insert(slot_name.to_string()) {
+                return Err(format!("slots[{i}]: duplicate slot '{slot_name}'"));
+            }
+            let media_ref = e.get("mediaRef").and_then(Value::as_str);
+            let clip_id = e.get("clipId").and_then(Value::as_str);
+            if media_ref.is_some() == clip_id.is_some() {
+                return Err(format!(
+                    "slots[{i}]: provide exactly one of 'mediaRef' or 'clipId'"
+                ));
+            }
+            if let Some(cid) = clip_id {
+                if !seen_clips.insert(cid.to_string()) {
+                    return Err(format!(
+                        "slots[{i}]: clip '{cid}' is assigned to more than one slot"
+                    ));
+                }
+            }
+            uses_media = uses_media || media_ref.is_some();
+            let anchor = resolve_layout_anchor(e).map_err(|m| format!("slots[{i}]: {m}"))?;
+            entries.push((
+                slot.clone(),
+                clip_id.unwrap_or_default().to_string(),
+                anchor,
+            ));
+        }
+
+        let missing: Vec<&str> = layout_slots
+            .iter()
+            .map(|s| s.id)
+            .filter(|id| !seen_slots.contains(*id))
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "layout '{layout_name}' needs every slot filled. Missing: {}",
+                missing.join(", ")
+            ));
+        }
+        if uses_media {
+            return Err(
+                "apply_layout: placing new clips by 'mediaRef' is not yet supported; \
+                 assign 'clipId' to re-layout existing clips."
+                    .to_string(),
+            );
+        }
+
+        // Re-layout mode: set each clip's transform + crop from its slot.
+        let canvas_w = self.timeline.width;
+        let canvas_h = self.timeline.height;
+        let mut applied: Vec<String> = Vec::new();
+        for (slot, clip_id, anchor) in &entries {
+            let loc = self.timeline.tracks.iter().enumerate().find_map(|(ti, t)| {
+                t.clips.iter().position(|c| c.id == *clip_id).map(|ci| (ti, ci))
+            });
+            let Some((ti, ci)) = loc else {
+                return Err(format!("slot '{}': clip not found: {clip_id}", slot.id));
+            };
+            let media_type = self.timeline.tracks[ti].clips[ci].media_type.clone();
+            if !matches!(media_type, ClipType::Video | ClipType::Image) {
+                return Err(format!(
+                    "slot '{}': clip {clip_id} is {media_type:?}; layout applies to video/image clips",
+                    slot.id
+                ));
+            }
+            let media_ref = self.timeline.tracks[ti].clips[ci].media_ref.clone();
+            let entry = self.media_manifest.entry_for(&media_ref);
+            let sw = entry.and_then(|e| e.source_width).unwrap_or(0);
+            let sh = entry.and_then(|e| e.source_height).unwrap_or(0);
+            let (transform, crop) = core_model::video_layout::layout_placement(
+                slot.rect, fit, sw, sh, canvas_w, canvas_h, anchor.0, anchor.1,
+            );
+            let clip = &mut self.timeline.tracks[ti].clips[ci];
+            clip.transform = transform;
+            clip.crop = crop;
+            clip.position_track = None;
+            clip.scale_track = None;
+            clip.rotation_track = None;
+            clip.crop_track = None;
+            applied.push(format!("{} -> {clip_id}", slot.id));
+        }
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": format!(
+                    "Applied '{layout_name}' layout ({}) on existing clips: {}",
+                    fit.as_str(),
+                    applied.join("; ")
+                )
+            }]
+        }))
     }
 
     fn cmd_add_clips(&mut self, args: &Value) -> Result<Value, String> {
@@ -3083,6 +3256,89 @@ mod tests {
         let before = exec.revision();
         exec.execute("read_skill", &json!({"id": "a"})).unwrap();
         assert_eq!(exec.revision(), before, "read_skill must not bump revision");
+    }
+
+    #[test]
+    fn apply_layout_side_by_side_sets_transforms_and_crop() {
+        let mut exec = make_executor_with_media(); // media-001 Video 1920x1080, canvas 1920x1080
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_clips",
+            &json!({"mediaIds": ["media-001", "media-001"], "trackIndex": 0}),
+        )
+        .unwrap();
+        let ids: Vec<String> = exec.timeline().tracks[0]
+            .clips
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(ids.len(), 2);
+
+        exec.execute(
+            "apply_layout",
+            &json!({
+                "layout": "side_by_side",
+                "slots": [
+                    {"slot": "left", "clipId": ids[0]},
+                    {"slot": "right", "clipId": ids[1]}
+                ]
+            }),
+        )
+        .unwrap();
+
+        let left = &exec.timeline().tracks[0].clips[0];
+        let right = &exec.timeline().tracks[0].clips[1];
+        assert!(
+            (left.transform.center_x - 0.25).abs() < 1e-6,
+            "left cx={}",
+            left.transform.center_x
+        );
+        assert!(
+            (right.transform.center_x - 0.75).abs() < 1e-6,
+            "right cx={}",
+            right.transform.center_x
+        );
+        // 16:9 source cover-cropped into a half-width slot → 0.25 side crops.
+        assert!((left.crop.left - 0.25).abs() < 1e-6, "crop.left={}", left.crop.left);
+    }
+
+    #[test]
+    fn apply_layout_unknown_layout_errors() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute(
+                "apply_layout",
+                &json!({"layout": "nope", "slots": [{"slot": "main", "clipId": "x"}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("unknown layout"), "err={err}");
+    }
+
+    #[test]
+    fn apply_layout_missing_slot_errors() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute(
+                "apply_layout",
+                &json!({"layout": "side_by_side", "slots": [{"slot": "left", "clipId": "x"}]}),
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("needs every slot filled") && err.contains("right"),
+            "err={err}"
+        );
+    }
+
+    #[test]
+    fn apply_layout_media_mode_rejected() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute(
+                "apply_layout",
+                &json!({"layout": "full", "slots": [{"slot": "main", "mediaRef": "m1"}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("not yet supported"), "err={err}");
     }
 
     #[test]

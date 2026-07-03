@@ -27,6 +27,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
         add_clips(),
+        apply_layout(),
         create_compound_clip(),
         dissolve_compound_clip(),
         import_xml(),
@@ -330,6 +331,32 @@ fn set_project_settings() -> ToolDefinition {
                 "quality",
                 string("Resolution preset: 720p, 1080p, 2K, or 4K. Scales the short edge, preserving aspect."),
             ),
+        ]),
+    }
+}
+
+fn apply_layout() -> ToolDefinition {
+    ToolDefinition {
+        name: "apply_layout",
+        description: "Arrange clips into a common multi-video layout (split screen, \
+            picture-in-picture, grid) in one undoable action — the fast path for \
+            composing several videos in one frame instead of hand-setting transforms. \
+            Pick a named layout and assign a clip to each of its slots; the tool \
+            computes every transform and crop so each clip fills its region without \
+            stretching (source cropped to the slot's shape). Pass fit='fit' to \
+            letterbox the whole source inside its slot instead (no crop). Crop is \
+            centered by default; bias it with 'anchor' (top/bottom/left/right/...) or \
+            continuous anchorX/anchorY (0-1). \
+            Re-layout mode (supported): give each slot a 'clipId' — only transforms \
+            and crop change; timing and tracks are untouched. \
+            Layouts and slots: full=main; side_by_side=left,right; \
+            top_bottom=top,bottom; pip_bottom_right/pip_bottom_left/pip_top_right/\
+            pip_top_left=main,inset; grid_2x2=top_left,top_right,bottom_left,\
+            bottom_right; main_sidebar=main,sidebar; three_up=left,center,right.",
+        input_schema: object_optional(&[
+            ("layout", string("Layout name (e.g. side_by_side, grid_2x2, pip_bottom_right). Required.")),
+            ("slots", array("Required. One entry per slot: {slot, clipId, optional anchor/anchorX/anchorY}. Every slot of the layout must be filled; each clip fills one slot.")),
+            ("fit", string("'fill' (cover-crop, default) or 'fit' (letterbox, no crop).")),
         ]),
     }
 }
@@ -1010,8 +1037,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            56,
-            "TDEF-001: 56 tools (55 + read_skill, upstream #199)"
+            57,
+            "TDEF-001: 57 tools (56 + apply_layout, upstream #226)"
         );
     }
 
@@ -1040,7 +1067,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 56, "all 56 tool names must be unique");
+        assert_eq!(names.len(), 57, "all 57 tool names must be unique");
     }
 
     #[test]
