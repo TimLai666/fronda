@@ -670,6 +670,53 @@ impl Render for ExportView {
                                         }
                                     })
                                     .detach();
+                                } else if mode == ExportMode::Video {
+                                    // Real pixel render: pick an .mp4 path, then
+                                    // composite + encode the timeline off-thread.
+                                    let start_dir =
+                                        std::env::home_dir().unwrap_or_else(|| ".".into());
+                                    let rx = cx
+                                        .prompt_for_new_path(&start_dir, Some("Timeline.mp4"));
+                                    cx.spawn(async move |this, cx| {
+                                        let Ok(Ok(Some(path))) = rx.await else {
+                                            return;
+                                        };
+                                        let _ = this.update(cx, |view, cx| {
+                                            view.model.start();
+                                            cx.notify();
+                                        });
+                                        let (timeline, manifest, root) = {
+                                            let hub =
+                                                crate::editor_state_hub::EditorStateHub::global();
+                                            let exec = hub.executor();
+                                            let guard = exec.lock().unwrap();
+                                            let root = hub.project_root().unwrap_or_else(|| {
+                                                std::env::home_dir().unwrap_or_else(|| ".".into())
+                                            });
+                                            (
+                                                guard.timeline().clone(),
+                                                guard.media_manifest().clone(),
+                                                root,
+                                            )
+                                        };
+                                        let out = path.clone();
+                                        let result = cx
+                                            .background_executor()
+                                            .spawn(async move {
+                                                let w = timeline.width.max(2) as u32;
+                                                let h = timeline.height.max(2) as u32;
+                                                crate::video_export::export_project(
+                                                    &timeline, &manifest, &root, &out, w, h,
+                                                )
+                                                .map(|()| out.clone())
+                                            })
+                                            .await;
+                                        let _ = this.update(cx, |view, cx| {
+                                            view.model.set_interchange_result(result);
+                                            cx.notify();
+                                        });
+                                    })
+                                    .detach();
                                 } else {
                                     this.model.start();
                                     cx.notify();
