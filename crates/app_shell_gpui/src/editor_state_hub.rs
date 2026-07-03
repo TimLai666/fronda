@@ -232,6 +232,34 @@ mod tests {
     }
 
     #[test]
+    fn undo_restores_clip_position_after_move() {
+        let hub = EditorStateHub::new();
+        let timeline: Timeline = serde_json::from_str(
+            r#"{"fps":30,"tracks":[{"id":"t1","type":"video","clips":[
+                {"id":"c1","mediaRef":"m","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":100}
+            ]}]}"#,
+        )
+        .unwrap();
+        hub.load_project(timeline, MediaManifest::default());
+
+        let exec = hub.executor();
+        let mut exec = exec.lock().unwrap();
+        exec.execute(
+            "move_clips",
+            &serde_json::json!({"clipIds":["c1"],"toTrack":0,"toFrame":90}),
+        )
+        .unwrap();
+        assert_eq!(exec.timeline().tracks[0].clips[0].start_frame, 90);
+
+        exec.execute("undo", &serde_json::json!({})).unwrap();
+        assert_eq!(
+            exec.timeline().tracks[0].clips[0].start_frame,
+            0,
+            "undo restores the pre-move position"
+        );
+    }
+
+    #[test]
     fn save_without_open_project_fails() {
         let hub = EditorStateHub::new();
         let err = hub.save().unwrap_err();

@@ -263,18 +263,31 @@ impl AppRoot {
                 .detach();
             }
             menu::MenuAction::ImportMedia | menu::MenuAction::Export => {}
-            menu::MenuAction::Undo
-            | menu::MenuAction::Redo
-            | menu::MenuAction::Cut
-            | menu::MenuAction::Copy => {}
+            menu::MenuAction::Undo => {
+                crate::timeline_view::TimelineView::run_history_tool("undo");
+                cx.notify();
+            }
+            menu::MenuAction::Redo => {
+                crate::timeline_view::TimelineView::run_history_tool("redo");
+                cx.notify();
+            }
+            menu::MenuAction::Cut | menu::MenuAction::Copy => {}
             menu::MenuAction::Paste => {
                 let _action = route_paste(FocusTarget::Timeline);
             }
+            menu::MenuAction::SplitAtPlayhead => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.split_selected_at_playhead(cx));
+                }
+            }
+            menu::MenuAction::Delete => {
+                if let Some(tv) = self.timeline_view.clone() {
+                    tv.update(cx, |view, cx| view.delete_selected(cx));
+                }
+            }
             menu::MenuAction::SelectAll
-            | menu::MenuAction::SplitAtPlayhead
             | menu::MenuAction::TrimStartToPlayhead
             | menu::MenuAction::TrimEndToPlayhead
-            | menu::MenuAction::Delete
             | menu::MenuAction::RippleDelete => {}
             menu::MenuAction::About
             | menu::MenuAction::CheckForUpdates

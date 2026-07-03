@@ -1832,6 +1832,7 @@ dependencies = [
  "fronda-generation-core",
  "fronda-mcp-server",
  "fronda-project-io",
+ "fronda-timeline-core",
  "gpui",
  "gpui_platform",
  "render_core",

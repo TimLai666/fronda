@@ -7,9 +7,24 @@ use crate::theme::{
 };
 use crate::timeline_model::{TimelineState, TrackKind, RULER_HEIGHT, TRACK_HEADER_WIDTH};
 use gpui::{
-    div, prelude::*, px, svg, App, Context, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, Window,
+    canvas, div, prelude::*, px, svg, App, Context, DragMoveEvent, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render, Styled,
+    Window,
 };
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+
+/// Drag token for clip moves.
+#[derive(Debug, Clone)]
+struct ClipDragToken;
+
+/// Invisible drag preview.
+struct ClipDragPreview;
+impl Render for ClipDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
 
 /// Timeline panel gpui entity.
 pub struct TimelineView {
@@ -18,6 +33,9 @@ pub struct TimelineView {
     /// Last seen shared-state revision; project loads and MCP mutations
     /// trigger a data rebuild.
     state_revision: u64,
+    /// Window x of the shared content left edge (ruler / clip canvas),
+    /// captured each frame by a zero-size canvas element.
+    content_origin_x: Arc<AtomicU32>,
 }
 
 impl TimelineView {
@@ -26,9 +44,84 @@ impl TimelineView {
             state: TimelineState::new(),
             focus_handle: cx.focus_handle(),
             state_revision: u64::MAX,
+            content_origin_x: Arc::new(AtomicU32::new(0f32.to_bits())),
         };
         view.sync_from_shared_state();
         view
+    }
+
+    fn content_x(&self, window_x: f32) -> f32 {
+        window_x - f32::from_bits(self.content_origin_x.load(Ordering::Relaxed))
+    }
+
+    fn pointer_frame(&self, window_x: f32) -> i64 {
+        self.state
+            .frame_for_x(self.state.scroll_x + self.content_x(window_x))
+    }
+
+    /// Run a tool on the shared executor; tool errors leave the UI unchanged.
+    fn run_shared_tool(tool: &str, args: serde_json::Value) {
+        let executor = crate::editor_state_hub::EditorStateHub::global().executor();
+        let guard = executor.lock();
+        if let Ok(mut exec) = guard {
+            if let Err(reason) = exec.execute(tool, &args) {
+                eprintln!("{tool} failed: {reason}");
+            }
+        }
+    }
+
+    /// Undo/Redo via the shared executor (menu wiring). Errors (e.g. empty
+    /// stack) are normal and silent.
+    pub fn run_history_tool(tool: &str) {
+        let executor = crate::editor_state_hub::EditorStateHub::global().executor();
+        let guard = executor.lock();
+        if let Ok(mut exec) = guard {
+            let _ = exec.execute(tool, &serde_json::json!({}));
+        }
+    }
+
+    /// Delete the selected clips through the shared executor.
+    pub fn delete_selected(&mut self, cx: &mut Context<Self>) {
+        if self.state.selected_clip_ids.is_empty() {
+            return;
+        }
+        let ids = self.state.selected_clip_ids.clone();
+        Self::run_shared_tool("remove_clips", serde_json::json!({ "clipIds": ids }));
+        self.state.clear_selection();
+        cx.notify();
+    }
+
+    /// Split each selected clip at the playhead through the shared executor.
+    pub fn split_selected_at_playhead(&mut self, cx: &mut Context<Self>) {
+        let playhead = self.state.playhead_frame;
+        for id in self.state.selected_clip_ids.clone() {
+            Self::run_shared_tool(
+                "split_clip",
+                serde_json::json!({ "clipId": id, "frame": playhead }),
+            );
+        }
+        self.state.clear_selection();
+        cx.notify();
+    }
+
+    /// Commit a finished clip drag through move_clips (undo-tracked).
+    fn commit_clip_drag(&mut self, cx: &mut Context<Self>) {
+        let Some((clip_id, to_frame)) = self.state.take_clip_drag() else {
+            cx.notify();
+            return;
+        };
+        let Some(to_track) = self.state.track_index_of_clip(&clip_id) else {
+            return;
+        };
+        Self::run_shared_tool(
+            "move_clips",
+            serde_json::json!({
+                "clipIds": [clip_id],
+                "toTrack": to_track,
+                "toFrame": to_frame,
+            }),
+        );
+        cx.notify();
     }
 
     /// Rebuild data fields from the shared editor state, preserving
@@ -78,6 +171,9 @@ impl Render for TimelineView {
         }
         let tracks = self.state.tracks.clone();
         let clips = self.state.clips.clone();
+        let selected_ids = self.state.selected_clip_ids.clone();
+        let drag_clip_id = self.state.clip_drag.as_ref().map(|d| d.clip_id.clone());
+        let drag_proposed_start = self.state.clip_drag.as_ref().map(|d| d.proposed_start);
         let zoom = self.state.zoom_scale;
         let total_frames = self.state.total_frames;
         let fps = self.state.fps;
@@ -123,6 +219,14 @@ impl Render for TimelineView {
                             .overflow_hidden()
                             .relative()
                             .bg(Background::RAISED)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                                    let x = this.content_x(e.position.x.as_f32());
+                                    this.state.scrub_to_content_x(x);
+                                    cx.notify();
+                                }),
+                            )
                             .child(ruler_timecodes(total_frames, fps, zoom, scroll_x))
                             // Playhead in ruler: triangle head + thin line
                             .child(
@@ -235,6 +339,33 @@ impl Render for TimelineView {
                             .overflow_hidden()
                             .relative()
                             .bg(Background::SURFACE)
+                            .child({
+                                let origin = self.content_origin_x.clone();
+                                canvas(
+                                    move |bounds, _, _| {
+                                        origin.store(
+                                            bounds.origin.x.as_f32().to_bits(),
+                                            Ordering::Relaxed,
+                                        );
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .size_full()
+                            })
+                            .on_drag_move::<ClipDragToken>(cx.listener(
+                                |this, e: &DragMoveEvent<ClipDragToken>, _, cx| {
+                                    let content_x =
+                                        e.event.position.x.as_f32() - e.bounds.origin.x.as_f32();
+                                    let frame =
+                                        this.state.frame_for_x(this.state.scroll_x + content_x);
+                                    this.state.update_clip_drag(frame);
+                                    cx.notify();
+                                },
+                            ))
+                            .on_drop::<ClipDragToken>(cx.listener(|this, _, _, cx| {
+                                this.commit_clip_drag(cx);
+                            }))
                             .child(
                                 div()
                                     .absolute()
@@ -272,12 +403,21 @@ impl Render for TimelineView {
                                                 el.border_t_2().border_color(BorderColors::DIVIDER)
                                             })
                                             .children(track_clips.iter().map(|clip| {
-                                                let clip_x =
-                                                    clip.start_frame as f32 * zoom - scroll_x;
+                                                let is_dragging = drag_clip_id.as_deref()
+                                                    == Some(clip.id.as_str());
+                                                let start = if is_dragging {
+                                                    drag_proposed_start.unwrap_or(clip.start_frame)
+                                                } else {
+                                                    clip.start_frame
+                                                };
+                                                let clip_x = start as f32 * zoom - scroll_x;
                                                 let clip_w =
                                                     (clip.duration_frames as f32 * zoom).max(4.0);
+                                                let is_selected =
+                                                    selected_ids.iter().any(|id| id == &clip.id);
                                                 let mut bg = color;
-                                                bg.a = 0.22;
+                                                bg.a = if is_selected { 0.38 } else { 0.22 };
+                                                let clip_id = clip.id.clone();
                                                 div()
                                                     .id(format!("clip-{}", clip.id))
                                                     .absolute()
@@ -288,8 +428,35 @@ impl Render for TimelineView {
                                                     .rounded(px(Radius::XS))
                                                     .bg(bg)
                                                     .border_1()
-                                                    .border_color(color)
+                                                    .border_color(if is_selected {
+                                                        Accent::PRIMARY
+                                                    } else {
+                                                        color
+                                                    })
                                                     .overflow_hidden()
+                                                    .cursor_pointer()
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            move |this,
+                                                                  e: &MouseDownEvent,
+                                                                  _,
+                                                                  cx| {
+                                                                this.state
+                                                                    .select_only(&clip_id);
+                                                                let frame = this.pointer_frame(
+                                                                    e.position.x.as_f32(),
+                                                                );
+                                                                this.state.begin_clip_drag(
+                                                                    &clip_id, frame,
+                                                                );
+                                                                cx.notify();
+                                                            },
+                                                        ),
+                                                    )
+                                                    .on_drag(ClipDragToken, |_, _, _, cx| {
+                                                        cx.new(|_| ClipDragPreview)
+                                                    })
                                                     .child(
                                                         div()
                                                             .px(px(Spacing::XS))

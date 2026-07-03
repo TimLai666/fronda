@@ -112,6 +112,25 @@ pub struct TimelineState {
     /// Snap indicator frame — Some(frame) shows the yellow dashed snap line during clip drag.
     /// Mirrors Swift SnapIndicatorOverlay's CAShapeLayer positioning.
     pub snap_x_frame: Option<i64>,
+    /// View-only clip selection (not written back to core state).
+    pub selected_clip_ids: Vec<String>,
+    /// Active clip drag session, if any.
+    pub clip_drag: Option<ClipDrag>,
+}
+
+/// In-flight clip drag: proposed position tracked in project frames.
+#[derive(Debug, Clone)]
+pub struct ClipDrag {
+    pub clip_id: String,
+    /// Pointer frame minus clip start at grab time.
+    pub grab_offset_frames: i64,
+    /// Original start frame (no-op detection).
+    pub original_start: i64,
+    /// Clip duration, used as the trailing snap probe.
+    pub duration_frames: i64,
+    /// Proposed (possibly snapped) new start frame.
+    pub proposed_start: i64,
+    snap_state: timeline_core::SnapState,
 }
 
 impl TimelineState {
@@ -126,6 +145,8 @@ impl TimelineState {
             total_frames: 600,
             fps: 30,
             snap_x_frame: None,
+            selected_clip_ids: Vec::new(),
+            clip_drag: None,
         }
     }
 
@@ -142,6 +163,105 @@ impl TimelineState {
             ClipSlot::new("clip-5", "audio-1", 280, 200, "Voice Over"),
         ];
         self
+    }
+
+    /// Select exactly one clip.
+    pub fn select_only(&mut self, clip_id: &str) {
+        self.selected_clip_ids = vec![clip_id.to_string()];
+    }
+
+    pub fn toggle_select(&mut self, clip_id: &str) {
+        if let Some(pos) = self.selected_clip_ids.iter().position(|id| id == clip_id) {
+            self.selected_clip_ids.remove(pos);
+        } else {
+            self.selected_clip_ids.push(clip_id.to_string());
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selected_clip_ids.clear();
+    }
+
+    /// Move the playhead to the frame under a content-area x position.
+    pub fn scrub_to_content_x(&mut self, content_x: f32) {
+        self.playhead_frame = self.frame_for_x(self.scroll_x + content_x).max(0);
+    }
+
+    /// Track index (for move_clips toTrack) of the clip's track.
+    pub fn track_index_of_clip(&self, clip_id: &str) -> Option<usize> {
+        let track_id = &self.clips.iter().find(|c| c.id == clip_id)?.track_id;
+        self.tracks.iter().position(|t| &t.id == track_id)
+    }
+
+    /// Start dragging a clip. Returns false if the clip is unknown.
+    pub fn begin_clip_drag(&mut self, clip_id: &str, pointer_frame: i64) -> bool {
+        let Some(clip) = self.clips.iter().find(|c| c.id == clip_id) else {
+            return false;
+        };
+        self.clip_drag = Some(ClipDrag {
+            clip_id: clip_id.to_string(),
+            grab_offset_frames: pointer_frame - clip.start_frame,
+            original_start: clip.start_frame,
+            duration_frames: clip.duration_frames,
+            proposed_start: clip.start_frame,
+            snap_state: timeline_core::SnapState::default(),
+        });
+        true
+    }
+
+    /// Update the drag proposal from the current pointer frame, snapping to
+    /// other clips' edges and the playhead.
+    pub fn update_clip_drag(&mut self, pointer_frame: i64) {
+        let zoom = f64::from(self.zoom_scale);
+        let playhead = self.playhead_frame;
+        let Some(drag) = self.clip_drag.as_mut() else {
+            return;
+        };
+        let mut proposed = (pointer_frame - drag.grab_offset_frames).max(0);
+
+        let mut targets = vec![timeline_core::SnapTarget {
+            frame: playhead,
+            kind: timeline_core::SnapTargetKind::Playhead,
+        }];
+        for clip in &self.clips {
+            if clip.id == drag.clip_id {
+                continue;
+            }
+            for frame in [clip.start_frame, clip.start_frame + clip.duration_frames] {
+                targets.push(timeline_core::SnapTarget {
+                    frame,
+                    kind: timeline_core::SnapTargetKind::ClipEdge,
+                });
+            }
+        }
+        targets.sort_by_key(|t| t.frame);
+
+        let snap = timeline_core::find_snap(
+            proposed,
+            &[0, drag.duration_frames],
+            &targets,
+            &mut drag.snap_state,
+            timeline_core::THRESHOLD_PIXELS,
+            zoom,
+        );
+        if let Some(result) = snap {
+            proposed = (result.frame - result.probe_offset).max(0);
+            self.snap_x_frame = Some(result.frame);
+        } else {
+            self.snap_x_frame = None;
+        }
+        drag.proposed_start = proposed;
+    }
+
+    /// Finish the drag. Returns Some((clip_id, to_frame)) when the clip
+    /// actually moved; None for a zero-distance drop.
+    pub fn take_clip_drag(&mut self) -> Option<(String, i64)> {
+        self.snap_x_frame = None;
+        let drag = self.clip_drag.take()?;
+        if drag.proposed_start == drag.original_start {
+            return None;
+        }
+        Some((drag.clip_id, drag.proposed_start))
     }
 
     /// Build view state from the shared core timeline (project data path).
@@ -418,6 +538,91 @@ mod tests {
             ]}]}"#,
         );
         assert_eq!(TimelineState::from_core(&long, &manifest).total_frames, 720);
+    }
+
+    // Interaction logic (timeline-interactions spec)
+
+    fn state_with_two_clips() -> TimelineState {
+        let mut s = TimelineState::new();
+        s.tracks = vec![
+            TrackRow::new("t1", TrackKind::Video, "Video 1"),
+            TrackRow::new("t2", TrackKind::Audio, "Audio 1"),
+        ];
+        s.clips = vec![
+            ClipSlot::new("c1", "t1", 0, 100, "A"),
+            ClipSlot::new("c2", "t1", 300, 100, "B"),
+        ];
+        s
+    }
+
+    #[test]
+    fn scrub_clamps_below_zero_and_maps_frames() {
+        let mut s = state_with_two_clips();
+        s.scroll_x = 0.0;
+        s.scrub_to_content_x(480.0); // 480px / 4px-per-frame = frame 120
+        assert_eq!(s.playhead_frame, 120);
+        s.scroll_x = 40.0;
+        s.scrub_to_content_x(-80.0);
+        assert_eq!(s.playhead_frame, 0, "negative frames clamp to 0");
+    }
+
+    #[test]
+    fn selection_moves_between_clips() {
+        let mut s = state_with_two_clips();
+        s.select_only("c1");
+        assert_eq!(s.selected_clip_ids, vec!["c1".to_string()]);
+        s.select_only("c2");
+        assert_eq!(s.selected_clip_ids, vec!["c2".to_string()]);
+        s.clear_selection();
+        assert!(s.selected_clip_ids.is_empty());
+    }
+
+    #[test]
+    fn drag_proposal_clamps_to_zero() {
+        let mut s = state_with_two_clips();
+        assert!(s.begin_clip_drag("c1", 10)); // grab offset 10
+        s.update_clip_drag(-500);
+        assert_eq!(s.clip_drag.as_ref().unwrap().proposed_start, 0);
+    }
+
+    #[test]
+    fn drag_snaps_to_neighbor_edge_and_sets_indicator() {
+        let mut s = state_with_two_clips();
+        s.playhead_frame = -1000; // keep playhead out of range
+        assert!(s.begin_clip_drag("c1", 0)); // grab at clip start
+                                             // c2 starts at 300; dragging c1 (duration 100) so its end nears 300:
+                                             // pointer 199 → proposed 199, trailing probe 299, within 2 frames of 300.
+        s.update_clip_drag(199);
+        let drag = s.clip_drag.as_ref().unwrap();
+        assert_eq!(drag.proposed_start, 200, "trailing edge snapped to 300");
+        assert_eq!(s.snap_x_frame, Some(300));
+    }
+
+    #[test]
+    fn zero_distance_drop_returns_none() {
+        let mut s = state_with_two_clips();
+        assert!(s.begin_clip_drag("c1", 50));
+        s.update_clip_drag(50);
+        assert!(s.take_clip_drag().is_none());
+        assert!(s.snap_x_frame.is_none());
+        assert!(s.clip_drag.is_none());
+    }
+
+    #[test]
+    fn moved_drop_returns_target() {
+        let mut s = state_with_two_clips();
+        assert!(s.begin_clip_drag("c1", 0));
+        s.update_clip_drag(90);
+        assert_eq!(s.take_clip_drag(), Some(("c1".to_string(), 90)));
+    }
+
+    #[test]
+    fn track_index_lookup() {
+        let mut s = state_with_two_clips();
+        s.clips.push(ClipSlot::new("c3", "t2", 0, 50, "M"));
+        assert_eq!(s.track_index_of_clip("c1"), Some(0));
+        assert_eq!(s.track_index_of_clip("c3"), Some(1));
+        assert_eq!(s.track_index_of_clip("nope"), None);
     }
 
     #[test]
