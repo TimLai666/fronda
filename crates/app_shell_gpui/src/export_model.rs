@@ -80,6 +80,17 @@ pub fn write_interchange(
     std::fs::write(path, content).map_err(|e| format!("Failed to write {}: {e}", path.display()))
 }
 
+/// Write a `.palmier` project bundle to `root` (creating it), containing
+/// `project.json` and `media.json` for the current timeline + manifest.
+/// This is an export — it does not change the currently open project.
+pub fn write_palmier_bundle(
+    root: &std::path::Path,
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+) -> Result<(), String> {
+    project_io::save_project_state(root, timeline, manifest).map_err(|e| e.to_string())
+}
+
 /// Complete export panel state used by the gpui view.
 ///
 /// Wraps `ExportPanelState` (the pure state machine from generation_core)
@@ -222,6 +233,16 @@ mod tests {
         vm.set_interchange_result(Err("disk full".into()));
         assert_eq!(vm.panel.stage, ExportStage::Failed);
         assert!(vm.status_text().unwrap().contains("Export failed: disk full"));
+    }
+
+    #[test]
+    fn write_palmier_bundle_writes_project_files() {
+        let dir = std::env::temp_dir().join("fronda-export-model-tests/bundle.palmier");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_palmier_bundle(&dir, &Timeline::default(), &MediaManifest::default()).unwrap();
+        assert!(dir.join("project.json").is_file(), "project.json written");
+        assert!(dir.join("media.json").is_file(), "media.json written");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

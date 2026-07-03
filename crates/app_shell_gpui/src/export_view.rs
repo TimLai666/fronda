@@ -429,6 +429,14 @@ impl Render for ExportView {
                                                 ),
                                         );
                                     }
+                                    if let Some(s) = self.model.status_text() {
+                                        col = col.child(
+                                            div()
+                                                .text_color(Text::PRIMARY)
+                                                .text_size(px(FontSize::XS))
+                                                .child(s.to_string()),
+                                        );
+                                    }
                                     col.into_any_element()
                                 },
                             }),
@@ -625,6 +633,33 @@ impl Render for ExportView {
                                                     guard.timeline(),
                                                     guard.media_manifest(),
                                                     &path,
+                                                )
+                                                .map(|()| path.clone())
+                                            };
+                                            let _ = this.update(cx, |view, cx| {
+                                                view.model.set_interchange_result(result);
+                                                cx.notify();
+                                            });
+                                        }
+                                    })
+                                    .detach();
+                                } else if mode == ExportMode::PalmierProject {
+                                    // Project bundle export: pick a .palmier path, write it.
+                                    let start_dir =
+                                        std::env::home_dir().unwrap_or_else(|| ".".into());
+                                    let rx = cx
+                                        .prompt_for_new_path(&start_dir, Some("Timeline.palmier"));
+                                    cx.spawn(async move |this, cx| {
+                                        if let Ok(Ok(Some(path))) = rx.await {
+                                            let result = {
+                                                let hub =
+                                                    crate::editor_state_hub::EditorStateHub::global();
+                                                let exec = hub.executor();
+                                                let guard = exec.lock().unwrap();
+                                                crate::export_model::write_palmier_bundle(
+                                                    &path,
+                                                    guard.timeline(),
+                                                    guard.media_manifest(),
                                                 )
                                                 .map(|()| path.clone())
                                             };
