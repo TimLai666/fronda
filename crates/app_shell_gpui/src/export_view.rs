@@ -675,6 +675,7 @@ impl Render for ExportView {
                                     // composite + encode the timeline off-thread.
                                     let start_dir =
                                         std::env::home_dir().unwrap_or_else(|| ".".into());
+                                    let resolution = this.model.panel.settings.resolution;
                                     let rx = cx
                                         .prompt_for_new_path(&start_dir, Some("Timeline.mp4"));
                                     cx.spawn(async move |this, cx| {
@@ -703,8 +704,9 @@ impl Render for ExportView {
                                         let result = cx
                                             .background_executor()
                                             .spawn(async move {
-                                                let w = timeline.width.max(2) as u32;
-                                                let h = timeline.height.max(2) as u32;
+                                                let size = resolution.render_size(&timeline);
+                                                let w = size.width.max(2) as u32;
+                                                let h = size.height.max(2) as u32;
                                                 crate::audio_export::export_project_with_audio(
                                                     &timeline, &manifest, &root, &out, w, h,
                                                 )
