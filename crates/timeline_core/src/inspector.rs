@@ -67,6 +67,32 @@ pub fn resolved_crop_at(clip: &Clip, frame: i64) -> Crop {
     }
 }
 
+/// INS-002 (opacity track): Resolve the effective opacity at a clip-relative frame.
+///
+/// When the opacity keyframe track is non-empty the interpolated value
+/// replaces the static opacity.
+pub fn resolved_opacity_at(clip: &Clip, frame: i64) -> f64 {
+    match clip.opacity_track {
+        Some(ref track) if !track.keyframes.is_empty() => {
+            sample_with_fallback(track, frame, clip.opacity)
+        }
+        _ => clip.opacity,
+    }
+}
+
+/// INS-002 (volume track): Resolve the effective volume at a clip-relative frame.
+///
+/// When the volume keyframe track is non-empty the interpolated value
+/// replaces the static volume.
+pub fn resolved_volume_at(clip: &Clip, frame: i64) -> f64 {
+    match clip.volume_track {
+        Some(ref track) if !track.keyframes.is_empty() => {
+            sample_with_fallback(track, frame, clip.volume)
+        }
+        _ => clip.volume,
+    }
+}
+
 /// INS-006: Rotate a crop-edge drag delta from screen space into crop space.
 ///
 /// When the clip is rotated by `rotation_degrees`, pointer deltas need to be
@@ -475,6 +501,110 @@ mod tests {
         assert!((resolved.height - 0.5).abs() < 1e-9);
         let resolved2 = resolved_transform_at(&clip, 50);
         assert!((resolved2.width - 0.5).abs() < 1e-9); // hold
+    }
+
+    // INS-002 (opacity track): Static opacity returned when no track.
+    #[test]
+    fn ins_002_resolved_opacity_no_track() {
+        let mut clip = make_clip();
+        clip.opacity = 0.7;
+        assert!((resolved_opacity_at(&clip, 50) - 0.7).abs() < 1e-9);
+    }
+
+    // INS-002 (opacity track): Exact-frame keyframe value overrides static.
+    #[test]
+    fn ins_002_resolved_opacity_exact_frame() {
+        let mut clip = make_clip();
+        clip.opacity = 1.0;
+        clip.opacity_track = Some(KeyframeTrack {
+            keyframes: vec![
+                Keyframe {
+                    frame: 0,
+                    value: 0.2,
+                    interpolation_out: Interpolation::Linear,
+                },
+                Keyframe {
+                    frame: 100,
+                    value: 0.8,
+                    interpolation_out: Interpolation::Linear,
+                },
+            ],
+        });
+        assert!((resolved_opacity_at(&clip, 0) - 0.2).abs() < 1e-9);
+        assert!((resolved_opacity_at(&clip, 100) - 0.8).abs() < 1e-9);
+    }
+
+    // INS-002 (opacity track): Linear interpolation at the midpoint.
+    #[test]
+    fn ins_002_resolved_opacity_interpolated_midpoint() {
+        let mut clip = make_clip();
+        clip.opacity_track = Some(KeyframeTrack {
+            keyframes: vec![
+                Keyframe {
+                    frame: 0,
+                    value: 0.2,
+                    interpolation_out: Interpolation::Linear,
+                },
+                Keyframe {
+                    frame: 100,
+                    value: 0.8,
+                    interpolation_out: Interpolation::Linear,
+                },
+            ],
+        });
+        assert!((resolved_opacity_at(&clip, 50) - 0.5).abs() < 1e-9);
+    }
+
+    // INS-002 (volume track): Static volume returned when no track.
+    #[test]
+    fn ins_002_resolved_volume_no_track() {
+        let mut clip = make_clip();
+        clip.volume = 0.6;
+        assert!((resolved_volume_at(&clip, 50) - 0.6).abs() < 1e-9);
+    }
+
+    // INS-002 (volume track): Exact-frame keyframe value overrides static.
+    #[test]
+    fn ins_002_resolved_volume_exact_frame() {
+        let mut clip = make_clip();
+        clip.volume = 1.0;
+        clip.volume_track = Some(KeyframeTrack {
+            keyframes: vec![
+                Keyframe {
+                    frame: 0,
+                    value: 0.4,
+                    interpolation_out: Interpolation::Linear,
+                },
+                Keyframe {
+                    frame: 100,
+                    value: 1.0,
+                    interpolation_out: Interpolation::Linear,
+                },
+            ],
+        });
+        assert!((resolved_volume_at(&clip, 0) - 0.4).abs() < 1e-9);
+        assert!((resolved_volume_at(&clip, 100) - 1.0).abs() < 1e-9);
+    }
+
+    // INS-002 (volume track): Linear interpolation at the midpoint.
+    #[test]
+    fn ins_002_resolved_volume_interpolated_midpoint() {
+        let mut clip = make_clip();
+        clip.volume_track = Some(KeyframeTrack {
+            keyframes: vec![
+                Keyframe {
+                    frame: 0,
+                    value: 0.4,
+                    interpolation_out: Interpolation::Linear,
+                },
+                Keyframe {
+                    frame: 100,
+                    value: 1.0,
+                    interpolation_out: Interpolation::Linear,
+                },
+            ],
+        });
+        assert!((resolved_volume_at(&clip, 50) - 0.7).abs() < 1e-9);
     }
 
     // INS-003: Position keyframes store top-left via AnimPair.

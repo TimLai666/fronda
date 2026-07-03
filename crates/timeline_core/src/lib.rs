@@ -38,7 +38,8 @@ pub use edit::{
 pub use inspector::{
     clamp_crop_visibility, constrain_crop_aspect, db_from_linear, fit_text_clip_to_content,
     format_aspect_ratio, format_duration, linear_from_db, resize_preserving_aspect,
-    resize_text_font, resolved_crop_at, resolved_transform_at, unrotate_crop_delta,
+    resize_text_font, resolved_crop_at, resolved_opacity_at, resolved_transform_at,
+    resolved_volume_at, unrotate_crop_delta,
     AspectConstraint, VOLUME_CEILING_DB, VOLUME_FLOOR_DB,
 };
 pub use linking::{
