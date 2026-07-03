@@ -63,6 +63,9 @@ pub struct PreviewView {
     /// (project revision, frame) currently rendered or in flight — avoids
     /// re-compositing the same frame every render.
     rendered_key: Option<(u64, i64)>,
+    /// A background render is in flight; blocks a second one so playback renders
+    /// best-effort (latest frame when the previous finishes) without flooding.
+    rendering: bool,
 }
 
 impl PreviewView {
@@ -81,16 +84,18 @@ impl PreviewView {
             focus_handle: cx.focus_handle(),
             frame_png: None,
             rendered_key: None,
+            rendering: false,
         }
     }
 
     /// If the current playhead frame hasn't been composited yet, kick a
-    /// background render of it to a cache PNG and show it when ready. Skipped
-    /// during playback (per-frame decode would be too slow) — the last rendered
-    /// frame stays on screen. Compose + decode + encode run off the UI thread,
-    /// so this never blocks rendering.
+    /// background render of it to a cache PNG and show it when ready. Only one
+    /// render runs at a time, so during playback the preview updates best-effort
+    /// (the latest frame once the previous finishes) rather than flooding the
+    /// background executor. Compose + decode + encode run off the UI thread, so
+    /// this never blocks rendering.
     fn ensure_preview_frame(&mut self, cx: &mut Context<Self>) {
-        if self.state.is_playing || self.active_tab_idx != 0 {
+        if self.active_tab_idx != 0 || self.rendering {
             return;
         }
         let hub = crate::editor_state_hub::EditorStateHub::global();
@@ -99,6 +104,7 @@ impl PreviewView {
             return;
         }
         self.rendered_key = Some(key);
+        self.rendering = true;
         let frame = self.state.active_frame;
         let (revision, _) = key;
         cx.spawn(async move |this, cx| {
@@ -133,12 +139,13 @@ impl PreviewView {
                     result
                 })
                 .await;
-            if let Some(path) = rendered {
-                let _ = this.update(cx, |view, cx| {
+            let _ = this.update(cx, |view, cx| {
+                view.rendering = false;
+                if let Some(path) = rendered {
                     view.frame_png = Some(path);
-                    cx.notify();
-                });
-            }
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
