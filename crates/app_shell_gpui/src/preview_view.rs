@@ -123,11 +123,14 @@ impl PreviewView {
                     if out.is_file() {
                         return Some(out);
                     }
-                    crate::preview_render::render_frame_png(
+                    let result = crate::preview_render::render_frame_png(
                         &timeline, &manifest, &root, frame, &out,
                     )
                     .ok()
-                    .map(|()| out)
+                    .map(|()| out);
+                    // Bound the on-disk preview cache (reuses the thumbnail pruner).
+                    crate::video_thumbnails::prune_by_size(&cache_dir, 64 * 1024 * 1024);
+                    result
                 })
                 .await;
             if let Some(path) = rendered {

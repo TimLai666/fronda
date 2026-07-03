@@ -46,9 +46,9 @@ pub fn decode_audio_pcm(
     // format/rate can be unset, which makes swr fail.
     let mut resampler: Option<ffmpeg::software::resampling::Context> = None;
 
-    let mut drain = |resampler: &mut ffmpeg::software::resampling::Context,
-                     out: &mut Vec<f32>,
-                     frame: &ffmpeg::frame::Audio| {
+    let drain = |resampler: &mut ffmpeg::software::resampling::Context,
+                 out: &mut Vec<f32>,
+                 frame: &ffmpeg::frame::Audio| {
         let mut resampled = ffmpeg::frame::Audio::empty();
         if resampler.run(frame, &mut resampled).is_ok() {
             let n = resampled.samples() * channels;
