@@ -999,33 +999,29 @@ impl ToolExecutor {
 
         let result = match outcome {
             timeline_core::RippleDeleteOutcome::Ok(report) => {
-                use timeline_core::ClipMathExt;
+                let merged = timeline_core::merge_ranges(&range_list);
+                let cleared: std::collections::HashSet<usize> =
+                    report.cleared_track_indices.iter().copied().collect();
 
+                // RPL-004: fragment-cut each range on every cleared track (anchor +
+                // linked partners) — a clip fully inside a range is removed, a
+                // partial overlap is trimmed/split so only the non-overlapping
+                // fragments survive. (Previously the whole clip was deleted whenever
+                // it merely touched a range, silently losing media.)
                 for ti in &report.cleared_track_indices {
-                    let ids_to_remove: Vec<String> = self.timeline.tracks[*ti]
-                        .clips
-                        .iter()
-                        .filter(|c| {
-                            ranges_val.iter().any(|r| {
-                                let s = r.get("start").and_then(|v| v.as_i64()).unwrap_or(0);
-                                let e = r.get("end").and_then(|v| v.as_i64()).unwrap_or(0);
-                                c.start_frame < e && c.end_frame() > s
-                            })
-                        })
-                        .map(|c| c.id.clone())
-                        .collect();
-                    timeline_core::remove_clips(&mut self.timeline, ids_to_remove, false);
+                    for r in &merged {
+                        timeline_core::clear_region(&mut self.timeline, *ti, r.start, r.end, false);
+                    }
                 }
 
-                // Ripple: close the gap by shifting later clips left on
-                // every sync-locked track (spec 03 ripple math).
-
-                for track in &mut self.timeline.tracks {
-                    if !track.sync_locked {
+                // Close the gaps: shift later clips left on the cleared tracks (their
+                // own gap) and on sync-locked follower tracks (to stay aligned).
+                for (ti, track) in self.timeline.tracks.iter_mut().enumerate() {
+                    if !cleared.contains(&ti) && !track.sync_locked {
                         continue;
                     }
                     let shifts =
-                        timeline_core::compute_ripple_shifts_for_ranges(&track.clips, &range_list);
+                        timeline_core::compute_ripple_shifts_for_ranges(&track.clips, &merged);
                     for shift in shifts {
                         if let Some(clip) = track.clips.iter_mut().find(|c| c.id == shift.clip_id) {
                             clip.start_frame = shift.new_start_frame;
@@ -4834,6 +4830,26 @@ mod tests {
             .execute("ripple_delete_ranges", &json!({}))
             .unwrap_err();
         assert!(err.contains("Missing trackIndex"));
+    }
+
+    #[test]
+    fn ripple_delete_partial_range_cuts_fragment_not_whole_clip() {
+        // Regression: a partial-overlap range destroyed the whole clip (silent media
+        // loss). It must cut only the overlapping fragment and close the gap.
+        let mut exec = executor_with_clip(); // track 0, clip "c" span [0,100)
+        exec.execute(
+            "ripple_delete_ranges",
+            &json!({"trackIndex": 0, "ranges": [{"start": 25, "end": 50}]}),
+        )
+        .unwrap();
+        let clips = &exec.timeline().tracks[0].clips;
+        let mut spans: Vec<(i64, i64)> = clips
+            .iter()
+            .map(|c| (c.start_frame, c.start_frame + c.duration_frames))
+            .collect();
+        spans.sort();
+        // Head [0,25) kept; tail [50,100) slid left by 25 → [25,75). Not destroyed.
+        assert_eq!(spans, vec![(0, 25), (25, 75)], "fragment cut + gap closed");
     }
 
     #[test]
