@@ -1511,11 +1511,37 @@ impl ToolExecutor {
             }
         }
 
+        // CLP-007/008/RPL-010: a video-with-audio inserted on a video track gets a
+        // linked audio clip. The audio track is pushed with the video (so room opens
+        // at the insert frame) via linked_audio_track_index. When no audio track
+        // exists we target the future end index — compute skips pushing an
+        // out-of-range track (a new empty one needs no push) — and create it only on
+        // success, so a refusal leaves no orphan track.
+        let has_linked_audio: Vec<bool> = media_ids
+            .iter()
+            .map(|mid| {
+                self.media_manifest
+                    .entry_for(mid)
+                    .map(|e| e.r#type == ClipType::Video && e.has_audio == Some(true))
+                    .unwrap_or(false)
+            })
+            .collect();
+        let existing_audio_ti = self
+            .timeline
+            .tracks
+            .iter()
+            .position(|t| t.r#type == ClipType::Audio);
+        let linked_audio_ti = if has_linked_audio.iter().any(|&b| b) {
+            Some(existing_audio_ti.unwrap_or(self.timeline.tracks.len()))
+        } else {
+            None
+        };
+
         let config = timeline_core::RippleInsertConfig {
             track_index,
             insert_frame: frame,
             clips: clip_specs,
-            linked_audio_track_index: None,
+            linked_audio_track_index: linked_audio_ti,
         };
 
         let outcome = timeline_core::compute_ripple_insert_with_split(&self.timeline, config);
@@ -1603,12 +1629,50 @@ impl ToolExecutor {
                     &new_clips,
                 );
 
+                // Link audio for the placed video-with-audio clips. The audio track
+                // has already had room opened by the ripple push (or is a freshly
+                // created empty track), so link_audio_for_placed_clips places into a
+                // clear region. `placed` is 1:1 with media_ids/has_linked_audio.
+                let mut linked_audio_count = 0usize;
+                if linked_audio_ti.is_some() {
+                    let video_with_audio_ids: Vec<String> = has_linked_audio
+                        .iter()
+                        .zip(placed.iter())
+                        .filter_map(|(&b, pid)| b.then(|| pid.clone()))
+                        .collect();
+                    if !video_with_audio_ids.is_empty() {
+                        let audio_ti = match existing_audio_ti {
+                            Some(ti) => ti,
+                            None => {
+                                let at = self.timeline.tracks.len();
+                                timeline_core::insert_track_at(
+                                    &mut self.timeline,
+                                    at,
+                                    ClipType::Audio,
+                                )
+                                .map_err(|_| {
+                                    "Failed to create audio track for linked audio".to_string()
+                                })?
+                            }
+                        };
+                        linked_audio_count = timeline_core::link_audio_for_placed_clips(
+                            &mut self.timeline,
+                            &video_with_audio_ids,
+                            audio_ti,
+                        )
+                        .len();
+                    }
+                }
+
                 let mut text = format!(
                     "Inserted {} clip(s) at track {} frame {}",
                     placed.len(),
                     plan.insert.track_index,
                     plan.insert.insert_frame
                 );
+                if linked_audio_count > 0 {
+                    text.push_str(&format!("\n(+{linked_audio_count} linked audio clip(s))"));
+                }
                 for warning in &warnings {
                     text.push('\n');
                     text.push_str(warning);
@@ -5075,6 +5139,65 @@ mod tests {
             .execute("ripple_delete_ranges", &json!({}))
             .unwrap_err();
         assert!(err.contains("Missing trackIndex"));
+    }
+
+    #[test]
+    fn insert_clips_auto_creates_linked_audio_and_pushes() {
+        // Inserting a video-with-audio mid-clip: the tail ripples, the video is
+        // placed, and a linked audio clip is created on an audio track sharing the
+        // group at the same position.
+        let timeline = executor_with_clip().timeline().clone(); // track 0, "c" [0,100)
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(core_model::MediaManifestEntry {
+            id: "vid".into(),
+            name: "v.mp4".into(),
+            r#type: ClipType::Video,
+            source: core_model::MediaSource::External {
+                absolute_path: "/v.mp4".into(),
+            },
+            duration: 2.0, // 60 frames @ 30fps
+            generation_input: None,
+            source_width: Some(1920),
+            source_height: Some(1080),
+            source_fps: Some(30.0),
+            has_audio: Some(true),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+        });
+        let mut exec = ToolExecutor::new(timeline, manifest);
+        exec.execute(
+            "insert_clips",
+            &json!({"mediaIds": ["vid"], "trackIndex": 0, "frame": 40}),
+        )
+        .unwrap();
+
+        let video_clips = &exec.timeline().tracks[0].clips;
+        // Frame conservation: 100 original + 60 inserted.
+        let total: i64 = video_clips.iter().map(|c| c.duration_frames).sum();
+        assert_eq!(total, 160, "frames preserved: {video_clips:?}");
+        let vid = video_clips
+            .iter()
+            .find(|c| c.link_group_id.is_some())
+            .expect("inserted video is linked");
+        assert_eq!(vid.start_frame, 40);
+        // Linked audio on an audio track, same group + position.
+        let audio_track = exec
+            .timeline()
+            .tracks
+            .iter()
+            .find(|t| t.r#type == ClipType::Audio)
+            .expect("linked audio track");
+        assert_eq!(audio_track.clips.len(), 1);
+        assert_eq!(audio_track.clips[0].link_group_id, vid.link_group_id);
+        assert_eq!(audio_track.clips[0].start_frame, 40);
+        assert_eq!(audio_track.clips[0].duration_frames, vid.duration_frames);
     }
 
     #[test]
