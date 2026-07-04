@@ -2836,8 +2836,8 @@ impl ToolExecutor {
         let words_per_caption = args
             .get("wordsPerCaption")
             .and_then(|v| v.as_i64())
-            .unwrap_or(5)
-            .clamp(1, 20);
+            .unwrap_or(6)
+            .clamp(1, 12);
 
         Ok(json!({
             "content": [{
