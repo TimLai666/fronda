@@ -1189,8 +1189,10 @@ impl ToolExecutor {
         let mut seen_slots: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut seen_clips: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut uses_media = false;
-        // (slot, clip_ids, anchor)
-        let mut entries: Vec<(core_model::LayoutSlot, Vec<String>, (f64, f64))> = Vec::new();
+        // (slot, clip_ids, media_ref, anchor). clip_ids drives re-layout mode;
+        // media_ref drives place-new mode (mutually exclusive across all slots).
+        let mut entries: Vec<(core_model::LayoutSlot, Vec<String>, Option<String>, (f64, f64))> =
+            Vec::new();
         for (i, e) in slots_val.iter().enumerate() {
             let slot_name = e
                 .get("slot")
@@ -1243,7 +1245,12 @@ impl ToolExecutor {
             }
             uses_media = uses_media || media_ref.is_some();
             let anchor = resolve_layout_anchor(e).map_err(|m| format!("slots[{i}]: {m}"))?;
-            entries.push((slot.clone(), clip_ids.unwrap_or_default(), anchor));
+            entries.push((
+                slot.clone(),
+                clip_ids.unwrap_or_default(),
+                media_ref.map(str::to_string),
+                anchor,
+            ));
         }
 
         let missing: Vec<&str> = layout_slots
@@ -1258,12 +1265,7 @@ impl ToolExecutor {
             ));
         }
         if uses_media {
-            return Err(
-                "apply_layout: placing new clips by 'mediaRef' is not yet supported \
-                 (needs project-settings auto-match); assign 'clipIds' to re-layout \
-                 existing clips."
-                    .to_string(),
-            );
+            return self.apply_layout_place_new(&entries, layout_name, fit, args);
         }
 
         // Re-layout co-visibility validation (before any mutation):
@@ -1275,7 +1277,7 @@ impl ToolExecutor {
             std::collections::HashMap::new();
         let mut intervals_by_slot: std::collections::HashMap<String, Vec<(i64, i64)>> =
             std::collections::HashMap::new();
-        for (slot, clip_ids, _) in &entries {
+        for (slot, clip_ids, _media, _) in &entries {
             for cid in clip_ids {
                 let loc = timeline_core::find_clip(&self.timeline, cid)
                     .ok_or_else(|| format!("slot '{}': clip not found: {cid}", slot.id))?;
@@ -1334,7 +1336,7 @@ impl ToolExecutor {
         let canvas_w = self.timeline.width;
         let canvas_h = self.timeline.height;
         let mut applied: Vec<String> = Vec::new();
-        for (slot, clip_ids, anchor) in &entries {
+        for (slot, clip_ids, _media, anchor) in &entries {
             for clip_id in clip_ids {
                 let loc = timeline_core::find_clip(&self.timeline, clip_id)
                     .ok_or_else(|| format!("slot '{}': clip not found: {clip_id}", slot.id))?;
@@ -1364,6 +1366,166 @@ impl ToolExecutor {
                     "Applied '{layout_name}' layout ({}) on existing clips: {}. \
                      Stacking follows current track order; reorder tracks if a PIP inset \
                      isn't on top.",
+                    fit.as_str(),
+                    applied.join("; ")
+                )
+            }]
+        }))
+    }
+
+    /// Place-new mode (#226): create a stacked video track per slot (highest z on
+    /// top, since tracks[0] is the TOP layer) and place one new clip from each
+    /// slot's mediaRef, auto-detecting project settings from the first video, with
+    /// the layout transform/crop baked into each clip. New clips at a common
+    /// start_frame/duration are inherently co-visible, so no overlap checks apply.
+    fn apply_layout_place_new(
+        &mut self,
+        entries: &[(core_model::LayoutSlot, Vec<String>, Option<String>, (f64, f64))],
+        layout_name: &str,
+        fit: LayoutFit,
+        args: &Value,
+    ) -> Result<Value, String> {
+        let start_frame = args.get("startFrame").and_then(Value::as_i64).unwrap_or(0);
+        let duration_frames = args
+            .get("durationFrames")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        if start_frame < 0 {
+            return Err(format!("startFrame must be >= 0 (got {start_frame})"));
+        }
+        if duration_frames < 1 {
+            return Err("apply_layout placing new clips requires durationFrames >= 1.".to_string());
+        }
+
+        // Validate every slot's asset exists and is video/image BEFORE mutating.
+        for (slot, _clips, media_ref, _anchor) in entries {
+            let mref = media_ref.as_deref().unwrap_or_default();
+            match self.media_manifest.entry_for(mref).map(|e| e.r#type.clone()) {
+                Some(ClipType::Video) | Some(ClipType::Image) => {}
+                Some(other) => {
+                    return Err(format!(
+                        "slot '{}': asset {mref} is {other:?}; layout slots take video or image.",
+                        slot.id
+                    ))
+                }
+                None => return Err(format!("slot '{}': asset not found: {mref}", slot.id)),
+            }
+        }
+
+        // Auto-detect project settings from the first video if not yet configured
+        // (same rule as add_clips / Swift applySettingsIfNeeded).
+        let mut settings_note: Option<String> = None;
+        if !self.timeline.settings_configured {
+            let detected = entries.iter().find_map(|(_s, _c, mref, _a)| {
+                self.media_manifest
+                    .entry_for(mref.as_deref().unwrap_or_default())
+                    .filter(|e| e.r#type == ClipType::Video)
+                    .map(|e| (e.source_fps, e.source_width, e.source_height))
+            });
+            if let Some((sfps, sw, sh)) = detected {
+                let fps = sfps
+                    .map(|f| f.round() as i64)
+                    .filter(|f| (1..=120).contains(f))
+                    .unwrap_or(self.timeline.fps);
+                let width = sw.unwrap_or(self.timeline.width);
+                let height = sh.unwrap_or(self.timeline.height);
+                let (pf, pw, ph) = (self.timeline.fps, self.timeline.width, self.timeline.height);
+                timeline_core::apply_settings(&mut self.timeline, fps, width, height, |c| {
+                    c.transform == Transform::default()
+                });
+                if fps != pf || width != pw || height != ph {
+                    settings_note = Some(format!(
+                        "Set project to {width}x{height} @ {fps}fps from the first clip."
+                    ));
+                }
+            }
+        }
+        let project_fps = self.timeline.fps;
+
+        // Create a video track per slot, inserting each at index 0 in ascending z
+        // order so the highest-z slot ends up on top (tracks[0] is the TOP layer).
+        let mut sorted: Vec<&(core_model::LayoutSlot, Vec<String>, Option<String>, (f64, f64))> =
+            entries.iter().collect();
+        sorted.sort_by_key(|(s, _, _, _)| s.z);
+        let mut track_id_by_slot: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let tracks_before = self.timeline.tracks.len();
+        for (slot, _, _, _) in &sorted {
+            let idx = timeline_core::insert_track_at(&mut self.timeline, 0, ClipType::Video)
+                .map_err(|_| "Failed to create video track".to_string())?;
+            track_id_by_slot.insert(slot.id.to_string(), self.timeline.tracks[idx].id.clone());
+        }
+
+        let canvas_w = self.timeline.width;
+        let canvas_h = self.timeline.height;
+        let mut applied: Vec<String> = Vec::new();
+        for (slot, _clips, media_ref, anchor) in entries {
+            let mref = media_ref.as_deref().unwrap_or_default();
+            let entry = self.media_manifest.entry_for(mref);
+            let placement = resolve_placement(entry, args, project_fps)?;
+            let sw = entry.and_then(|e| e.source_width).unwrap_or(0);
+            let sh = entry.and_then(|e| e.source_height).unwrap_or(0);
+            let (transform, crop) = core_model::video_layout::layout_placement(
+                slot.rect, fit, sw, sh, canvas_w, canvas_h, anchor.0, anchor.1,
+            );
+            let clip = Clip {
+                id: Uuid::new_v4().to_string(),
+                media_ref: mref.to_string(),
+                media_type: placement.media_type.clone(),
+                source_clip_type: placement.media_type,
+                start_frame,
+                duration_frames: placement.duration_frames,
+                trim_start_frame: placement.trim_start_frame,
+                trim_end_frame: placement.trim_end_frame,
+                speed: 1.0,
+                volume: 1.0,
+                fade_in_frames: 0,
+                fade_out_frames: 0,
+                fade_in_interpolation: Interpolation::Linear,
+                fade_out_interpolation: Interpolation::Linear,
+                opacity: 1.0,
+                transform,
+                crop,
+                link_group_id: None,
+                caption_group_id: None,
+                text_content: None,
+                text_style: None,
+                opacity_track: None,
+                position_track: None,
+                scale_track: None,
+                rotation_track: None,
+                crop_track: None,
+                volume_track: None,
+                effects: None,
+                shape_style: None,
+                stroke_progress_track: None,
+                compound_timeline_id: None,
+                blend_mode: Default::default(),
+                chroma_key: None,
+            };
+            let Some(tid) = track_id_by_slot.get(slot.id) else {
+                continue;
+            };
+            let Some(tidx) = self.timeline.tracks.iter().position(|t| &t.id == tid) else {
+                continue;
+            };
+            let placed = timeline_core::place_clips(&mut self.timeline, tidx, start_frame, &[clip]);
+            if let Some(pid) = placed.first() {
+                applied.push(format!("{} -> {pid}", slot.id));
+            }
+        }
+
+        if applied.is_empty() {
+            return Err("apply_layout created no clips.".to_string());
+        }
+        let created = self.timeline.tracks.len() - tracks_before;
+        let prefix = settings_note.map(|n| format!("{n} ")).unwrap_or_default();
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": format!(
+                    "{prefix}Created {created} video track(s). Applied '{layout_name}' layout \
+                     ({}) at frame {start_frame} for {duration_frames}: {}.",
                     fit.as_str(),
                     applied.join("; ")
                 )
@@ -4263,15 +4425,66 @@ mod tests {
     }
 
     #[test]
-    fn apply_layout_media_mode_rejected() {
-        let mut exec = make_executor();
+    fn apply_layout_place_new_requires_duration() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let err = exec
             .execute(
                 "apply_layout",
                 &json!({"layout": "full", "slots": [{"slot": "main", "mediaRef": "m1"}]}),
             )
             .unwrap_err();
-        assert!(err.contains("not yet supported"), "err={err}");
+        assert!(err.contains("durationFrames >= 1"), "err={err}");
+    }
+
+    #[test]
+    fn apply_layout_place_new_rejects_missing_asset() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute(
+                "apply_layout",
+                &json!({"layout": "full", "durationFrames": 30, "slots": [{"slot": "main", "mediaRef": "nope"}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("asset not found"), "err={err}");
+    }
+
+    #[test]
+    fn apply_layout_place_new_creates_tracks_and_frames_clips() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("L", 1920, 1080, 30.0));
+        manifest.entries.push(video_media("R", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let res = exec
+            .execute(
+                "apply_layout",
+                &json!({
+                    "layout": "side_by_side",
+                    "durationFrames": 60,
+                    "slots": [
+                        {"slot": "left", "mediaRef": "L"},
+                        {"slot": "right", "mediaRef": "R"}
+                    ]
+                }),
+            )
+            .unwrap();
+        // One new video track per slot, each with one framed clip.
+        assert_eq!(exec.timeline().tracks.len(), 2);
+        let tl = exec.timeline();
+        let clips: Vec<&Clip> = tl.tracks.iter().flat_map(|t| &t.clips).collect();
+        let left = clips.iter().find(|c| c.media_ref == "L").expect("left clip");
+        let right = clips.iter().find(|c| c.media_ref == "R").expect("right clip");
+        assert!((left.transform.center_x - 0.25).abs() < 1e-6, "left cx={}", left.transform.center_x);
+        assert!(
+            (right.transform.center_x - 0.75).abs() < 1e-6,
+            "right cx={}",
+            right.transform.center_x
+        );
+        assert_eq!(left.duration_frames, 60);
+        assert_eq!(left.start_frame, 0);
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Created 2 video track"), "note: {text}");
     }
 
     #[test]

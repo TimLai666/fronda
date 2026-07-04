@@ -376,18 +376,23 @@ fn apply_layout() -> ToolDefinition {
             letterbox the whole source inside its slot instead (no crop). Crop is \
             centered by default; bias it with 'anchor' (top/bottom/left/right/...) or \
             continuous anchorX/anchorY (0-1). \
-            Re-layout mode (supported): give each slot a 'clipIds' array (or a single \
-            'clipId') — only transforms and crop change; timing and tracks are \
-            untouched. Clips sharing a slot may sit on the same track; clips in \
-            different slots must be co-visible (overlap in time on separate tracks). \
+            Two modes (don't mix them across slots): Re-layout mode — give each slot a \
+            'clipIds' array (or a single 'clipId'); only transforms and crop change, \
+            timing and tracks are untouched. Clips sharing a slot may sit on the same \
+            track; clips in different slots must be co-visible (overlap in time on \
+            separate tracks). Place-new mode — give each slot a 'mediaRef' plus \
+            top-level 'startFrame'/'durationFrames'; the tool creates one stacked video \
+            track per slot and places a new clip in each, framed to its region. \
             Layouts and slots: full=main; side_by_side=left,right; \
             top_bottom=top,bottom; pip_bottom_right/pip_bottom_left/pip_top_right/\
             pip_top_left=main,inset; grid_2x2=top_left,top_right,bottom_left,\
             bottom_right; main_sidebar=main,sidebar; three_up=left,center,right.",
         input_schema: object_optional(&[
             ("layout", string("Layout name (e.g. side_by_side, grid_2x2, pip_bottom_right). Required.")),
-            ("slots", array("Required. One entry per slot: {slot, clipIds (array) or clipId, optional anchor/anchorX/anchorY}. Every slot of the layout must be filled; each clip fills one slot.")),
+            ("slots", array("Required. One entry per slot: {slot, then clipIds (array)/clipId to re-layout OR mediaRef to place new, optional anchor/anchorX/anchorY}. Every slot must be filled; each clip fills one slot.")),
             ("fit", string("'fill' (cover-crop, default) or 'fit' (letterbox, no crop).")),
+            ("startFrame", integer("Place-new mode only: timeline frame for the new clips (default 0).")),
+            ("durationFrames", integer("Place-new mode only: length of the new clips in frames (required, >= 1).")),
         ]),
     }
 }
