@@ -1528,6 +1528,7 @@ mod tests {
             reference_audio_asset_ids: None,
             created_at: None,
             backend_job_id: None,
+            output_index: None,
             result_urls: None,
         };
         let snap = GenerationMachine::create_snapshot(
@@ -1678,6 +1679,7 @@ mod tests {
             reference_audio_asset_ids: None,
             created_at: None,
             backend_job_id: None,
+            output_index: None,
             result_urls: None,
         };
         let prep = GenerationMachine::rerun_from_input(&input, GenerationModality::Video).unwrap();

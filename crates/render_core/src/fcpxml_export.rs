@@ -219,9 +219,13 @@ impl FcpxmlExport {
 /// Ids of audio clips that are the redundant partner of a synced A/V pair — the
 /// linked video's asset-clip already covers the audio, so the audio clip is dropped
 /// on export (upstream #206/#254). A pair collapses only when its group holds exactly
-/// one video/image and one audio that share source, placement, trim, and speed.
+/// one video/image and one audio that share source, placement, trim, speed, AND
+/// enabled state. `enabled` derives from the TRACK (video/image → `!hidden`, audio →
+/// `!muted`), so a MUTED audio partner is NOT collapsed — folding it into the video
+/// asset-clip (which carries audio) would make the muted audio audible in the export.
 fn redundant_audio_clip_ids(timeline: &Timeline) -> std::collections::HashSet<String> {
-    let mut by_group: std::collections::HashMap<&str, (Vec<&Clip>, Vec<&Clip>)> =
+    // (clip, enabled) grouped by link group.
+    let mut by_group: std::collections::HashMap<&str, (Vec<(&Clip, bool)>, Vec<(&Clip, bool)>)> =
         std::collections::HashMap::new();
     for track in &timeline.tracks {
         for clip in &track.clips {
@@ -230,8 +234,8 @@ fn redundant_audio_clip_ids(timeline: &Timeline) -> std::collections::HashSet<St
             };
             let bucket = by_group.entry(group).or_default();
             match clip.media_type {
-                ClipType::Video | ClipType::Image => bucket.0.push(clip),
-                ClipType::Audio => bucket.1.push(clip),
+                ClipType::Video | ClipType::Image => bucket.0.push((clip, !track.hidden)),
+                ClipType::Audio => bucket.1.push((clip, !track.muted)),
                 _ => {}
             }
         }
@@ -241,8 +245,10 @@ fn redundant_audio_clip_ids(timeline: &Timeline) -> std::collections::HashSet<St
         if videos.len() != 1 || audios.len() != 1 {
             continue;
         }
-        let (v, a) = (videos[0], audios[0]);
+        let (v, v_enabled) = videos[0];
+        let (a, a_enabled) = audios[0];
         if v.media_ref == a.media_ref
+            && v_enabled == a_enabled
             && v.start_frame == a.start_frame
             && v.duration_frames == a.duration_frames
             && v.trim_start_frame == a.trim_start_frame
@@ -639,6 +645,29 @@ mod tests {
             xml.matches("<asset-clip").count(),
             2,
             "different sources are not collapsed:\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_does_not_collapse_when_audio_track_is_muted() {
+        // A muted audio partner must NOT collapse — folding it into the video's
+        // asset-clip (which carries audio) would make the muted audio audible.
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let mut vclip = clip("cv", "v1", ClipType::Video, 0, 60);
+        vclip.link_group_id = Some("g1".into());
+        let mut aclip = clip("ca", "v1", ClipType::Audio, 0, 60);
+        aclip.link_group_id = Some("g1".into());
+        let mut atrack = track(ClipType::Audio, vec![aclip]);
+        atrack.muted = true;
+        let tl = timeline(vec![track(ClipType::Video, vec![vclip]), atrack]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert_eq!(
+            xml.matches("<asset-clip").count(),
+            2,
+            "muted audio (enabled diverges) is not collapsed:\n{xml}"
         );
     }
 

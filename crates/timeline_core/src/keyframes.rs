@@ -115,8 +115,17 @@ pub fn rescale_word_timings(clip: &mut Clip, old_duration: i64) {
     let ratio = new_duration as f64 / old_duration as f64;
     if let Some(timings) = clip.word_timings.as_mut() {
         for t in timings.iter_mut() {
-            t.start_frame = (t.start_frame as f64 * ratio).round() as i64;
-            t.end_frame = (t.end_frame as f64 * ratio).round() as i64;
+            // Clamp into the clip like Swift Clip.rescaleWordTimings: start into
+            // [0, duration-1], end into (start, duration] — never out of bounds or
+            // zero-length after rounding a shrink.
+            let start = ((t.start_frame as f64 * ratio).round() as i64)
+                .max(0)
+                .min((new_duration - 1).max(0));
+            let end = ((t.end_frame as f64 * ratio).round() as i64)
+                .max(start + 1)
+                .min(new_duration);
+            t.start_frame = start;
+            t.end_frame = end;
         }
     }
 }

@@ -388,14 +388,18 @@ fn upstream_216_generation_recovery_fields_round_trip() {
     let encoded = json!({
         "prompt": "p", "model": "m", "duration": 3, "aspectRatio": "16:9",
         "backendJobId": "job-abc",
-        "resultURLs": ["https://cdn/r0.mp4", "https://cdn/r1.mp4"]
+        "outputIndex": 2,
+        "resultURLs": ["https://cdn/r0.mp4", "https://cdn/r1.mp4", "https://cdn/r2.mp4"]
     });
     let gi: core_model::GenerationInput = serde_json::from_value(encoded).unwrap();
     assert_eq!(gi.backend_job_id.as_deref(), Some("job-abc"));
-    assert_eq!(gi.result_urls.as_ref().unwrap().len(), 2);
+    // outputIndex is load-bearing for resume (placeholder → resultURLs[index]).
+    assert_eq!(gi.output_index, Some(2));
+    assert_eq!(gi.result_urls.as_ref().unwrap().len(), 3);
 
     let re = serde_json::to_value(&gi).unwrap();
     assert_eq!(re["backendJobId"], json!("job-abc"));
+    assert_eq!(re["outputIndex"], json!(2));
     assert_eq!(re["resultURLs"][0], json!("https://cdn/r0.mp4"));
     assert!(
         !re.as_object().unwrap().contains_key("resultUrls"),

@@ -77,6 +77,23 @@ fn set_duration_leaves_non_text_word_timings_untouched() {
     assert_eq!((t[0].start_frame, t[0].end_frame), (10, 20));
 }
 
+#[test]
+fn set_duration_clamps_word_timings_into_bounds_on_shrink() {
+    use core_model::WordTiming;
+    let mut c = clip("t", 0, 100);
+    c.media_type = ClipType::Text;
+    // A word at the very end; shrinking 100→50 rounds to [50,50] (out of bounds AND
+    // zero-length) — must clamp to [49,50] like Swift.
+    c.word_timings = Some(vec![WordTiming {
+        text: "last".into(),
+        start_frame: 99,
+        end_frame: 100,
+    }]);
+    set_clip_duration(&mut c, 50);
+    let t = &c.word_timings.as_ref().unwrap()[0];
+    assert_eq!((t.start_frame, t.end_frame), (49, 50));
+}
+
 // INS-012: Keyframes remain clip-relative in storage.
 // Verify keyframe frames are always relative to clip.start_frame (0-based).
 #[test]

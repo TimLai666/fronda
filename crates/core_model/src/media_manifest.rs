@@ -182,6 +182,11 @@ pub struct GenerationInput {
     /// this field round-trips so a project saved mid-generation isn't corrupted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_job_id: Option<String>,
+    /// Which entry of `result_urls` this placeholder maps to when resuming a
+    /// multi-output generation (#216). Load-bearing: dropping it forces a positional
+    /// fallback that can download the wrong / mis-ordered result into a placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_index: Option<i64>,
     /// Result URLs returned by a completed backend job, pending download (#216).
     #[serde(
         rename = "resultURLs",
@@ -217,6 +222,7 @@ impl Default for GenerationInput {
             reference_audio_asset_ids: None,
             created_at: None,
             backend_job_id: None,
+            output_index: None,
             result_urls: None,
         }
     }
