@@ -86,14 +86,20 @@ pub fn compute_ripple_delete(
         }
     }
 
-    for (ti, track) in timeline.tracks.iter().enumerate() {
-        if clear_track_indices.contains(&ti) || !track.sync_locked {
-            continue;
-        }
-        let shifts = compute_ripple_shifts_for_ranges(&track.clips, &merged);
-        if let Err(err) = validate_track_shifts(track, &shifts) {
-            return RippleDeleteOutcome::Refused(format!("{err:?}"));
-        }
+    // #227: a sync-locked follower track is CUT in sync with the anchor — the deleted
+    // range is cleared on it too, not merely shifted. Otherwise it keeps content the
+    // master track removed (e.g. master audio linked to a video cut). A single-track
+    // cut+ripple always absorbs the gap it creates, so no refuse is needed here (the
+    // old shift-without-cut behaviour could collide, which is why it validated).
+    let sync_locked_followers: Vec<usize> = timeline
+        .tracks
+        .iter()
+        .enumerate()
+        .filter(|(ti, t)| t.sync_locked && !clear_track_indices.contains(ti))
+        .map(|(ti, _)| ti)
+        .collect();
+    for ti in sync_locked_followers {
+        clear_track_indices.insert(ti);
     }
 
     RippleDeleteOutcome::Ok(RippleDeleteReport {

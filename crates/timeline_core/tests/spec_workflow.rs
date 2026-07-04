@@ -267,6 +267,55 @@ fn rpl_006_unsynced_track_ignored() {
     assert!(matches!(result, RippleDeleteOutcome::Ok(_)));
 }
 
+// ─── #227: sync-locked follower is CUT in sync, not just shifted ───
+
+#[test]
+fn rpl_227_sync_locked_follower_is_cut_not_just_shifted() {
+    // A sync-locked audio follower spanning the deleted range is CUT (its range
+    // cleared) in sync with the anchor — otherwise it keeps content the master removed.
+    let v = video_track(vec![clip("v1", 0, 100)]);
+    let a = audio_track(vec![clip("a1", 0, 100)]);
+    let t = timeline(vec![v, a]);
+    match compute_ripple_delete(
+        &t,
+        RippleDeleteConfig {
+            anchor_track_index: 0,
+            ranges: vec![FrameRange { start: 40, end: 50 }],
+        },
+    ) {
+        RippleDeleteOutcome::Ok(report) => {
+            assert!(report.cleared_track_indices.contains(&0), "anchor cut");
+            assert!(
+                report.cleared_track_indices.contains(&1),
+                "sync-locked follower cut, not merely shifted"
+            );
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
+#[test]
+fn rpl_227_unsynced_follower_is_not_cut() {
+    let v = video_track(vec![clip("v1", 0, 100)]);
+    let u = unsynced_track(vec![clip("u1", 0, 100)]);
+    let t = timeline(vec![v, u]);
+    match compute_ripple_delete(
+        &t,
+        RippleDeleteConfig {
+            anchor_track_index: 0,
+            ranges: vec![FrameRange { start: 40, end: 50 }],
+        },
+    ) {
+        RippleDeleteOutcome::Ok(report) => {
+            assert!(
+                !report.cleared_track_indices.contains(&1),
+                "an unsynced track is not cut"
+            );
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
 // ─── RPL-007/008: Validation in gap context ───
 
 #[test]
