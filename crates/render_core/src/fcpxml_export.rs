@@ -135,6 +135,18 @@ impl FcpxmlExport {
             }
             write_asset(&mut xml, asset_id, format_id.as_deref(), media_ref, manifest, fps);
         }
+        // Title generator effect, emitted once when the timeline has any text overlay (#254).
+        let has_titles = timeline.tracks.iter().flat_map(|t| &t.clips).any(|c| {
+            c.media_type == ClipType::Text
+                && c.text_content.as_ref().is_some_and(|s| !s.is_empty())
+        });
+        if has_titles {
+            writeln!(
+                xml,
+                "    <effect id=\"titleBasic\" name=\"Basic Title\" uid=\".../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti\"/>"
+            )
+            .ok();
+        }
         writeln!(xml, "  </resources>").ok();
 
         writeln!(xml, "  <library>").ok();
@@ -159,11 +171,34 @@ impl FcpxmlExport {
         // partner is dropped (upstream #206/#254).
         let redundant_audio = redundant_audio_clip_ids(timeline);
 
+        let mut title_style_id = 0usize;
         for (ti, track) in timeline.tracks.iter().enumerate() {
             let lane = lane_of_track[ti];
+            // A hidden video track / muted audio track exports its clips disabled.
+            let track_disabled = if track.r#type == ClipType::Audio {
+                track.muted
+            } else {
+                track.hidden
+            };
             for clip in &track.clips {
+                // Text overlays become <title> generators; they have no backing asset.
+                if clip.media_type == ClipType::Text {
+                    if let Some(content) = clip.text_content.as_ref().filter(|c| !c.is_empty()) {
+                        write_title(
+                            &mut xml,
+                            clip,
+                            content,
+                            lane,
+                            fps,
+                            seq_w,
+                            seq_h,
+                            track_disabled,
+                            &mut title_style_id,
+                        );
+                    }
+                    continue;
+                }
                 if clip.media_ref.is_empty()
-                    || clip.media_type == ClipType::Text
                     || clip.media_type == ClipType::Shape
                     || redundant_audio.contains(&clip.id)
                 {
@@ -197,11 +232,6 @@ impl FcpxmlExport {
                 let origin = start_timecode_frames(manifest.entry_for(&clip.media_ref), fps);
                 // A hidden video track / muted audio track exports its clips disabled, so the
                 // export mirrors what's actually visible/audible (Swift emits `enabled`).
-                let track_disabled = if track.r#type == ClipType::Audio {
-                    track.muted
-                } else {
-                    track.hidden
-                };
                 let enabled_attr = if track_disabled { " enabled=\"0\"" } else { "" };
                 let open = format!(
                     "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{format_attr}{enabled_attr}",
@@ -594,6 +624,95 @@ fn write_kf_param(
     }
     let _ = writeln!(out, "                    </keyframeAnimation>");
     let _ = writeln!(out, "                  </param>");
+}
+
+/// Emit a text overlay as a `<title>` generator (#254). The title references the shared
+/// `titleBasic` effect and carries a `<text>`/`<text-style-def>` pair (font family/face/size/
+/// colour/alignment), a fit-conform + position transform, and static opacity. Font family is
+/// the name's family part and face derives from weight (Rust has no NSFont resolution, so the
+/// exact system face match Swift does is approximated); border stroke is not yet emitted.
+#[allow(clippy::too_many_arguments)]
+fn write_title(
+    xml: &mut String,
+    clip: &Clip,
+    content: &str,
+    lane: i64,
+    fps: i64,
+    seq_w: i64,
+    seq_h: i64,
+    disabled: bool,
+    style_counter: &mut usize,
+) {
+    let style_id = format!("ts{}", *style_counter);
+    *style_counter += 1;
+    let style = clip.text_style.clone().unwrap_or_default();
+    let enabled_attr = if disabled { " enabled=\"0\"" } else { "" };
+    let family = font_family_fallback(&style.font_name);
+    let face = if style.font_weight >= 700.0 {
+        "Bold"
+    } else {
+        "Regular"
+    };
+    let font_size = style.font_size * style.font_scale;
+    let color = color_string(&style.color);
+    let align = match style.alignment {
+        core_model::TextAlignment::Left => "left",
+        core_model::TextAlignment::Center => "center",
+        core_model::TextAlignment::Right => "right",
+    };
+    let _ = writeln!(
+        xml,
+        "              <title ref=\"titleBasic\" name=\"{}\" lane=\"{lane}\" offset=\"{}\" start=\"0s\" duration=\"{}\"{enabled_attr}>",
+        xml_escape(content),
+        time_str(clip.start_frame, fps),
+        time_str(clip.duration_frames.max(1), fps)
+    );
+    let _ = writeln!(xml, "                <text>");
+    let _ = writeln!(
+        xml,
+        "                  <text-style ref=\"{style_id}\">{}</text-style>",
+        xml_escape(content)
+    );
+    let _ = writeln!(xml, "                </text>");
+    let _ = writeln!(xml, "                <text-style-def id=\"{style_id}\">");
+    let _ = writeln!(
+        xml,
+        "                  <text-style font=\"{}\" fontFace=\"{face}\" fontSize=\"{}\" fontColor=\"{color}\" alignment=\"{align}\"/>",
+        xml_escape(&family),
+        format_number(font_size)
+    );
+    let _ = writeln!(xml, "                </text-style-def>");
+    let _ = writeln!(xml, "                <adjust-conform type=\"fit\"/>");
+    let _ = writeln!(
+        xml,
+        "                <adjust-transform scale=\"1 1\" anchor=\"0 0\" position=\"{}\"/>",
+        position_value(&clip.transform, seq_w, seq_h, (1.0, 1.0))
+    );
+    if clip.opacity < 0.9995 {
+        let _ = writeln!(
+            xml,
+            "                <adjust-blend amount=\"{}\"/>",
+            format_number(clip.opacity)
+        );
+    }
+    let _ = writeln!(xml, "              </title>");
+}
+
+/// The font family part of a font name (`"Poppins-Bold"` → `"Poppins"`). Mirrors Swift
+/// `fontFamilyFallback`.
+fn font_family_fallback(font_name: &str) -> String {
+    font_name.split('-').next().unwrap_or(font_name).to_string()
+}
+
+/// FCP `fontColor` string: space-separated normalized r g b a. Mirrors Swift `colorString`.
+fn color_string(c: &core_model::TextRgba) -> String {
+    format!(
+        "{} {} {} {}",
+        format_number(c.r),
+        format_number(c.g),
+        format_number(c.b),
+        format_number(c.a)
+    )
 }
 
 fn media_src(source: &MediaSource) -> String {
@@ -1077,6 +1196,46 @@ mod tests {
             "frame 30 centre\n{xml}"
         );
         assert!(xml.contains("</adjust-transform>"), "open/close transform");
+    }
+
+    #[test]
+    fn fcpxml_text_clip_emits_title() {
+        let mut c = clip("t1", "", ClipType::Text, 0, 60);
+        c.media_type = ClipType::Text;
+        c.source_clip_type = ClipType::Text;
+        c.transform.center_x = 0.5;
+        c.transform.center_y = 0.5;
+        c.text_content = Some("Hello World".to_string());
+        c.text_style = Some(core_model::TextStyle {
+            font_name: "Poppins-Bold".to_string(),
+            font_size: 48.0,
+            font_weight: 700.0,
+            alignment: core_model::TextAlignment::Center,
+            color: core_model::TextRgba {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            ..Default::default()
+        });
+        let manifest = MediaManifest::default();
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("<effect id=\"titleBasic\""), "title effect resource\n{xml}");
+        assert!(
+            xml.contains("<title ref=\"titleBasic\" name=\"Hello World\""),
+            "title node\n{xml}"
+        );
+        assert!(
+            xml.contains("<text-style ref=\"ts0\">Hello World</text-style>"),
+            "text content\n{xml}"
+        );
+        assert!(
+            xml.contains("font=\"Poppins\" fontFace=\"Bold\" fontSize=\"48\" fontColor=\"1 0 0 1\" alignment=\"center\""),
+            "text-style attrs\n{xml}"
+        );
+        assert!(xml.contains("</title>"), "title closed");
     }
 
     #[test]
