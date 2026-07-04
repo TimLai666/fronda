@@ -1,9 +1,9 @@
 pub mod project_duplicate;
 
 use core_model::{
-    ChatSession, GenerationLog, MediaManifest, Timeline, CHAT_DIRECTORY_NAME,
-    GENERATION_LOG_FILENAME, MANIFEST_FILENAME, MEDIA_DIRECTORY_NAME, THUMBNAIL_FILENAME,
-    TIMELINE_FILENAME, TRANSCRIPTS_DIRECTORY_NAME, VISUAL_INDEXES_DIRECTORY_NAME,
+    AnimPair, ChatSession, Crop, GenerationLog, KeyframeTrack, MediaManifest, Timeline,
+    CHAT_DIRECTORY_NAME, GENERATION_LOG_FILENAME, MANIFEST_FILENAME, MEDIA_DIRECTORY_NAME,
+    THUMBNAIL_FILENAME, TIMELINE_FILENAME, TRANSCRIPTS_DIRECTORY_NAME, VISUAL_INDEXES_DIRECTORY_NAME,
 };
 use search_core::search_index::VisualIndex;
 use search_core::transcript::Transcript;
@@ -138,7 +138,7 @@ impl ProjectBundle {
         let root = path.as_ref();
         ensure_directory(root)?;
 
-        write_json(&root.join(TIMELINE_FILENAME), &self.timeline)?;
+        write_timeline_json(&root.join(TIMELINE_FILENAME), &self.timeline)?;
         write_optional_json(&root.join(MANIFEST_FILENAME), self.manifest.as_ref())?;
         write_optional_json(
             &root.join(GENERATION_LOG_FILENAME),
@@ -173,7 +173,7 @@ pub fn save_project_state(
     manifest: &MediaManifest,
 ) -> Result<(), BundleError> {
     ensure_directory(root)?;
-    write_json(&root.join(TIMELINE_FILENAME), timeline)?;
+    write_timeline_json(&root.join(TIMELINE_FILENAME), timeline)?;
     write_json(&root.join(MANIFEST_FILENAME), manifest)?;
     Ok(())
 }
@@ -271,6 +271,83 @@ where
         path: path.to_path_buf(),
         source,
     })
+}
+
+/// Write `project.json`, sanitizing any non-finite (NaN/Infinity) f64 first.
+/// serde_json serializes a non-finite float as literal `null`, which then fails to
+/// deserialize into the non-`Option` f64 fields on reopen — making the whole project
+/// permanently unopenable. Sanitizing a save-time copy keeps the file re-openable.
+fn write_timeline_json(path: &Path, timeline: &Timeline) -> Result<(), BundleError> {
+    let mut sanitized = timeline.clone();
+    sanitize_non_finite(&mut sanitized);
+    write_json(path, &sanitized)
+}
+
+fn finite_or(v: f64, default: f64) -> f64 {
+    if v.is_finite() {
+        v
+    } else {
+        default
+    }
+}
+
+fn sanitize_f64_track(track: &mut Option<KeyframeTrack<f64>>, default: f64) {
+    if let Some(t) = track {
+        for kf in &mut t.keyframes {
+            kf.value = finite_or(kf.value, default);
+        }
+    }
+}
+
+fn sanitize_pair_track(track: &mut Option<KeyframeTrack<AnimPair>>) {
+    if let Some(t) = track {
+        for kf in &mut t.keyframes {
+            kf.value.a = finite_or(kf.value.a, 0.0);
+            kf.value.b = finite_or(kf.value.b, 0.0);
+        }
+    }
+}
+
+fn sanitize_crop_track(track: &mut Option<KeyframeTrack<Crop>>) {
+    if let Some(t) = track {
+        for kf in &mut t.keyframes {
+            kf.value.left = finite_or(kf.value.left, 0.0);
+            kf.value.top = finite_or(kf.value.top, 0.0);
+            kf.value.right = finite_or(kf.value.right, 0.0);
+            kf.value.bottom = finite_or(kf.value.bottom, 0.0);
+        }
+    }
+}
+
+/// Replace non-finite f64s in the timeline's arithmetic-computed numeric fields
+/// (clip speed/volume/opacity, transform, crop, and every keyframe track) with a
+/// safe finite default. These are the only fields that can become NaN/Infinity in
+/// practice — style/effect floats come straight from validated JSON (which has no
+/// non-finite literal) and are never arithmetic-derived.
+pub fn sanitize_non_finite(timeline: &mut Timeline) {
+    for track in &mut timeline.tracks {
+        for clip in &mut track.clips {
+            clip.speed = finite_or(clip.speed, 1.0);
+            clip.volume = finite_or(clip.volume, 1.0);
+            clip.opacity = finite_or(clip.opacity, 1.0);
+            clip.transform.center_x = finite_or(clip.transform.center_x, 0.5);
+            clip.transform.center_y = finite_or(clip.transform.center_y, 0.5);
+            clip.transform.width = finite_or(clip.transform.width, 1.0);
+            clip.transform.height = finite_or(clip.transform.height, 1.0);
+            clip.transform.rotation = finite_or(clip.transform.rotation, 0.0);
+            clip.crop.left = finite_or(clip.crop.left, 0.0);
+            clip.crop.top = finite_or(clip.crop.top, 0.0);
+            clip.crop.right = finite_or(clip.crop.right, 0.0);
+            clip.crop.bottom = finite_or(clip.crop.bottom, 0.0);
+            sanitize_f64_track(&mut clip.opacity_track, 1.0);
+            sanitize_f64_track(&mut clip.volume_track, 0.0); // dB
+            sanitize_f64_track(&mut clip.rotation_track, 0.0);
+            sanitize_f64_track(&mut clip.stroke_progress_track, 1.0);
+            sanitize_pair_track(&mut clip.position_track);
+            sanitize_pair_track(&mut clip.scale_track);
+            sanitize_crop_track(&mut clip.crop_track);
+        }
+    }
 }
 
 fn load_chat_sessions(path: &Path) -> Result<Vec<ChatSession>, BundleError> {

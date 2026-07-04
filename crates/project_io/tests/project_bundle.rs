@@ -377,3 +377,24 @@ fn save_project_state_writes_only_timeline_and_manifest() {
     );
     assert!(!root.join(GENERATION_LOG_FILENAME).exists());
 }
+
+#[test]
+fn non_finite_float_is_sanitized_on_save_so_project_reopens() {
+    // A non-finite f64 serializes to `null` and makes the saved project.json
+    // unopenable; save-time sanitization must replace it with a finite default so
+    // the file always reopens.
+    let mut bundle = ProjectBundle::open(fixture_bundle_path("modern-rich.palmier")).unwrap();
+    bundle.timeline.tracks[0].clips[0].speed = f64::NAN;
+    bundle.timeline.tracks[0].clips[0].opacity = f64::INFINITY;
+
+    let temp = tempdir().unwrap();
+    let dest = temp.path().join("out.palmier");
+    bundle.save_to(&dest).unwrap();
+
+    let reopened = ProjectBundle::open(&dest).expect("sanitized project must reopen");
+    let clip = &reopened.timeline.tracks[0].clips[0];
+    assert!(clip.speed.is_finite(), "speed not sanitized: {}", clip.speed);
+    assert!(clip.opacity.is_finite(), "opacity not sanitized: {}", clip.opacity);
+    assert_eq!(clip.speed, 1.0);
+    assert_eq!(clip.opacity, 1.0);
+}

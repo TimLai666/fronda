@@ -2329,19 +2329,17 @@ impl ToolExecutor {
     }
 
     fn cmd_duplicate_project(&mut self) -> Result<Value, String> {
-        let cloned_timeline = self.timeline.clone();
-        let cloned_manifest = self.media_manifest.clone();
-
+        // Upstream #67: duplicating a project copies its .palmier package on disk and
+        // reopens the copy as current. That is host filesystem I/O the in-memory
+        // ToolExecutor cannot do (it has no project path or fs handle). The pure plan
+        // exists as project_io::project_duplicate::plan_duplicate; the host must
+        // execute it. Report honestly rather than claiming a no-op succeeded.
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": format!(
-                    "Project duplicated. Timeline has {} tracks with {} total clips. Media manifest has {} entries.",
-                    cloned_timeline.tracks.len(),
-                    cloned_timeline.tracks.iter().map(|t| t.clips.len()).sum::<usize>(),
-                    cloned_manifest.entries.len()
-                )
-            }]
+                "text": "Project duplication requires host filesystem support and is not available in this context."
+            }],
+            "isError": true,
         }))
     }
 
@@ -4650,10 +4648,13 @@ mod tests {
 
     #[test]
     fn exec_032_duplicate_project() {
+        // Duplication is host filesystem I/O the pure executor can't perform, so it
+        // must report an error honestly (not claim a no-op succeeded).
         let mut exec = make_executor_with_media();
         let result = exec.execute("duplicate_project", &json!({})).unwrap();
+        assert_eq!(result["isError"], true);
         let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Project duplicated"));
+        assert!(text.contains("requires host filesystem support"), "got: {text}");
     }
 
     #[test]
