@@ -1298,6 +1298,39 @@ impl ToolExecutor {
         }))
     }
 
+    /// CLP-007/008: create a linked audio clip for each placed video-with-audio
+    /// clip, on the first audio track FREE over the span the audio will occupy
+    /// (so existing audio is never clobbered), or a newly created track. Returns
+    /// the number of linked audio clips created.
+    fn auto_link_placed_audio(&mut self, video_with_audio: &[String]) -> Result<usize, String> {
+        if video_with_audio.is_empty() {
+            return Ok(0);
+        }
+        let (mut span_start, mut span_end) = (i64::MAX, i64::MIN);
+        for pid in video_with_audio {
+            if let Some(loc) = timeline_core::find_clip(&self.timeline, pid) {
+                let c = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+                span_start = span_start.min(c.start_frame);
+                span_end = span_end.max(c.start_frame + c.duration_frames);
+            }
+        }
+        let free = self.timeline.tracks.iter().position(|t| {
+            t.r#type == ClipType::Audio
+                && !t.clips.iter().any(|c| {
+                    c.start_frame < span_end && c.start_frame + c.duration_frames > span_start
+                })
+        });
+        let audio_ti = match free {
+            Some(ti) => ti,
+            None => {
+                let at = self.timeline.tracks.len();
+                timeline_core::insert_track_at(&mut self.timeline, at, ClipType::Audio)
+                    .map_err(|_| "Failed to create audio track for linked audio".to_string())?
+            }
+        };
+        Ok(timeline_core::link_audio_for_placed_clips(&mut self.timeline, video_with_audio, audio_ti).len())
+    }
+
     fn cmd_add_clips(&mut self, args: &Value) -> Result<Value, String> {
         let media_ids: Vec<String> = args
             .get("mediaIds")
@@ -1311,14 +1344,12 @@ impl ToolExecutor {
             return Err("mediaIds must be non-empty".to_string());
         }
 
-        let track_index = args
+        // trackIndex is optional (MUT-002/003): omit it and the tool auto-creates /
+        // reuses a video track for visual clips and an audio track for audio clips.
+        let track_index_opt = args
             .get("trackIndex")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| "Missing trackIndex".to_string())? as usize;
-
-        if track_index >= self.timeline.tracks.len() {
-            return Err(format!("Track index {track_index} out of bounds"));
-        }
+            .map(|i| i as usize);
 
         let project_fps = self.timeline.fps;
         let mut warnings: Vec<String> = Vec::new();
@@ -1368,73 +1399,91 @@ impl ToolExecutor {
             });
         }
 
-        // Reject type-incompatible placement (audio onto a visual track or a visual
-        // clip onto an audio track) before mutating anything.
-        let track = &self.timeline.tracks[track_index];
-        for clip in &clips {
-            if !track.is_compatible_with(clip.media_type) {
-                return Err(format!(
-                    "media type {:?} is not compatible with track {track_index} ({:?})",
-                    clip.media_type, track.r#type
-                ));
+        // Place the clips and collect the placed ids of the VISUAL clips (the only
+        // ones that can carry linked audio).
+        let (placed_count, placed_visual_ids): (usize, Vec<String>) = match track_index_opt {
+            Some(track_index) => {
+                if track_index >= self.timeline.tracks.len() {
+                    return Err(format!("Track index {track_index} out of bounds"));
+                }
+                // Reject type-incompatible placement before mutating anything.
+                let track = &self.timeline.tracks[track_index];
+                for clip in &clips {
+                    if !track.is_compatible_with(clip.media_type) {
+                        return Err(format!(
+                            "media type {:?} is not compatible with track {track_index} ({:?})",
+                            clip.media_type, track.r#type
+                        ));
+                    }
+                }
+                let placed = timeline_core::place_clips(&mut self.timeline, track_index, 0, &clips);
+                (placed.len(), placed)
             }
-        }
+            None => {
+                // Auto-create: visual clips share a video track, audio clips share an
+                // audio track (creating either if absent).
+                let visual: Vec<Clip> =
+                    clips.iter().filter(|c| c.media_type.is_visual()).cloned().collect();
+                let audio: Vec<Clip> =
+                    clips.iter().filter(|c| !c.media_type.is_visual()).cloned().collect();
+                let mut visual_ids = Vec::new();
+                if !visual.is_empty() {
+                    let vti = match self
+                        .timeline
+                        .tracks
+                        .iter()
+                        .position(|t| t.r#type != ClipType::Audio)
+                    {
+                        Some(ti) => ti,
+                        None => {
+                            let at = self.timeline.tracks.len();
+                            timeline_core::insert_track_at(&mut self.timeline, at, ClipType::Video)
+                                .map_err(|_| "Failed to create video track".to_string())?
+                        }
+                    };
+                    visual_ids = timeline_core::place_clips(&mut self.timeline, vti, 0, &visual);
+                }
+                if !audio.is_empty() {
+                    let ati = match self
+                        .timeline
+                        .tracks
+                        .iter()
+                        .position(|t| t.r#type == ClipType::Audio)
+                    {
+                        Some(ti) => ti,
+                        None => {
+                            let at = self.timeline.tracks.len();
+                            timeline_core::insert_track_at(&mut self.timeline, at, ClipType::Audio)
+                                .map_err(|_| "Failed to create audio track".to_string())?
+                        }
+                    };
+                    let _ = timeline_core::place_clips(&mut self.timeline, ati, 0, &audio);
+                }
+                (visual.len() + audio.len(), visual_ids)
+            }
+        };
 
-        let placed_ids = timeline_core::place_clips(&mut self.timeline, track_index, 0, &clips);
-
-        // CLP-007/008: auto-create a linked audio clip for each placed
-        // video-with-audio, on an existing audio track or a freshly created one.
-        // (placed_ids is aligned 1:1 with media_ids/clips by place_clips.)
-        let video_with_audio: Vec<String> = media_ids
+        // CLP-007/008: auto-link video-with-audio. Detect from each placed visual
+        // clip's own media_ref (works whichever placement path ran).
+        let video_with_audio: Vec<String> = placed_visual_ids
             .iter()
-            .zip(placed_ids.iter())
-            .filter_map(|(mid, pid)| {
-                let e = self.media_manifest.entry_for(mid)?;
-                (e.r#type == ClipType::Video && e.has_audio == Some(true)).then(|| pid.clone())
+            .filter(|pid| {
+                let Some(loc) = timeline_core::find_clip(&self.timeline, pid) else {
+                    return false;
+                };
+                let c = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+                c.media_type == ClipType::Video
+                    && self
+                        .media_manifest
+                        .entry_for(&c.media_ref)
+                        .and_then(|e| e.has_audio)
+                        == Some(true)
             })
+            .cloned()
             .collect();
-        let mut linked_audio_count = 0usize;
-        if !video_with_audio.is_empty() {
-            // Span the linked audio will occupy (each audio clip mirrors its video's
-            // position). Pick the first audio track FREE over that span so existing
-            // audio is never clobbered; otherwise create a new track (Swift's
-            // availableAudioTrackIndex / resolveOrCreateAudioTrack).
-            let (mut span_start, mut span_end) = (i64::MAX, i64::MIN);
-            for pid in &video_with_audio {
-                if let Some(loc) = timeline_core::find_clip(&self.timeline, pid) {
-                    let c = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
-                    span_start = span_start.min(c.start_frame);
-                    span_end = span_end.max(c.start_frame + c.duration_frames);
-                }
-            }
-            let free = self.timeline.tracks.iter().position(|t| {
-                t.r#type == ClipType::Audio
-                    && !t.clips.iter().any(|c| {
-                        c.start_frame < span_end && c.start_frame + c.duration_frames > span_start
-                    })
-            });
-            let audio_ti = match free {
-                Some(ti) => ti,
-                None => {
-                    let at = self.timeline.tracks.len();
-                    timeline_core::insert_track_at(&mut self.timeline, at, ClipType::Audio)
-                        .map_err(|_| {
-                            "Failed to create audio track for linked audio".to_string()
-                        })?
-                }
-            };
-            linked_audio_count = timeline_core::link_audio_for_placed_clips(
-                &mut self.timeline,
-                &video_with_audio,
-                audio_ti,
-            )
-            .len();
-        }
+        let linked_audio_count = self.auto_link_placed_audio(&video_with_audio)?;
 
-        let mut text = format!(
-            "Added {} clip(s) to track {track_index}: {placed_ids:?}",
-            placed_ids.len()
-        );
+        let mut text = format!("Added {placed_count} clip(s)");
         if linked_audio_count > 0 {
             text.push_str(&format!("\n(+{linked_audio_count} linked audio clip(s))"));
         }
@@ -3508,6 +3557,72 @@ mod tests {
         assert_eq!(audio.start_frame, video.start_frame);
         assert_eq!(audio.duration_frames, video.duration_frames);
         assert!(matches!(audio.media_type, ClipType::Audio));
+    }
+
+    fn media_entry(id: &str, ty: ClipType, has_audio: bool, duration: f64) -> core_model::MediaManifestEntry {
+        core_model::MediaManifestEntry {
+            id: id.into(),
+            name: format!("{id}.media"),
+            r#type: ty,
+            source: core_model::MediaSource::External {
+                absolute_path: format!("/{id}"),
+            },
+            duration,
+            generation_input: None,
+            source_width: Some(1920),
+            source_height: Some(1080),
+            source_fps: Some(30.0),
+            has_audio: Some(has_audio),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+        }
+    }
+
+    #[test]
+    fn add_clips_omit_track_index_auto_creates_video_track() {
+        // MUT-002/003: omitting trackIndex auto-creates a track for the clips.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("vid", ClipType::Video, false, 3.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest); // zero tracks
+        exec.execute("add_clips", &json!({"mediaIds": ["vid"]})).unwrap();
+        assert_eq!(exec.timeline().tracks.len(), 1, "one track auto-created");
+        assert!(matches!(exec.timeline().tracks[0].r#type, ClipType::Video));
+        assert_eq!(exec.timeline().tracks[0].clips.len(), 1);
+    }
+
+    #[test]
+    fn add_clips_omit_track_index_splits_visual_and_audio() {
+        // Mixed visual + audio with no trackIndex → a video track for the visual and
+        // an audio track for the audio.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
+        manifest.entries.push(media_entry("aud", ClipType::Audio, true, 2.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute("add_clips", &json!({"mediaIds": ["vid", "aud"]}))
+            .unwrap();
+        let video_track = exec
+            .timeline()
+            .tracks
+            .iter()
+            .find(|t| t.r#type == ClipType::Video)
+            .expect("video track created");
+        let audio_track = exec
+            .timeline()
+            .tracks
+            .iter()
+            .find(|t| t.r#type == ClipType::Audio)
+            .expect("audio track created");
+        assert_eq!(video_track.clips.len(), 1);
+        assert_eq!(video_track.clips[0].media_ref, "vid");
+        assert_eq!(audio_track.clips.len(), 1);
+        assert_eq!(audio_track.clips[0].media_ref, "aud");
     }
 
     #[test]

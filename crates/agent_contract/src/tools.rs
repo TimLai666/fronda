@@ -161,12 +161,14 @@ fn add_clips() -> ToolDefinition {
         name: "add_clips",
         description: "Add media clips to the end of the timeline. Clip type and \
             full source length are taken from the media asset; project fps is \
-            authoritative and is not changed to match the source.",
+            authoritative and is not changed to match the source. A video-with-audio \
+            asset placed on a video track also gets a linked audio clip on an audio \
+            track (created if needed).",
         input_schema: object(&[
             ("mediaIds", array("Media asset ids to add")),
             (
                 "trackIndex",
-                integer("Target track index (0-based, default: first visual/audio track)"),
+                integer("Optional target track index (0-based). Omit to auto-create/reuse a video track for visual clips and an audio track for audio clips."),
             ),
             (
                 "trimStartFrame",
