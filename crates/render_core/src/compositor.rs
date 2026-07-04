@@ -1216,8 +1216,9 @@ mod tests {
             line_height: None,
         });
         let timeline = tl(vec![c]);
-        // Text is procedural — fetch_source is never consulted.
-        let out = compose_frame(&timeline, &MediaManifest::default(), 0, 120, 80, |_| None);
+        // Text is procedural — fetch_source is never consulted. Use a tall canvas
+        // so the 1080-reference font scaling yields visible glyphs.
+        let out = compose_frame(&timeline, &MediaManifest::default(), 0, 400, 1080, |_| None);
         // Some pixels are painted with the (red) text colour.
         let lit = out
             .pixels

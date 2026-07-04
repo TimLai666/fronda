@@ -2,11 +2,11 @@
 //!
 //! Renders a clip's `text_content` into an RGBA layer using a bundled font
 //! (Poppins) via the pure-Rust `ab_glyph` rasterizer — the linked ffmpeg has no
-//! text support and the compositor stays platform-free. v1 covers a single
-//! embedded font family (weight → Regular/Bold), `font_size` as pixels, `\n`
-//! line breaks, left/center/right alignment, letter spacing, and line height.
-//! Per-family fonts, rotation, shadow/stroke, and exact Swift size calibration
-//! are follow-ups.
+//! text support and the compositor stays platform-free. Covers bundled font
+//! families (by name), Regular/Bold weight, `\n` line breaks, L/C/R alignment,
+//! letter spacing, line height, drop shadow, caption background, and outline —
+//! with `font_size` scaled to Swift's 1080-tall reference canvas. Text rotation,
+//! shadow blur, rounded background corners, and variable-font axes are follow-ups.
 
 use crate::compositor::RgbaImage;
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
@@ -87,10 +87,14 @@ pub fn render_text(
     let Ok(font) = FontRef::try_from_slice(bytes) else {
         return img;
     };
-    let px = (style.font_size * style.font_scale).max(1.0) as f32;
+    // Swift sizes text for a 1080-tall reference canvas and scales by
+    // canvas_height / 1080 (TextLayerController). Match it so sizes are consistent
+    // across export resolutions.
+    let canvas_scale = ch as f32 / 1080.0;
+    let px = ((style.font_size * style.font_scale) as f32 * canvas_scale).max(1.0);
     let scale = PxScale::from(px);
     let sf = font.as_scaled(scale);
-    let letter = style.letter_spacing.unwrap_or(0.0) as f32;
+    let letter = style.letter_spacing.unwrap_or(0.0) as f32 * canvas_scale;
     let line_h = px * style.line_height.unwrap_or(1.2).max(0.1) as f32;
     let color = [
         (style.color.r * 255.0).round().clamp(0.0, 255.0) as u8,
@@ -238,7 +242,7 @@ mod tests {
     #[test]
     fn renders_visible_glyphs() {
         let red = TextRgba { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
-        let img = render_text("Hi", &style(40.0, red, TextAlignment::Center), 200, 80, 0.5, 0.5);
+        let img = render_text("Hi", &style(120.0, red, TextAlignment::Center), 400, 1080, 0.5, 0.5);
         let painted = any_opaque(&img);
         assert!(painted > 20, "glyphs painted some pixels, got {painted}");
         // A painted pixel carries the text colour (red-dominant).
@@ -267,8 +271,8 @@ mod tests {
     fn shadow_adds_painted_pixels() {
         use core_model::TextShadow;
         let w = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
-        let mut s = style(40.0, w, TextAlignment::Center);
-        let no_shadow = render_text("Hi", &s, 200, 120, 0.5, 0.5);
+        let mut s = style(120.0, w, TextAlignment::Center);
+        let no_shadow = render_text("Hi", &s, 400, 1080, 0.5, 0.5);
         s.shadow = TextShadow {
             enabled: true,
             color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
@@ -276,7 +280,7 @@ mod tests {
             offset_y: 6.0,
             blur: 0.0,
         };
-        let with_shadow = render_text("Hi", &s, 200, 120, 0.5, 0.5);
+        let with_shadow = render_text("Hi", &s, 400, 1080, 0.5, 0.5);
         assert!(
             any_opaque(&with_shadow) > any_opaque(&no_shadow),
             "shadow paints extra pixels"
@@ -287,14 +291,14 @@ mod tests {
     fn background_fills_behind_text() {
         use core_model::TextFill;
         let black = TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
-        let mut s = style(30.0, black, TextAlignment::Center);
+        let mut s = style(120.0, black, TextAlignment::Center);
         s.background = TextFill {
             enabled: true,
             color: TextRgba { r: 0.0, g: 0.5, b: 1.0, a: 1.0 },
             padding: Some(8.0),
             corner_radius: None,
         };
-        let img = render_text("Hi", &s, 200, 120, 0.5, 0.5);
+        let img = render_text("Hi", &s, 400, 1080, 0.5, 0.5);
         // A solid rectangle of the (blue) background is painted.
         let blue = img
             .pixels
@@ -309,14 +313,14 @@ mod tests {
         use core_model::TextFill;
         // White text with a black outline: black pixels appear around the glyphs.
         let white = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
-        let mut s = style(40.0, white, TextAlignment::Center);
+        let mut s = style(120.0, white, TextAlignment::Center);
         s.border = TextFill {
             enabled: true,
             color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
             padding: Some(3.0),
             corner_radius: None,
         };
-        let img = render_text("Hi", &s, 200, 120, 0.5, 0.5);
+        let img = render_text("Hi", &s, 400, 1080, 0.5, 0.5);
         let dark = img
             .pixels
             .chunks_exact(4)
@@ -328,8 +332,9 @@ mod tests {
     #[test]
     fn multiline_paints_more_than_single_line() {
         let w = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
-        let one = render_text("AA", &style(30.0, w, TextAlignment::Center), 200, 200, 0.5, 0.5);
-        let two = render_text("AA\nAA", &style(30.0, w, TextAlignment::Center), 200, 200, 0.5, 0.5);
+        let one = render_text("AA", &style(120.0, w, TextAlignment::Center), 400, 1080, 0.5, 0.5);
+        let two =
+            render_text("AA\nAA", &style(120.0, w, TextAlignment::Center), 400, 1080, 0.5, 0.5);
         assert!(any_opaque(&two) > any_opaque(&one), "two lines paint more");
     }
 }
