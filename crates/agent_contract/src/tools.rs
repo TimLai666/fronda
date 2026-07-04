@@ -530,9 +530,11 @@ fn set_clip_properties() -> ToolDefinition {
             opacity (0-1), transform ({centerX, centerY, width, height, rotation, \
             flipHorizontal, flipVertical} — partial merge, 0-1 normalized canvas \
             coords). For text clips only: content (string), fontName, fontSize, \
-            color ('#RGB' / '#RRGGBB' / '#RRGGBBAA'), alignment ('left' / 'center' / \
-            'right'). Setting volume or opacity here clears any keyframe track on \
-            that property.",
+            fontWeight (400 = regular, 700 = bold), color ('#RGB' / '#RRGGBB' / \
+            '#RRGGBBAA'), alignment ('left' / 'center' / 'right'), background and \
+            border (each {enabled, color, padding?, cornerRadius?} for the caption \
+            fill/stroke). Setting volume or opacity here clears any keyframe track \
+            on that property.",
         input_schema: object(&[
             ("clipIds", array("Clip ids to modify")),
             (

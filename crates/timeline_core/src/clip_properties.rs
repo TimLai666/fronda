@@ -60,26 +60,34 @@ pub struct PropertyChanges {
 ///   - `volume` / `opacity` set the scalar and clear the keyframe track
 ///   - `transform` uses `PartialTransform::merge_into` (#114 fix)
 ///   - `content` / `font_name` etc. update text style fields
-#[allow(clippy::too_many_arguments)]
-pub fn set_clip_properties(
-    clip: &mut Clip,
-    duration_frames: Option<i64>,
-    trim_start_frame: Option<i64>,
-    trim_end_frame: Option<i64>,
-    speed: Option<f64>,
-    volume: Option<f64>,
-    opacity: Option<f64>,
-    transform: Option<&PartialTransform>,
-    content: Option<&str>,
-    font_name: Option<&str>,
-    font_size: Option<f64>,
-    color: Option<core_model::TextRgba>,
-    alignment: Option<core_model::TextAlignment>,
-) -> PropertyChanges {
+/// The set of clip properties an update may change. Every field is optional;
+/// `None` leaves the property untouched. Replaces the old 12-positional-argument
+/// signature of [`set_clip_properties`].
+#[derive(Default)]
+pub struct ClipPropertyUpdate<'a> {
+    pub duration_frames: Option<i64>,
+    pub trim_start_frame: Option<i64>,
+    pub trim_end_frame: Option<i64>,
+    pub speed: Option<f64>,
+    pub volume: Option<f64>,
+    pub opacity: Option<f64>,
+    pub transform: Option<&'a PartialTransform>,
+    // Text-clip style fields.
+    pub content: Option<&'a str>,
+    pub font_name: Option<&'a str>,
+    pub font_size: Option<f64>,
+    pub font_weight: Option<f64>,
+    pub color: Option<core_model::TextRgba>,
+    pub alignment: Option<core_model::TextAlignment>,
+    pub background: Option<core_model::TextFill>,
+    pub border: Option<core_model::TextFill>,
+}
+
+pub fn set_clip_properties(clip: &mut Clip, u: &ClipPropertyUpdate) -> PropertyChanges {
     let mut changed: Vec<String> = Vec::new();
 
     // Duration
-    if let Some(d) = duration_frames {
+    if let Some(d) = u.duration_frames {
         if d >= 1 {
             clip.duration_frames = d;
             crate::clamp_clip_keyframes_to_duration(clip);
@@ -89,18 +97,18 @@ pub fn set_clip_properties(
     }
 
     // Trim
-    if let Some(v) = trim_start_frame {
+    if let Some(v) = u.trim_start_frame {
         clip.trim_start_frame = v;
         changed.push("trimStartFrame".into());
     }
-    if let Some(v) = trim_end_frame {
+    if let Some(v) = u.trim_end_frame {
         clip.trim_end_frame = v;
         changed.push("trimEndFrame".into());
     }
 
     // Speed
-    if let Some(s) = speed {
-        if s > 0.0 && duration_frames.is_none() {
+    if let Some(s) = u.speed {
+        if s > 0.0 && u.duration_frames.is_none() {
             // recompute duration from source coverage
             let source_consumed = (clip.duration_frames as f64 * clip.speed).round();
             clip.duration_frames = (source_consumed / s).round().max(1.0) as i64;
@@ -113,19 +121,19 @@ pub fn set_clip_properties(
     }
 
     // Volume/opacity: scalar set clears keyframe track
-    if let Some(v) = volume {
+    if let Some(v) = u.volume {
         clip.volume = v;
         clip.volume_track = None;
         changed.push("volume".into());
     }
-    if let Some(v) = opacity {
+    if let Some(v) = u.opacity {
         clip.opacity = v;
         clip.opacity_track = None;
         changed.push("opacity".into());
     }
 
     // Transform — upstream #114: carry forward missing fields
-    if let Some(t) = transform {
+    if let Some(t) = u.transform {
         if t.has_any_field() {
             clip.transform = t.merge_into(&clip.transform);
             changed.push("transform".into());
@@ -133,36 +141,57 @@ pub fn set_clip_properties(
     }
 
     // Text fields
-    if let Some(c) = content {
+    if let Some(c) = u.content {
         clip.text_content = Some(c.to_string());
         changed.push("content".into());
     }
-    if let Some(n) = font_name {
+    if let Some(n) = u.font_name {
         ensure_text_style(clip);
         if let Some(ref mut ts) = clip.text_style {
             ts.font_name = n.to_string();
             changed.push("fontName".into());
         }
     }
-    if let Some(s) = font_size {
+    if let Some(s) = u.font_size {
         ensure_text_style(clip);
         if let Some(ref mut ts) = clip.text_style {
             ts.font_size = s;
             changed.push("fontSize".into());
         }
     }
-    if let Some(c) = color {
+    if let Some(w) = u.font_weight {
+        ensure_text_style(clip);
+        if let Some(ref mut ts) = clip.text_style {
+            ts.font_weight = w;
+            changed.push("fontWeight".into());
+        }
+    }
+    if let Some(c) = u.color {
         ensure_text_style(clip);
         if let Some(ref mut ts) = clip.text_style {
             ts.color = c;
             changed.push("color".into());
         }
     }
-    if let Some(a) = alignment {
+    if let Some(a) = u.alignment {
         ensure_text_style(clip);
         if let Some(ref mut ts) = clip.text_style {
             ts.alignment = a;
             changed.push("alignment".into());
+        }
+    }
+    if let Some(bg) = &u.background {
+        ensure_text_style(clip);
+        if let Some(ref mut ts) = clip.text_style {
+            ts.background = bg.clone();
+            changed.push("background".into());
+        }
+    }
+    if let Some(bd) = &u.border {
+        ensure_text_style(clip);
+        if let Some(ref mut ts) = clip.text_style {
+            ts.border = bd.clone();
+            changed.push("border".into());
         }
     }
 
@@ -392,18 +421,10 @@ mod tests {
         let mut clip = make_clip();
         let result = set_clip_properties(
             &mut clip,
-            Some(50),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            &ClipPropertyUpdate {
+                duration_frames: Some(50),
+                ..Default::default()
+            },
         );
         assert_eq!(clip.duration_frames, 50);
         assert!(result.changed.contains(&"durationFrames".to_string()));
@@ -416,18 +437,10 @@ mod tests {
         clip.speed = 1.0;
         let result = set_clip_properties(
             &mut clip,
-            None,
-            None,
-            None,
-            Some(2.0),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            &ClipPropertyUpdate {
+                speed: Some(2.0),
+                ..Default::default()
+            },
         );
         assert_eq!(clip.speed, 2.0);
         // 100 * 1.0 / 2.0 = 50
@@ -448,18 +461,10 @@ mod tests {
         });
         let result = set_clip_properties(
             &mut clip,
-            None,
-            None,
-            None,
-            None,
-            Some(0.8),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            &ClipPropertyUpdate {
+                volume: Some(0.8),
+                ..Default::default()
+            },
         );
         assert_eq!(clip.volume, 0.8);
         assert!(clip.volume_track.is_none());
@@ -480,18 +485,10 @@ mod tests {
         };
         let result = set_clip_properties(
             &mut clip,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(&partial),
-            None,
-            None,
-            None,
-            None,
-            None,
+            &ClipPropertyUpdate {
+                transform: Some(&partial),
+                ..Default::default()
+            },
         );
         assert_eq!(clip.transform.center_x, 0.7);
         assert_eq!(clip.transform.width, 0.8);
@@ -508,18 +505,12 @@ mod tests {
         clip.source_clip_type = ClipType::Text;
         let result = set_clip_properties(
             &mut clip,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("Hello"),
-            Some("Helvetica"),
-            Some(48.0),
-            None,
-            None,
+            &ClipPropertyUpdate {
+                content: Some("Hello"),
+                font_name: Some("Helvetica"),
+                font_size: Some(48.0),
+                ..Default::default()
+            },
         );
         assert_eq!(clip.text_content.as_deref(), Some("Hello"));
         assert_eq!(

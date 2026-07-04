@@ -27,7 +27,8 @@ pub use clip_clipboard::{
     CopiedClip, PasteError, PasteResult,
 };
 pub use clip_properties::{
-    set_clip_properties, write_position, write_scale, PartialTransform, PropertyChanges,
+    set_clip_properties, write_position, write_scale, ClipPropertyUpdate, PartialTransform,
+    PropertyChanges,
 };
 pub use drag_payload::{
     is_internal_drag_payload, parse_asset_segment, parse_drag_payload, DragItem, DragPayload,

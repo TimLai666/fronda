@@ -249,6 +249,27 @@ pub(crate) fn parse_keyframe_rows(
     Ok(deduped)
 }
 
+/// Parse a caption background/border fill object `{enabled?, color?, padding?,
+/// cornerRadius?}` into a [`core_model::TextFill`] (Issue #18). Missing fields
+/// keep the default; an invalid colour is an error. Full replacement, not a merge.
+fn parse_text_fill(v: &Value, what: &str) -> Result<core_model::TextFill, String> {
+    let mut fill = core_model::TextFill::default();
+    if let Some(en) = v.get("enabled").and_then(|x| x.as_bool()) {
+        fill.enabled = en;
+    }
+    if let Some(hex) = v.get("color").and_then(|x| x.as_str()) {
+        fill.color = core_model::TextRgba::from_hex(hex)
+            .ok_or_else(|| format!("invalid {what} color '{hex}'"))?;
+    }
+    if let Some(p) = v.get("padding").and_then(|x| x.as_f64()) {
+        fill.padding = Some(p);
+    }
+    if let Some(r) = v.get("cornerRadius").and_then(|x| x.as_f64()) {
+        fill.corner_radius = Some(r);
+    }
+    Ok(fill)
+}
+
 fn resolve_layout_anchor(entry: &Value) -> Result<(f64, f64), String> {
     const ANCHORS: &[(&str, (f64, f64))] = &[
         ("center", (0.5, 0.5)),
@@ -755,6 +776,7 @@ impl ToolExecutor {
         let content = properties.get("content").and_then(|v| v.as_str());
         let font_name = properties.get("fontName").and_then(|v| v.as_str());
         let font_size = properties.get("fontSize").and_then(|v| v.as_f64());
+        let font_weight = properties.get("fontWeight").and_then(|v| v.as_f64());
         let color = match properties.get("color").and_then(|v| v.as_str()) {
             Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
                 format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
@@ -765,6 +787,14 @@ impl ToolExecutor {
             Some(a) => Some(core_model::TextAlignment::from_name(a).ok_or_else(|| {
                 format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
             })?),
+            None => None,
+        };
+        let background = match properties.get("background") {
+            Some(v) => Some(parse_text_fill(v, "background")?),
+            None => None,
+        };
+        let border = match properties.get("border") {
+            Some(v) => Some(parse_text_fill(v, "border")?),
             None => None,
         };
 
@@ -780,6 +810,24 @@ impl ToolExecutor {
                 flip_vertical: t.get("flipVertical").and_then(|v| v.as_bool()),
             });
 
+        let update = timeline_core::ClipPropertyUpdate {
+            duration_frames: duration,
+            trim_start_frame: trim_start,
+            trim_end_frame: trim_end,
+            speed,
+            volume,
+            opacity,
+            transform: transform.as_ref(),
+            content,
+            font_name,
+            font_size,
+            font_weight,
+            color,
+            alignment,
+            background,
+            border,
+        };
+
         let mut changed_count = 0usize;
         let mut changed_fields: Vec<String> = Vec::new();
         for clip_id in &clip_ids {
@@ -787,21 +835,7 @@ impl ToolExecutor {
                 continue;
             };
             let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
-            let changes = timeline_core::set_clip_properties(
-                clip,
-                duration,
-                trim_start,
-                trim_end,
-                speed,
-                volume,
-                opacity,
-                transform.as_ref(),
-                content,
-                font_name,
-                font_size,
-                color,
-                alignment,
-            );
+            let changes = timeline_core::set_clip_properties(clip, &update);
             changed_count += 1;
             if changed_fields.is_empty() {
                 changed_fields = changes.changed;
@@ -4757,6 +4791,40 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("invalid alignment"), "got: {err}");
+    }
+
+    #[test]
+    fn set_clip_properties_sets_font_weight_background_border() {
+        let mut exec = executor_with_clip();
+        exec.execute(
+            "set_clip_properties",
+            &json!({"clipIds": ["c"], "properties": {
+                "fontWeight": 700.0,
+                "background": {"enabled": true, "color": "#000000", "padding": 8.0, "cornerRadius": 4.0},
+                "border": {"enabled": true, "color": "#FFFFFF"}
+            }}),
+        )
+        .unwrap();
+        let ts = only_clip(&exec).text_style.as_ref().unwrap();
+        assert_eq!(ts.font_weight, 700.0);
+        assert!(ts.background.enabled);
+        assert_eq!(ts.background.padding, Some(8.0));
+        assert_eq!(ts.background.corner_radius, Some(4.0));
+        assert_eq!((ts.background.color.r, ts.background.color.g), (0.0, 0.0));
+        assert!(ts.border.enabled);
+        assert_eq!((ts.border.color.r, ts.border.color.g, ts.border.color.b), (1.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn set_clip_properties_rejects_bad_background_color() {
+        let mut exec = executor_with_clip();
+        let err = exec
+            .execute(
+                "set_clip_properties",
+                &json!({"clipIds": ["c"], "properties": {"background": {"color": "zzz"}}}),
+            )
+            .unwrap_err();
+        assert!(err.contains("invalid background color"), "got: {err}");
     }
 
     #[test]
