@@ -381,6 +381,28 @@ fn media_manifest_acronym_keys_roundtrip_without_data_loss() {
     assert!(!out.contains("\"cachedRemoteUrl\""), "no lowercased acronym key on save");
 }
 
+#[test]
+fn upstream_216_generation_recovery_fields_round_trip() {
+    // Upstream #216: an in-flight generation's backendJobId + resultURLs persist so a
+    // project saved mid-generation isn't corrupted; resultURLs keeps its uppercase key.
+    let encoded = json!({
+        "prompt": "p", "model": "m", "duration": 3, "aspectRatio": "16:9",
+        "backendJobId": "job-abc",
+        "resultURLs": ["https://cdn/r0.mp4", "https://cdn/r1.mp4"]
+    });
+    let gi: core_model::GenerationInput = serde_json::from_value(encoded).unwrap();
+    assert_eq!(gi.backend_job_id.as_deref(), Some("job-abc"));
+    assert_eq!(gi.result_urls.as_ref().unwrap().len(), 2);
+
+    let re = serde_json::to_value(&gi).unwrap();
+    assert_eq!(re["backendJobId"], json!("job-abc"));
+    assert_eq!(re["resultURLs"][0], json!("https://cdn/r0.mp4"));
+    assert!(
+        !re.as_object().unwrap().contains_key("resultUrls"),
+        "no lowercased acronym key"
+    );
+}
+
 // ── FMT round-trip tests ──────────────────────────────────────────────────
 
 #[test]

@@ -177,6 +177,19 @@ pub struct GenerationInput {
     pub reference_audio_asset_ids: Option<Vec<String>>,
     #[serde(default, with = "crate::date_serde::option_foundation_date")]
     pub created_at: Option<DateTime<Utc>>,
+    /// Backend job id for an in-flight async generation, persisted so the job can be
+    /// resumed after an app restart (upstream #216). The resume LOGIC is app-wired;
+    /// this field round-trips so a project saved mid-generation isn't corrupted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_job_id: Option<String>,
+    /// Result URLs returned by a completed backend job, pending download (#216).
+    #[serde(
+        rename = "resultURLs",
+        alias = "resultUrls",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub result_urls: Option<Vec<String>>,
 }
 
 impl Default for GenerationInput {
@@ -203,6 +216,8 @@ impl Default for GenerationInput {
             reference_video_asset_ids: None,
             reference_audio_asset_ids: None,
             created_at: None,
+            backend_job_id: None,
+            result_urls: None,
         }
     }
 }
