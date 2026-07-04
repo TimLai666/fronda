@@ -308,40 +308,48 @@ pub fn blit_scaled(
 /// Separable box blur with the given pixel `radius` (a fast gaussian approx).
 /// Averages each channel — including alpha — over the `2*radius+1` window,
 /// clamping at edges. No-op for radius 0. PR #8 blur path.
+///
+/// Uses per-line prefix sums so each pass is O(w*h) regardless of `radius`
+/// (the naive window sum was O(w*h*radius) — costly for the default blur-6 text
+/// shadow at 1080p across every export frame). Output is bit-identical to the
+/// naive average: the window sum is an exact integer and the divide/round match.
 pub fn apply_blur(img: &mut RgbaImage, radius: usize) {
     if radius == 0 || img.width == 0 || img.height == 0 {
         return;
     }
     let (w, h) = (img.width, img.height);
+    let mut prefix = vec![0u64; w.max(h) + 1];
     // Horizontal pass into a temp buffer.
     let mut tmp = vec![0u8; img.pixels.len()];
     for y in 0..h {
-        for x in 0..w {
-            let lo = x.saturating_sub(radius);
-            let hi = (x + radius).min(w - 1);
-            for c in 0..4 {
-                let mut sum = 0.0;
-                for sx in lo..=hi {
-                    sum += img.pixels[(y * w + sx) * 4 + c] as f64;
-                }
-                // Divide by the full window (edge samples clamp-repeat conceptually).
+        let row = y * w;
+        for c in 0..4 {
+            prefix[0] = 0;
+            for x in 0..w {
+                prefix[x + 1] = prefix[x] + img.pixels[(row + x) * 4 + c] as u64;
+            }
+            for x in 0..w {
+                let lo = x.saturating_sub(radius);
+                let hi = (x + radius).min(w - 1);
+                let sum = prefix[hi + 1] - prefix[lo];
                 let count = (hi - lo + 1) as f64;
-                tmp[(y * w + x) * 4 + c] = (sum / count).round().clamp(0.0, 255.0) as u8;
+                tmp[(row + x) * 4 + c] = (sum as f64 / count).round().clamp(0.0, 255.0) as u8;
             }
         }
     }
     // Vertical pass back into the image.
-    for y in 0..h {
-        for x in 0..w {
-            let lo = y.saturating_sub(radius);
-            let hi = (y + radius).min(h - 1);
-            for c in 0..4 {
-                let mut sum = 0.0;
-                for sy in lo..=hi {
-                    sum += tmp[(sy * w + x) * 4 + c] as f64;
-                }
+    for x in 0..w {
+        for c in 0..4 {
+            prefix[0] = 0;
+            for y in 0..h {
+                prefix[y + 1] = prefix[y] + tmp[(y * w + x) * 4 + c] as u64;
+            }
+            for y in 0..h {
+                let lo = y.saturating_sub(radius);
+                let hi = (y + radius).min(h - 1);
+                let sum = prefix[hi + 1] - prefix[lo];
                 let count = (hi - lo + 1) as f64;
-                img.pixels[(y * w + x) * 4 + c] = (sum / count).round().clamp(0.0, 255.0) as u8;
+                img.pixels[(y * w + x) * 4 + c] = (sum as f64 / count).round().clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -1183,6 +1191,69 @@ mod tests {
         let before = img.pixels.clone();
         apply_blur(&mut img, 0);
         assert_eq!(img.pixels, before);
+    }
+
+    // Naive O(w*h*radius) box blur — the reference the prefix-sum path must match
+    // bit-for-bit.
+    fn blur_naive(img: &mut RgbaImage, radius: usize) {
+        if radius == 0 || img.width == 0 || img.height == 0 {
+            return;
+        }
+        let (w, h) = (img.width, img.height);
+        let mut tmp = vec![0u8; img.pixels.len()];
+        for y in 0..h {
+            for x in 0..w {
+                let lo = x.saturating_sub(radius);
+                let hi = (x + radius).min(w - 1);
+                for c in 0..4 {
+                    let mut sum = 0.0;
+                    for sx in lo..=hi {
+                        sum += img.pixels[(y * w + sx) * 4 + c] as f64;
+                    }
+                    let count = (hi - lo + 1) as f64;
+                    tmp[(y * w + x) * 4 + c] = (sum / count).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let lo = y.saturating_sub(radius);
+                let hi = (y + radius).min(h - 1);
+                for c in 0..4 {
+                    let mut sum = 0.0;
+                    for sy in lo..=hi {
+                        sum += tmp[(sy * w + x) * 4 + c] as f64;
+                    }
+                    let count = (hi - lo + 1) as f64;
+                    img.pixels[(y * w + x) * 4 + c] =
+                        (sum / count).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn blur_matches_naive_reference() {
+        // Deterministic pseudo-random image; assert bit-identity across radii and
+        // a non-square shape (exercises the separable passes independently).
+        for (w, h) in [(17usize, 11usize), (11, 17), (1, 20), (20, 1)] {
+            let mut img = RgbaImage::new(w, h);
+            let mut s: u32 = 0x9E3779B9;
+            for p in img.pixels.iter_mut() {
+                s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                *p = (s >> 24) as u8;
+            }
+            for radius in [1usize, 2, 3, 5, 8, 30] {
+                let mut a = img.clone();
+                let mut b = img.clone();
+                apply_blur(&mut a, radius);
+                blur_naive(&mut b, radius);
+                assert_eq!(
+                    a.pixels, b.pixels,
+                    "prefix-sum blur diverged from naive at {w}x{h} radius {radius}"
+                );
+            }
+        }
     }
 
     #[test]
