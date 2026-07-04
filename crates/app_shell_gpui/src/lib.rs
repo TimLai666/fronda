@@ -37,6 +37,7 @@ pub mod inspector_model;
 pub mod inspector_view;
 #[cfg(feature = "desktop-app")]
 pub mod keyframes_view;
+pub mod matte_writer;
 pub mod mcp_service;
 pub mod media_import;
 pub mod media_panel_model;

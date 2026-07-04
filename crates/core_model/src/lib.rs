@@ -3,6 +3,7 @@ pub mod date_serde;
 pub mod effect;
 pub mod generation_log;
 pub mod library;
+pub mod matte;
 pub mod media_manifest;
 pub mod project_registry;
 pub mod shape_style;
@@ -17,6 +18,7 @@ pub use agent::{
 pub use effect::{CurvePoint, Effect, EffectParam, GradeCurve};
 pub use generation_log::{GenerationLog, GenerationLogEntry};
 pub use library::{Event, Library, ProjectRef};
+pub use matte::MatteAspect;
 pub use media_manifest::{
     GenerationInput, MediaFolder, MediaManifest, MediaManifestEntry, MediaSource,
 };

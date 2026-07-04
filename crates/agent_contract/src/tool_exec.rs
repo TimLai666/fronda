@@ -10,11 +10,26 @@ use crate::read_tools::{
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
     AnimPair, Clip, ClipType, Crop, Effect, GenerationInput, Interpolation, Keyframe, KeyframeTrack,
-    LayoutFit, MediaManifest, MediaManifestEntry, MediaSource, TextStyle, Timeline, Transform,
-    VideoLayout,
+    LayoutFit, MatteAspect, MediaManifest, MediaManifestEntry, MediaSource, TextRgba, TextStyle,
+    Timeline, Transform, VideoLayout,
 };
 use serde_json::{json, Value};
+use std::sync::Arc;
 use uuid::Uuid;
+
+/// Host seam for `create_matte` (#242): render a solid-colour matte PNG and persist it into the
+/// current project, returning where it was written. The pure executor stays FS-free — the app
+/// shell provides the implementation (which encodes the PNG and writes it into the `.palmier`
+/// package); the MCP/headless path leaves it unset, so `create_matte` reports it's unavailable.
+pub trait MatteWriter: Send + Sync {
+    fn write_matte(
+        &self,
+        rgba: [u8; 4],
+        width: i64,
+        height: i64,
+        base_name: &str,
+    ) -> Result<MediaSource, String>;
+}
 
 const DEFAULT_CLIP_DURATION_FRAMES: i64 = 150;
 
@@ -352,6 +367,9 @@ pub struct ToolExecutor {
     /// (upstream #160). The host transcriber supplies these (source audio → words is
     /// a platform concern); `remove_words`/`get_transcript` read them. Empty until set.
     timeline_words: Vec<timeline_core::TimelineWord>,
+    /// Host writer for `create_matte` (#242): renders + persists the matte PNG into the project.
+    /// `None` on the pure/MCP path, where `create_matte` reports it's unavailable.
+    matte_writer: Option<Arc<dyn MatteWriter>>,
 }
 
 /// Read-only tools: successful execution does not bump the revision.
@@ -378,7 +396,14 @@ impl ToolExecutor {
             revision: 0,
             skills: Vec::new(),
             timeline_words: Vec::new(),
+            matte_writer: None,
         }
+    }
+
+    /// Install the host writer for `create_matte` (#242). The app shell provides an implementation
+    /// that encodes the solid-colour PNG and writes it into the open project package.
+    pub fn set_matte_writer(&mut self, writer: Arc<dyn MatteWriter>) {
+        self.matte_writer = Some(writer);
     }
 
     /// Supply the timeline-mapped transcript words (upstream #160). The host runs
@@ -550,6 +575,7 @@ impl ToolExecutor {
             "move_to_folder" => self.cmd_move_to_folder(args),
             "import_media" => self.cmd_import_media(args),
             "import_folder" => self.cmd_import_folder(args),
+            "create_matte" => self.cmd_create_matte(args),
             "duplicate_project" => self.cmd_duplicate_project(),
 
             // ── Read-only tools ──────────────────────────────────────────
@@ -2874,6 +2900,83 @@ impl ToolExecutor {
             "content": [{
                 "type": "text",
                 "text": format!("Imported '{}' as '{}' (id: {})", file_path, name, entry_id)
+            }]
+        }))
+    }
+
+    /// create_matte (#242): add a solid-colour image to the library. Computes even pixel
+    /// dimensions from the aspect preset + timeline size, then hands the colour + size to the host
+    /// `MatteWriter` (which renders + persists the PNG) and registers the resulting image asset.
+    fn cmd_create_matte(&mut self, args: &Value) -> Result<Value, String> {
+        let hex = args
+            .get("hex")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "create_matte requires 'hex'.".to_string())?;
+        let rgba = TextRgba::from_hex(hex)
+            .ok_or_else(|| format!("create_matte: invalid hex color '{hex}'."))?;
+        let aspect = match args.get("aspectRatio").and_then(|v| v.as_str()) {
+            Some(raw) => MatteAspect::parse(raw).ok_or_else(|| {
+                format!(
+                    "create_matte: unknown aspectRatio '{raw}'. Use one of: {}.",
+                    MatteAspect::ALL
+                        .iter()
+                        .map(|a| a.raw_value())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?,
+            None => MatteAspect::Project,
+        };
+        let (width, height) = aspect.pixel_size(self.timeline.width, self.timeline.height);
+        let name = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("Matte")
+            .to_string();
+        let folder_id = args.get("folderId").and_then(|v| v.as_str()).map(String::from);
+
+        let writer = self.matte_writer.clone().ok_or_else(|| {
+            "create_matte is unavailable: no project is connected to write the matte into."
+                .to_string()
+        })?;
+        let to_u8 = |c: f64| (c * 255.0).round().clamp(0.0, 255.0) as u8;
+        let px = [to_u8(rgba.r), to_u8(rgba.g), to_u8(rgba.b), 255];
+        let source = writer.write_matte(px, width, height, &name)?;
+
+        let entry = MediaManifestEntry {
+            id: Uuid::new_v4().to_string(),
+            name: name.clone(),
+            r#type: ClipType::Image,
+            source,
+            duration: 5.0,
+            generation_input: None,
+            source_width: Some(width),
+            source_height: Some(height),
+            source_fps: None,
+            has_audio: Some(false),
+            folder_id,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+            generation_status: None,
+        };
+        let id = entry.id.clone();
+        self.media_manifest.entries.push(entry);
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&json!({
+                    "mediaRef": id, "name": name, "width": width, "height": height
+                }))
+                .unwrap_or_default()
             }]
         }))
     }
@@ -6543,6 +6646,90 @@ mod tests {
                 &json!({"words": [1], "cutAggressiveness": "nuclear"})
             )
             .is_err());
+    }
+
+    // ── create_matte (#242) ──────────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct MockMatte {
+        last: std::sync::Mutex<Option<([u8; 4], i64, i64, String)>>,
+    }
+    impl MatteWriter for MockMatte {
+        fn write_matte(
+            &self,
+            rgba: [u8; 4],
+            width: i64,
+            height: i64,
+            base_name: &str,
+        ) -> Result<MediaSource, String> {
+            *self.last.lock().unwrap() = Some((rgba, width, height, base_name.to_string()));
+            Ok(MediaSource::Project {
+                relative_path: format!("media/{base_name}.png"),
+            })
+        }
+    }
+
+    #[test]
+    fn create_matte_writes_and_registers_image() {
+        let mut exec = make_executor(); // Timeline::default() = 1920x1080
+        let writer = std::sync::Arc::new(MockMatte::default());
+        exec.set_matte_writer(writer.clone());
+        let out = exec
+            .execute(
+                "create_matte",
+                &json!({"hex": "#FF0000", "aspectRatio": "1:1", "name": "Red"}),
+            )
+            .unwrap();
+        // 1:1 in 1920x1080 → short edge 1080 → 1080x1080; #FF0000 → [255,0,0,255].
+        let (rgba, w, h, name) = writer.last.lock().unwrap().clone().unwrap();
+        assert_eq!(rgba, [255, 0, 0, 255]);
+        assert_eq!((w, h), (1080, 1080));
+        assert_eq!(name, "Red");
+        // A new image asset is registered with the matte dimensions.
+        assert_eq!(exec.media_manifest.entries.len(), 1);
+        let e = &exec.media_manifest.entries[0];
+        assert_eq!(e.r#type, ClipType::Image);
+        assert_eq!(e.source_width, Some(1080));
+        assert_eq!(e.source_height, Some(1080));
+        let text = out["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains(&e.id), "result carries the mediaRef: {text}");
+    }
+
+    #[test]
+    fn create_matte_defaults_to_project_aspect() {
+        let mut exec = make_executor();
+        let writer = std::sync::Arc::new(MockMatte::default());
+        exec.set_matte_writer(writer.clone());
+        exec.execute("create_matte", &json!({"hex": "#000"})).unwrap();
+        let (_, w, h, name) = writer.last.lock().unwrap().clone().unwrap();
+        assert_eq!((w, h), (1920, 1080), "default aspect = Project");
+        assert_eq!(name, "Matte", "default name");
+    }
+
+    #[test]
+    fn create_matte_requires_writer() {
+        let mut exec = make_executor(); // no writer set
+        let err = exec
+            .execute("create_matte", &json!({"hex": "#000000"}))
+            .unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
+    }
+
+    #[test]
+    fn create_matte_validates_hex_and_aspect() {
+        let mut exec = make_executor();
+        exec.set_matte_writer(std::sync::Arc::new(MockMatte::default()));
+        assert!(exec.execute("create_matte", &json!({})).is_err(), "no hex");
+        assert!(
+            exec.execute("create_matte", &json!({"hex": "notacolor"}))
+                .is_err(),
+            "bad hex"
+        );
+        assert!(
+            exec.execute("create_matte", &json!({"hex": "#000", "aspectRatio": "bogus"}))
+                .is_err(),
+            "bad aspect"
+        );
     }
 
     #[test]

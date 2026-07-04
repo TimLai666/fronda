@@ -77,10 +77,21 @@ impl EditorStateHub {
             exec.load_project(bundle.timeline, bundle.manifest.unwrap_or_default());
         }
         self.record_in_registry(&bundle.root);
+        self.install_matte_writer(bundle.root.clone());
         if let Ok(mut root) = self.project_root.lock() {
             *root = Some(bundle.root);
         }
         Ok(())
+    }
+
+    /// Point `create_matte` (#242) at the given project package so it writes mattes into its
+    /// `media/` directory. Called whenever the project root changes.
+    fn install_matte_writer(&self, root: PathBuf) {
+        if let Ok(mut exec) = self.executor.lock() {
+            exec.set_matte_writer(std::sync::Arc::new(
+                crate::matte_writer::ProjectMatteWriter::new(root),
+            ));
+        }
     }
 
     /// Root directory of the currently loaded project, if any.
@@ -113,6 +124,7 @@ impl EditorStateHub {
         let (timeline, manifest) = self.snapshot()?;
         project_io::save_project_state(root, &timeline, &manifest).map_err(|e| e.to_string())?;
         self.record_in_registry(root);
+        self.install_matte_writer(root.to_path_buf());
         if let Ok(mut current) = self.project_root.lock() {
             *current = Some(root.to_path_buf());
         }

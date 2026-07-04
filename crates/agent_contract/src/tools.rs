@@ -38,6 +38,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         apply_color(),
         apply_effect(),
         create_folder(),
+        create_matte(),
         create_project(),
         delete_folder(),
         delete_media(),
@@ -573,6 +574,26 @@ fn remove_words() -> ToolDefinition {
                     The removed words' own frames always go regardless.",
                 ),
             ),
+        ]),
+    }
+}
+
+fn create_matte() -> ToolDefinition {
+    ToolDefinition {
+        name: "create_matte",
+        description: "Add a solid-colour image (matte) to the media library — a plain colour fill \
+            for backgrounds, lower-thirds, or letterbox bars. `hex` is required (e.g. '#000000'). \
+            `aspectRatio` sets the size: 'Project' (default, matches the timeline) or a fixed ratio \
+            (16:9, 9:16, 1:1, 4:3, 9:14, 2.4:1) fit to the timeline's short edge. Returns the new \
+            mediaRef; place it with add_clips.",
+        input_schema: object_optional(&[
+            ("hex", string("Fill colour as '#RGB' / '#RRGGBB' (required).")),
+            (
+                "aspectRatio",
+                string("Optional: 'Project' (default) or 16:9 / 9:16 / 1:1 / 4:3 / 9:14 / 2.4:1."),
+            ),
+            ("name", string("Optional asset name (default 'Matte').")),
+            ("folderId", string("Optional folder id to place the asset in.")),
         ]),
     }
 }
@@ -1153,8 +1174,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            58,
-            "TDEF-001: 58 tools (57 + remove_words, upstream #160)"
+            59,
+            "TDEF-001: 59 tools (58 + create_matte, upstream #242)"
         );
     }
 
@@ -1183,7 +1204,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 58, "all 58 tool names must be unique");
+        assert_eq!(names.len(), 59, "all 59 tool names must be unique");
     }
 
     #[test]
