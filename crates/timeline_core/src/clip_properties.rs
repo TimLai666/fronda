@@ -73,6 +73,8 @@ pub fn set_clip_properties(
     content: Option<&str>,
     font_name: Option<&str>,
     font_size: Option<f64>,
+    color: Option<core_model::TextRgba>,
+    alignment: Option<core_model::TextAlignment>,
 ) -> PropertyChanges {
     let mut changed: Vec<String> = Vec::new();
 
@@ -147,6 +149,20 @@ pub fn set_clip_properties(
         if let Some(ref mut ts) = clip.text_style {
             ts.font_size = s;
             changed.push("fontSize".into());
+        }
+    }
+    if let Some(c) = color {
+        ensure_text_style(clip);
+        if let Some(ref mut ts) = clip.text_style {
+            ts.color = c;
+            changed.push("color".into());
+        }
+    }
+    if let Some(a) = alignment {
+        ensure_text_style(clip);
+        if let Some(ref mut ts) = clip.text_style {
+            ts.alignment = a;
+            changed.push("alignment".into());
         }
     }
 
@@ -386,6 +402,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         );
         assert_eq!(clip.duration_frames, 50);
         assert!(result.changed.contains(&"durationFrames".to_string()));
@@ -402,6 +420,8 @@ mod tests {
             None,
             None,
             Some(2.0),
+            None,
+            None,
             None,
             None,
             None,
@@ -438,6 +458,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         );
         assert_eq!(clip.volume, 0.8);
         assert!(clip.volume_track.is_none());
@@ -468,6 +490,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         );
         assert_eq!(clip.transform.center_x, 0.7);
         assert_eq!(clip.transform.width, 0.8);
@@ -494,6 +518,8 @@ mod tests {
             Some("Hello"),
             Some("Helvetica"),
             Some(48.0),
+            None,
+            None,
         );
         assert_eq!(clip.text_content.as_deref(), Some("Hello"));
         assert_eq!(

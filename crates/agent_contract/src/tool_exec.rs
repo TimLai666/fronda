@@ -755,6 +755,18 @@ impl ToolExecutor {
         let content = properties.get("content").and_then(|v| v.as_str());
         let font_name = properties.get("fontName").and_then(|v| v.as_str());
         let font_size = properties.get("fontSize").and_then(|v| v.as_f64());
+        let color = match properties.get("color").and_then(|v| v.as_str()) {
+            Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+                format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
+            })?),
+            None => None,
+        };
+        let alignment = match properties.get("alignment").and_then(|v| v.as_str()) {
+            Some(a) => Some(core_model::TextAlignment::from_name(a).ok_or_else(|| {
+                format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
+            })?),
+            None => None,
+        };
 
         let transform = properties
             .get("transform")
@@ -787,6 +799,8 @@ impl ToolExecutor {
                 content,
                 font_name,
                 font_size,
+                color,
+                alignment,
             );
             changed_count += 1;
             if changed_fields.is_empty() {
@@ -4544,6 +4558,43 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("Unknown keyframe property"));
+    }
+
+    #[test]
+    fn set_clip_properties_sets_text_color_and_alignment() {
+        let mut exec = executor_with_clip();
+        exec.execute(
+            "set_clip_properties",
+            &json!({"clipIds": ["c"], "properties": {"color": "#FF0000", "alignment": "center"}}),
+        )
+        .unwrap();
+        let ts = only_clip(&exec).text_style.as_ref().expect("text style created");
+        assert_eq!((ts.color.r, ts.color.g, ts.color.b), (1.0, 0.0, 0.0));
+        assert_eq!(ts.alignment, core_model::TextAlignment::Center);
+    }
+
+    #[test]
+    fn set_clip_properties_rejects_bad_color() {
+        let mut exec = executor_with_clip();
+        let err = exec
+            .execute(
+                "set_clip_properties",
+                &json!({"clipIds": ["c"], "properties": {"color": "not-a-color"}}),
+            )
+            .unwrap_err();
+        assert!(err.contains("invalid color"), "got: {err}");
+    }
+
+    #[test]
+    fn set_clip_properties_rejects_bad_alignment() {
+        let mut exec = executor_with_clip();
+        let err = exec
+            .execute(
+                "set_clip_properties",
+                &json!({"clipIds": ["c"], "properties": {"alignment": "middle"}}),
+            )
+            .unwrap_err();
+        assert!(err.contains("invalid alignment"), "got: {err}");
     }
 
     #[test]

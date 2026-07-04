@@ -516,17 +516,22 @@ fn search_media() -> ToolDefinition {
 fn set_clip_properties() -> ToolDefinition {
     ToolDefinition {
         name: "set_clip_properties",
-        description: "Set properties on one or more clips. \
-            For text/caption clips, supports: text, fontSize, fontName, fontWeight (400=regular/700=bold), \
-            textAlignment, textColor (#RRGGBB), \
-            textBackground ({enabled: bool, color: #RRGGBB}) for caption background fill (Issue #18), \
-            textBorder ({enabled: bool, color: #RRGGBB}) for caption border/stroke (Issue #18). \
-            For all clips: speed, volume, opacity, trimStart, trimEnd, transform, crop.",
+        description: "Apply property values to one or more clips in a single undoable \
+            action. `properties` is an object; pass any combination of: \
+            durationFrames, trimStartFrame, trimEndFrame, speed, volume (0-1), \
+            opacity (0-1), transform ({centerX, centerY, width, height, rotation, \
+            flipHorizontal, flipVertical} — partial merge, 0-1 normalized canvas \
+            coords). For text clips only: content (string), fontName, fontSize, \
+            color ('#RGB' / '#RRGGBB' / '#RRGGBBAA'), alignment ('left' / 'center' / \
+            'right'). Setting volume or opacity here clears any keyframe track on \
+            that property.",
         input_schema: object(&[
             ("clipIds", array("Clip ids to modify")),
             (
                 "properties",
-                object_any("Properties to set (transform, crop, speed, textBackground, textBorder, etc.)"),
+                object_any(
+                    "Properties to set: durationFrames, trimStartFrame, trimEndFrame, speed, volume, opacity, transform, and (text clips) content, fontName, fontSize, color, alignment",
+                ),
             ),
         ]),
     }

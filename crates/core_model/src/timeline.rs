@@ -393,6 +393,18 @@ pub enum TextAlignment {
     Right,
 }
 
+impl TextAlignment {
+    /// Parse `"left"`, `"center"`, or `"right"` (the agent/serde wire form).
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "left" => Some(Self::Left),
+            "center" => Some(Self::Center),
+            "right" => Some(Self::Right),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TextRgba {
     #[serde(default = "default_one_f64")]
@@ -412,6 +424,47 @@ impl Default for TextRgba {
             g: 1.0,
             b: 1.0,
             a: 1.0,
+        }
+    }
+}
+
+impl TextRgba {
+    /// Parse `#RGB`, `#RRGGBB`, or `#RRGGBBAA` (leading `#` optional) into
+    /// normalized 0..1 components. Mirrors Swift `TextStyle.RGBA(hex:)`; returns
+    /// `None` for any other length or non-hex digit.
+    pub fn from_hex(hex: &str) -> Option<Self> {
+        let s = hex.trim();
+        let s = s.strip_prefix('#').unwrap_or(s);
+        let chars: Vec<char> = s.chars().collect();
+        let comp = |start: usize, len: usize| -> Option<f64> {
+            let slice: String = chars[start..start + len].iter().collect();
+            let byte_str = if len == 1 {
+                format!("{slice}{slice}")
+            } else {
+                slice
+            };
+            u8::from_str_radix(&byte_str, 16).ok().map(|n| n as f64 / 255.0)
+        };
+        match chars.len() {
+            3 => Some(Self {
+                r: comp(0, 1)?,
+                g: comp(1, 1)?,
+                b: comp(2, 1)?,
+                a: 1.0,
+            }),
+            6 => Some(Self {
+                r: comp(0, 2)?,
+                g: comp(2, 2)?,
+                b: comp(4, 2)?,
+                a: 1.0,
+            }),
+            8 => Some(Self {
+                r: comp(0, 2)?,
+                g: comp(2, 2)?,
+                b: comp(4, 2)?,
+                a: comp(6, 2)?,
+            }),
+            _ => None,
         }
     }
 }
@@ -740,6 +793,34 @@ mod tests {
         assert_eq!(t.center_x, 0.25);
         assert_eq!(t.center_y, 0.25);
         assert_eq!(t.top_left(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn text_rgba_from_hex_forms() {
+        // 6-digit, leading # optional, case-insensitive; alpha defaults to 1.
+        let c = TextRgba::from_hex("#FF8000").unwrap();
+        assert!((c.r - 1.0).abs() < 1e-9);
+        assert!((c.g - 128.0 / 255.0).abs() < 1e-9);
+        assert!((c.b - 0.0).abs() < 1e-9);
+        assert_eq!(c.a, 1.0);
+        assert_eq!(TextRgba::from_hex("ff8000"), TextRgba::from_hex("#FF8000"));
+        // 8-digit carries alpha.
+        let ca = TextRgba::from_hex("#00000080").unwrap();
+        assert!((ca.a - 128.0 / 255.0).abs() < 1e-9);
+        // 3-digit shorthand doubles each nibble (#f00 → red).
+        let short = TextRgba::from_hex("#f00").unwrap();
+        assert_eq!((short.r, short.g, short.b), (1.0, 0.0, 0.0));
+        // Invalid lengths / digits reject.
+        assert!(TextRgba::from_hex("#12345").is_none());
+        assert!(TextRgba::from_hex("#GG0000").is_none());
+    }
+
+    #[test]
+    fn text_alignment_from_name() {
+        assert_eq!(TextAlignment::from_name("left"), Some(TextAlignment::Left));
+        assert_eq!(TextAlignment::from_name("center"), Some(TextAlignment::Center));
+        assert_eq!(TextAlignment::from_name("right"), Some(TextAlignment::Right));
+        assert_eq!(TextAlignment::from_name("middle"), None);
     }
 
     #[test]
