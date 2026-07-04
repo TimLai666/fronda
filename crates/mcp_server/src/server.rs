@@ -98,6 +98,7 @@ impl McpServer {
 
     /// Start the server (blocking). Call in a background thread.
     pub fn start(&self) -> Result<(), String> {
+        self.config.validate()?;
         let addr = format!("{}:{}", self.config.host, self.config.port);
         let listener =
             TcpListener::bind(&addr).map_err(|e| format!("Failed to bind to {addr}: {e}"))?;
@@ -105,6 +106,7 @@ impl McpServer {
             listener,
             self.config.server_name.clone(),
             self.config.server_version.clone(),
+            self.config.auth_token.clone(),
             Arc::clone(&self.executor),
             Arc::new(AtomicBool::new(false)),
         );
@@ -114,6 +116,7 @@ impl McpServer {
     /// Bind and serve on a background thread, returning a handle that can stop
     /// the server. Bind errors are returned synchronously.
     pub fn spawn(self) -> Result<McpServerHandle, String> {
+        self.config.validate()?;
         let addr = format!("{}:{}", self.config.host, self.config.port);
         let listener =
             TcpListener::bind(&addr).map_err(|e| format!("Failed to bind to {addr}: {e}"))?;
@@ -125,9 +128,10 @@ impl McpServer {
         let loop_shutdown = Arc::clone(&shutdown);
         let name = self.config.server_name.clone();
         let version = self.config.server_version.clone();
+        let auth_token = self.config.auth_token.clone();
         let executor = Arc::clone(&self.executor);
         let thread = thread::spawn(move || {
-            run_accept_loop(listener, name, version, executor, loop_shutdown);
+            run_accept_loop(listener, name, version, auth_token, executor, loop_shutdown);
         });
 
         Ok(McpServerHandle {
@@ -172,6 +176,7 @@ fn run_accept_loop(
     listener: TcpListener,
     server_name: String,
     server_version: String,
+    auth_token: Option<String>,
     executor: Arc<Mutex<ToolExecutor>>,
     shutdown: Arc<AtomicBool>,
 ) {
@@ -183,9 +188,10 @@ fn run_accept_loop(
             Ok(stream) => {
                 let name = server_name.clone();
                 let version = server_version.clone();
+                let auth_token = auth_token.clone();
                 let executor = Arc::clone(&executor);
                 thread::spawn(move || {
-                    handle_connection(stream, &name, &version, &executor);
+                    handle_connection(stream, &name, &version, auth_token.as_deref(), &executor);
                 });
             }
             Err(e) => {
@@ -199,6 +205,7 @@ fn handle_connection(
     mut stream: TcpStream,
     server_name: &str,
     server_version: &str,
+    auth_token: Option<&str>,
     executor: &Arc<Mutex<ToolExecutor>>,
 ) {
     let mut buf = [0u8; 8192];
@@ -208,6 +215,19 @@ fn handle_connection(
     };
 
     let request = String::from_utf8_lossy(&buf[..n]);
+
+    // Issue #122: when a token is configured, reject any request lacking a matching
+    // `Authorization: Bearer <token>` BEFORE doing any work — a network-exposed
+    // server must not serve tool calls unauthenticated.
+    if let Some(token) = auth_token {
+        let head = request.split("\r\n\r\n").next().unwrap_or("");
+        if !request_has_bearer(head, token) {
+            let response = build_http_response(401, "application/json", "{\"error\":\"unauthorized\"}");
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            return;
+        }
+    }
 
     // Parse the HTTP request to get the body
     let body = match request.split("\r\n\r\n").nth(1) {
@@ -243,6 +263,39 @@ fn handle_connection(
 
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
+}
+
+/// Constant-time byte comparison (avoids a token-content timing side-channel beyond
+/// the unavoidable length check).
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// True if the HTTP request head carries `Authorization: Bearer <token>` matching
+/// `expected` (header name + scheme case-insensitive; token compared constant-time).
+fn request_has_bearer(head: &str, expected: &str) -> bool {
+    for line in head.split("\r\n").skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("authorization") {
+            let value = value.trim();
+            let mut parts = value.splitn(2, ' ');
+            let scheme = parts.next().unwrap_or("");
+            let tok = parts.next().unwrap_or("").trim();
+            if scheme.eq_ignore_ascii_case("bearer") {
+                return ct_eq(tok.as_bytes(), expected.as_bytes());
+            }
+        }
+    }
+    false
 }
 
 fn handle_json_rpc(
@@ -379,6 +432,7 @@ fn build_http_response(status: u16, content_type: &str, body: &str) -> String {
     let status_line = match status {
         200 => "200 OK",
         400 => "400 Bad Request",
+        401 => "401 Unauthorized",
         404 => "404 Not Found",
         500 => "500 Internal Server Error",
         _ => "200 OK",
@@ -521,6 +575,61 @@ mod tests {
         stream.read_to_string(&mut resp).unwrap();
         let json_body = resp.split("\r\n\r\n").nth(1).unwrap();
         serde_json::from_str(json_body).unwrap()
+    }
+
+    fn http_raw(port: u16, auth: Option<&str>, body: &str) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let auth_header = match auth {
+            Some(t) => format!("Authorization: Bearer {t}\r\n"),
+            None => String::new(),
+        };
+        let req = format!(
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n{auth_header}Content-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(req.as_bytes()).unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        resp
+    }
+
+    #[test]
+    fn issue_122_auth_token_enforced_on_requests() {
+        // Loopback + token → validate() passes AND auth is enforced on every request.
+        let config = McpConfig {
+            port: 0,
+            auth_token: Some("secret-token".into()),
+            ..Default::default()
+        };
+        let executor = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        let handle = McpServer::new(config, executor).spawn().unwrap();
+        let port = handle.port();
+        let call = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_timeline","arguments":{}}}"#;
+
+        let unauth = http_raw(port, None, call);
+        assert!(unauth.starts_with("HTTP/1.1 401"), "missing token → 401: {}", unauth.lines().next().unwrap_or(""));
+        let wrong = http_raw(port, Some("nope"), call);
+        assert!(wrong.starts_with("HTTP/1.1 401"), "wrong token → 401");
+        let ok = http_raw(port, Some("secret-token"), call);
+        assert!(ok.starts_with("HTTP/1.1 200"), "correct token → 200: {}", ok.lines().next().unwrap_or(""));
+        assert!(ok.contains("\"result\""), "authorized call returns a result");
+        handle.stop();
+    }
+
+    #[test]
+    fn issue_122_network_bind_without_token_is_rejected_at_spawn() {
+        let config = McpConfig {
+            host: "0.0.0.0".into(),
+            port: 0,
+            auth_token: None,
+            ..Default::default()
+        };
+        let executor = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        assert!(
+            McpServer::new(config, executor).spawn().is_err(),
+            "network bind without a token must be rejected at spawn"
+        );
     }
 
     #[test]

@@ -19,6 +19,10 @@ pub const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(3600);
 struct Entry<T> {
     value: T,
     last_access: Instant,
+    /// Monotonic access counter: a stable secondary LRU key so two entries sharing
+    /// one `last_access` Instant (coarse clock resolution) evict deterministically
+    /// instead of by nondeterministic HashMap iteration order.
+    seq: u64,
 }
 
 /// A bounded, idle-expiring registry of per-session state. Capacity is enforced
@@ -28,6 +32,7 @@ pub struct SessionStore<T> {
     capacity: usize,
     ttl: Duration,
     entries: HashMap<String, Entry<T>>,
+    next_seq: u64,
 }
 
 impl<T> SessionStore<T> {
@@ -36,6 +41,7 @@ impl<T> SessionStore<T> {
             capacity: capacity.max(1),
             ttl,
             entries: HashMap::new(),
+            next_seq: 0,
         }
     }
 
@@ -67,11 +73,14 @@ impl<T> SessionStore<T> {
                 evicted = Some(lru);
             }
         }
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.wrapping_add(1);
         self.entries.insert(
             id,
             Entry {
                 value,
                 last_access: now,
+                seq,
             },
         );
         evicted
@@ -79,8 +88,11 @@ impl<T> SessionStore<T> {
 
     /// Access a session, refreshing its recency. `None` if absent.
     pub fn get(&mut self, id: &str, now: Instant) -> Option<&mut T> {
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.wrapping_add(1);
         let entry = self.entries.get_mut(id)?;
         entry.last_access = now;
+        entry.seq = seq;
         Some(&mut entry.value)
     }
 
@@ -107,7 +119,7 @@ impl<T> SessionStore<T> {
     fn lru_id(&self) -> Option<String> {
         self.entries
             .iter()
-            .min_by_key(|(_, e)| e.last_access)
+            .min_by_key(|(_, e)| (e.last_access, e.seq))
             .map(|(id, _)| id.clone())
     }
 }
@@ -117,7 +129,11 @@ impl<T> SessionStore<T> {
 pub fn parse_session_id(raw_http_request: &str) -> Option<String> {
     let headers = raw_http_request.split("\r\n\r\n").next()?;
     for line in headers.split("\r\n").skip(1) {
-        let (name, value) = line.split_once(':')?;
+        // Skip a colon-less line rather than `?`-aborting the whole scan (which would
+        // miss a valid Mcp-Session-Id header appearing after it).
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
         if name.trim().eq_ignore_ascii_case("mcp-session-id") {
             let v = value.trim();
             if !v.is_empty() {
@@ -160,6 +176,30 @@ mod tests {
         assert!(store.contains("a"));
         assert!(store.contains("c"));
         assert!(!store.contains("b"));
+    }
+
+    #[test]
+    fn lru_tie_break_is_deterministic_on_equal_timestamps() {
+        // Two sessions inserted at the SAME Instant, then "a" is accessed at that same
+        // Instant. On overflow the true LRU ("b") must evict — not a nondeterministic
+        // HashMap pick that could drop the just-accessed "a".
+        let mut store: SessionStore<i32> = SessionStore::new(2, DEFAULT_SESSION_TTL);
+        let now = t0();
+        store.insert("a".into(), 1, now);
+        store.insert("b".into(), 2, now);
+        store.get("a", now); // "a" becomes most-recent by seq; "b" is the LRU
+        let evicted = store.insert("c".into(), 3, now);
+        assert_eq!(evicted.as_deref(), Some("b"), "true LRU evicted on a timestamp tie");
+        assert!(store.contains("a"));
+        assert!(store.contains("c"));
+    }
+
+    #[test]
+    fn parse_session_id_skips_colonless_lines() {
+        // A malformed colon-less header line before the real one must not abort the
+        // scan (the old `?` returned None for the whole request).
+        let raw = "POST /mcp HTTP/1.1\r\nHost: x\r\nMalformedNoColon\r\nMcp-Session-Id: abc123\r\n\r\nbody";
+        assert_eq!(parse_session_id(raw), Some("abc123".to_string()));
     }
 
     #[test]
