@@ -269,7 +269,11 @@ fn spec_generation_workflow_download_failure() {
     };
 
     // Mark one download as failed (GEN-017)
-    GenerationMachine::mark_download_failed(&mut dl, "https://dl.example.com/result0.mp4".into());
+    GenerationMachine::mark_download_failed(
+        &mut dl,
+        "ph-0".into(),
+        "https://dl.example.com/result0.mp4".into(),
+    );
     assert_eq!(dl.failed_downloads.len(), 1);
 
     // Finalize with errors
@@ -279,6 +283,37 @@ fn spec_generation_workflow_download_failure() {
             assert_eq!(s.final_asset_ids.len(), 0);
             assert_eq!(s.pending_download_urls.len(), 1);
             assert!(s.pending_download_urls[0].contains("result0"));
+            assert_eq!(s.failed_placeholder_ids, vec!["ph-0".to_string()]);
+        }
+        other => panic!("expected CompletedWithErrors, got {other:?}"),
+    }
+}
+
+#[test]
+fn finalize_names_the_actually_failed_placeholder_not_the_tail() {
+    // An EARLY download fails and LATER ones succeed. finalize must name the failed
+    // placeholder (ph-0), not a tail-position guess (skip(completed) named ph-2).
+    let mut dl = generation_core::DownloadingState {
+        job_id: "job-early-fail".into(),
+        snapshot: make_snapshot_for_verify(),
+        placeholder_ids: vec!["ph-0".into(), "ph-1".into(), "ph-2".into()],
+        result_urls: vec!["u0".into(), "u1".into(), "u2".into()],
+        completed_downloads: Vec::new(),
+        failed_downloads: Vec::new(),
+        failed_placeholder_ids: Vec::new(),
+    };
+
+    GenerationMachine::mark_download_failed(&mut dl, "ph-0".into(), "u0".into());
+    GenerationMachine::mark_download_complete(&mut dl, "asset-1".into());
+    GenerationMachine::mark_download_complete(&mut dl, "asset-2".into());
+
+    match GenerationMachine::finalize_completed_with_errors(dl) {
+        generation_core::GenerationState::CompletedWithErrors(s) => {
+            assert_eq!(s.failed_placeholder_ids, vec!["ph-0".to_string()]);
+            assert_eq!(
+                s.final_asset_ids,
+                vec!["asset-1".to_string(), "asset-2".to_string()]
+            );
         }
         other => panic!("expected CompletedWithErrors, got {other:?}"),
     }

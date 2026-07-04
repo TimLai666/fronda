@@ -93,6 +93,9 @@ pub struct DownloadingState {
     pub result_urls: Vec<String>,
     pub completed_downloads: Vec<String>,
     pub failed_downloads: Vec<String>,
+    /// Placeholder ids whose download failed, captured per-failure (mirrors Swift's
+    /// placeholder[i] ↔ result_urls[i] pairing) so finalize names the right ones.
+    pub failed_placeholder_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -409,6 +412,7 @@ impl GenerationMachine {
             result_urls,
             completed_downloads: Vec::new(),
             failed_downloads: Vec::new(),
+            failed_placeholder_ids: Vec::new(),
         })
     }
 
@@ -428,8 +432,14 @@ impl GenerationMachine {
         state.completed_downloads.push(asset_id);
     }
 
-    /// GEN-017: Mark download failure with pending retry.
-    pub fn mark_download_failed(state: &mut DownloadingState, url: String) {
+    /// GEN-017: Mark download failure with pending retry. `placeholder_id` is the
+    /// specific placeholder whose download failed (not inferred by position).
+    pub fn mark_download_failed(
+        state: &mut DownloadingState,
+        placeholder_id: String,
+        url: String,
+    ) {
+        state.failed_placeholder_ids.push(placeholder_id);
         state.failed_downloads.push(url);
     }
 
@@ -443,17 +453,13 @@ impl GenerationMachine {
 
     /// Transition: Downloading → CompletedWithErrors (some succeeded, some failed).
     pub fn finalize_completed_with_errors(state: DownloadingState) -> GenerationState {
-        let pending = state.failed_downloads.clone();
-        let failed_ids: Vec<String> = state
-            .placeholder_ids
-            .iter()
-            .skip(state.completed_downloads.len())
-            .cloned()
-            .collect();
+        // Use the placeholders recorded as failed at mark-time — NOT a tail-position
+        // heuristic (`skip(completed_downloads.len())`), which named the wrong
+        // placeholder whenever a failure wasn't strictly last in placeholder order.
         GenerationState::CompletedWithErrors(CompletedWithErrorsState {
             final_asset_ids: state.completed_downloads,
-            failed_placeholder_ids: failed_ids,
-            pending_download_urls: pending,
+            failed_placeholder_ids: state.failed_placeholder_ids,
+            pending_download_urls: state.failed_downloads,
             snapshot: state.snapshot,
         })
     }
@@ -788,13 +794,16 @@ impl UserSettings {
         }
     }
 
-    /// SET-006: Mask API key, keeping only last 4 chars.
+    /// SET-006: Mask API key, keeping only the last 4 chars.
     pub fn mask_api_key(key: &str) -> String {
-        if key.len() <= 4 {
+        // Slice by CHARS, not bytes: `&key[len-4..]` panics when the byte split lands
+        // inside a multi-byte UTF-8 character (and mis-counts chars near one).
+        let char_count = key.chars().count();
+        if char_count <= 4 {
             return key.to_string();
         }
-        let masked_len = key.len() - 4;
-        format!("{}****", &key[masked_len..])
+        let last4: String = key.chars().skip(char_count - 4).collect();
+        format!("{last4}****")
     }
 }
 
@@ -1615,8 +1624,9 @@ mod tests {
             GenerationState::Downloading(s) => s,
             _ => panic!("expected Downloading"),
         };
-        GenerationMachine::mark_download_failed(&mut dl, "url1".into());
+        GenerationMachine::mark_download_failed(&mut dl, "ph-0".into(), "url1".into());
         assert_eq!(dl.failed_downloads.len(), 1);
+        assert_eq!(dl.failed_placeholder_ids, vec!["ph-0".to_string()]);
     }
 
     #[test]

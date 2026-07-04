@@ -11,7 +11,8 @@ pub struct RmsFrame {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyncOffset {
     /// Offset in frames at the project frame rate.
-    /// Positive means reference clip is ahead (reference starts later).
+    /// Positive means the reference is ahead — its signal starts earlier, so the
+    /// target's signal is delayed (starts later).
     pub offset_frames: i64,
     /// Confidence score (0.0 to 1.0). Higher = more confident.
     pub confidence: f64,
@@ -59,7 +60,8 @@ impl AudioSyncCorrelator {
     /// Compute cross-correlation between two RMS envelopes.
     ///
     /// Returns correlation values for each lag from -(reference.len()-1) to (reference.len()-1).
-    /// Positive lag means reference is shifted right (reference starts later).
+    /// Positive lag means the target's signal is shifted right (target delayed) — the
+    /// reference is ahead / starts earlier (see the shifted-signal test).
     ///
     /// Uses the Pearson correlation coefficient computed per-lag over the
     /// overlapping portion of the two envelopes.
@@ -77,7 +79,8 @@ impl AudioSyncCorrelator {
         let mut results = Vec::with_capacity(num_lags);
 
         // Lag range: -(m-1) to (n-1)
-        // Positive lag = reference shifted right (target index is ahead)
+        // Positive lag = target's signal delayed; the target is indexed further in
+        // (tgt_start = lag), so the reference is ahead / starts earlier.
         for lag in -(m as i64 - 1)..=(n as i64 - 1) {
             let ref_start = 0.max(-lag) as usize;
             let tgt_start = 0.max(lag) as usize;

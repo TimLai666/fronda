@@ -247,11 +247,12 @@ impl AudioGenerationPayload {
     ) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
-        if self.prompt.len() < min_prompt_length {
-            errors.push(format!(
-                "Prompt too short ({} < {min_prompt_length})",
-                self.prompt.len()
-            ));
+        // Swift compares the whitespace-trimmed character count; prompt.len() (UTF-8
+        // byte length, untrimmed) over-counts non-ASCII and padded prompts (e.g.
+        // "café" is 5 bytes but 4 characters).
+        let prompt_len = self.prompt.trim().chars().count();
+        if prompt_len < min_prompt_length {
+            errors.push(format!("Prompt too short ({prompt_len} < {min_prompt_length})"));
         }
         if let Some(ref voice) = self.voice {
             if !supported_voices.is_empty() && !supported_voices.contains(&voice.as_str()) {
@@ -259,12 +260,12 @@ impl AudioGenerationPayload {
             }
         }
         if let Some(dur) = self.duration_seconds {
-            if !supported_durations.is_empty()
-                && !supported_durations.contains(&dur)
-                && !(AUDIO_MIN_SECONDS..=AUDIO_MAX_SECONDS).contains(&dur)
-            {
+            // A duration not in the model's supported list is unsupported, matching
+            // the sibling video check and Swift AudioModelConfig.validate — do NOT
+            // also accept it just because it falls in the global [1,900] span range.
+            if !supported_durations.is_empty() && !supported_durations.contains(&dur) {
                 errors.push(format!(
-                    "Duration {dur}s outside [{AUDIO_MIN_SECONDS}, {AUDIO_MAX_SECONDS}]"
+                    "unsupportedValue: duration {dur}s not in {supported_durations:?}"
                 ));
             }
         }
@@ -598,6 +599,41 @@ mod tests {
         };
         let result = p.validate(5, &[], &[]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn audio_validation_rejects_duration_not_in_supported_list() {
+        // 45s is inside the global [1,900] span but NOT in the model's supported list;
+        // it must still be rejected (matching the video check and Swift).
+        let make = |dur: f64| AudioGenerationPayload {
+            prompt: "a valid prompt".into(),
+            voice: None,
+            lyrics: None,
+            style_instructions: None,
+            instrumental: false,
+            duration_seconds: Some(dur),
+            video_url: None,
+        };
+        assert!(make(45.0).validate(1, &[], &[30.0, 60.0]).is_err());
+        assert!(make(60.0).validate(1, &[], &[30.0, 60.0]).is_ok());
+    }
+
+    #[test]
+    fn audio_validation_prompt_length_is_trimmed_char_count() {
+        let make = |prompt: &str| AudioGenerationPayload {
+            prompt: prompt.into(),
+            voice: None,
+            lyrics: None,
+            style_instructions: None,
+            instrumental: false,
+            duration_seconds: None,
+            video_url: None,
+        };
+        // "café" is 4 characters (5 UTF-8 bytes) → too short at min 5 (byte len passed).
+        assert!(make("café").validate(5, &[], &[]).is_err());
+        // Whitespace is trimmed before counting: "  abcd  " → "abcd" (4) < 5.
+        assert!(make("  abcd  ").validate(5, &[], &[]).is_err());
+        assert!(make("abcde").validate(5, &[], &[]).is_ok());
     }
 
     // GPAY-015
