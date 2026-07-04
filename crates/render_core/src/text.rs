@@ -146,22 +146,40 @@ pub fn render_text(
         }
     };
 
-    // Caption background pill behind the text block (Issue #18). Corner rounding
-    // is a follow-up; padding is honoured.
+    // Caption background pill behind the text block (Issue #18): padded rect with
+    // optional rounded corners (radius scaled to the reference like the font).
     if style.background.enabled {
-        let pad = style.background.padding.unwrap_or(0.0) as f32;
+        let pad = style.background.padding.unwrap_or(0.0) as f32 * canvas_scale;
         let bg = [
             (style.background.color.r * 255.0).round().clamp(0.0, 255.0) as u8,
             (style.background.color.g * 255.0).round().clamp(0.0, 255.0) as u8,
             (style.background.color.b * 255.0).round().clamp(0.0, 255.0) as u8,
         ];
         let ba = style.background.color.a.clamp(0.0, 1.0) as f32;
-        let x0 = (center_x - max_width / 2.0 - pad).floor().max(0.0) as usize;
-        let x1 = ((center_x + max_width / 2.0 + pad).ceil().max(0.0) as usize).min(cw);
-        let y0 = (block_top - pad).floor().max(0.0) as usize;
-        let y1 = ((block_bottom + pad).ceil().max(0.0) as usize).min(ch);
+        let fx0 = center_x - max_width / 2.0 - pad;
+        let fx1 = center_x + max_width / 2.0 + pad;
+        let fy0 = block_top - pad;
+        let fy1 = block_bottom + pad;
+        let x0 = fx0.floor().max(0.0) as usize;
+        let x1 = (fx1.ceil().max(0.0) as usize).min(cw);
+        let y0 = fy0.floor().max(0.0) as usize;
+        let y1 = (fy1.ceil().max(0.0) as usize).min(ch);
+        // Clamp the radius to half the smaller side.
+        let radius = (style.background.corner_radius.unwrap_or(0.0) as f32 * canvas_scale)
+            .min(((fx1 - fx0).min(fy1 - fy0)) / 2.0)
+            .max(0.0);
         for y in y0..y1 {
             for x in x0..x1 {
+                if radius > 0.5 {
+                    let px = x as f32 + 0.5;
+                    let py = y as f32 + 0.5;
+                    // Distance outside the inset rounded region's corner circles.
+                    let dx = (fx0 + radius - px).max(px - (fx1 - radius)).max(0.0);
+                    let dy = (fy0 + radius - py).max(py - (fy1 - radius)).max(0.0);
+                    if dx * dx + dy * dy > radius * radius {
+                        continue;
+                    }
+                }
                 blend_over(&mut img, x, y, bg, ba);
             }
         }
@@ -306,6 +324,16 @@ mod tests {
             .filter(|p| p[3] > 200 && p[2] > p[0] && p[2] > p[1])
             .count();
         assert!(blue > 200, "background rect painted, got {blue}");
+
+        // With a large corner radius, the extreme corners are clipped away.
+        s.background.corner_radius = Some(40.0);
+        let rounded = render_text("Hi", &s, 400, 1080, 0.5, 0.5);
+        let rounded_blue = rounded
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| p[3] > 200 && p[2] > p[0] && p[2] > p[1])
+            .count();
+        assert!(rounded_blue < blue, "rounded corners remove some fill");
     }
 
     #[test]
