@@ -10,12 +10,13 @@
 //!
 //! Deliberately out of scope for v1 (tracked as follow-ups):
 //! - retime / compound `<ref-clip>` wrapping (#197)
-//! - A/V asset dedup + linked-audio collapse (#206)
 //! - FCP/Resolve format naming + colorspace (#214)
 //! - source timecode (#247)
 //! - per-target transform/crop/blend calibration (#254)
+//!
+//! Done since v1: per-asset formats + A/V linked-audio collapse (#206).
 
-use core_model::{ClipType, MediaManifest, MediaSource, Timeline};
+use core_model::{Clip, ClipType, MediaManifest, MediaSource, Timeline};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -153,12 +154,18 @@ impl FcpxmlExport {
         )
         .ok();
 
+        // A synced A/V pair (same source, timing, trim, speed) collapses into the
+        // single video asset-clip — the asset already carries audio — so the audio
+        // partner is dropped (upstream #206/#254).
+        let redundant_audio = redundant_audio_clip_ids(timeline);
+
         for (ti, track) in timeline.tracks.iter().enumerate() {
             let lane = lane_of_track[ti];
             for clip in &track.clips {
                 if clip.media_ref.is_empty()
                     || clip.media_type == ClipType::Text
                     || clip.media_type == ClipType::Shape
+                    || redundant_audio.contains(&clip.id)
                 {
                     continue;
                 }
@@ -209,6 +216,44 @@ impl FcpxmlExport {
 /// Emit an `<asset>`. `format_ref` is the asset's own per-asset format id when
 /// it has one; visual assets without one fall back to the sequence format `r1`,
 /// and audio-only assets carry no `format` attribute.
+/// Ids of audio clips that are the redundant partner of a synced A/V pair — the
+/// linked video's asset-clip already covers the audio, so the audio clip is dropped
+/// on export (upstream #206/#254). A pair collapses only when its group holds exactly
+/// one video/image and one audio that share source, placement, trim, and speed.
+fn redundant_audio_clip_ids(timeline: &Timeline) -> std::collections::HashSet<String> {
+    let mut by_group: std::collections::HashMap<&str, (Vec<&Clip>, Vec<&Clip>)> =
+        std::collections::HashMap::new();
+    for track in &timeline.tracks {
+        for clip in &track.clips {
+            let Some(group) = clip.link_group_id.as_deref() else {
+                continue;
+            };
+            let bucket = by_group.entry(group).or_default();
+            match clip.media_type {
+                ClipType::Video | ClipType::Image => bucket.0.push(clip),
+                ClipType::Audio => bucket.1.push(clip),
+                _ => {}
+            }
+        }
+    }
+    let mut redundant = std::collections::HashSet::new();
+    for (videos, audios) in by_group.into_values() {
+        if videos.len() != 1 || audios.len() != 1 {
+            continue;
+        }
+        let (v, a) = (videos[0], audios[0]);
+        if v.media_ref == a.media_ref
+            && v.start_frame == a.start_frame
+            && v.duration_frames == a.duration_frames
+            && v.trim_start_frame == a.trim_start_frame
+            && (v.speed - a.speed).abs() < 0.0001
+        {
+            redundant.insert(a.id.clone());
+        }
+    }
+    redundant
+}
+
 fn write_asset(
     xml: &mut String,
     id: &str,
@@ -541,6 +586,56 @@ mod tests {
         assert!(
             !audio_line.contains("format="),
             "audio clip omits the video format attribute: {audio_line}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_collapses_synced_av_pair_dropping_the_audio_partner() {
+        // A video and its linked audio from the SAME source, same timing/trim/speed,
+        // collapse into the single video asset-clip; the audio partner is not emitted.
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let mut vclip = clip("cv", "v1", ClipType::Video, 0, 60);
+        vclip.link_group_id = Some("g1".into());
+        let mut aclip = clip("ca", "v1", ClipType::Audio, 0, 60);
+        aclip.link_group_id = Some("g1".into());
+        let tl = timeline(vec![
+            track(ClipType::Video, vec![vclip]),
+            track(ClipType::Audio, vec![aclip]),
+        ]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert_eq!(
+            xml.matches("<asset-clip").count(),
+            1,
+            "audio partner collapsed into the video asset-clip:\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_does_not_collapse_pair_from_different_sources() {
+        // Linked, but from DIFFERENT sources → both asset-clips are emitted.
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest
+            .entries
+            .push(entry("a1", "music.wav", ClipType::Audio, 10.0, "/media/music.wav"));
+        let mut vclip = clip("cv", "v1", ClipType::Video, 0, 60);
+        vclip.link_group_id = Some("g1".into());
+        let mut aclip = clip("ca", "a1", ClipType::Audio, 0, 60);
+        aclip.link_group_id = Some("g1".into());
+        let tl = timeline(vec![
+            track(ClipType::Video, vec![vclip]),
+            track(ClipType::Audio, vec![aclip]),
+        ]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert_eq!(
+            xml.matches("<asset-clip").count(),
+            2,
+            "different sources are not collapsed:\n{xml}"
         );
     }
 
