@@ -150,9 +150,11 @@ pub fn export_project_with_audio(
     width: u32,
     height: u32,
     codec: crate::video_export::VideoCodec,
+    progress: &std::sync::atomic::AtomicU64,
 ) -> Result<(), String> {
     use crate::video_export::{source_time_seconds, Mp4Encoder, SourceDecoder};
     use render_core::compositor::compose_frame;
+    use std::sync::atomic::Ordering;
     use timeline_core::TimelineMathExt;
 
     let total = timeline.total_frames();
@@ -190,11 +192,15 @@ pub fn export_project_with_audio(
                 .frame_at_seconds(source_time_seconds(clip, frame, fps))
         });
         enc.write_frame(&img)?;
+        // Report video progress as 0..=95%; the trailing 5% covers audio + mux.
+        progress.store(((frame + 1) as u64 * 95 / total as u64).min(95), Ordering::Relaxed);
     }
     if has_audio {
         enc.write_audio(&mixed)?;
     }
-    enc.finish()
+    let result = enc.finish();
+    progress.store(100, Ordering::Relaxed);
+    result
 }
 
 /// Mix every audio-bearing clip of `timeline` and write a WAV stem to `out`.
@@ -419,6 +425,7 @@ mod tests {
         };
 
         let out = dir.join("out.mp4");
+        let progress = std::sync::atomic::AtomicU64::new(0);
         export_project_with_audio(
             &timeline,
             &manifest,
@@ -427,8 +434,10 @@ mod tests {
             64,
             48,
             crate::video_export::VideoCodec::H264,
+            &progress,
         )
         .expect("av export");
+        assert_eq!(progress.load(std::sync::atomic::Ordering::Relaxed), 100, "progress completes");
         assert!(std::fs::metadata(&out).unwrap().len() > 0);
         assert!(decode_audio_pcm(&out, 48_000, 2).is_some_and(|p| !p.is_empty()));
         assert!(crate::video_export::decode_frame_rgba(&out, 0.0).is_some());

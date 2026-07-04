@@ -700,6 +700,34 @@ impl Render for ExportView {
                                             view.model.start();
                                             cx.notify();
                                         });
+                                        // Shared progress (0..=100) the encoder
+                                        // updates; a ticker mirrors it to the UI.
+                                        let progress = std::sync::Arc::new(
+                                            std::sync::atomic::AtomicU64::new(0),
+                                        );
+                                        let prog_tick = progress.clone();
+                                        let ticker_this = this.clone();
+                                        cx.spawn(async move |cx| loop {
+                                            cx.background_executor()
+                                                .timer(std::time::Duration::from_millis(150))
+                                                .await;
+                                            let p = prog_tick
+                                                .load(std::sync::atomic::Ordering::Relaxed)
+                                                as f64
+                                                / 100.0;
+                                            let running = ticker_this
+                                                .update(cx, |view, cx| {
+                                                    view.model.panel.update_progress(p, None);
+                                                    cx.notify();
+                                                    view.model.panel.stage
+                                                        == generation_core::export_panel::ExportStage::Exporting
+                                                })
+                                                .unwrap_or(false);
+                                            if !running {
+                                                break;
+                                            }
+                                        })
+                                        .detach();
                                         let (timeline, manifest, root) = {
                                             let hub =
                                                 crate::editor_state_hub::EditorStateHub::global();
@@ -715,6 +743,7 @@ impl Render for ExportView {
                                             )
                                         };
                                         let out = path.clone();
+                                        let prog_enc = progress.clone();
                                         let result = cx
                                             .background_executor()
                                             .spawn(async move {
@@ -723,7 +752,7 @@ impl Render for ExportView {
                                                 let h = size.height.max(2) as u32;
                                                 crate::audio_export::export_project_with_audio(
                                                     &timeline, &manifest, &root, &out, w, h,
-                                                    video_codec,
+                                                    video_codec, &prog_enc,
                                                 )
                                                 .map(|()| out.clone())
                                             })
