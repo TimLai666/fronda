@@ -16,7 +16,7 @@
 //!
 //! Done since v1: per-asset formats + A/V linked-audio collapse (#206).
 
-use core_model::{Clip, ClipType, MediaManifest, MediaSource, Timeline};
+use core_model::{Clip, ClipType, MediaManifest, MediaManifestEntry, MediaSource, Timeline};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -190,13 +190,18 @@ impl FcpxmlExport {
                         .unwrap_or("r1");
                     format!(" format=\"{fid}\"")
                 };
+                // #247: the in-point reads from the asset's timecode origin, so the source
+                // frame is offset by the asset's embedded start timecode. (No retiming in this
+                // exporter, so origin lands directly on `start`; a retimed clip would carry it
+                // in a timeMap instead.)
+                let origin = start_timecode_frames(manifest.entry_for(&clip.media_ref), fps);
                 writeln!(
                     xml,
                     "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{format_attr}/>",
                     time_str(clip.start_frame, fps),
                     xml_escape(&display_name(manifest, &clip.media_ref)),
                     time_str(clip.duration_frames.max(1), fps),
-                    time_str(clip.trim_start_frame.max(0), fps),
+                    time_str(origin + clip.trim_start_frame.max(0), fps),
                 )
                 .ok();
             }
@@ -284,10 +289,13 @@ fn write_asset(
     } else {
         String::new()
     };
+    // #247: the asset's `start` is its embedded source timecode — FCP/Resolve read it as the
+    // asset's timecode origin, so a non-zero embedded timecode isn't flagged as a mismatch.
+    let tc = time_str(start_timecode_frames(entry, fps), fps);
 
     writeln!(
         xml,
-        "    <asset id=\"{id}\" name=\"{}\" start=\"0s\" duration=\"{}\" hasVideo=\"{}\" hasAudio=\"{}\"{format_attr}>",
+        "    <asset id=\"{id}\" name=\"{}\" start=\"{tc}\" duration=\"{}\" hasVideo=\"{}\" hasAudio=\"{}\"{format_attr}>",
         xml_escape(&name),
         time_str(duration_frames, fps),
         if has_video { 1 } else { 0 },
@@ -301,6 +309,18 @@ fn write_asset(
     )
     .ok();
     writeln!(xml, "    </asset>").ok();
+}
+
+/// The asset's embedded start timecode in project-frame units (upstream #247). Cameras often
+/// embed a running timecode, so footage starts non-zero. `frames(atFPS) = round(frame/quanta*fps)`
+/// (the tmcd track's `quanta` may differ from the project fps); 0 when no timecode is recorded.
+fn start_timecode_frames(entry: Option<&MediaManifestEntry>, fps: i64) -> i64 {
+    match entry.and_then(|e| e.source_timecode_frame.zip(e.source_timecode_quanta)) {
+        Some((frame, quanta)) if quanta > 0 => {
+            (frame as f64 / quanta as f64 * fps as f64).round() as i64
+        }
+        _ => 0,
+    }
 }
 
 fn media_src(source: &MediaSource) -> String {
@@ -529,6 +549,58 @@ mod tests {
         assert!(xml.contains("<!DOCTYPE fcpxml>"));
         assert!(xml.contains("<fcpxml version=\"1.10\">"));
         assert!(xml.trim_end().ends_with("</fcpxml>"));
+    }
+
+    #[test]
+    fn fcpxml_no_timecode_asset_start_is_zero() {
+        // #247: an asset without an embedded timecode keeps start="0s" and the in-point is
+        // just the clip's trim (no origin offset).
+        let (tl, m) = sample();
+        let xml = FcpxmlExport::export(&tl, &m);
+        assert!(xml.contains("<asset id=\"r3\" name=\"shot.mp4\" start=\"0s\""), "{xml}");
+    }
+
+    #[test]
+    fn fcpxml_source_timecode_offsets_asset_and_clip_in_point() {
+        // #247: a source with an embedded start timecode emits it as the asset `start`, and the
+        // asset-clip in-point reads from that origin (origin + trim). Camera TC 90 @ quanta 30,
+        // project fps 30 → origin 90 frames; trim 15 → in-point 105.
+        let mut e = entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4");
+        e.source_timecode_frame = Some(90);
+        e.source_timecode_quanta = Some(30);
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(e);
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.trim_start_frame = 15;
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        // Asset carries its embedded timecode origin.
+        assert!(
+            xml.contains("<asset id=\"r3\" name=\"shot.mp4\" start=\"90/30s\""),
+            "asset start = embedded timecode\n{xml}"
+        );
+        // Asset-clip in-point = origin (90) + trim (15) = 105.
+        assert!(
+            xml.contains("start=\"105/30s\""),
+            "asset-clip in-point offset by origin\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_source_timecode_rescales_quanta_to_project_fps() {
+        // quanta differs from project fps: TC frame 48 @ quanta 24, project fps 30 →
+        // round(48/24*30) = 60 frames origin.
+        let mut e = entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4");
+        e.source_timecode_frame = Some(48);
+        e.source_timecode_quanta = Some(24);
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(e);
+        let tl = timeline(vec![track(
+            ClipType::Video,
+            vec![clip("c1", "v1", ClipType::Video, 0, 60)],
+        )]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("start=\"60/30s\""), "quanta rescaled to fps\n{xml}");
     }
 
     #[test]
