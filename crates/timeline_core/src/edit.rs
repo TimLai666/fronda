@@ -336,7 +336,9 @@ pub fn move_clips(
     for mut clip in primary_clips {
         let new_id = Uuid::new_v4().to_string();
         clip.id = new_id.clone();
-        clip.start_frame = dest_start_frame + offset;
+        // Clamp to the frame-0 floor (Swift moveClips uses max(0, toFrame));
+        // the linked-partner path below already clamps, this one did not.
+        clip.start_frame = (dest_start_frame + offset).max(0);
         let duration = clip.duration_frames;
         timeline.tracks[dest_track_index].clips.push(clip);
         placed_ids.push(new_id);
@@ -347,7 +349,15 @@ pub fn move_clips(
     // Phase 5: place linked partners at their delta positions
     let mut partner_tracks: BTreeSet<usize> = BTreeSet::new();
     for (mut clip, track_index, new_start_frame) in linked_partner_clips {
-        clip.start_frame = new_start_frame.max(0);
+        let start = new_start_frame.max(0);
+        clip.start_frame = start;
+        let duration = clip.duration_frames;
+        // Clear the partner's destination region too (CLP-006). Swift clears every
+        // moved clip's destination; the Rust port cleared only the primary track,
+        // leaving a partner to overlap an unrelated clip on its track.
+        if duration > 0 && track_index < timeline.tracks.len() {
+            clear_region(timeline, track_index, start, start + duration, false);
+        }
         timeline.tracks[track_index].clips.push(clip);
         partner_tracks.insert(track_index);
     }
