@@ -173,13 +173,13 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 | #233 | add_clips keeps project fps fixed        | DONE        | agent_contract (source-fps warning)          |
 | #243 | Default agent model → Sonnet 5           | DONE        | app_contract, app_shell_gpui (chat list)     |
 | #189 | Caption phrase timing from word stamps   | DONE (already) | search_core (phrases_from_words)          |
-| #177 | set_project_settings tool + presets      | DONE        | agent_contract (auto-match-on-add deferred)  |
+| #177 | set_project_settings tool + presets      | DONE        | agent_contract (set_project_settings + first-clip auto-detect on add_clips & apply_layout place-new) |
 | #186 | split_clip → split_clips batch           | DONE        | agent_contract (two modes, dedup, A/V)       |
 | #193 | FCPXML export v1 baseline                | DONE (v1)   | render_core (fcpxml_export.rs) + ExportMode::Fcpxml + write_interchange (save dialog writes .xml/.fcpxml); refinements #197/#206/#214/#247/#254 pending |
 | #204 | Window sizing (Home/Settings)           | DONE        | app_shell_gpui window.rs (project maximize-to-screen deferred) |
 | #214 | FCPXML format naming + Rec.709           | DONE        | render_core fcpxml_export.rs (NTSC-aware naming) |
 | #206 | FCPXML per-asset formats (partial)       | PARTIAL     | render_core fcpxml_export.rs: per-asset formats keep source resolution but frameDuration on the PROJECT grid (asset duration + asset-clip in-point now align, no FCP conform-snap); each asset-clip references its own format (audio omits it). Cross-file A/V linked collapse still pending |
-| #226 | apply_layout geometry + placement + tool   | PARTIAL     | core_model video_layout.rs + agent_contract cmd_apply_layout: re-layout mode at full parity (batch clipIds per slot, same-track overlap + coincidence checks); place-new (mediaRef) mode deferred pending project-settings auto-match seam |
+| #226 | apply_layout geometry + placement + tool   | DONE        | core_model video_layout.rs + agent_contract cmd_apply_layout: re-layout mode (batch clipIds, same-track overlap + coincidence checks) AND place-new mode (mediaRef → stacked video track per slot by z-order, clip creation, settings auto-detect) |
 | #199 | Skills: store + read_skill tool + prompt | PARTIAL     | skill_store.rs + agent_contract read_skill/set_skills/prompt inject + boot load; catalog/UI pending |
 | #74  | naturalTimeScale for clip inserts       | DEFERRED    | AVFoundation-specific                        |
 | #119 | Audio syncing multiple tracks           | NOT_STARTED | Swift-only, large feature                    |
