@@ -1381,10 +1381,50 @@ impl ToolExecutor {
         }
 
         let placed_ids = timeline_core::place_clips(&mut self.timeline, track_index, 0, &clips);
+
+        // CLP-007/008: auto-create a linked audio clip for each placed
+        // video-with-audio, on an existing audio track or a freshly created one.
+        // (placed_ids is aligned 1:1 with media_ids/clips by place_clips.)
+        let video_with_audio: Vec<String> = media_ids
+            .iter()
+            .zip(placed_ids.iter())
+            .filter_map(|(mid, pid)| {
+                let e = self.media_manifest.entry_for(mid)?;
+                (e.r#type == ClipType::Video && e.has_audio == Some(true)).then(|| pid.clone())
+            })
+            .collect();
+        let mut linked_audio_count = 0usize;
+        if !video_with_audio.is_empty() {
+            let audio_ti = match self
+                .timeline
+                .tracks
+                .iter()
+                .position(|t| t.r#type == ClipType::Audio)
+            {
+                Some(ti) => ti,
+                None => {
+                    let at = self.timeline.tracks.len();
+                    timeline_core::insert_track_at(&mut self.timeline, at, ClipType::Audio)
+                        .map_err(|_| {
+                            "Failed to create audio track for linked audio".to_string()
+                        })?
+                }
+            };
+            linked_audio_count = timeline_core::link_audio_for_placed_clips(
+                &mut self.timeline,
+                &video_with_audio,
+                audio_ti,
+            )
+            .len();
+        }
+
         let mut text = format!(
             "Added {} clip(s) to track {track_index}: {placed_ids:?}",
             placed_ids.len()
         );
+        if linked_audio_count > 0 {
+            text.push_str(&format!("\n(+{linked_audio_count} linked audio clip(s))"));
+        }
         for warning in &warnings {
             text.push('\n');
             text.push_str(warning);
@@ -3342,6 +3382,55 @@ mod tests {
             exec.timeline().tracks[0].clips.is_empty(),
             "nothing placed on rejection"
         );
+    }
+
+    #[test]
+    fn add_clips_auto_creates_linked_audio_for_video_with_audio() {
+        // CLP-007/008: a video-with-audio placed on a video track auto-creates a
+        // linked audio clip on an audio track (created if needed), sharing a group.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(core_model::MediaManifestEntry {
+            id: "vid".into(),
+            name: "v.mp4".into(),
+            r#type: ClipType::Video,
+            source: core_model::MediaSource::External {
+                absolute_path: "/v.mp4".into(),
+            },
+            duration: 4.0,
+            generation_input: None,
+            source_width: Some(1920),
+            source_height: Some(1080),
+            source_fps: Some(30.0),
+            has_audio: Some(true),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+        });
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+            .unwrap();
+
+        let video = exec.timeline().tracks[0].clips[0].clone();
+        assert!(video.link_group_id.is_some(), "video should be linked");
+        let audio_track = exec
+            .timeline()
+            .tracks
+            .iter()
+            .find(|t| t.r#type == ClipType::Audio)
+            .expect("linked audio track created");
+        assert_eq!(audio_track.clips.len(), 1);
+        let audio = &audio_track.clips[0];
+        assert_eq!(audio.link_group_id, video.link_group_id, "shares link group");
+        assert_eq!(audio.start_frame, video.start_frame);
+        assert_eq!(audio.duration_frames, video.duration_frames);
+        assert!(matches!(audio.media_type, ClipType::Audio));
     }
 
     #[test]
