@@ -235,24 +235,25 @@ mod tests {
 
     #[test]
     fn keyframed_volume_is_baked_per_frame() {
+        // Volume keyframes are dB: -40 dB (≈0.01 linear) ramping to 0 dB (unity).
         let mut clip = audio_clip("c", 0, 3, 1.0);
         clip.volume_track = Some(core_model::KeyframeTrack {
             keyframes: vec![
                 core_model::Keyframe {
                     frame: 0,
-                    value: 0.0,
+                    value: -40.0,
                     interpolation_out: core_model::Interpolation::Linear,
                 },
                 core_model::Keyframe {
                     frame: 2,
-                    value: 1.0,
+                    value: 0.0,
                     interpolation_out: core_model::Interpolation::Linear,
                 },
             ],
         });
         let tl = timeline_with(vec![track("a", false, vec![clip])]);
         let out = mix_timeline_audio(&tl, 30, 1, |_| Some(vec![1.0, 1.0, 1.0]));
-        // Volume ramps 0 → 1 over the clip, so the samples ramp up.
+        // dB ramps up over the clip, so the linear samples ramp up.
         assert!(out[0] < out[1] && out[1] < out[2], "volume automation ramps: {out:?}");
         assert!(out[0] < 0.1, "starts near silent, got {}", out[0]);
     }

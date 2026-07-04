@@ -125,14 +125,19 @@ fn smoothstep(t: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// INS-002 (volume track): Resolve the effective volume at a clip-relative frame.
+/// INS-002 (volume track): Resolve the effective linear volume at a clip-relative
+/// frame, mirroring Swift `Timeline.volumeAt` (minus the fade envelope, which the
+/// audio mixer applies separately).
 ///
-/// When the volume keyframe track is non-empty the interpolated value
-/// replaces the static volume.
+/// Volume keyframe values are **decibels** (the on-disk `.palmier` contract and
+/// the inspector's dB scale). The sampled dB is converted to a linear gain via
+/// [`linear_from_db`] and multiplied by the clip's static `volume` as an outer
+/// linear gain — the keyframe envelope does not replace the static volume, it
+/// scales under it. With no track, the static `volume` is returned unchanged.
 pub fn resolved_volume_at(clip: &Clip, frame: i64) -> f64 {
     match clip.volume_track {
         Some(ref track) if !track.keyframes.is_empty() => {
-            sample_with_fallback(track, frame, clip.volume)
+            clip.volume * linear_from_db(sample_with_fallback(track, frame, 0.0))
         }
         _ => clip.volume,
     }
@@ -688,48 +693,51 @@ mod tests {
         assert!((resolved_volume_at(&clip, 50) - 0.6).abs() < 1e-9);
     }
 
-    // INS-002 (volume track): Exact-frame keyframe value overrides static.
+    // INS-002 (volume track): keyframe values are dB, converted to linear, and the
+    // static volume multiplies as an outer gain (Swift Timeline.volumeAt).
     #[test]
-    fn ins_002_resolved_volume_exact_frame() {
+    fn ins_002_resolved_volume_db_with_static_gain() {
+        let mut clip = make_clip();
+        clip.volume = 0.5; // outer linear gain
+        clip.volume_track = Some(KeyframeTrack {
+            keyframes: vec![
+                Keyframe {
+                    frame: 0,
+                    value: 0.0, // 0 dB = unity
+                    interpolation_out: Interpolation::Linear,
+                },
+                Keyframe {
+                    frame: 100,
+                    value: -6.0, // -6 dB ≈ 0.501 linear
+                    interpolation_out: Interpolation::Linear,
+                },
+            ],
+        });
+        assert!((resolved_volume_at(&clip, 0) - 0.5 * linear_from_db(0.0)).abs() < 1e-9);
+        assert!((resolved_volume_at(&clip, 100) - 0.5 * linear_from_db(-6.0)).abs() < 1e-9);
+    }
+
+    // INS-002 (volume track): interpolation is linear in dB space; the midpoint of
+    // 0 dB → -12 dB is -6 dB.
+    #[test]
+    fn ins_002_resolved_volume_interpolated_midpoint() {
         let mut clip = make_clip();
         clip.volume = 1.0;
         clip.volume_track = Some(KeyframeTrack {
             keyframes: vec![
                 Keyframe {
                     frame: 0,
-                    value: 0.4,
+                    value: 0.0,
                     interpolation_out: Interpolation::Linear,
                 },
                 Keyframe {
                     frame: 100,
-                    value: 1.0,
+                    value: -12.0,
                     interpolation_out: Interpolation::Linear,
                 },
             ],
         });
-        assert!((resolved_volume_at(&clip, 0) - 0.4).abs() < 1e-9);
-        assert!((resolved_volume_at(&clip, 100) - 1.0).abs() < 1e-9);
-    }
-
-    // INS-002 (volume track): Linear interpolation at the midpoint.
-    #[test]
-    fn ins_002_resolved_volume_interpolated_midpoint() {
-        let mut clip = make_clip();
-        clip.volume_track = Some(KeyframeTrack {
-            keyframes: vec![
-                Keyframe {
-                    frame: 0,
-                    value: 0.4,
-                    interpolation_out: Interpolation::Linear,
-                },
-                Keyframe {
-                    frame: 100,
-                    value: 1.0,
-                    interpolation_out: Interpolation::Linear,
-                },
-            ],
-        });
-        assert!((resolved_volume_at(&clip, 50) - 0.7).abs() < 1e-9);
+        assert!((resolved_volume_at(&clip, 50) - linear_from_db(-6.0)).abs() < 1e-9);
     }
 
     // INS-003: Position keyframes store top-left via AnimPair.
