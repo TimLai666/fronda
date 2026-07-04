@@ -282,8 +282,15 @@ fn write_clip(
         return;
     }
 
+    // Human-readable clip/file name (Premiere shows this in the timeline) — the resolved asset
+    // name, not the raw media_ref id. Mirrors Swift `resolver.displayName(for:)`.
+    let display_name = manifest
+        .and_then(|m| m.entry_for(&clip.media_ref))
+        .map(|e| e.name.clone())
+        .unwrap_or_else(|| clip.media_ref.clone());
+
     writeln!(xml, "            <clipitem id=\"{}\">", xml_escape(&clip.id)).ok();
-    writeln!(xml, "              <name>{}</name>", xml_escape(&clip.media_ref)).ok();
+    writeln!(xml, "              <name>{}</name>", xml_escape(&display_name)).ok();
     writeln!(
         xml,
         "              <duration>{}</duration>",
@@ -472,14 +479,11 @@ fn write_clip(
     }
     emitted.insert(file_id.clone());
     let entry = manifest.and_then(|m| m.entry_for(&clip.media_ref));
-    let name = entry
-        .map(|e| e.name.clone())
-        .unwrap_or_else(|| clip.media_ref.clone());
     let pathurl = entry
         .map(|e| media_src(&e.source))
         .unwrap_or_else(|| clip.media_ref.clone());
     writeln!(xml, "              <file id=\"{}\">", xml_escape(&file_id)).ok();
-    writeln!(xml, "                <name>{}</name>", xml_escape(&name)).ok();
+    writeln!(xml, "                <name>{}</name>", xml_escape(&display_name)).ok();
     writeln!(
         xml,
         "                <pathurl>{}</pathurl>",
@@ -705,6 +709,17 @@ mod tests {
         assert!(xml.contains("<name>shot.mp4</name>"));
         // Without a manifest, pathurl falls back to the media_ref (unchanged).
         assert!(XmlExport::export(&timeline).contains("<pathurl>m1</pathurl>"));
+    }
+
+    #[test]
+    fn xml_clipitem_name_is_display_name_not_media_ref_id() {
+        // The clipitem <name> (shown in Premiere's timeline) must be the resolved asset
+        // name, not the raw media_ref id.
+        let timeline = tl_with(vec![mk_clip("c1", "vid-id-123", ClipType::Video, 0)]);
+        let m = manifest_with("vid-id-123", "Interview.mp4", "/media/Interview.mp4");
+        let xml = XmlExport::export_with_manifest(&timeline, &m);
+        assert!(xml.contains("<name>Interview.mp4</name>"), "resolved name\n{xml}");
+        assert!(!xml.contains("<name>vid-id-123</name>"), "id never used as a name\n{xml}");
     }
 
     #[test]
