@@ -218,7 +218,13 @@ pub fn render_text(
             (style.shadow.color.b * 255.0).round().clamp(0.0, 255.0) as u8,
         ];
         let sa = style.shadow.color.a.clamp(0.0, 1.0) as f32;
-        let (ox, oy) = (style.shadow.offset_x as f32, style.shadow.offset_y as f32);
+        // Offset is a 1080-reference quantity like everything else — scale it so the
+        // shadow displacement tracks the glyphs at any export resolution (Swift
+        // TextLayerController scales offsetX/Y by canvas_height / 1080).
+        let (ox, oy) = (
+            style.shadow.offset_x as f32 * canvas_scale,
+            style.shadow.offset_y as f32 * canvas_scale,
+        );
         let blur = (style.shadow.blur as f32 * canvas_scale).round() as usize;
         if blur > 0 {
             // Render + blur the shadow on its own layer, then composite it under.
@@ -241,7 +247,10 @@ pub fn render_text(
             (style.border.color.b * 255.0).round().clamp(0.0, 255.0) as u8,
         ];
         let ba = style.border.color.a.clamp(0.0, 1.0) as f32;
-        let r = style.border.padding.unwrap_or(2.0).max(0.5) as f32;
+        // Stroke width is a 1080-reference quantity — scale it so the outline stays
+        // proportional to the glyphs at higher resolutions (Swift scales borderWidth
+        // by canvas_height / 1080).
+        let r = style.border.padding.unwrap_or(2.0).max(0.5) as f32 * canvas_scale;
         for (ox, oy) in [
             (-r, 0.0),
             (r, 0.0),
@@ -400,5 +409,63 @@ mod tests {
         let two =
             render_text("AA\nAA", &style(120.0, w, TextAlignment::Center), 400, 1080, 0.5, 0.5);
         assert!(any_opaque(&two) > any_opaque(&one), "two lines paint more");
+    }
+
+    // Horizontal span (px) of the opaque region — grows ~2x when every geometric
+    // quantity scales with a 2x canvas.
+    fn opaque_x_span(img: &RgbaImage) -> i32 {
+        let xs: Vec<usize> = (0..img.width)
+            .filter(|&x| (0..img.height).any(|y| img.pixels[(y * img.width + x) * 4 + 3] > 0))
+            .collect();
+        match (xs.first(), xs.last()) {
+            (Some(&lo), Some(&hi)) => (hi - lo) as i32,
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn shadow_offset_scales_with_canvas_resolution() {
+        use core_model::TextShadow;
+        // A big rightward shadow offset dominates the horizontal span. At a 2x canvas
+        // the offset must double with the glyphs, so the span ~doubles; if the offset
+        // stayed fixed the span would grow far less.
+        let w = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let mut s = style(40.0, w, TextAlignment::Center);
+        s.shadow = TextShadow {
+            enabled: true,
+            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+            offset_x: 200.0,
+            offset_y: 0.0,
+            blur: 0.0,
+        };
+        let span1 = opaque_x_span(&render_text("I", &s, 1600, 1080, 0.5, 0.5));
+        let span2 = opaque_x_span(&render_text("I", &s, 1600, 2160, 0.5, 0.5));
+        assert!(span1 > 0 && span2 > 0, "both render");
+        assert!(
+            span2 as f64 >= 1.8 * span1 as f64,
+            "shadow offset must scale with resolution: span1={span1}, span2={span2}"
+        );
+    }
+
+    #[test]
+    fn outline_width_scales_with_canvas_resolution() {
+        use core_model::TextFill;
+        // A thick outline extends the span by its stroke width per side. At a 2x
+        // canvas the stroke must double, so the span ~doubles.
+        let w = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let mut s = style(40.0, w, TextAlignment::Center);
+        s.border = TextFill {
+            enabled: true,
+            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+            padding: Some(100.0),
+            corner_radius: None,
+        };
+        let span1 = opaque_x_span(&render_text("I", &s, 1600, 1080, 0.5, 0.5));
+        let span2 = opaque_x_span(&render_text("I", &s, 1600, 2160, 0.5, 0.5));
+        assert!(span1 > 0 && span2 > 0, "both render");
+        assert!(
+            span2 as f64 >= 1.8 * span1 as f64,
+            "outline width must scale with resolution: span1={span1}, span2={span2}"
+        );
     }
 }

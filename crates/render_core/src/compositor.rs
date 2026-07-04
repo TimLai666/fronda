@@ -450,63 +450,65 @@ pub fn flip_image(img: &RgbaImage, horizontal: bool, vertical: bool) -> RgbaImag
 /// Each is a single-parameter effect; unrecognised or grading effects are left
 /// for a dedicated pass. PR #8 colour-adjustment path.
 pub fn apply_color_adjustments(img: &mut RgbaImage, effects: &[crate::effects::EffectState]) {
-    // Collect the four supported adjustments (last value per type), then apply them
-    // ONCE per pixel in the documented fixed order — accumulating in f64 with a
-    // single final clamp. Applying each op through a u8 round-trip (as before) threw
-    // away out-of-[0,1] intermediates, so e.g. exposure blowing a value past 1.0
-    // then a brightness cut flattened a highlight to mid-gray instead of white.
-    let mut exposure = 0.0f64;
-    let mut contrast = 1.0f64;
-    let mut saturation = 1.0f64;
-    let mut brightness = 0.0f64;
-    let mut any = false;
-    for e in effects {
-        if !e.enabled {
-            continue;
-        }
-        let amount = e.params.values().next().copied();
-        match e.effect_type.as_str() {
-            "color.exposure" => {
-                exposure = amount.unwrap_or(0.0);
-                any = true;
-            }
-            "color.contrast" => {
-                contrast = amount.unwrap_or(1.0);
-                any = true;
-            }
-            "color.saturation" => {
-                saturation = amount.unwrap_or(1.0);
-                any = true;
-            }
-            "color.brightness" => {
-                brightness = amount.unwrap_or(0.0);
-                any = true;
-            }
-            _ => {}
-        }
+    // The effect stack is ORDERED (`effects: Vec<Effect>`), so apply each recognized
+    // adjustment per pixel IN LIST ORDER, accumulating in f64 with a single final
+    // clamp — no mid-pipeline u8 round-trip (which used to throw away out-of-[0,1]
+    // intermediates, e.g. an exposure-blown highlight flattened by a later brightness
+    // cut). Order and multiplicity are preserved: reordering the stack changes the
+    // result, and stacking two of the same adjustment compounds.
+    enum Op {
+        Exposure(f64),
+        Contrast(f64),
+        Saturation(f64),
+        Brightness(f64),
     }
-    if !any {
+    let ops: Vec<Op> = effects
+        .iter()
+        .filter(|e| e.enabled)
+        .filter_map(|e| {
+            let amount = e.params.values().next().copied();
+            match e.effect_type.as_str() {
+                "color.exposure" => Some(Op::Exposure(2f64.powf(amount.unwrap_or(0.0)))),
+                "color.contrast" => Some(Op::Contrast(amount.unwrap_or(1.0))),
+                "color.saturation" => Some(Op::Saturation(amount.unwrap_or(1.0))),
+                "color.brightness" => Some(Op::Brightness(amount.unwrap_or(0.0))),
+                _ => None,
+            }
+        })
+        .collect();
+    if ops.is_empty() {
         return;
     }
-    let m = 2f64.powf(exposure);
     for px in img.pixels.chunks_exact_mut(4) {
         let mut rgb = [
             px[0] as f64 / 255.0,
             px[1] as f64 / 255.0,
             px[2] as f64 / 255.0,
         ];
-        for c in &mut rgb {
-            *c *= m; // exposure
-        }
-        for c in &mut rgb {
-            *c = (*c - 0.5) * contrast + 0.5; // contrast
-        }
-        let luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
-        for c in &mut rgb {
-            *c = luma + (*c - luma) * saturation; // saturation
-        }
-        for c in &mut rgb {
-            *c += brightness; // brightness
+        for op in &ops {
+            match *op {
+                Op::Exposure(m) => {
+                    for c in &mut rgb {
+                        *c *= m;
+                    }
+                }
+                Op::Contrast(k) => {
+                    for c in &mut rgb {
+                        *c = (*c - 0.5) * k + 0.5;
+                    }
+                }
+                Op::Saturation(s) => {
+                    let luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+                    for c in &mut rgb {
+                        *c = luma + (*c - luma) * s;
+                    }
+                }
+                Op::Brightness(b) => {
+                    for c in &mut rgb {
+                        *c += b;
+                    }
+                }
+            }
         }
         for (i, c) in rgb.iter().enumerate() {
             px[i] = (c * 255.0).round().clamp(0.0, 255.0) as u8;
@@ -1451,23 +1453,42 @@ mod tests {
     }
 
     #[test]
-    fn color_adjust_order_is_canonical_not_list_order() {
-        // The documented order (exposure→contrast→saturation→brightness) is applied
-        // regardless of the effect-list order, so reordering the list is a no-op.
-        let run = |effects: &[crate::effects::EffectState]| {
-            let mut img = RgbaImage::solid(1, 1, [100, 150, 200, 255]);
+    fn color_adjust_preserves_stack_order_and_multiplicity() {
+        // The effect stack is ordered, so list order is observable and stacking the
+        // same adjustment compounds (NOT collapsed to a canonical order / last-wins).
+        let run = |effects: &[crate::effects::EffectState], v: u8| {
+            let mut img = RgbaImage::solid(1, 1, [v, v, v, 255]);
             apply_color_adjustments(&mut img, effects);
-            px(&img, 0, 0)
+            px(&img, 0, 0)[0]
         };
-        let a = run(&[
-            color_effect("color.brightness", 0.1),
-            color_effect("color.exposure", 0.5),
-        ]);
-        let b = run(&[
-            color_effect("color.exposure", 0.5),
-            color_effect("color.brightness", 0.1),
-        ]);
-        assert_eq!(a, b, "adjustment order is canonical, not list-order-dependent");
+        let ev12 = (1.2f64).log2(); // exposure ×1.2
+        let a = run(
+            &[
+                color_effect("color.contrast", 1.5),
+                color_effect("color.exposure", ev12),
+            ],
+            100,
+        );
+        let b = run(
+            &[
+                color_effect("color.exposure", ev12),
+                color_effect("color.contrast", 1.5),
+            ],
+            100,
+        );
+        assert_ne!(a, b, "effect order must change the result");
+        // Two ×2 exposures compound to ×4: 32 → 128 (last-wins would give 64).
+        let doubled = run(
+            &[
+                color_effect("color.exposure", 1.0),
+                color_effect("color.exposure", 1.0),
+            ],
+            32,
+        );
+        assert!(
+            (doubled as i32 - 128).abs() <= 1,
+            "stacked exposures compound, got {doubled}"
+        );
     }
 
     #[test]
