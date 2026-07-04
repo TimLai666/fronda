@@ -92,6 +92,14 @@ impl FcpxmlExport {
             }
         }
 
+        // media_ref → its per-asset format id (None = audio-only or video without
+        // dimensions). Lets each asset-clip reference its OWN format instead of
+        // hardcoding the sequence format r1.
+        let format_by_ref: BTreeMap<String, Option<String>> = resources
+            .iter()
+            .map(|(mref, _aid, fid)| (mref.clone(), fid.clone()))
+            .collect();
+
         let mut xml = String::new();
         writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").ok();
         writeln!(xml, "<!DOCTYPE fcpxml>").ok();
@@ -109,7 +117,13 @@ impl FcpxmlExport {
             if let Some(fid) = format_id {
                 let w = entry.and_then(|e| e.source_width).unwrap_or(seq_w).max(1);
                 let h = entry.and_then(|e| e.source_height).unwrap_or(seq_h).max(1);
-                let f = entry.and_then(|e| e.source_fps).unwrap_or(fps as f64);
+                // Keep the source RESOLUTION, but the frameDuration must be the PROJECT
+                // fps, NOT source_fps: the asset <duration> and every asset-clip
+                // <start>/<duration> are emitted on the project-frame grid (the model
+                // conforms sources to the project timebase, like XMEML). A source-fps
+                // frameDuration would leave those times off the asset's own grid and
+                // Final Cut would conform-snap them to the wrong frame.
+                let f = fps as f64;
                 writeln!(
                     xml,
                     "    <format id=\"{fid}\" name=\"{}\" frameDuration=\"{}\" width=\"{w}\" height=\"{h}\" colorSpace=\"1-1-1 (Rec. 709)\"/>",
@@ -151,9 +165,27 @@ impl FcpxmlExport {
                 let Some(ref_id) = asset_ids.get(&clip.media_ref) else {
                     continue;
                 };
+                // Reference the clip's OWN format: an audio-only asset-clip inherits
+                // from its (video-format-less) asset — omit `format`; a video clip
+                // uses its per-asset format, falling back to the sequence format r1
+                // only when it has no dimensions. Hardcoding r1 mislabels a clip's
+                // native size/rate and points audio clips at a video format.
+                let is_audio = manifest
+                    .entry_for(&clip.media_ref)
+                    .map(|e| e.r#type == ClipType::Audio)
+                    .unwrap_or(clip.media_type == ClipType::Audio);
+                let format_attr = if is_audio {
+                    String::new()
+                } else {
+                    let fid = format_by_ref
+                        .get(&clip.media_ref)
+                        .and_then(|o| o.as_deref())
+                        .unwrap_or("r1");
+                    format!(" format=\"{fid}\"")
+                };
                 writeln!(
                     xml,
-                    "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\" format=\"r1\"/>",
+                    "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{format_attr}/>",
                     time_str(clip.start_frame, fps),
                     xml_escape(&display_name(manifest, &clip.media_ref)),
                     time_str(clip.duration_frames.max(1), fps),
@@ -457,6 +489,59 @@ mod tests {
         assert!(xml.contains("<asset id=\"r4\""), "audio asset");
         assert!(xml.contains("src=\"file:///media/shot.mp4\""));
         assert!(xml.contains("hasAudio=\"1\""));
+    }
+
+    #[test]
+    fn fcpxml_asset_format_uses_project_fps_grid_not_source_fps() {
+        // A 24fps 4K source in a 30fps project: the per-asset <format> keeps the 4K
+        // RESOLUTION but must declare the PROJECT frameDuration (1/30s) so the asset
+        // <duration> and asset-clip <start> (both on the project grid) align to it.
+        // A source-fps 1/24s grid would make Final Cut conform-snap those times.
+        let mut e = entry("v24", "shot4k.mp4", ClipType::Video, 0.7, "/media/shot4k.mp4");
+        e.source_width = Some(3840);
+        e.source_height = Some(2160);
+        e.source_fps = Some(24.0);
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(e);
+        let mut c = clip("c1", "v24", ClipType::Video, 0, 21);
+        c.trim_start_frame = 7;
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        let fmt_line = xml
+            .lines()
+            .find(|l| l.contains("<format") && l.contains("width=\"3840\""))
+            .expect("per-asset 4K format present");
+        assert!(
+            fmt_line.contains("frameDuration=\"1/30s\""),
+            "asset format must use the project fps grid: {fmt_line}"
+        );
+        assert!(!xml.contains("1/24s"), "no source-fps grid anywhere:\n{xml}");
+        assert!(xml.contains("start=\"7/30s\""), "in-point on the project grid:\n{xml}");
+    }
+
+    #[test]
+    fn fcpxml_asset_clip_references_own_format_and_omits_for_audio() {
+        // Video asset-clips reference their OWN per-asset format (not the sequence
+        // r1); audio asset-clips omit `format` (their asset has no video format).
+        let (tl, m) = sample();
+        let xml = FcpxmlExport::export(&tl, &m);
+        let video_line = xml
+            .lines()
+            .find(|l| l.contains("<asset-clip") && l.contains("ref=\"r3\""))
+            .expect("video asset-clip present");
+        assert!(
+            video_line.contains("format=\"r2\""),
+            "video clip references its own per-asset format: {video_line}"
+        );
+        let audio_line = xml
+            .lines()
+            .find(|l| l.contains("<asset-clip") && l.contains("ref=\"r4\""))
+            .expect("audio asset-clip present");
+        assert!(
+            !audio_line.contains("format="),
+            "audio clip omits the video format attribute: {audio_line}"
+        );
     }
 
     #[test]

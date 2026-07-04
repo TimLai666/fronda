@@ -19,11 +19,17 @@ pub fn format_timecode(frame: i64, fps: i64, drop_frame: bool) -> String {
     let mut f = frame;
     if drop_frame {
         let drop = ((fps as f64) * 0.066666).round() as i64; // 2 @ 30, 4 @ 60
-        let d = f / (fps * 600);
-        let m = f % (fps * 600);
+        // Drop-adjusted divisors: a real minute holds fps*60 - drop frame labels
+        // (2 dropped) and a 10-minute block fps*600 - 9*drop (9 of 10 minutes drop).
+        // Using the nominal fps*60 / fps*600 here under-counts the added labels and
+        // shifts the SMPTE frame field (e.g. frame 1800@30 → ;00 instead of ;02).
+        let fpm = fps * 60 - drop;
+        let fp10m = fps * 600 - 9 * drop;
+        let d = f / fp10m;
+        let m = f % fp10m;
         f += drop * 9 * d
             + if m > drop {
-                drop * ((m - drop) / (fps * 60))
+                drop * ((m - drop) / fpm)
             } else {
                 0
             };
@@ -218,8 +224,8 @@ fn write_clip(
         return;
     }
 
-    writeln!(xml, "            <clipitem id=\"{}\">", clip.id).ok();
-    writeln!(xml, "              <name>{}</name>", clip.media_ref).ok();
+    writeln!(xml, "            <clipitem id=\"{}\">", xml_escape(&clip.id)).ok();
+    writeln!(xml, "              <name>{}</name>", xml_escape(&clip.media_ref)).ok();
     writeln!(
         xml,
         "              <duration>{}</duration>",
@@ -677,6 +683,19 @@ mod tests {
     }
 
     #[test]
+    fn clipitem_name_is_xml_escaped() {
+        // A media_ref (free-form filename) with XML metacharacters must be escaped in
+        // the clipitem <name>, else the whole sequence is malformed and rejected.
+        let clip = mk_clip("c1", "A&B<take>.mp4", ClipType::Video, 0);
+        let xml = XmlExport::export(&tl_with(vec![clip]));
+        assert!(
+            xml.contains("<name>A&amp;B&lt;take&gt;.mp4</name>"),
+            "clipitem name escaped:\n{xml}"
+        );
+        assert!(!xml.contains("<take>"), "no raw metacharacters leak into the XML");
+    }
+
+    #[test]
     fn xml_001_xmeml_4_format() {
         let xml = XmlExport::export(&sample_timeline());
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
@@ -897,6 +916,18 @@ mod tests {
     fn format_timecode_drop_frame_basic() {
         // 42966 frames at 30 DF = 00;23;53;18
         assert_eq!(format_timecode(42966, 30, true), "00;23;53;18");
+    }
+
+    #[test]
+    fn format_timecode_drop_frame_minute_boundaries() {
+        // Drop-frame skips labels ;00/;01 at each non-tenth minute, so the frame
+        // field jumps at a minute boundary. These fail under nominal (undropped)
+        // divisors — the coincidental 42966 case does not catch that.
+        assert_eq!(format_timecode(1800, 30, true), "00;01;00;02");
+        assert_eq!(format_timecode(3600, 30, true), "00;02;00;04");
+        assert_eq!(format_timecode(3600, 60, true), "00;01;00;04");
+        // The tenth minute does NOT drop, so one real hour reads exactly 01;00;00;00.
+        assert_eq!(format_timecode(107892, 30, true), "01;00;00;00");
     }
 
     #[test]
