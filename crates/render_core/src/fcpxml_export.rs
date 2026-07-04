@@ -205,7 +205,7 @@ impl FcpxmlExport {
                 // Scalar adjustments that round-trip without coordinate calibration: opacity
                 // (<adjust-blend>) and audio volume (<adjust-volume>, in dB). Transform/crop
                 // (coordinate-space sensitive) and keyframed opacity are #254 follow-ups.
-                let adjustments = clip_adjustments(clip, manifest, is_audio);
+                let adjustments = clip_adjustments(clip, manifest, is_audio, seq_w, seq_h);
                 if adjustments.is_empty() {
                     writeln!(xml, "{open}/>").ok();
                 } else {
@@ -332,13 +332,72 @@ fn start_timecode_frames(entry: Option<&MediaManifestEntry>, fps: i64) -> i64 {
     }
 }
 
-/// Scalar clip adjustments as `<asset-clip>` children (upstream #254, scalar subset):
-/// `<adjust-blend amount>` for opacity (visual clips) and `<adjust-volume amount>` in dB for
-/// audio level. These need no coordinate calibration. Transform/crop and keyframed opacity
-/// animation are deferred (they need FCP↔Resolve value calibration). Empty string → none.
-fn clip_adjustments(clip: &Clip, manifest: &MediaManifest, is_audio: bool) -> String {
+/// Clip adjustments as `<asset-clip>` children (upstream #254, Resolve target): geometry
+/// (`<adjust-crop>` + `<adjust-conform type="fit">` + `<adjust-transform>`) then `<adjust-blend>`
+/// (opacity) then `<adjust-volume>` (dB), in Swift's child order. Emitted only when non-default,
+/// so a plain full-frame clip stays self-closing. `conform` is emitted with any geometry so the
+/// fit-relative scale/position stay consistent. Deferred: keyframed transform/opacity animation,
+/// the FCP target's alternate value encoding, and same-aspect/different-resolution auto-fit for
+/// clips with NO explicit transform (they stay native rather than filling the frame).
+fn clip_adjustments(
+    clip: &Clip,
+    manifest: &MediaManifest,
+    is_audio: bool,
+    seq_w: i64,
+    seq_h: i64,
+) -> String {
     let mut out = String::new();
     if !is_audio {
+        let t = &clip.transform;
+        let fit = fit_fractions(clip, manifest, seq_w, seq_h);
+        let base = scale_value(clip, t.width, t.height, fit);
+        let moved = (t.center_x - 0.5).abs() > 0.0005 || (t.center_y - 0.5).abs() > 0.0005;
+        let rotated = t.rotation.abs() > 0.005;
+        let scaled = base != "1 1";
+        let transform_needed = moved || rotated || scaled;
+        let crop_needed = !clip.crop.is_identity();
+
+        if crop_needed {
+            let c = &clip.crop;
+            // Resolve encodes the trim-rect against source pixels fit into the sequence.
+            let (mut lr, mut tb) = (100.0, 100.0);
+            if let Some((sw, sh)) = manifest
+                .entry_for(&clip.media_ref)
+                .and_then(|e| e.source_width.zip(e.source_height))
+            {
+                if sw > 0 && sh > 0 {
+                    let f = (seq_w as f64 / sw as f64).min(seq_h as f64 / sh as f64);
+                    lr = sw as f64 * 100.0 / seq_h as f64;
+                    tb = 100.0 / f;
+                }
+            }
+            let _ = writeln!(out, "                <adjust-crop mode=\"trim\">");
+            let _ = writeln!(
+                out,
+                "                  <trim-rect top=\"{}\" right=\"{}\" bottom=\"{}\" left=\"{}\"/>",
+                format_number(c.top * tb),
+                format_number(c.right * lr),
+                format_number(c.bottom * tb),
+                format_number(c.left * lr)
+            );
+            let _ = writeln!(out, "                </adjust-crop>");
+        }
+        if crop_needed || transform_needed {
+            out.push_str("                <adjust-conform type=\"fit\"/>\n");
+        }
+        if transform_needed {
+            let mut attrs = format!(" scale=\"{base}\"");
+            if rotated {
+                // FCP rotation is the negation of the model's clockwise rotation.
+                attrs.push_str(&format!(" rotation=\"{}\"", format_number(-t.rotation)));
+            }
+            attrs.push_str(&format!(
+                " anchor=\"0 0\" position=\"{}\"",
+                position_value(t, seq_w, seq_h, fit)
+            ));
+            let _ = writeln!(out, "                <adjust-transform{attrs}/>");
+        }
+
         let has_opacity_kf = clip
             .opacity_track
             .as_ref()
@@ -368,6 +427,51 @@ fn clip_adjustments(clip: &Clip, manifest: &MediaManifest, is_audio: bool) -> St
         );
     }
     out
+}
+
+/// How the source fits (aspect-preserving) into the sequence frame, as (w, h) fractions of the
+/// frame the fitted source occupies. `(1, 1)` when source dimensions are unknown. Mirrors Swift
+/// `fitFractions`.
+fn fit_fractions(clip: &Clip, manifest: &MediaManifest, seq_w: i64, seq_h: i64) -> (f64, f64) {
+    match manifest
+        .entry_for(&clip.media_ref)
+        .and_then(|e| e.source_width.zip(e.source_height))
+    {
+        Some((sw, sh)) if sw > 0 && sh > 0 => {
+            let source_aspect = sw as f64 / sh as f64;
+            let frame_aspect = seq_w as f64 / seq_h as f64;
+            if source_aspect >= frame_aspect {
+                (1.0, frame_aspect / source_aspect)
+            } else {
+                (source_aspect / frame_aspect, 1.0)
+            }
+        }
+        _ => (1.0, 1.0),
+    }
+}
+
+/// `<adjust-transform scale>` value: the clip's normalized size divided by the fit fraction
+/// (so a fit-letterboxed source scales back to its intended on-canvas size), sign-flipped per
+/// axis for mirror. Mirrors Swift `scaleValue`.
+fn scale_value(clip: &Clip, w: f64, h: f64, fit: (f64, f64)) -> String {
+    let mut sx = w / fit.0;
+    let mut sy = h / fit.1;
+    if clip.transform.flip_horizontal {
+        sx = -sx;
+    }
+    if clip.transform.flip_vertical {
+        sy = -sy;
+    }
+    format!("{} {}", format_number(sx), format_number(sy))
+}
+
+/// `<adjust-transform position>` value in FCP points (1/100 of frame height per unit), measured
+/// from centre, y-down negated to FCP's y-up, and fit-compensated. Mirrors Swift `positionValue`.
+fn position_value(t: &core_model::Transform, seq_w: i64, seq_h: i64, fit: (f64, f64)) -> String {
+    let unit = seq_h as f64 / 100.0;
+    let x = (t.center_x - 0.5) * seq_w as f64 / unit / fit.0;
+    let y = (0.5 - t.center_y) * seq_h as f64 / unit / fit.1;
+    format!("{} {}", format_number(x), format_number(y))
 }
 
 /// FCPXML number formatting (mirrors Swift `formatNumber`): round to 4 places, drop a
@@ -715,6 +819,77 @@ mod tests {
         assert_eq!(format_number(1.0), "1");
         assert_eq!(format_number(-6.020599913), "-6.0206");
         assert_eq!(format_number(0.80000), "0.8");
+    }
+
+    #[test]
+    fn fcpxml_pip_transform_emits_conform_and_transform() {
+        // Quarter-size PIP in the top-left quadrant: center (0.25,0.25), size 0.5x0.5.
+        // Matching aspect (1920x1080 in 1920x1080) → fit (1,1). scale "0.5 0.5".
+        // position x=(0.25-0.5)*1920/10.8 = -44.4444; y=(0.5-0.25)*1080/10.8 = 25.
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.transform.center_x = 0.25;
+        c.transform.center_y = 0.25;
+        c.transform.width = 0.5;
+        c.transform.height = 0.5;
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("<adjust-conform type=\"fit\"/>"), "conform\n{xml}");
+        assert!(
+            xml.contains("<adjust-transform scale=\"0.5 0.5\" anchor=\"0 0\" position=\"-44.4444 25\"/>"),
+            "PIP transform\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_rotation_negated_for_fcp() {
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.transform.rotation = 90.0;
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("rotation=\"-90\""), "FCP rotation negated\n{xml}");
+    }
+
+    #[test]
+    fn fcpxml_crop_emits_trim_rect() {
+        // crop top 0.1; source 1920x1080 in seq 1920x1080 → fit 1, lr=177.7778, tb=100.
+        // trim-rect top = 0.1*100 = 10, others 0.
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.crop.top = 0.1;
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("<adjust-crop mode=\"trim\">"), "crop\n{xml}");
+        assert!(
+            xml.contains("<trim-rect top=\"10\" right=\"0\" bottom=\"0\" left=\"0\"/>"),
+            "trim-rect\n{xml}"
+        );
+        assert!(xml.contains("<adjust-conform type=\"fit\"/>"), "crop also emits conform");
+    }
+
+    #[test]
+    fn fcpxml_flip_negates_scale_axis() {
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.transform.width = 0.5;
+        c.transform.height = 0.5;
+        c.transform.flip_horizontal = true;
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("scale=\"-0.5 0.5\""), "h-flip negates sx\n{xml}");
     }
 
     #[test]
