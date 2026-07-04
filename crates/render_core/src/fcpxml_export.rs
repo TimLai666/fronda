@@ -363,7 +363,11 @@ fn clip_adjustments(
         let moved = (t.center_x - 0.5).abs() > 0.0005 || (t.center_y - 0.5).abs() > 0.0005;
         let rotated = t.rotation.abs() > 0.005;
         let scaled = base != "1 1";
-        let transform_needed = moved || rotated || scaled;
+        let has_scale_kf = clip.scale_track.as_ref().is_some_and(|k| !k.keyframes.is_empty());
+        let has_pos_kf = clip.position_track.as_ref().is_some_and(|k| !k.keyframes.is_empty());
+        let has_rot_kf = clip.rotation_track.as_ref().is_some_and(|k| !k.keyframes.is_empty());
+        let has_transform_kf = has_scale_kf || has_pos_kf || has_rot_kf;
+        let transform_needed = moved || rotated || scaled || has_transform_kf;
         let crop_needed = !clip.crop.is_identity();
 
         if crop_needed {
@@ -395,16 +399,65 @@ fn clip_adjustments(
             out.push_str("                <adjust-conform type=\"fit\"/>\n");
         }
         if transform_needed {
+            let pos_base = position_value(t, seq_w, seq_h, fit);
+            let rot_base = format_number(-t.rotation);
             let mut attrs = format!(" scale=\"{base}\"");
-            if rotated {
+            if rotated || has_rot_kf {
                 // FCP rotation is the negation of the model's clockwise rotation.
-                attrs.push_str(&format!(" rotation=\"{}\"", format_number(-t.rotation)));
+                attrs.push_str(&format!(" rotation=\"{rot_base}\""));
             }
-            attrs.push_str(&format!(
-                " anchor=\"0 0\" position=\"{}\"",
-                position_value(t, seq_w, seq_h, fit)
-            ));
-            let _ = writeln!(out, "                <adjust-transform{attrs}/>");
+            attrs.push_str(&format!(" anchor=\"0 0\" position=\"{pos_base}\""));
+            if !has_transform_kf {
+                let _ = writeln!(out, "                <adjust-transform{attrs}/>");
+            } else {
+                // Keyframed transform: each animated property is a <param>; values are sampled
+                // through resolved_transform_at (which applies the top-left→centre + size
+                // coupling) and encoded in FCP units. Keyframe time is clip-relative.
+                let _ = writeln!(out, "                <adjust-transform{attrs}>");
+                if has_scale_kf {
+                    let rows: Vec<(i64, core_model::Interpolation, String)> = clip
+                        .scale_track
+                        .as_ref()
+                        .unwrap()
+                        .keyframes
+                        .iter()
+                        .map(|k| {
+                            let rt = timeline_core::resolved_transform_at(clip, k.frame);
+                            (k.frame, k.interpolation_out, scale_value(clip, rt.width, rt.height, fit))
+                        })
+                        .collect();
+                    write_kf_param(&mut out, "scale", &base, &rows, fps);
+                }
+                if has_pos_kf {
+                    let rows: Vec<(i64, core_model::Interpolation, String)> = clip
+                        .position_track
+                        .as_ref()
+                        .unwrap()
+                        .keyframes
+                        .iter()
+                        .map(|k| {
+                            let rt = timeline_core::resolved_transform_at(clip, k.frame);
+                            (k.frame, k.interpolation_out, position_value(&rt, seq_w, seq_h, fit))
+                        })
+                        .collect();
+                    write_kf_param(&mut out, "position", &pos_base, &rows, fps);
+                }
+                if has_rot_kf {
+                    let rows: Vec<(i64, core_model::Interpolation, String)> = clip
+                        .rotation_track
+                        .as_ref()
+                        .unwrap()
+                        .keyframes
+                        .iter()
+                        .map(|k| {
+                            let rt = timeline_core::resolved_transform_at(clip, k.frame);
+                            (k.frame, k.interpolation_out, format_number(-rt.rotation))
+                        })
+                        .collect();
+                    write_kf_param(&mut out, "rotation", &rot_base, &rows, fps);
+                }
+                let _ = writeln!(out, "                </adjust-transform>");
+            }
         }
 
         let opacity_kf = clip
@@ -419,25 +472,11 @@ fn clip_adjustments(
                     // Keyframed opacity → <param>/<keyframeAnimation>; time is on the clip's
                     // output axis (keyframes are clip-relative), value in 0..1.
                     let _ = writeln!(out, "                <adjust-blend amount=\"{amount}\">");
-                    let _ = writeln!(out, "                  <param name=\"amount\" value=\"{amount}\">");
-                    let _ = writeln!(out, "                    <keyframeAnimation>");
-                    let mut sorted: Vec<_> = kfs.iter().collect();
-                    sorted.sort_by_key(|k| k.frame);
-                    for k in sorted {
-                        let curve = if k.interpolation_out == core_model::Interpolation::Linear {
-                            " curve=\"linear\""
-                        } else {
-                            ""
-                        };
-                        let _ = writeln!(
-                            out,
-                            "                      <keyframe time=\"{}\"{curve} value=\"{}\"/>",
-                            time_str(k.frame, fps),
-                            format_number(k.value)
-                        );
-                    }
-                    let _ = writeln!(out, "                    </keyframeAnimation>");
-                    let _ = writeln!(out, "                  </param>");
+                    let rows: Vec<(i64, core_model::Interpolation, String)> = kfs
+                        .iter()
+                        .map(|k| (k.frame, k.interpolation_out, format_number(k.value)))
+                        .collect();
+                    write_kf_param(&mut out, "amount", &amount, &rows, fps);
                     let _ = writeln!(out, "                </adjust-blend>");
                 }
                 None => {
@@ -525,6 +564,36 @@ fn format_number(value: f64) -> String {
         s.pop();
     }
     s
+}
+
+/// Emit a keyframed `<param>`: the base value on the param, then a `<keyframeAnimation>` with one
+/// `<keyframe>` per row (clip-relative time, `curve="linear"` for linear segments, else FCP's
+/// default smoothing). Rows are `(clip_relative_frame, interpolation_out, formatted_value)`.
+fn write_kf_param(
+    out: &mut String,
+    name: &str,
+    base: &str,
+    rows: &[(i64, core_model::Interpolation, String)],
+    fps: i64,
+) {
+    let mut sorted: Vec<&(i64, core_model::Interpolation, String)> = rows.iter().collect();
+    sorted.sort_by_key(|r| r.0);
+    let _ = writeln!(out, "                  <param name=\"{name}\" value=\"{base}\">");
+    let _ = writeln!(out, "                    <keyframeAnimation>");
+    for (frame, interp, value) in sorted {
+        let curve = if *interp == core_model::Interpolation::Linear {
+            " curve=\"linear\""
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            out,
+            "                      <keyframe time=\"{}\"{curve} value=\"{value}\"/>",
+            time_str(*frame, fps)
+        );
+    }
+    let _ = writeln!(out, "                    </keyframeAnimation>");
+    let _ = writeln!(out, "                  </param>");
 }
 
 fn media_src(source: &MediaSource) -> String {
@@ -964,6 +1033,50 @@ mod tests {
             "second keyframe\n{xml}"
         );
         assert!(xml.contains("</adjust-blend>"), "open/close blend");
+    }
+
+    #[test]
+    fn fcpxml_keyframed_position_emits_transform_param() {
+        // Half-size clip; position track animates top-left (0,0)→(0.25,0.25) over 0..30f.
+        // resolved centre = top_left + size/2: frame0 (0.25,0.25) → pos "-44.4444 25";
+        // frame30 (0.5,0.5) → pos "0 0". Base uses static centre (0.5,0.5) → "0 0".
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.transform.width = 0.5;
+        c.transform.height = 0.5;
+        c.position_track = Some(core_model::KeyframeTrack {
+            keyframes: vec![
+                core_model::Keyframe {
+                    frame: 0,
+                    value: core_model::AnimPair { a: 0.0, b: 0.0 },
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+                core_model::Keyframe {
+                    frame: 30,
+                    value: core_model::AnimPair { a: 0.25, b: 0.25 },
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+            ],
+        });
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(
+            xml.contains("<adjust-transform scale=\"0.5 0.5\" anchor=\"0 0\" position=\"0 0\">"),
+            "transform open tag\n{xml}"
+        );
+        assert!(xml.contains("<param name=\"position\" value=\"0 0\">"), "position param\n{xml}");
+        assert!(
+            xml.contains("<keyframe time=\"0s\" curve=\"linear\" value=\"-44.4444 25\"/>"),
+            "frame 0 centre\n{xml}"
+        );
+        assert!(
+            xml.contains("<keyframe time=\"30/30s\" curve=\"linear\" value=\"0 0\"/>"),
+            "frame 30 centre\n{xml}"
+        );
+        assert!(xml.contains("</adjust-transform>"), "open/close transform");
     }
 
     #[test]
