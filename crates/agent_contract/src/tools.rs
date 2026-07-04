@@ -190,12 +190,19 @@ fn add_clips() -> ToolDefinition {
 fn add_texts() -> ToolDefinition {
     ToolDefinition {
         name: "add_texts",
-        description: "Add text overlay clips to the timeline.",
-        input_schema: object(&[
-            ("text", string("Text content")),
-            ("startFrame", integer("Start frame (inclusive)")),
-            ("durationFrames", integer("Duration in frames")),
-        ]),
+        description: "Add one or more text overlay clips (titles, lower-thirds) in a \
+            single undoable action. Pass a `texts` array; each entry takes: content \
+            (the text), startFrame, durationFrames, and optional styling — fontName, \
+            fontSize, color ('#RGB' / '#RRGGBB' / '#RRGGBBAA'), alignment ('left' / \
+            'center' / 'right'), and transform ({centerX, centerY, width, height} in \
+            0–1 normalized canvas coords; centre-only shifts position). For \
+            captioning spoken audio, prefer add_captions.",
+        input_schema: object(&[(
+            "texts",
+            array(
+                "Array of {content, startFrame, durationFrames, fontName?, fontSize?, color?, alignment?, transform?}",
+            ),
+        )]),
     }
 }
 

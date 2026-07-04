@@ -2161,7 +2161,12 @@ impl ToolExecutor {
         }
 
         for t_val in texts_val {
-            let text = t_val.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            // Accept Swift's `content` key, falling back to `text`.
+            let text = t_val
+                .get("content")
+                .or_else(|| t_val.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let start_frame = t_val
                 .get("startFrame")
                 .and_then(|v| v.as_i64())
@@ -2170,6 +2175,42 @@ impl ToolExecutor {
                 .get("durationFrames")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(150);
+
+            // Per-entry text styling (reuses the set_clip_properties parsers).
+            let mut style = TextStyle::default();
+            if let Some(f) = t_val.get("fontName").and_then(|v| v.as_str()) {
+                style.font_name = f.to_string();
+            }
+            if let Some(s) = t_val.get("fontSize").and_then(|v| v.as_f64()) {
+                style.font_size = s;
+            }
+            if let Some(hex) = t_val.get("color").and_then(|v| v.as_str()) {
+                style.color = core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+                    format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
+                })?;
+            }
+            if let Some(a) = t_val.get("alignment").and_then(|v| v.as_str()) {
+                style.alignment = core_model::TextAlignment::from_name(a).ok_or_else(|| {
+                    format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
+                })?;
+            }
+
+            // Explicit box override; partial (centre-only) shifts position, keeping
+            // the default size. Auto-fit-to-content sizing is deferred (needs text
+            // measurement, which lives in the render layer).
+            let mut transform = Transform::default();
+            if let Some(t) = t_val.get("transform") {
+                transform = timeline_core::PartialTransform {
+                    center_x: t.get("centerX").and_then(|v| v.as_f64()),
+                    center_y: t.get("centerY").and_then(|v| v.as_f64()),
+                    width: t.get("width").and_then(|v| v.as_f64()),
+                    height: t.get("height").and_then(|v| v.as_f64()),
+                    rotation: t.get("rotation").and_then(|v| v.as_f64()),
+                    flip_horizontal: None,
+                    flip_vertical: None,
+                }
+                .merge_into(&transform);
+            }
 
             let clip = Clip {
                 id: Uuid::new_v4().to_string(),
@@ -2187,7 +2228,7 @@ impl ToolExecutor {
                 fade_in_interpolation: Interpolation::Linear,
                 fade_out_interpolation: Interpolation::Linear,
                 opacity: 1.0,
-                transform: Transform::default(),
+                transform,
                 crop: core_model::Crop::default(),
                 link_group_id: None,
                 caption_group_id: None,
@@ -2196,7 +2237,7 @@ impl ToolExecutor {
                 } else {
                     text.to_string()
                 }),
-                text_style: Some(TextStyle::default()),
+                text_style: Some(style),
                 opacity_track: None,
                 position_track: None,
                 scale_track: None,
@@ -4135,6 +4176,43 @@ mod tests {
         let mut exec = make_executor();
         let err = exec.execute("add_texts", &json!({})).unwrap_err();
         assert!(err.contains("Missing texts array"));
+    }
+
+    #[test]
+    fn add_texts_applies_per_entry_style_and_transform() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_texts",
+            &json!({"texts": [{
+                "content": "Title",
+                "fontName": "Anton",
+                "fontSize": 72.0,
+                "color": "#00FF00",
+                "alignment": "left",
+                "transform": {"centerX": 0.5, "centerY": 0.9}
+            }]}),
+        )
+        .unwrap();
+        let clip = &exec.timeline.tracks[0].clips[0];
+        assert_eq!(clip.text_content.as_deref(), Some("Title"));
+        let ts = clip.text_style.as_ref().unwrap();
+        assert_eq!(ts.font_name, "Anton");
+        assert_eq!(ts.font_size, 72.0);
+        assert_eq!((ts.color.r, ts.color.g, ts.color.b), (0.0, 1.0, 0.0));
+        assert_eq!(ts.alignment, core_model::TextAlignment::Left);
+        // Centre-only transform repositions; the y matches the request.
+        assert!((clip.transform.center_y - 0.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn add_texts_rejects_bad_color() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute("add_texts", &json!({"texts": [{"content": "x", "color": "zzz"}]}))
+            .unwrap_err();
+        assert!(err.contains("invalid color"), "got: {err}");
     }
 
     #[test]
