@@ -1,4 +1,4 @@
-//! All 54 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 59 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -20,7 +20,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 54 tools exposed to the agent.
+/// Returns all 59 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
