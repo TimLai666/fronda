@@ -172,6 +172,9 @@ fn count_keyframes(clip: &Clip) -> usize {
     if let Some(t) = &clip.volume_track {
         count += t.keyframes.len();
     }
+    if let Some(t) = &clip.stroke_progress_track {
+        count += t.keyframes.len();
+    }
     count
 }
 

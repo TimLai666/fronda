@@ -37,6 +37,7 @@ pub fn clamp_clip_keyframes_to_duration(clip: &mut Clip) {
     clamp_keyframe_track(&mut clip.rotation_track, clip.duration_frames);
     clamp_keyframe_track(&mut clip.crop_track, clip.duration_frames);
     clamp_keyframe_track(&mut clip.volume_track, clip.duration_frames);
+    clamp_keyframe_track(&mut clip.stroke_progress_track, clip.duration_frames);
 }
 
 pub fn clamp_clip_fades_to_duration(clip: &mut Clip) {
@@ -58,6 +59,7 @@ pub fn rescale_clip_keyframes(clip: &mut Clip, ratio: f64) {
     rescale_keyframe_track(&mut clip.rotation_track, ratio, clip.duration_frames);
     rescale_keyframe_track(&mut clip.crop_track, ratio, clip.duration_frames);
     rescale_keyframe_track(&mut clip.volume_track, ratio, clip.duration_frames);
+    rescale_keyframe_track(&mut clip.stroke_progress_track, ratio, clip.duration_frames);
 }
 
 fn rescale_keyframe_track<V: Clone + PartialEq>(
@@ -115,6 +117,10 @@ pub fn split_all_clip_keyframe_tracks(clip: &Clip, split_offset: i64) -> (Clip, 
         split_keyframe_track(clip.rotation_track.clone(), split_offset, 0.0);
     let (left_crop, right_crop) =
         split_keyframe_track(clip.crop_track.clone(), split_offset, clip.crop);
+    // stroke_progress has no static field; the fallback is unused for a non-empty
+    // track (the sampler clamps to the nearest keyframe), so 1.0 is just a filler.
+    let (left_stroke, right_stroke) =
+        split_keyframe_track(clip.stroke_progress_track.clone(), split_offset, 1.0);
 
     left.opacity_track = left_opacity;
     right.opacity_track = right_opacity;
@@ -128,6 +134,8 @@ pub fn split_all_clip_keyframe_tracks(clip: &Clip, split_offset: i64) -> (Clip, 
     right.rotation_track = right_rotation;
     left.crop_track = left_crop;
     right.crop_track = right_crop;
+    left.stroke_progress_track = left_stroke;
+    right.stroke_progress_track = right_stroke;
 
     (left, right)
 }

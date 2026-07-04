@@ -1,5 +1,10 @@
-use core_model::{Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, Transform};
-use timeline_core::{clamp_clip_fades_to_duration, sample_keyframe_track, set_clip_duration};
+use core_model::{
+    Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, Timeline, Track, Transform,
+};
+use timeline_core::{
+    apply_fps, clamp_clip_fades_to_duration, sample_keyframe_track, set_clip_duration,
+    split_all_clip_keyframe_tracks,
+};
 
 fn clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
     Clip {
@@ -464,4 +469,56 @@ fn ins_016_volume_keyframes_interpolation_modes() {
         "hold after frame: expected 0.5, got {}",
         v75
     );
+}
+
+// PCFG-004 regression: the stroke_progress_track (7th keyframe track, Rust-only
+// from #46) participates in fps rescale alongside its six siblings.
+#[test]
+fn stroke_progress_track_rescales_on_fps_change() {
+    let mut c = clip("s", 0, 100);
+    c.stroke_progress_track = Some(KeyframeTrack {
+        keyframes: vec![
+            Keyframe { frame: 0, value: 0.0, interpolation_out: Interpolation::Linear },
+            Keyframe { frame: 50, value: 1.0, interpolation_out: Interpolation::Linear },
+        ],
+    });
+    let mut timeline = Timeline {
+        fps: 30,
+        tracks: vec![Track {
+            id: "t".into(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            clips: vec![c],
+        }],
+        ..Timeline::default()
+    };
+    apply_fps(&mut timeline, 60); // scale 2.0
+    let track = timeline.tracks[0].clips[0]
+        .stroke_progress_track
+        .as_ref()
+        .expect("stroke track preserved");
+    assert_eq!(track.keyframes[0].frame, 0);
+    assert_eq!(track.keyframes[1].frame, 100, "50 → 100 at 2x fps");
+}
+
+// Splitting a clip partitions the stroke_progress_track like the other tracks.
+#[test]
+fn stroke_progress_track_splits_with_clip() {
+    let mut c = clip("s", 0, 100);
+    c.stroke_progress_track = Some(KeyframeTrack {
+        keyframes: vec![
+            Keyframe { frame: 0, value: 0.0, interpolation_out: Interpolation::Linear },
+            Keyframe { frame: 100, value: 1.0, interpolation_out: Interpolation::Linear },
+        ],
+    });
+    let (left, right) = split_all_clip_keyframe_tracks(&c, 40);
+    let l = left.stroke_progress_track.as_ref().expect("left stroke");
+    let r = right.stroke_progress_track.as_ref().expect("right stroke");
+    // Left ends with a boundary keyframe at the split point.
+    assert_eq!(l.keyframes.last().unwrap().frame, 40);
+    // Right is reindexed to 0 and keeps the tail keyframe at 100-40=60.
+    assert_eq!(r.keyframes.first().unwrap().frame, 0);
+    assert_eq!(r.keyframes.last().unwrap().frame, 60);
 }
