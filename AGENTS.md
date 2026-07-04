@@ -139,7 +139,8 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 - `timeline_core::project_presets` holds the inspector/preview dropdown data (upstream #168): `ASPECT_PRESETS`, `FPS_PRESETS`, `QUALITY_PRESETS`, `ZOOM_PRESETS` with active-selection logic, mirroring Swift `PreviewContainerView` exactly.
 - XML export (`render_core/src/xml_export.rs`) emits keyframed motion params (scale/rotation/center/crop) and a keyframed Opacity filter when the clip has the matching animation track (XML-012).
 - Cross-platform: the `desktop-app` `fronda` bin compiles clean on Windows (gpui-ce + ffmpeg + reqwest), verified via `cargo check` (2026-07-03/04).
-- `mcp_server::session` is the pure core of stateful MCP sessions (#250): `SessionStore` (LRU32 + 1h TTL, injected clock) + `parse_session_id`. Per-session executor wiring / SSE / tools/list_changed are deferred (basic single-shared-executor HTTP server already works).
+- `mcp_server::session` is the pure core of stateful MCP sessions (#250): `SessionStore` (LRU32 + 1h TTL, injected clock, monotonic `seq` for deterministic tie-break) + `parse_session_id` (skips colon-less header lines). Per-session executor wiring / SSE / tools/list_changed are deferred (basic single-shared-executor HTTP server already works).
+- `mcp_server::server` enforces Issue #122 bearer auth: `start()`/`spawn()` call `config.validate()` (a non-loopback bind without a token is rejected), and `handle_connection` rejects any request lacking a matching `Authorization: Bearer <token>` with 401 (constant-time compare) before executing. Default config is loopback + no token (auth not enforced locally).
 
 ## Upstream PR management
 
