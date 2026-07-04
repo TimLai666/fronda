@@ -4530,6 +4530,44 @@ mod tests {
     }
 
     #[test]
+    fn apply_layout_place_new_stacks_pip_inset_on_top() {
+        // The PIP inset has z=1 (main z=0). tracks[0] is the TOP layer, so the inset's
+        // track must land at a LOWER index than main's — the insert-at-0 ascending-z
+        // stacking put the highest z on top.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("MAIN", 1920, 1080, 30.0));
+        manifest.entries.push(video_media("INSET", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute(
+            "apply_layout",
+            &json!({
+                "layout": "pip_bottom_right",
+                "durationFrames": 30,
+                "slots": [
+                    {"slot": "main", "mediaRef": "MAIN"},
+                    {"slot": "inset", "mediaRef": "INSET"}
+                ]
+            }),
+        )
+        .unwrap();
+        let tl = exec.timeline();
+        let inset_track = tl
+            .tracks
+            .iter()
+            .position(|t| t.clips.iter().any(|c| c.media_ref == "INSET"))
+            .expect("inset placed");
+        let main_track = tl
+            .tracks
+            .iter()
+            .position(|t| t.clips.iter().any(|c| c.media_ref == "MAIN"))
+            .expect("main placed");
+        assert!(
+            inset_track < main_track,
+            "PIP inset (z=1) must stack above main (z=0): inset={inset_track}, main={main_track}"
+        );
+    }
+
+    #[test]
     fn exec_001_get_timeline_returns_default() {
         let mut exec = make_executor();
         let result = exec.execute("get_timeline", &json!({})).unwrap();
