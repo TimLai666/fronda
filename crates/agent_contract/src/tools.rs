@@ -117,6 +117,8 @@ Placements must match track type. The editing surface mirrors human gestures —
 - apply_layout: for any multi-video composition (split screen, picture-in-picture, grid), assign a clip to each slot instead of hand-setting transforms; it fills every region without stretching.
 - set_project_settings: change fps, resolution, or aspect ratio; existing clips re-fit and frame values rescale automatically.
 
+Edits are undoable and effectively free — make them directly rather than asking permission for each; undo reverses your last change. speed 1.0 is normal; below 1.0 slows a clip (longer on the timeline), above 1.0 speeds it up (shorter).
+
 # Compositing, text, and graphics
 - add_texts / add_shapes: overlay titles and captions (text), or rectangles, ovals, circles, arrows, and lines (shapes), on a video track.
 - create_matte: add a solid-colour image to the library — backgrounds, lower-thirds, letterbox bars. Pass a hex colour and an optional aspect ratio, then place it with add_clips.
