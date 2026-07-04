@@ -1022,9 +1022,24 @@ impl ToolExecutor {
             return Err(format!("Track index {track_index} out of bounds"));
         }
 
+        // #207: tracks the caller wants treated as UNLOCKED for this call — a
+        // sync-locked track listed here is left in place (neither cut nor shifted).
+        let ignore_sync_lock_track_indices: std::collections::BTreeSet<usize> = args
+            .get("ignoreSyncLockTrackIndices")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_i64())
+                    .filter(|&i| i >= 0)
+                    .map(|i| i as usize)
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let range_list = ranges.clone();
         let config = timeline_core::RippleDeleteConfig {
             anchor_track_index: track_index,
+            ignore_sync_lock_track_indices,
             ranges,
         };
         let outcome = timeline_core::compute_ripple_delete(&self.timeline, config);
@@ -1046,10 +1061,11 @@ impl ToolExecutor {
                     }
                 }
 
-                // Close the gaps: shift later clips left on the cleared tracks (their
-                // own gap) and on sync-locked follower tracks (to stay aligned).
+                // Close the gaps: shift later clips left on every cleared track. Post-#227
+                // all non-ignored sync-locked followers are already in `cleared`, so this
+                // shifts them too; #207-ignored sync-locked tracks are absent → left in place.
                 for (ti, track) in self.timeline.tracks.iter_mut().enumerate() {
-                    if !cleared.contains(&ti) && !track.sync_locked {
+                    if !cleared.contains(&ti) {
                         continue;
                     }
                     let shifts =
@@ -6074,6 +6090,71 @@ mod tests {
         spans.sort();
         // Head [0,25) kept; tail [50,100) slid left by 25 → [25,75). Not destroyed.
         assert_eq!(spans, vec![(0, 25), (25, 75)], "fragment cut + gap closed");
+    }
+
+    fn ripple_207_two_track_exec() -> ToolExecutor {
+        // track 0: anchor video clip [0,100); track 1: sync-locked audio clip [0,100).
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let v = crate::test_helpers::make_clip(0, 100);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[v]);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Audio);
+        exec.timeline_mut().tracks[1].sync_locked = true;
+        let a = crate::test_helpers::make_clip(0, 100);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 1, 0, &[a]);
+        exec
+    }
+
+    fn track_spans(exec: &ToolExecutor, ti: usize) -> Vec<(i64, i64)> {
+        let mut s: Vec<(i64, i64)> = exec.timeline().tracks[ti]
+            .clips
+            .iter()
+            .map(|c| (c.start_frame, c.start_frame + c.duration_frames))
+            .collect();
+        s.sort();
+        s
+    }
+
+    #[test]
+    fn ripple_delete_207_ignored_sync_locked_track_left_in_place() {
+        // #207: a sync-locked track listed in ignoreSyncLockTrackIndices is treated as
+        // unlocked — neither cut nor shifted. Its clips stay exactly where they were.
+        let mut exec = ripple_207_two_track_exec();
+        let before = track_spans(&exec, 1);
+        exec.execute(
+            "ripple_delete_ranges",
+            &json!({
+                "trackIndex": 0,
+                "ranges": [{"start": 25, "end": 50}],
+                "ignoreSyncLockTrackIndices": [1]
+            }),
+        )
+        .unwrap();
+        // Anchor track 0 is cut+rippled: head [0,25) kept, tail slid → [25,75).
+        assert_eq!(track_spans(&exec, 0), vec![(0, 25), (25, 75)], "anchor rippled");
+        // Ignored sync-locked track 1 untouched.
+        assert_eq!(
+            track_spans(&exec, 1),
+            before,
+            "ignored sync-locked track left in place"
+        );
+        assert_eq!(before, vec![(0, 100)]);
+    }
+
+    #[test]
+    fn ripple_delete_207_sync_locked_follower_cut_when_not_ignored() {
+        // Without the ignore, the same sync-locked track is cut in sync (#227) and shifted.
+        let mut exec = ripple_207_two_track_exec();
+        exec.execute(
+            "ripple_delete_ranges",
+            &json!({"trackIndex": 0, "ranges": [{"start": 25, "end": 50}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            track_spans(&exec, 1),
+            vec![(0, 25), (25, 75)],
+            "sync-locked follower cut+rippled in sync with anchor"
+        );
     }
 
     #[test]

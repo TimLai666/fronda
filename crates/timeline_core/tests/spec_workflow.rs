@@ -144,6 +144,7 @@ fn rpl_001_ripple_delete_middle_closets_gap() {
         &t,
         RippleDeleteConfig {
             anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
             ranges: vec![FrameRange {
                 start: 50,
                 end: 100,
@@ -205,6 +206,7 @@ fn rpl_004_sync_locked_follower_shifts_after_range_delete() {
         &t,
         RippleDeleteConfig {
             anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
             ranges: vec![FrameRange { start: 40, end: 50 }],
         },
     );
@@ -224,6 +226,7 @@ fn rpl_005_linked_partner_tracks_cleared() {
         &t,
         RippleDeleteConfig {
             anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
             ranges: vec![FrameRange { start: 40, end: 50 }],
         },
     );
@@ -246,6 +249,7 @@ fn rpl_006_sync_locked_track_shift_valid() {
         &t,
         RippleDeleteConfig {
             anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
             ranges: vec![FrameRange { start: 40, end: 50 }],
         },
     );
@@ -261,6 +265,7 @@ fn rpl_006_unsynced_track_ignored() {
         &t,
         RippleDeleteConfig {
             anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
             ranges: vec![FrameRange { start: 40, end: 50 }],
         },
     );
@@ -280,6 +285,7 @@ fn rpl_227_sync_locked_follower_is_cut_not_just_shifted() {
         &t,
         RippleDeleteConfig {
             anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
             ranges: vec![FrameRange { start: 40, end: 50 }],
         },
     ) {
@@ -303,6 +309,7 @@ fn rpl_227_unsynced_follower_is_not_cut() {
         &t,
         RippleDeleteConfig {
             anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
             ranges: vec![FrameRange { start: 40, end: 50 }],
         },
     ) {
@@ -670,6 +677,7 @@ fn refuses_empty_ranges() {
         &t,
         RippleDeleteConfig {
             anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
             ranges: vec![],
         },
     );

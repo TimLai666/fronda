@@ -19,6 +19,9 @@ pub struct RippleShiftSet {
 pub struct RippleDeleteConfig {
     pub anchor_track_index: usize,
     pub ranges: Vec<FrameRange>,
+    /// Track indices to treat as UNLOCKED for this call (#207): a sync-locked track
+    /// listed here is left in place — neither cut nor shifted — like an unsynced track.
+    pub ignore_sync_lock_track_indices: std::collections::BTreeSet<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,7 +98,11 @@ pub fn compute_ripple_delete(
         .tracks
         .iter()
         .enumerate()
-        .filter(|(ti, t)| t.sync_locked && !clear_track_indices.contains(ti))
+        .filter(|(ti, t)| {
+            t.sync_locked
+                && !clear_track_indices.contains(ti)
+                && !config.ignore_sync_lock_track_indices.contains(ti)
+        })
         .map(|(ti, _)| ti)
         .collect();
     for ti in sync_locked_followers {

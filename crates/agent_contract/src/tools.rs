@@ -516,13 +516,20 @@ fn rename_media() -> ToolDefinition {
 fn ripple_delete_ranges() -> ToolDefinition {
     ToolDefinition {
         name: "ripple_delete_ranges",
-        description: "Delete frame ranges from the timeline with ripple.",
+        description: "Delete frame ranges from the timeline with ripple. Sync-locked tracks are cut \
+            in sync with the anchor and their gaps closed. List a track in \
+            ignoreSyncLockTrackIndices to treat it as unlocked for this call — it is left in \
+            place, neither cut nor shifted.",
         input_schema: object(&[
             (
                 "ranges",
-                array("Array of {startFrame, endFrame} ranges to delete"),
+                array("Array of {start, end} frame ranges to delete"),
             ),
             ("trackIndex", integer("Optional: scope to specific track")),
+            (
+                "ignoreSyncLockTrackIndices",
+                array("Optional: track indices to treat as unlocked (left in place) for this call"),
+            ),
         ]),
     }
 }
