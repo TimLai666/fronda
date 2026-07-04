@@ -180,6 +180,31 @@ pub fn render_text(
         );
     }
 
+    // Text outline/stroke: draw the glyphs in the border colour at 8 offsets so
+    // the main fill sits inside an outline (approximate; a true outline is a
+    // follow-up). `border.padding` is the stroke width.
+    if style.border.enabled && style.border.color.a > 0.0 {
+        let bc = [
+            (style.border.color.r * 255.0).round().clamp(0.0, 255.0) as u8,
+            (style.border.color.g * 255.0).round().clamp(0.0, 255.0) as u8,
+            (style.border.color.b * 255.0).round().clamp(0.0, 255.0) as u8,
+        ];
+        let ba = style.border.color.a.clamp(0.0, 1.0) as f32;
+        let r = style.border.padding.unwrap_or(2.0).max(0.5) as f32;
+        for (ox, oy) in [
+            (-r, 0.0),
+            (r, 0.0),
+            (0.0, -r),
+            (0.0, r),
+            (-r, -r),
+            (r, -r),
+            (-r, r),
+            (r, r),
+        ] {
+            draw_glyphs(&mut img, ox, oy, bc, ba);
+        }
+    }
+
     draw_glyphs(&mut img, 0.0, 0.0, color, alpha);
     img
 }
@@ -277,6 +302,27 @@ mod tests {
             .filter(|p| p[3] > 200 && p[2] > p[0] && p[2] > p[1])
             .count();
         assert!(blue > 200, "background rect painted, got {blue}");
+    }
+
+    #[test]
+    fn border_outlines_the_text() {
+        use core_model::TextFill;
+        // White text with a black outline: black pixels appear around the glyphs.
+        let white = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let mut s = style(40.0, white, TextAlignment::Center);
+        s.border = TextFill {
+            enabled: true,
+            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+            padding: Some(3.0),
+            corner_radius: None,
+        };
+        let img = render_text("Hi", &s, 200, 120, 0.5, 0.5);
+        let dark = img
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| p[3] > 150 && p[0] < 60 && p[1] < 60 && p[2] < 60)
+            .count();
+        assert!(dark > 20, "outline paints dark pixels, got {dark}");
     }
 
     #[test]
