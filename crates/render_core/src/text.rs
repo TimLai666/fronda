@@ -12,10 +12,43 @@ use crate::compositor::RgbaImage;
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use core_model::{TextAlignment, TextStyle};
 
-static REGULAR: &[u8] =
-    include_bytes!("../../../Sources/PalmierPro/Resources/Fonts/Poppins/Poppins-Regular.ttf");
-static BOLD: &[u8] =
-    include_bytes!("../../../Sources/PalmierPro/Resources/Fonts/Poppins/Poppins-Bold.ttf");
+macro_rules! font {
+    ($p:literal) => {
+        include_bytes!(concat!("../../../Sources/PalmierPro/Resources/Fonts/", $p))
+    };
+}
+
+static POPPINS_REGULAR: &[u8] = font!("Poppins/Poppins-Regular.ttf");
+static POPPINS_BOLD: &[u8] = font!("Poppins/Poppins-Bold.ttf");
+static ANTON: &[u8] = font!("Anton/Anton-Regular.ttf");
+static BEBAS_NEUE: &[u8] = font!("BebasNeue/BebasNeue-Regular.ttf");
+static PERMANENT_MARKER: &[u8] = font!("PermanentMarker/PermanentMarker-Regular.ttf");
+static SHRIKHAND: &[u8] = font!("Shrikhand/Shrikhand-Regular.ttf");
+static BASEMENT_GROTESQUE: &[u8] = font!("BasementGrotesque/BasementGrotesque-Black.ttf");
+
+/// Pick the embedded font bytes for a `font_name` (case-insensitive substring
+/// match against a bundled family), honouring `bold` for families that ship a
+/// bold weight. Falls back to Poppins for unknown / system fonts (e.g. the
+/// default "Helvetica-Bold", which is not bundled).
+fn font_for(font_name: &str, bold: bool) -> &'static [u8] {
+    let n = font_name.to_ascii_lowercase();
+    let has = |needle: &str| n.replace([' ', '-', '_'], "").contains(needle);
+    if has("anton") {
+        ANTON
+    } else if has("bebas") {
+        BEBAS_NEUE
+    } else if has("permanentmarker") || has("marker") {
+        PERMANENT_MARKER
+    } else if has("shrikhand") {
+        SHRIKHAND
+    } else if has("basementgrotesque") {
+        BASEMENT_GROTESQUE
+    } else if bold {
+        POPPINS_BOLD
+    } else {
+        POPPINS_REGULAR
+    }
+}
 
 fn blend_over(img: &mut RgbaImage, x: usize, y: usize, color: [u8; 3], a: f32) {
     if a <= 0.0 {
@@ -50,7 +83,7 @@ pub fn render_text(
     if text.trim().is_empty() || cw == 0 || ch == 0 {
         return img;
     }
-    let bytes = if style.font_weight >= 600.0 { BOLD } else { REGULAR };
+    let bytes = font_for(&style.font_name, style.font_weight >= 600.0);
     let Ok(font) = FontRef::try_from_slice(bytes) else {
         return img;
     };
@@ -141,6 +174,16 @@ mod tests {
         // A painted pixel carries the text colour (red-dominant).
         let lit = img.pixels.chunks_exact(4).find(|p| p[3] > 200).unwrap();
         assert!(lit[0] > lit[1] && lit[0] > lit[2], "red text");
+    }
+
+    #[test]
+    fn font_for_maps_bundled_families_and_defaults() {
+        assert!(std::ptr::eq(font_for("Anton", false), ANTON));
+        assert!(std::ptr::eq(font_for("Bebas Neue", false), BEBAS_NEUE));
+        assert!(std::ptr::eq(font_for("Permanent Marker", false), PERMANENT_MARKER));
+        // Unknown / system font → Poppins (regular vs bold by weight flag).
+        assert!(std::ptr::eq(font_for("Helvetica-Bold", true), POPPINS_BOLD));
+        assert!(std::ptr::eq(font_for("Whatever", false), POPPINS_REGULAR));
     }
 
     #[test]
