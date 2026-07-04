@@ -52,10 +52,16 @@ impl MediaManifest {
     ///
     /// Returns `None` if no entry found, `Some(true)` if file exists,
     /// `Some(false)` if file does not exist.
-    pub fn resolve_url_for(&self, id: &str, file_exists: impl Fn(&str) -> bool) -> Option<bool> {
+    pub fn resolve_url_for(
+        &self,
+        id: &str,
+        now: DateTime<Utc>,
+        file_exists: impl Fn(&str) -> bool,
+    ) -> Option<bool> {
         let entry = self.entry_for(id)?;
-        // Entries with cached_remote_url are always resolvable
-        if entry.cached_remote_url.is_some() {
+        // An entry with a FRESH cached remote copy is resolvable (re-downloadable);
+        // an expired cache is not (its URL is dead).
+        if entry.cache_is_fresh(now) {
             return Some(true);
         }
         let path = match &entry.source {
@@ -66,9 +72,14 @@ impl MediaManifest {
     }
 
     /// Returns true when expected file does not exist or entry is missing (RES-004).
-    pub fn is_missing_for(&self, id: &str, file_exists: impl Fn(&str) -> bool) -> bool {
+    pub fn is_missing_for(
+        &self,
+        id: &str,
+        now: DateTime<Utc>,
+        file_exists: impl Fn(&str) -> bool,
+    ) -> bool {
         self.entry_for(id).is_none_or(|entry| {
-            if entry.cached_remote_url.is_some() {
+            if entry.cache_is_fresh(now) {
                 return false;
             }
             let path = match &entry.source {
@@ -89,18 +100,39 @@ impl MediaManifest {
 
     /// Returns IDs of entries whose local files are missing.
     ///
-    /// Entries with `cached_remote_url` populated are never considered missing
-    /// (they can be re-downloaded). The `is_missing` callback receives each
-    /// entry and returns `true` if the underlying file does not exist on disk.
+    /// An entry with a FRESH cached remote copy (see [`MediaManifestEntry::cache_is_fresh`])
+    /// is never considered missing — it can be re-downloaded. An EXPIRED cache no
+    /// longer counts. The `is_missing` callback receives each entry not covered by a
+    /// fresh cache and returns `true` if the underlying file does not exist on disk.
     pub fn missing_entry_ids(
         &self,
+        now: DateTime<Utc>,
         is_missing: impl Fn(&MediaManifestEntry) -> bool,
     ) -> Vec<String> {
         self.entries
             .iter()
-            .filter(|e| e.cached_remote_url.is_none() && is_missing(e))
+            .filter(|e| !e.cache_is_fresh(now) && is_missing(e))
             .map(|e| e.id.clone())
             .collect()
+    }
+}
+
+impl MediaManifestEntry {
+    /// Whether a cached remote copy is usable ("fresh"): the URL is set AND its
+    /// expiry (if any) is still in the future.
+    ///
+    /// The cached-URL exclusion is a Rust enhancement over Swift PR #135, whose
+    /// missing-media check keys purely on local-file existence and does NOT consult
+    /// `cachedRemoteURL`. Swift's `MediaAsset.freshRemoteURL` adds the expiry test,
+    /// which this mirrors so an EXPIRED cache (dead URL) no longer hides an offline
+    /// asset. None-expiry is treated as fresh (no known expiry → assume usable),
+    /// preserving prior behaviour for legacy entries; only a recorded PAST expiry
+    /// makes the cache stale.
+    pub fn cache_is_fresh(&self, now: DateTime<Utc>) -> bool {
+        self.cached_remote_url.is_some()
+            && self
+                .cached_remote_url_expires_at
+                .is_none_or(|exp| exp > now)
     }
 }
 
@@ -355,13 +387,24 @@ mod tests {
         }
     }
 
+    /// A fixed reference time for deterministic cache-expiry tests.
+    fn now() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    }
+
+    fn entry_cached_until(id: &str, url: &str, expires_at: Option<DateTime<Utc>>) -> MediaManifestEntry {
+        let mut e = entry(id, Some(url));
+        e.cached_remote_url_expires_at = expires_at;
+        e
+    }
+
     #[test]
     fn med_001_missing_entry_ids_all_exist() {
         let manifest = MediaManifest {
             entries: vec![entry("a", None), entry("b", None)],
             ..Default::default()
         };
-        let missing = manifest.missing_entry_ids(|_| false);
+        let missing = manifest.missing_entry_ids(now(), |_| false);
         assert!(missing.is_empty(), "no entries should be missing");
     }
 
@@ -371,7 +414,7 @@ mod tests {
             entries: vec![entry("a", None), entry("b", None)],
             ..Default::default()
         };
-        let missing = manifest.missing_entry_ids(|e| e.id == "a");
+        let missing = manifest.missing_entry_ids(now(), |e| e.id == "a");
         assert_eq!(missing, vec!["a"]);
     }
 
@@ -385,7 +428,7 @@ mod tests {
             ..Default::default()
         };
         // Both are "missing" per callback, but "a" has cached_remote_url so excluded.
-        let missing = manifest.missing_entry_ids(|_| true);
+        let missing = manifest.missing_entry_ids(now(), |_| true);
         assert_eq!(missing, vec!["b"]);
     }
 
@@ -398,14 +441,51 @@ mod tests {
             ],
             ..Default::default()
         };
-        let missing = manifest.missing_entry_ids(|_| true);
+        let missing = manifest.missing_entry_ids(now(), |_| true);
         assert!(missing.is_empty(), "cached entries should not be missing");
+    }
+
+    #[test]
+    fn cache_expiry_gates_missing_and_resolve() {
+        let past = now() - chrono::Duration::hours(1);
+        let future = now() + chrono::Duration::hours(1);
+        let manifest = MediaManifest {
+            entries: vec![
+                entry_cached_until("expired", "https://c/expired.mp4", Some(past)),
+                entry_cached_until("fresh", "https://c/fresh.mp4", Some(future)),
+                entry_cached_until("undated", "https://c/undated.mp4", None),
+            ],
+            ..Default::default()
+        };
+        // All three are "missing" on disk, but only the fresh + undated caches
+        // exclude them; the EXPIRED cache no longer hides the offline asset.
+        let missing = manifest.missing_entry_ids(now(), |_| true);
+        assert_eq!(missing, vec!["expired"]);
+
+        assert!(manifest.is_missing_for("expired", now(), |_| false));
+        assert!(!manifest.is_missing_for("fresh", now(), |_| false));
+        assert!(!manifest.is_missing_for("undated", now(), |_| false));
+        assert_eq!(manifest.resolve_url_for("expired", now(), |_| false), Some(false));
+        assert_eq!(manifest.resolve_url_for("fresh", now(), |_| false), Some(true));
+    }
+
+    #[test]
+    fn cache_is_fresh_semantics() {
+        let past = now() - chrono::Duration::seconds(1);
+        let future = now() + chrono::Duration::seconds(1);
+        assert!(entry_cached_until("a", "u", Some(future)).cache_is_fresh(now()));
+        assert!(!entry_cached_until("a", "u", Some(past)).cache_is_fresh(now()));
+        assert!(
+            entry_cached_until("a", "u", None).cache_is_fresh(now()),
+            "no recorded expiry → treated as fresh"
+        );
+        assert!(!entry("a", None).cache_is_fresh(now()), "no cached URL → not fresh");
     }
 
     #[test]
     fn med_005_missing_entry_ids_empty_manifest() {
         let manifest = MediaManifest::default();
-        let missing = manifest.missing_entry_ids(|_| true);
+        let missing = manifest.missing_entry_ids(now(), |_| true);
         assert!(missing.is_empty(), "empty manifest has no missing entries");
     }
 
@@ -420,7 +500,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let missing = manifest.missing_entry_ids(|e| e.id != "online");
+        let missing = manifest.missing_entry_ids(now(), |e| e.id != "online");
         assert_eq!(missing, vec!["offline", "also_offline"]);
     }
 
@@ -505,7 +585,7 @@ mod tests {
             ai_description: None,
             ai_label_status: None,
         });
-        let result = manifest.resolve_url_for("vid", |p| p == "/path/to/vid.mp4");
+        let result = manifest.resolve_url_for("vid", now(), |p| p == "/path/to/vid.mp4");
         assert_eq!(result, Some(true), "RES-003: file exists");
     }
 
@@ -535,14 +615,14 @@ mod tests {
             ai_description: None,
             ai_label_status: None,
         });
-        let result = manifest.resolve_url_for("vid", |_| false);
+        let result = manifest.resolve_url_for("vid", now(), |_| false);
         assert_eq!(result, Some(false), "RES-003: file missing");
     }
 
     #[test]
     fn res_003_resolve_url_nonexistent_entry() {
         let manifest = MediaManifest::default();
-        let result = manifest.resolve_url_for("nonexistent", |_| true);
+        let result = manifest.resolve_url_for("nonexistent", now(), |_| true);
         assert_eq!(result, None, "RES-003: no entry returns None");
     }
 
@@ -572,7 +652,7 @@ mod tests {
             ai_description: None,
             ai_label_status: None,
         });
-        let result = manifest.resolve_url_for("cached", |_| false);
+        let result = manifest.resolve_url_for("cached", now(), |_| false);
         assert_eq!(result, Some(true), "RES-003: cached is always resolvable");
     }
 
@@ -603,7 +683,7 @@ mod tests {
             ai_label_status: None,
         });
         assert!(
-            manifest.is_missing_for("vid", |_| false),
+            manifest.is_missing_for("vid", now(), |_| false),
             "RES-004: missing file"
         );
     }
@@ -612,7 +692,7 @@ mod tests {
     fn res_004_is_missing_entry_not_found() {
         let manifest = MediaManifest::default();
         assert!(
-            manifest.is_missing_for("nonexistent", |_| true),
+            manifest.is_missing_for("nonexistent", now(), |_| true),
             "RES-004: missing entry"
         );
     }
@@ -644,7 +724,7 @@ mod tests {
             ai_label_status: None,
         });
         assert!(
-            !manifest.is_missing_for("vid", |_| true),
+            !manifest.is_missing_for("vid", now(), |_| true),
             "RES-004: not missing when file exists"
         );
     }

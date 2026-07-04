@@ -432,9 +432,11 @@ impl RelinkOps {
             }
         }
 
-        // Identify offline assets (no cached_remote_url, and marked missing)
-        let offline_ids: HashSet<String> =
-            manifest.missing_entry_ids(|_| true).into_iter().collect();
+        // Identify offline assets (no fresh cached_remote_url, and marked missing).
+        let offline_ids: HashSet<String> = manifest
+            .missing_entry_ids(chrono::Utc::now(), |_| true)
+            .into_iter()
+            .collect();
         let total_offline = offline_ids.len();
         let mut relinked: usize = 0;
 

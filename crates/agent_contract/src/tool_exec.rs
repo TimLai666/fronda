@@ -405,40 +405,42 @@ impl ToolExecutor {
         self.search_status = status.to_string();
     }
 
-    /// Returns IDs of media entries that are offline (missing local file, no cached URL).
-    ///
-    /// The `is_missing` callback is called for each entry without `cached_remote_url`
-    /// and returns `true` if the underlying file does not exist on disk.
+    /// Returns IDs of media entries that are offline (missing local file, no fresh
+    /// cached URL). `now` gates cache-expiry (see `MediaManifestEntry::cache_is_fresh`).
     pub fn media_offline_ids(
         &self,
+        now: chrono::DateTime<chrono::Utc>,
         is_missing: impl Fn(&MediaManifestEntry) -> bool,
     ) -> Vec<String> {
-        self.media_manifest.missing_entry_ids(is_missing)
+        self.media_manifest.missing_entry_ids(now, is_missing)
     }
 
     /// Returns true if the given media ref is offline.
     pub fn is_media_offline(
         &self,
         media_ref: &str,
+        now: chrono::DateTime<chrono::Utc>,
         is_missing: impl Fn(&MediaManifestEntry) -> bool,
     ) -> bool {
-        let offline_ids = self.media_offline_ids(is_missing);
+        let offline_ids = self.media_offline_ids(now, is_missing);
         offline_ids.iter().any(|id| id == media_ref)
     }
 
     /// Returns true if the given media ref is unprocessable (present but failed to decode).
     ///
     /// Uses the `is_missing` callback to exclude entries whose files are simply missing
-    /// (those are "offline", not "unprocessable").
+    /// (those are "offline", not "unprocessable"); an entry with a fresh cached copy is
+    /// likewise not unprocessable.
     pub fn is_media_unprocessable(
         &self,
         media_ref: &str,
+        now: chrono::DateTime<chrono::Utc>,
         is_missing: impl Fn(&MediaManifestEntry) -> bool,
         is_unprocessable: impl Fn(&MediaManifestEntry) -> bool,
     ) -> bool {
         self.media_manifest.entries.iter().any(|e| {
             e.id == media_ref
-                && e.cached_remote_url.is_none()
+                && !e.cache_is_fresh(now)
                 && !is_missing(e)
                 && is_unprocessable(e)
         })
@@ -5969,7 +5971,7 @@ mod tests {
     #[test]
     fn exec_058_missing_entry_ids_none_missing() {
         let exec = make_executor_with_media();
-        let offline = exec.media_offline_ids(|_| false);
+        let offline = exec.media_offline_ids(chrono::Utc::now(), |_| false);
         assert!(offline.is_empty(), "no entries should be missing");
     }
 
@@ -5977,7 +5979,7 @@ mod tests {
     fn exec_059_missing_entry_ids_all_missing() {
         let exec = make_executor_with_media();
         // The helper adds one entry with no cached_remote_url.
-        let offline = exec.media_offline_ids(|_| true);
+        let offline = exec.media_offline_ids(chrono::Utc::now(), |_| true);
         assert_eq!(offline.len(), 1, "the one entry should be missing");
     }
 
@@ -5985,20 +5987,20 @@ mod tests {
     fn exec_060_is_media_offline_true() {
         let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
-        assert!(exec.is_media_offline(&id, |_| true));
+        assert!(exec.is_media_offline(&id, chrono::Utc::now(), |_| true));
     }
 
     #[test]
     fn exec_061_is_media_offline_false() {
         let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
-        assert!(!exec.is_media_offline(&id, |_| false));
+        assert!(!exec.is_media_offline(&id, chrono::Utc::now(), |_| false));
     }
 
     #[test]
     fn exec_062_is_media_offline_unknown_ref() {
         let exec = make_executor_with_media();
-        assert!(!exec.is_media_offline("unknown", |_| true));
+        assert!(!exec.is_media_offline("unknown", chrono::Utc::now(), |_| true));
     }
 
     #[test]
@@ -6030,9 +6032,43 @@ mod tests {
                 ai_label_status: None,
             });
         assert!(
-            !exec.is_media_offline("cached", |_| true),
+            !exec.is_media_offline("cached", chrono::Utc::now(), |_| true),
             "cached entries should not be offline"
         );
+    }
+
+    #[test]
+    fn is_media_offline_expired_cache_is_offline() {
+        // An EXPIRED cached URL no longer hides an offline asset (the `now` clock
+        // threads through the helper into MediaManifestEntry::cache_is_fresh).
+        let mut exec = make_executor();
+        let past = chrono::Utc::now() - chrono::Duration::hours(1);
+        exec.media_manifest
+            .entries
+            .push(core_model::MediaManifestEntry {
+                id: "stale".into(),
+                name: "stale".into(),
+                r#type: core_model::ClipType::Video,
+                source: core_model::MediaSource::External {
+                    absolute_path: "/tmp/stale.mp4".into(),
+                },
+                duration: 10.0,
+                generation_input: None,
+                source_width: None,
+                source_height: None,
+                source_fps: None,
+                has_audio: None,
+                folder_id: None,
+                cached_remote_url: Some("https://c".into()),
+                cached_remote_url_expires_at: Some(past),
+                source_timecode_frame: None,
+                source_timecode_quanta: None,
+                source_timecode_drop_frame: None,
+                ai_tags: None,
+                ai_description: None,
+                ai_label_status: None,
+            });
+        assert!(exec.is_media_offline("stale", chrono::Utc::now(), |_| true));
     }
 
     #[test]
@@ -6040,7 +6076,7 @@ mod tests {
         let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         // File exists (not missing) but is unprocessable.
-        assert!(exec.is_media_unprocessable(&id, |_| false, |_| true));
+        assert!(exec.is_media_unprocessable(&id, chrono::Utc::now(), |_| false, |_| true));
     }
 
     #[test]
@@ -6048,7 +6084,7 @@ mod tests {
         let exec = make_executor_with_media();
         let id = exec.media_manifest.entries[0].id.clone();
         // If file is missing, it's offline, not unprocessable.
-        assert!(!exec.is_media_unprocessable(&id, |_| true, |_| true));
+        assert!(!exec.is_media_unprocessable(&id, chrono::Utc::now(), |_| true, |_| true));
     }
 
     // ── Revision counter (shared-editor-state) ─────────────────────────
