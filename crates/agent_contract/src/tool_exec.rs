@@ -590,10 +590,12 @@ impl ToolExecutor {
             // in Issues #154/#155/#157/#158/#165/#174). Report the limitation honestly rather than
             // the misleading "Unknown tool" a fallthrough gives; each needs its own port (some are
             // host-gated: audio DSP, on-device silence analysis, XML parsing, a preset store).
-            "create_compound_clip" | "dissolve_compound_clip" => Err(
-                "Compound clips (nested sub-sequences) aren't implemented through the agent yet."
-                    .to_string(),
-            ),
+            "create_compound_clip" => {
+                self.exec_mut(tool_name, ToolExecutor::cmd_create_compound_clip, args)
+            }
+            "dissolve_compound_clip" => {
+                self.exec_mut(tool_name, ToolExecutor::cmd_dissolve_compound_clip, args)
+            }
             "import_xml" => Err(
                 "Importing an XMEML/FCPXML timeline isn't implemented through the agent yet."
                     .to_string(),
@@ -3008,6 +3010,60 @@ impl ToolExecutor {
                 "type": "text",
                 "text": serde_json::to_string(&json!({
                     "mediaRef": id, "name": name, "width": width, "height": height
+                }))
+                .unwrap_or_default()
+            }]
+        }))
+    }
+
+    /// CREATE_COMPOUND_CLIP: group adjacent same-track clips into a compound
+    /// clip whose constituents move into a nested timeline (Issue #155).
+    fn cmd_create_compound_clip(&mut self, args: &Value) -> Result<Value, String> {
+        let clip_ids: Vec<String> = args
+            .get("clipIds")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if clip_ids.is_empty() {
+            return Err(
+                "create_compound_clip requires 'clipIds' (a non-empty array of clip ids)."
+                    .to_string(),
+            );
+        }
+        let name = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let compound_id =
+            timeline_core::create_compound_clip(&mut self.timeline, &clip_ids, name)?;
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&json!({
+                    "compoundClipId": compound_id,
+                    "name": name.unwrap_or("Compound Clip"),
+                    "groupedClipCount": clip_ids.len(),
+                }))
+                .unwrap_or_default()
+            }]
+        }))
+    }
+
+    /// DISSOLVE_COMPOUND_CLIP: flatten a compound clip back to its constituent
+    /// clips at their absolute frames (Issue #155).
+    fn cmd_dissolve_compound_clip(&mut self, args: &Value) -> Result<Value, String> {
+        let clip_id = args
+            .get("clipId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "dissolve_compound_clip requires 'clipId'.".to_string())?;
+        let restored = timeline_core::dissolve_compound_clip(&mut self.timeline, clip_id)?;
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&json!({
+                    "restoredClipIds": restored,
+                    "count": restored.len(),
                 }))
                 .unwrap_or_default()
             }]
@@ -6768,6 +6824,56 @@ mod tests {
             assert!(!err.contains("Unknown tool"), "{tool}: {err}");
             assert!(err.contains("runs in the app"), "{tool}: {err}");
         }
+    }
+
+    #[test]
+    fn compound_clip_create_and_dissolve_round_trip_via_executor() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
+        manifest.entries.push(video_media("m2", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute("add_clips", &json!({"mediaIds": ["m1", "m2"]}))
+            .unwrap();
+        let track0 = &exec.timeline().tracks[0];
+        assert_eq!(track0.clips.len(), 2, "two clips placed on one track");
+        let ids: Vec<String> = track0.clips.iter().map(|c| c.id.clone()).collect();
+
+        let res = exec
+            .execute(
+                "create_compound_clip",
+                &json!({"clipIds": [ids[0], ids[1]], "name": "Scene"}),
+            )
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("compoundClipId"), "res={text}");
+        assert_eq!(exec.timeline().tracks[0].clips.len(), 1, "one compound clip");
+        let compound_id = exec.timeline().tracks[0].clips[0].id.clone();
+        assert!(exec.timeline().tracks[0].clips[0]
+            .compound_timeline_id
+            .is_some());
+        assert_eq!(exec.timeline().compound_timelines.len(), 1);
+
+        let res2 = exec
+            .execute("dissolve_compound_clip", &json!({"clipId": compound_id}))
+            .unwrap();
+        let text2 = res2["content"][0]["text"].as_str().unwrap();
+        assert!(text2.contains("restoredClipIds"), "res={text2}");
+        assert_eq!(exec.timeline().tracks[0].clips.len(), 2, "clips restored");
+        assert!(exec.timeline().compound_timelines.is_empty());
+    }
+
+    #[test]
+    fn compound_clip_errors_surface_not_unknown_tool() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute("create_compound_clip", &json!({"clipIds": ["ghost"]}))
+            .unwrap_err();
+        assert!(!err.contains("Unknown tool"), "{err}");
+        assert!(err.contains("not found"), "{err}");
+        let err2 = exec
+            .execute("dissolve_compound_clip", &json!({"clipId": "ghost"}))
+            .unwrap_err();
+        assert!(err2.contains("not found"), "{err2}");
     }
 
     #[test]
