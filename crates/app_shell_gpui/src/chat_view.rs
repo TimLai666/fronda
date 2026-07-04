@@ -690,6 +690,7 @@ impl ChatView {
 
             // Copy button below assistant text (Swift: CopyMessageButton, visible on hover)
             if !msg.text.is_empty() {
+                let copy_text = msg.text.clone();
                 body = body.child(
                     div()
                         .id(gpui::SharedString::from(format!("chat-copy-{idx}")))
@@ -698,7 +699,11 @@ impl ChatView {
                         .items_center()
                         .gap(px(Spacing::XS))
                         .cursor_pointer()
-                        .on_click(cx.listener(|_, _, _, _| { /* copy to clipboard */ }))
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                copy_text.clone(),
+                            ));
+                        }))
                         .child(
                             div()
                                 .text_color(Text::MUTED)
