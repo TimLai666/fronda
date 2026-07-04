@@ -290,16 +290,21 @@ pub fn blit_scaled(
             ];
             let da = canvas.pixels[ci + 3] as f64 / 255.0;
             let blended = blend_rgb(blend, s_rgb, d_rgb);
+            // Straight-alpha source-over. out_a = src_a + dst_a*(1-src_a); the RGB is
+            // the premultiplied result divided by out_a. The backdrop term must be
+            // weighted by its own alpha `da` and the result normalized by out_a —
+            // both are no-ops only when the backdrop is opaque (da==1), which is why
+            // the previous (da-omitting, un-normalized) form looked right in tests
+            // but stored premultiplied colour over the transparent canvas.
+            let out_a = a + da * (1.0 - a);
+            let inv_out_a = if out_a > 0.0 { 1.0 / out_a } else { 0.0 };
             for k in 0..3 {
-                // The blend only takes effect in proportion to the backdrop's
-                // alpha (W3C compositing); over transparent areas the source
-                // shows unblended.
+                // The blend only takes effect in proportion to the backdrop's alpha
+                // (W3C); over transparent areas the source shows unblended.
                 let effective = (1.0 - da) * s_rgb[k] + da * blended[k];
-                let out = effective * a + d_rgb[k] * (1.0 - a);
+                let out = (effective * a + d_rgb[k] * da * (1.0 - a)) * inv_out_a;
                 canvas.pixels[ci + k] = (out * 255.0).round().clamp(0.0, 255.0) as u8;
             }
-            // Straight-alpha over: out_a = src_a + dst_a*(1-src_a).
-            let out_a = a + da * (1.0 - a);
             canvas.pixels[ci + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
         }
     }
@@ -864,6 +869,23 @@ mod tests {
         );
         // 255*0.5 + 0*0.5 = 127.5 → 128.
         assert_eq!(px(&canvas, 0, 0), [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn blit_over_transparent_stores_straight_alpha_not_premultiplied() {
+        // A 50% clip over the transparent canvas must store STRAIGHT colour
+        // (white stays 255 with alpha 128), not premultiplied grey [128,128,128,128].
+        let mut canvas = RgbaImage::new(1, 1); // transparent, straight-alpha buffer
+        let white_half = RgbaImage::solid(1, 1, [255, 255, 255, 128]);
+        let region = (0.0, 0.0, 1.0, 1.0);
+        blit_scaled(&mut canvas, &white_half, region, (0.0, 0.0, 1.0, 1.0), 1.0, 0.0, BlendMode::Normal);
+        let p = px(&canvas, 0, 0);
+        assert_eq!(p, [255, 255, 255, 128], "straight colour over transparent");
+        // Stacking a second identical layer stays pure white (never greys out).
+        blit_scaled(&mut canvas, &white_half, region, (0.0, 0.0, 1.0, 1.0), 1.0, 0.0, BlendMode::Normal);
+        let p2 = px(&canvas, 0, 0);
+        assert_eq!((p2[0], p2[1], p2[2]), (255, 255, 255), "white-over-white stays white: {p2:?}");
+        assert!(p2[3] > 180 && p2[3] < 200, "alpha ~0.75: {}", p2[3]);
     }
 
     #[test]

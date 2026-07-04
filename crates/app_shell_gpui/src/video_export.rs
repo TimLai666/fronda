@@ -326,7 +326,17 @@ impl Mp4Encoder {
             for y in 0..self.height as usize {
                 let dst = &mut data[y * stride..y * stride + row_bytes];
                 let src = &image.pixels[y * row_bytes..y * row_bytes + row_bytes];
-                dst.copy_from_slice(src);
+                // The compositor buffer is STRAIGHT alpha; swscale RGBA→YUV drops
+                // alpha, so composite over black first (video has an opaque black
+                // background). Opaque pixels are unchanged.
+                for x in 0..self.width as usize {
+                    let i = x * 4;
+                    let a = src[i + 3] as u16;
+                    dst[i] = (src[i] as u16 * a / 255) as u8;
+                    dst[i + 1] = (src[i + 1] as u16 * a / 255) as u8;
+                    dst[i + 2] = (src[i + 2] as u16 * a / 255) as u8;
+                    dst[i + 3] = 255;
+                }
             }
         }
         let mut yuv = ffmpeg::frame::Video::new(self.pix, self.width, self.height);
