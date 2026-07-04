@@ -1424,6 +1424,37 @@ impl ToolExecutor {
             .and_then(|v| v.as_i64())
             .map(|i| i as usize);
 
+        // Auto-detect project settings from the first video the FIRST time clips are
+        // added (Swift `checkProjectSettings`): silently adopt its fps/size and mark
+        // the project configured. Later adds see it configured, keep settings fixed,
+        // and only warn on a source-fps mismatch (#233). Runs before `project_fps` so
+        // the new clips are placed on the detected timebase.
+        let mut settings_note: Option<String> = None;
+        if !self.timeline.settings_configured {
+            let detected = media_ids.iter().find_map(|id| {
+                self.media_manifest
+                    .entry_for(id)
+                    .filter(|e| e.r#type == ClipType::Video)
+                    .map(|e| (e.source_fps, e.source_width, e.source_height))
+            });
+            if let Some((sfps, sw, sh)) = detected {
+                let fps = sfps
+                    .map(|f| f.round() as i64)
+                    .filter(|f| (1..=120).contains(f))
+                    .unwrap_or(self.timeline.fps);
+                let width = sw.unwrap_or(self.timeline.width);
+                let height = sh.unwrap_or(self.timeline.height);
+                let (pf, pw, ph) = (self.timeline.fps, self.timeline.width, self.timeline.height);
+                timeline_core::apply_settings(&mut self.timeline, fps, width, height, |c| {
+                    c.transform == Transform::default()
+                });
+                if fps != pf || width != pw || height != ph {
+                    settings_note =
+                        Some(format!("Set project to {width}x{height} @ {fps}fps from the first clip."));
+                }
+            }
+        }
+
         let project_fps = self.timeline.fps;
         let mut warnings: Vec<String> = Vec::new();
         let mut clips: Vec<Clip> = Vec::with_capacity(media_ids.len());
@@ -1557,6 +1588,10 @@ impl ToolExecutor {
         let linked_audio_count = self.auto_link_placed_audio(&video_with_audio)?;
 
         let mut text = format!("Added {placed_count} clip(s)");
+        if let Some(note) = &settings_note {
+            text.push('\n');
+            text.push_str(note);
+        }
         if linked_audio_count > 0 {
             text.push_str(&format!("\n(+{linked_audio_count} linked audio clip(s))"));
         }
@@ -3526,6 +3561,68 @@ mod tests {
         ToolExecutor::new(Timeline::default(), manifest)
     }
 
+    fn video_media(id: &str, w: i64, h: i64, fps: f64) -> core_model::MediaManifestEntry {
+        core_model::MediaManifestEntry {
+            id: id.into(),
+            name: format!("{id}.mp4"),
+            r#type: ClipType::Video,
+            source: core_model::MediaSource::External {
+                absolute_path: format!("/{id}.mp4"),
+            },
+            duration: 3.0,
+            generation_input: None,
+            source_width: Some(w),
+            source_height: Some(h),
+            source_fps: Some(fps),
+            has_audio: Some(false),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+        }
+    }
+
+    #[test]
+    fn add_clips_auto_detects_settings_from_first_video() {
+        // First clip ever (settings not configured) → silently adopt its fps/size.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("v4k", 3840, 2160, 24.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        assert!(!exec.timeline().settings_configured);
+        let res = exec.execute("add_clips", &json!({"mediaIds": ["v4k"]})).unwrap();
+        assert_eq!(exec.timeline().fps, 24);
+        assert_eq!(exec.timeline().width, 3840);
+        assert_eq!(exec.timeline().height, 2160);
+        assert!(exec.timeline().settings_configured);
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("3840x2160") && text.contains("24fps"),
+            "settings note expected: {text}"
+        );
+        // Clip duration is measured on the DETECTED 24fps grid (3s → 72 frames).
+        assert_eq!(exec.timeline().tracks[0].clips[0].duration_frames, 72);
+    }
+
+    #[test]
+    fn add_clips_keeps_settings_fixed_after_first_clip() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("a24", 1920, 1080, 24.0));
+        manifest.entries.push(video_media("b60", 1920, 1080, 60.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute("add_clips", &json!({"mediaIds": ["a24"]})).unwrap();
+        assert_eq!(exec.timeline().fps, 24, "first clip sets project to 24fps");
+        // A later 60fps clip must NOT re-detect: project fps stays fixed (#233).
+        let res = exec.execute("add_clips", &json!({"mediaIds": ["b60"]})).unwrap();
+        assert_eq!(exec.timeline().fps, 24, "settings stay fixed after the first clip");
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("Set project"), "no re-detect on later adds: {text}");
+    }
+
     #[test]
     fn add_clips_resolves_type_and_full_source_duration() {
         // Upstream #236: omitting trim/duration places the full source length,
@@ -3808,10 +3905,12 @@ mod tests {
 
     #[test]
     fn add_clips_warns_on_source_fps_divergence_without_changing_project_fps() {
-        // Upstream #233: project fps is authoritative; a divergent source fps
-        // only warns and points at set_project_settings.
+        // Upstream #233: on a CONFIGURED project, project fps is authoritative; a
+        // divergent source fps only warns and points at set_project_settings (the
+        // first-clip auto-detect only fires when settings are not yet configured).
         let mut exec = make_executor_with_media();
         exec.timeline_mut().fps = 24; // source asset is 30 fps
+        exec.timeline_mut().settings_configured = true;
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         let result = exec
             .execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 0}))
