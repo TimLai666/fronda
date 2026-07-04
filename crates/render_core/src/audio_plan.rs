@@ -98,6 +98,8 @@ pub fn mix_timeline_audio(
                 volume: 1.0,
                 fade_in_samples: fade_in,
                 fade_out_samples: fade_out,
+                fade_in_smooth: clip.fade_in_interpolation == core_model::Interpolation::Smooth,
+                fade_out_smooth: clip.fade_out_interpolation == core_model::Interpolation::Smooth,
             });
         }
     }

@@ -1,5 +1,5 @@
 use crate::keyframes::KeyframeValue;
-use core_model::{AnimPair, Clip, Crop, KeyframeTrack, Transform};
+use core_model::{AnimPair, Clip, Crop, Interpolation, KeyframeTrack, Transform};
 use std::f64::consts::PI;
 
 // ---------------------------------------------------------------------------
@@ -80,26 +80,49 @@ pub fn resolved_opacity_at(clip: &Clip, frame: i64) -> f64 {
     }
 }
 
-/// Linear fade-in/out multiplier (`0..=1`) at clip-relative `frame`, from the
-/// clip's `fade_in_frames` / `fade_out_frames`. Returns 1.0 where no fade
-/// applies. Multiply this into `resolved_opacity_at` for the effective opacity.
+/// Fade-in/out multiplier (`0..=1`) at clip-relative `frame`, from the clip's
+/// `fade_in_frames` / `fade_out_frames`. Returns 1.0 where no fade applies.
+/// Multiply this into `resolved_opacity_at` for the effective opacity.
+///
+/// Mirrors Swift `Timeline.fadeMultiplier(at:)` exactly: each ramp is `t` (or
+/// `smoothstep(t)` for a `.smooth` interpolation), and the two ramps combine by
+/// `min` — so overlapping head/tail fades on a short clip take the deeper of the
+/// two rather than double-attenuating.
 pub fn fade_multiplier_at(clip: &Clip, frame: i64) -> f64 {
     let dur = clip.duration_frames;
     if dur <= 0 {
         return 1.0;
     }
-    let mut m = 1.0;
-    if clip.fade_in_frames > 0 && frame < clip.fade_in_frames {
-        m *= (frame as f64 + 0.5) / clip.fade_in_frames as f64;
+    if frame < 0 || frame > dur {
+        return 0.0;
     }
-    if clip.fade_out_frames > 0 {
-        let out_start = dur - clip.fade_out_frames;
-        if frame >= out_start {
-            let into = frame - out_start;
-            m *= 1.0 - (into as f64 + 0.5) / clip.fade_out_frames as f64;
+    let in_mul = if clip.fade_in_frames > 0 {
+        let t = (frame as f64 / clip.fade_in_frames as f64).min(1.0);
+        if clip.fade_in_interpolation == Interpolation::Smooth {
+            smoothstep(t)
+        } else {
+            t
         }
-    }
-    m.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let out_rem = dur - frame;
+    let out_mul = if clip.fade_out_frames > 0 {
+        let t = (out_rem as f64 / clip.fade_out_frames as f64).min(1.0);
+        if clip.fade_out_interpolation == Interpolation::Smooth {
+            smoothstep(t)
+        } else {
+            t
+        }
+    } else {
+        1.0
+    };
+    in_mul.min(out_mul)
+}
+
+/// `t*t*(3-2t)` easing, matching Swift `smoothstep` (Keyframe.swift).
+fn smoothstep(t: f64) -> f64 {
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// INS-002 (volume track): Resolve the effective volume at a clip-relative frame.
@@ -971,5 +994,50 @@ mod tests {
         clip.duration_frames = 50;
         assert_eq!(fade_multiplier_at(&clip, 0), 1.0);
         assert_eq!(fade_multiplier_at(&clip, 49), 1.0);
+    }
+
+    #[test]
+    fn fade_multiplier_starts_and_ends_at_zero() {
+        // No half-frame offset (Swift parity): the very first/last fade frame is
+        // exactly 0, not ~0.05.
+        let mut clip = make_clip();
+        clip.duration_frames = 100;
+        clip.fade_in_frames = 10;
+        clip.fade_out_frames = 20;
+        assert_eq!(fade_multiplier_at(&clip, 0), 0.0);
+        assert_eq!(fade_multiplier_at(&clip, 100), 0.0);
+        // Fully out of range clamps to 0.
+        assert_eq!(fade_multiplier_at(&clip, 101), 0.0);
+        assert_eq!(fade_multiplier_at(&clip, -1), 0.0);
+    }
+
+    #[test]
+    fn fade_multiplier_smooth_curves_the_ramp() {
+        // `.smooth` applies smoothstep: below linear in the first half of the
+        // ramp, above it in the second half. Linear leaves it as `t`.
+        let mut clip = make_clip();
+        clip.duration_frames = 100;
+        clip.fade_in_frames = 10;
+        clip.fade_in_interpolation = Interpolation::Smooth;
+        // t=0.2 → smoothstep 0.104 < linear 0.2.
+        assert!(fade_multiplier_at(&clip, 2) < 0.2 - 1e-9);
+        // t=0.8 → smoothstep 0.896 > linear 0.8.
+        assert!(fade_multiplier_at(&clip, 8) > 0.8 + 1e-9);
+        // Midpoint smoothstep(0.5) == 0.5, same as linear.
+        assert!((fade_multiplier_at(&clip, 5) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fade_multiplier_overlapping_fades_take_min_not_product() {
+        // Short clip whose head and tail fades overlap: Swift takes the deeper of
+        // the two ramps (min), not the product (which would double-attenuate).
+        let mut clip = make_clip();
+        clip.duration_frames = 10;
+        clip.fade_in_frames = 8;
+        clip.fade_out_frames = 8;
+        // rel=5: in_mul = 5/8 = 0.625, out_mul = (10-5)/8 = 0.625.
+        let m = fade_multiplier_at(&clip, 5);
+        assert!((m - 0.625).abs() < 1e-9, "min ramp: {m}");
+        assert!(m > 0.625 * 0.625 + 1e-9, "not the product");
     }
 }

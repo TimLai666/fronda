@@ -17,13 +17,16 @@ pub fn samples_per_frame(sample_rate: u32, fps: i64) -> usize {
 /// One audio source placed on the timeline. `samples` is interleaved PCM already
 /// resampled to the mix rate and channel count; `start_sample` is the per-channel
 /// output offset where it begins.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AudioPlacement {
     pub start_sample: usize,
     pub samples: Vec<f32>,
     pub volume: f32,
     pub fade_in_samples: usize,
     pub fade_out_samples: usize,
+    /// `smoothstep` easing on the head/tail ramp instead of linear.
+    pub fade_in_smooth: bool,
+    pub fade_out_smooth: bool,
 }
 
 impl AudioPlacement {
@@ -37,20 +40,38 @@ impl AudioPlacement {
     }
 }
 
-/// Linear fade envelope at per-channel frame `i` of a clip `frames` long.
-fn fade_gain(i: usize, frames: usize, fade_in: usize, fade_out: usize) -> f32 {
-    let mut g = 1.0f32;
-    if fade_in > 0 && i < fade_in {
-        g *= (i as f32 + 0.5) / fade_in as f32;
-    }
-    if fade_out > 0 && frames >= fade_out {
-        let out_start = frames - fade_out;
-        if i >= out_start {
-            let into = i - out_start;
-            g *= 1.0 - (into as f32 + 0.5) / fade_out as f32;
+fn smoothstep(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Fade envelope at per-channel frame `i` of a clip `frames` long. Mirrors Swift
+/// `Timeline.fadeMultiplier(at:)` in sample space: each ramp is `t` (or
+/// `smoothstep(t)`), the two combine by `min` so overlapping head/tail fades take
+/// the deeper ramp rather than double-attenuating, and there is no half-sample
+/// offset (the first sample is exactly 0, the last is `1/fade`).
+fn fade_gain(p: &AudioPlacement, i: usize, frames: usize) -> f32 {
+    let in_mul = if p.fade_in_samples > 0 {
+        let t = (i as f32 / p.fade_in_samples as f32).min(1.0);
+        if p.fade_in_smooth {
+            smoothstep(t)
+        } else {
+            t
         }
-    }
-    g.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let out_mul = if p.fade_out_samples > 0 {
+        let rem = frames.saturating_sub(i);
+        let t = (rem as f32 / p.fade_out_samples as f32).min(1.0);
+        if p.fade_out_smooth {
+            smoothstep(t)
+        } else {
+            t
+        }
+    } else {
+        1.0
+    };
+    in_mul.min(out_mul)
 }
 
 /// Mix `placements` into one interleaved buffer of `channels`. Its per-channel
@@ -71,7 +92,7 @@ pub fn mix(placements: &[AudioPlacement], channels: usize, min_frames: usize) ->
     for p in placements {
         let frames = p.frames(channels);
         for i in 0..frames {
-            let gain = p.volume * fade_gain(i, frames, p.fade_in_samples, p.fade_out_samples);
+            let gain = p.volume * fade_gain(p, i, frames);
             let out_frame = p.start_sample + i;
             let out_base = out_frame * channels;
             let in_base = i * channels;
@@ -174,8 +195,7 @@ mod tests {
             start_sample: start,
             samples,
             volume,
-            fade_in_samples: 0,
-            fade_out_samples: 0,
+            ..Default::default()
         }
     }
 
@@ -231,32 +251,69 @@ mod tests {
     }
 
     #[test]
-    fn fade_in_ramps_from_near_zero() {
+    fn fade_in_ramps_linearly_from_zero() {
+        // Swift parity: linear ramp `i/fade`, no half-sample offset → 0, .25, .5, .75.
         let p = AudioPlacement {
             start_sample: 0,
             samples: vec![1.0, 1.0, 1.0, 1.0],
             volume: 1.0,
             fade_in_samples: 4,
-            fade_out_samples: 0,
+            ..Default::default()
         };
         let out = mix(&[p], 1, 0);
-        assert!(out[0] < out[1] && out[1] < out[2] && out[2] < out[3]);
-        assert!(out[0] < 0.2, "first sample near zero, got {}", out[0]);
-        assert!(out[3] < 1.0, "still ramping at last fade sample");
+        let want = [0.0f32, 0.25, 0.5, 0.75];
+        for (got, w) in out.iter().zip(want) {
+            assert!((got - w).abs() < 1e-6, "got {out:?}");
+        }
     }
 
     #[test]
-    fn fade_out_ramps_to_near_zero() {
+    fn fade_out_ramps_linearly_to_last_step() {
+        // Swift parity: `rem/fade` → 1, .75, .5, .25 (last sample is 1/fade, not 0).
         let p = AudioPlacement {
             start_sample: 0,
             samples: vec![1.0, 1.0, 1.0, 1.0],
             volume: 1.0,
-            fade_in_samples: 0,
             fade_out_samples: 4,
+            ..Default::default()
         };
         let out = mix(&[p], 1, 0);
-        assert!(out[0] > out[1] && out[1] > out[2] && out[2] > out[3]);
-        assert!(out[3] < 0.2, "last sample near zero, got {}", out[3]);
+        let want = [1.0f32, 0.75, 0.5, 0.25];
+        for (got, w) in out.iter().zip(want) {
+            assert!((got - w).abs() < 1e-6, "got {out:?}");
+        }
+    }
+
+    #[test]
+    fn fade_smooth_curves_below_then_above_linear() {
+        // `.smooth` in-fade: smoothstep(i/fade) — below linear early, above late.
+        let p = AudioPlacement {
+            start_sample: 0,
+            samples: vec![1.0; 10],
+            volume: 1.0,
+            fade_in_samples: 10,
+            fade_in_smooth: true,
+            ..Default::default()
+        };
+        let out = mix(&[p], 1, 0);
+        assert!(out[2] < 0.2 - 1e-6, "smoothstep(0.2)=0.104 < 0.2: {}", out[2]);
+        assert!(out[8] > 0.8 + 1e-6, "smoothstep(0.8)=0.896 > 0.8: {}", out[8]);
+    }
+
+    #[test]
+    fn overlapping_fades_take_min_not_product() {
+        // 10-sample clip, both fades 8 samples → they overlap. At i=5 both ramps
+        // give 0.625; min keeps 0.625 rather than the product 0.39.
+        let p = AudioPlacement {
+            start_sample: 0,
+            samples: vec![1.0; 10],
+            volume: 1.0,
+            fade_in_samples: 8,
+            fade_out_samples: 8,
+            ..Default::default()
+        };
+        let out = mix(&[p], 1, 0);
+        assert!((out[5] - 0.625).abs() < 1e-6, "min of the two ramps: {}", out[5]);
     }
 
     #[test]
