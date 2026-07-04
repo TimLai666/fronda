@@ -373,6 +373,40 @@ pub fn apply_vignette(img: &mut RgbaImage, amount: f64) {
     }
 }
 
+/// Rotate `src` by `degrees` (clockwise) about the pixel point `(px, py)`,
+/// keeping the same dimensions (content outside the frame is clipped). Bilinear
+/// inverse sampling; a no-op for 0°. Used for text-layer rotation.
+pub fn rotate_around(src: &RgbaImage, degrees: f64, px: f64, py: f64) -> RgbaImage {
+    if degrees == 0.0 || src.width == 0 || src.height == 0 {
+        return src.clone();
+    }
+    let rad = degrees * std::f64::consts::PI / 180.0;
+    let (sin, cos) = (rad.sin(), rad.cos());
+    let mut out = RgbaImage::new(src.width, src.height);
+    for y in 0..src.height {
+        for x in 0..src.width {
+            let dx = x as f64 + 0.5 - px;
+            let dy = y as f64 + 0.5 - py;
+            // Inverse rotation to find the source position.
+            let sx = px + dx * cos + dy * sin - 0.5;
+            let sy = py - dx * sin + dy * cos - 0.5;
+            if sx < -0.5 || sx > src.width as f64 - 0.5 || sy < -0.5 || sy > src.height as f64 - 0.5
+            {
+                continue;
+            }
+            let [r, g, b, a] = sample_bilinear(src, sx, sy);
+            let i = (y * out.width + x) * 4;
+            if a > 0.0 {
+                out.pixels[i] = (r / a * 255.0).round().clamp(0.0, 255.0) as u8;
+                out.pixels[i + 1] = (g / a * 255.0).round().clamp(0.0, 255.0) as u8;
+                out.pixels[i + 2] = (b / a * 255.0).round().clamp(0.0, 255.0) as u8;
+                out.pixels[i + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    out
+}
+
 /// Mirror an image horizontally and/or vertically (clip flip). Returns a clone
 /// unchanged when neither flip is set.
 pub fn flip_image(img: &RgbaImage, horizontal: bool, vertical: bool) -> RgbaImage {
@@ -625,8 +659,12 @@ pub fn compose_frame(
                 continue;
             };
             let text = clip.text_content.as_deref().unwrap_or("");
-            let img = crate::text::render_text(text, ts, width, height, t.center_x, t.center_y);
-            // The text layer is already positioned on the full canvas.
+            let mut img = crate::text::render_text(text, ts, width, height, t.center_x, t.center_y);
+            // The text layer is positioned on the full canvas; rotate it about the
+            // clip's centre (blit stays identity/unrotated).
+            if t.rotation != 0.0 {
+                img = rotate_around(&img, t.rotation, t.center_x * cw, t.center_y * ch);
+            }
             dst = (0.0, 0.0, cw, ch);
             rotation = 0.0;
             (img, (0.0, 0.0, 1.0, 1.0))
@@ -1036,6 +1074,25 @@ mod tests {
         let img = rasterize_shape(&solid_shape(ShapeKind::Oval, [0.0, 0.0, 1.0, 1.0]), 8, 8);
         assert_eq!(px(&img, 4, 4), [0, 0, 255, 255], "center filled");
         assert_eq!(px(&img, 0, 0), [0, 0, 0, 0], "corner transparent");
+    }
+
+    #[test]
+    fn rotate_around_center_90_moves_a_point() {
+        // A single white pixel to the right of centre rotates to below centre
+        // under a 90° clockwise rotation about the centre.
+        let mut img = RgbaImage::new(5, 5);
+        let ci = (2 * 5 + 4) * 4; // (x=4, y=2) — right of centre (2,2)
+        img.pixels[ci..ci + 4].copy_from_slice(&[255, 255, 255, 255]);
+        let r = rotate_around(&img, 90.0, 2.5, 2.5);
+        // Clockwise 90°: the right-of-centre pixel lands below centre (x≈2, y≈4).
+        assert!(px(&r, 2, 4)[3] > 100, "pixel rotated to below centre");
+        assert_eq!(px(&r, 4, 2)[3], 0, "original position now empty");
+    }
+
+    #[test]
+    fn rotate_around_zero_is_unchanged() {
+        let img = RgbaImage::solid(3, 3, [10, 20, 30, 255]);
+        assert_eq!(rotate_around(&img, 0.0, 1.5, 1.5).pixels, img.pixels);
     }
 
     #[test]
