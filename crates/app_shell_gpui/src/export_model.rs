@@ -5,7 +5,7 @@
 
 use core_model::{MediaManifest, Timeline};
 use generation_core::export_panel::{ExportPanelState, ExportStage};
-use render_core::fcpxml_export::FcpxmlExport;
+use render_core::fcpxml_export::{FcpxmlExport, FcpxmlTarget};
 use render_core::xml_export::XmlExport;
 use render_core::{ExportFormat, ExportResolution};
 use serde::{Deserialize, Serialize};
@@ -59,10 +59,15 @@ pub fn interchange_content(
     mode: ExportMode,
     timeline: &Timeline,
     manifest: &MediaManifest,
+    fcpxml_target: FcpxmlTarget,
 ) -> Option<String> {
     match mode {
         ExportMode::Xml => Some(XmlExport::export_with_manifest(timeline, manifest)),
-        ExportMode::Fcpxml => Some(FcpxmlExport::export(timeline, manifest)),
+        ExportMode::Fcpxml => Some(FcpxmlExport::export_with_target(
+            timeline,
+            manifest,
+            fcpxml_target,
+        )),
         ExportMode::Video | ExportMode::PalmierProject => None,
     }
 }
@@ -74,8 +79,9 @@ pub fn write_interchange(
     timeline: &Timeline,
     manifest: &MediaManifest,
     path: &std::path::Path,
+    fcpxml_target: FcpxmlTarget,
 ) -> Result<(), String> {
-    let content = interchange_content(mode, timeline, manifest)
+    let content = interchange_content(mode, timeline, manifest, fcpxml_target)
         .ok_or_else(|| format!("{mode:?} is not a text interchange mode"))?;
     std::fs::write(path, content).map_err(|e| format!("Failed to write {}: {e}", path.display()))
 }
@@ -106,6 +112,9 @@ pub struct ExportViewModel {
     /// Number of project media files not found on disk (PalmierProject mode).
     /// Mirrors Swift ExportView's `palmierSummary.missing` red warning.
     pub missing_file_count: usize,
+    /// Which NLE an FCPXML export is calibrated for (#254). Resolve is the default; the export
+    /// dialog surfaces a "DaVinci Resolve / Final Cut Pro" selector for the Fcpxml mode.
+    pub fcpxml_target: FcpxmlTarget,
 }
 
 impl ExportViewModel {
@@ -116,11 +125,16 @@ impl ExportViewModel {
             thumbnail_asset_key: None,
             settings_expanded: true,
             missing_file_count: 0,
+            fcpxml_target: FcpxmlTarget::Resolve,
         }
     }
 
     pub fn set_mode(&mut self, mode: ExportMode) {
         self.mode = mode;
+    }
+
+    pub fn set_fcpxml_target(&mut self, target: FcpxmlTarget) {
+        self.fcpxml_target = target;
     }
 
     pub fn set_resolution(&mut self, resolution: ExportResolution) {
@@ -184,15 +198,31 @@ mod tests {
     fn interchange_content_matches_mode() {
         let tl = Timeline::default();
         let m = MediaManifest::default();
-        let xml = interchange_content(ExportMode::Xml, &tl, &m).unwrap();
+        let xml = interchange_content(ExportMode::Xml, &tl, &m, FcpxmlTarget::Resolve).unwrap();
         assert!(xml.contains("<xmeml"), "Xml mode produces XMEML");
-        let fcp = interchange_content(ExportMode::Fcpxml, &tl, &m).unwrap();
+        let fcp =
+            interchange_content(ExportMode::Fcpxml, &tl, &m, FcpxmlTarget::Resolve).unwrap();
         assert!(
             fcp.contains("<fcpxml version=\"1.10\">"),
             "Fcpxml mode produces FCPXML"
         );
-        assert!(interchange_content(ExportMode::Video, &tl, &m).is_none());
-        assert!(interchange_content(ExportMode::PalmierProject, &tl, &m).is_none());
+        // The Fcp target is reachable through the model and produces a valid FCPXML too.
+        let fcp2 = interchange_content(ExportMode::Fcpxml, &tl, &m, FcpxmlTarget::Fcp).unwrap();
+        assert!(fcp2.contains("<fcpxml version=\"1.10\">"));
+        assert!(interchange_content(ExportMode::Video, &tl, &m, FcpxmlTarget::Resolve).is_none());
+        assert!(
+            interchange_content(ExportMode::PalmierProject, &tl, &m, FcpxmlTarget::Resolve)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn export_view_model_defaults_to_resolve_target() {
+        let vm = ExportViewModel::new();
+        assert_eq!(vm.fcpxml_target, FcpxmlTarget::Resolve);
+        let mut vm = vm;
+        vm.set_fcpxml_target(FcpxmlTarget::Fcp);
+        assert_eq!(vm.fcpxml_target, FcpxmlTarget::Fcp);
     }
 
     #[test]
@@ -214,6 +244,7 @@ mod tests {
             &Timeline::default(),
             &MediaManifest::default(),
             &path,
+            FcpxmlTarget::Resolve,
         )
         .unwrap();
 
@@ -256,6 +287,7 @@ mod tests {
             &Timeline::default(),
             &MediaManifest::default(),
             &path,
+            FcpxmlTarget::Resolve,
         )
         .unwrap_err();
         assert!(err.contains("not a text interchange"), "err={err}");

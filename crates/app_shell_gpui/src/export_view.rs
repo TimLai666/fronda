@@ -614,6 +614,7 @@ impl Render for ExportView {
                                     return;
                                 }
                                 let mode = this.model.mode;
+                                let fcpxml_target = this.model.fcpxml_target;
                                 if let Some(ext) = mode.interchange_extension() {
                                     // Interchange export: pick a path, then generate + write.
                                     let start_dir =
@@ -633,6 +634,7 @@ impl Render for ExportView {
                                                     guard.timeline(),
                                                     guard.media_manifest(),
                                                     &path,
+                                                    fcpxml_target,
                                                 )
                                                 .map(|()| path.clone())
                                             };
