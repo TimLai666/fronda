@@ -19,6 +19,10 @@ fn new_id() -> Uuid {
 pub enum AgentMessageRole {
     User,
     Assistant,
+    /// System-authored context (e.g. MCP project-navigation notices, upstream #238).
+    /// Present so a chat session carrying a `system` message decodes instead of
+    /// failing the whole session on an unknown role.
+    System,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

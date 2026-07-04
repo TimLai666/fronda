@@ -433,6 +433,25 @@ fn upstream_216_generation_status_round_trips_on_entry() {
         .contains_key("generationStatus"));
 }
 
+#[test]
+fn upstream_238_agent_message_role_system_round_trips() {
+    // A `system` role (upstream #238 MCP notices) must decode, not fail the session.
+    use core_model::AgentMessageRole;
+    assert_eq!(
+        serde_json::from_str::<AgentMessageRole>("\"system\"").unwrap(),
+        AgentMessageRole::System
+    );
+    assert_eq!(
+        serde_json::to_string(&AgentMessageRole::System).unwrap(),
+        "\"system\""
+    );
+    // Existing roles still round-trip lowercase.
+    assert_eq!(
+        serde_json::to_string(&AgentMessageRole::User).unwrap(),
+        "\"user\""
+    );
+}
+
 // ── FMT round-trip tests ──────────────────────────────────────────────────
 
 #[test]
