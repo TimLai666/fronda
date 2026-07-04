@@ -690,6 +690,8 @@ impl Render for ExportView {
                                             (crate::video_export::VideoCodec::H264, "mp4")
                                         }
                                     };
+                                    let out_fps =
+                                        [24i64, 30, 60].get(this.selected_fps).copied().unwrap_or(0);
                                     let rx = cx.prompt_for_new_path(
                                         &start_dir,
                                         Some(&format!("Timeline.{ext}")),
@@ -754,7 +756,7 @@ impl Render for ExportView {
                                                 let h = size.height.max(2) as u32;
                                                 crate::audio_export::export_project_with_audio(
                                                     &timeline, &manifest, &root, &out, w, h,
-                                                    video_codec, &prog_enc,
+                                                    video_codec, out_fps, &prog_enc,
                                                 )
                                                 .map(|()| out.clone())
                                             })

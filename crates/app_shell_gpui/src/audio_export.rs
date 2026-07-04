@@ -146,6 +146,7 @@ pub fn export_project_with_audio(
     width: u32,
     height: u32,
     codec: crate::video_export::VideoCodec,
+    output_fps: i64,
     progress: &std::sync::atomic::AtomicU64,
 ) -> Result<(), String> {
     use crate::video_export::{source_time_seconds, Mp4Encoder, SourceDecoder};
@@ -153,11 +154,16 @@ pub fn export_project_with_audio(
     use std::sync::atomic::Ordering;
     use timeline_core::TimelineMathExt;
 
-    let total = timeline.total_frames();
-    if total <= 0 {
+    let total_timeline = timeline.total_frames();
+    if total_timeline <= 0 {
         return Err("timeline has no frames to export".into());
     }
-    let fps = timeline.fps;
+    let fps = timeline.fps.max(1);
+    // Output fps drives the encoder + how many frames we emit; each output frame
+    // samples the timeline at out_frame * timeline_fps / out_fps (frame-rate
+    // conversion). Audio is time-based, so its duration matches regardless.
+    let out_fps = if output_fps > 0 { output_fps } else { fps };
+    let total = (total_timeline * out_fps / fps).max(1);
     let (arate, ach) = (48_000u32, 2u16);
 
     let paths: HashMap<String, PathBuf> = manifest
@@ -173,24 +179,27 @@ pub fn export_project_with_audio(
     let has_audio = mixed.iter().any(|&s| s != 0.0);
 
     let audio_params = has_audio.then_some((arate, ach));
-    let mut enc = Mp4Encoder::new_av_codec(output, width, height, fps as i32, audio_params, codec)?;
+    let mut enc =
+        Mp4Encoder::new_av_codec(output, width, height, out_fps as i32, audio_params, codec)?;
 
     let ew = (width & !1).max(2) as usize;
     let eh = (height & !1).max(2) as usize;
     let mut decoders: HashMap<String, Option<SourceDecoder>> = HashMap::new();
-    for frame in 0..total {
-        let img = compose_frame(timeline, manifest, frame, ew, eh, |clip| {
+    for out_frame in 0..total {
+        // Map this output frame back to a timeline frame (frame-rate conversion).
+        let tframe = out_frame * fps / out_fps;
+        let img = compose_frame(timeline, manifest, tframe, ew, eh, |clip| {
             let path = paths.get(clip.media_ref.as_str())?;
             decoders
                 .entry(clip.media_ref.clone())
                 .or_insert_with(|| SourceDecoder::open(path))
                 .as_mut()?
-                .frame_at_seconds(source_time_seconds(clip, frame, fps))
+                .frame_at_seconds(source_time_seconds(clip, tframe, fps))
         });
         enc.write_frame(&img)?;
         // Report video progress as 0..=95%; the trailing 5% covers audio + mux.
         progress.store(
-            ((frame + 1) as u64 * 95 / total as u64).min(95),
+            ((out_frame + 1) as u64 * 95 / total as u64).min(95),
             Ordering::Relaxed,
         );
     }
@@ -440,6 +449,7 @@ mod tests {
             64,
             48,
             crate::video_export::VideoCodec::H264,
+            0, // 0 = use the timeline fps
             &progress,
         )
         .expect("av export");
@@ -450,6 +460,53 @@ mod tests {
         );
         assert!(std::fs::metadata(&out).unwrap().len() > 0);
         assert!(decode_audio_pcm(&out, 48_000, 2).is_some_and(|p| !p.is_empty()));
+        assert!(crate::video_export::decode_frame_rgba(&out, 0.0).is_some());
+    }
+
+    #[test]
+    fn exports_at_a_different_output_fps() {
+        use crate::video_export::encoder_available;
+        if !encoder_available() {
+            return;
+        }
+        let video_fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
+        let dir = temp_dir("fps-conv");
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(external_entry_video("v1", &video_fixture));
+        let timeline = Timeline {
+            fps: 15,
+            width: 64,
+            height: 48,
+            tracks: vec![Track {
+                id: "vid".into(),
+                r#type: ClipType::Video,
+                muted: false,
+                hidden: false,
+                sync_locked: false,
+                clips: vec![video_clip("v1", 0, 4)],
+            }],
+            settings_configured: true,
+            selected_clip_ids: Default::default(),
+            transcription_language: None,
+            compound_timelines: Default::default(),
+        };
+        let out = dir.join("out30.mp4");
+        let progress = std::sync::atomic::AtomicU64::new(0);
+        // 15fps timeline → 30fps output (frame-rate conversion, ~2x the frames).
+        export_project_with_audio(
+            &timeline,
+            &manifest,
+            &dir,
+            &out,
+            64,
+            48,
+            crate::video_export::VideoCodec::H264,
+            30,
+            &progress,
+        )
+        .expect("fps-converted export");
+        assert!(std::fs::metadata(&out).unwrap().len() > 0);
         assert!(crate::video_export::decode_frame_rgba(&out, 0.0).is_some());
     }
 
