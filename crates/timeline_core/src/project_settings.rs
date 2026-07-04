@@ -526,6 +526,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pcfg_004_out_of_range_keyframe_dropped_not_collapsed_onto_boundary() {
+        // A keyframe past the clip duration (reachable via set_keyframes, which
+        // does not clamp) must be DROPPED on rescale, not clamped onto the boundary
+        // where it would overwrite a legitimate boundary keyframe (Swift parity).
+        let mut clip = make_clip("c1", 0, 10);
+        clip.opacity_track = Some(KeyframeTrack {
+            keyframes: vec![
+                Keyframe { frame: 9, value: 0.2, interpolation_out: Interpolation::Linear },
+                Keyframe { frame: 10, value: 0.5, interpolation_out: Interpolation::Linear },
+                Keyframe { frame: 15, value: 0.9, interpolation_out: Interpolation::Linear },
+            ],
+        });
+        let mut timeline = make_timeline(
+            30,
+            1920,
+            1080,
+            false,
+            vec![make_track(ClipType::Video, vec![clip])],
+        );
+        apply_fps(&mut timeline, 36); // scale 1.2 → new duration 12
+        let kfs = &timeline.tracks[0].clips[0].opacity_track.as_ref().unwrap().keyframes;
+        // 9→11, 10→12 (kept); 15→18 > 12 → dropped. The frame-12 boundary keeps 0.5.
+        assert_eq!(kfs.len(), 2, "out-of-range keyframe dropped: {kfs:?}");
+        assert_eq!(kfs[0].frame, 11);
+        assert!((kfs[0].value - 0.2).abs() < 1e-9);
+        assert_eq!(kfs[1].frame, 12);
+        assert!(
+            (kfs[1].value - 0.5).abs() < 1e-9,
+            "boundary value must be Q=0.5, not R=0.9: {:?}",
+            kfs[1]
+        );
+    }
+
     // ── PCFG-005 ─────────────────────────────────────────────────────
 
     #[test]

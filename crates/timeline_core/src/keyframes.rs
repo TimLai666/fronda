@@ -72,7 +72,14 @@ fn rescale_keyframe_track<V: Clone + PartialEq>(
     };
     let mut rescaled = KeyframeTrack::default();
     for keyframe in existing.keyframes {
-        let new_frame = ((keyframe.frame as f64 * ratio).round() as i64).min(cap);
+        let new_frame = (keyframe.frame as f64 * ratio).round() as i64;
+        // Drop frames that rescale past the (new) duration rather than clamping
+        // them onto the cap — clamping would collapse an out-of-range keyframe onto
+        // a legitimate boundary keyframe and overwrite it (last-wins). Swift
+        // rescales freely then drops out-of-range in clampKeyframesToDuration.
+        if new_frame > cap {
+            continue;
+        }
         upsert_keyframe(
             &mut rescaled,
             Keyframe {
