@@ -577,6 +577,15 @@ impl ToolExecutor {
             "import_folder" => self.cmd_import_folder(args),
             "create_matte" => self.cmd_create_matte(args),
             "duplicate_project" => self.cmd_duplicate_project(),
+            // #238 (half-ported): these tools are advertised but their full behaviour switches the
+            // whole app's active project, which needs an app-navigation seam (and delete_project is
+            // destructive). Until that lands, report the limitation honestly instead of the
+            // misleading "Unknown tool" a bare fallthrough would give.
+            "create_project" | "open_project" | "delete_project" => Err(
+                "Project management (create/open/delete) runs in the app, not through the agent \
+                 yet — ask the user to manage projects from the Home screen."
+                    .to_string(),
+            ),
 
             // ── Read-only tools ──────────────────────────────────────────
             "get_media" => self.cmd_get_media(args),
@@ -6704,6 +6713,17 @@ mod tests {
         let (_, w, h, name) = writer.last.lock().unwrap().clone().unwrap();
         assert_eq!((w, h), (1920, 1080), "default aspect = Project");
         assert_eq!(name, "Matte", "default name");
+    }
+
+    #[test]
+    fn project_nav_tools_report_honest_limitation_not_unknown() {
+        // #238 half-port: advertised but app-nav; must not return the misleading "Unknown tool".
+        let mut exec = make_executor();
+        for tool in ["create_project", "open_project", "delete_project"] {
+            let err = exec.execute(tool, &json!({})).unwrap_err();
+            assert!(!err.contains("Unknown tool"), "{tool}: {err}");
+            assert!(err.contains("runs in the app"), "{tool}: {err}");
+        }
     }
 
     #[test]
