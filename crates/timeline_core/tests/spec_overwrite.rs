@@ -173,3 +173,66 @@ fn clp_006_clear_region_leaves_adjacent_clip_untouched() {
     assert_eq!(remaining.start_frame, 100);
     assert_eq!(remaining.duration_frames, 30);
 }
+
+#[test]
+fn clp_006_clear_region_split_does_not_touch_linked_partner_track() {
+    // Video v=[0,200) linked (g1) to audio a=[0,200) on a second track. Clearing
+    // [50,150) on the video track must split ONLY the video and leave the audio
+    // partner untouched. Regression: the Split branch used the link-aware
+    // split_clip, which split (and orphaned) the audio clip on track 1.
+    let mut v = clip("v", 0, 200, 0, 1.0);
+    v.link_group_id = Some("g1".to_string());
+    let mut a = clip("a", 0, 200, 0, 1.0);
+    a.media_type = ClipType::Audio;
+    a.source_clip_type = ClipType::Audio;
+    a.link_group_id = Some("g1".to_string());
+
+    let mut tl = Timeline {
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        settings_configured: true,
+        selected_clip_ids: std::collections::HashSet::new(),
+        tracks: vec![
+            Track {
+                id: "v".to_string(),
+                r#type: ClipType::Video,
+                muted: false,
+                hidden: false,
+                sync_locked: false,
+                clips: vec![v],
+            },
+            Track {
+                id: "a".to_string(),
+                r#type: ClipType::Audio,
+                muted: false,
+                hidden: false,
+                sync_locked: false,
+                clips: vec![a],
+            },
+        ],
+        transcription_language: None,
+        compound_timelines: std::collections::HashMap::new(),
+    };
+
+    clear_region(&mut tl, 0, 50, 150, false);
+
+    // Audio track (index 1) must be untouched: a single [0,200) clip.
+    assert_eq!(
+        tl.tracks[1].clips.len(),
+        1,
+        "linked audio partner must not be split: {:?}",
+        tl.tracks[1].clips.iter().map(|c| (c.start_frame, c.duration_frames)).collect::<Vec<_>>()
+    );
+    assert_eq!(tl.tracks[1].clips[0].start_frame, 0);
+    assert_eq!(tl.tracks[1].clips[0].duration_frames, 200);
+
+    // Video track: the middle [50,150) cleared → fragments [0,50) and [150,200).
+    let mut vspans: Vec<(i64, i64)> = tl.tracks[0]
+        .clips
+        .iter()
+        .map(|c| (c.start_frame, c.start_frame + c.duration_frames))
+        .collect();
+    vspans.sort();
+    assert_eq!(vspans, vec![(0, 50), (150, 200)]);
+}

@@ -155,26 +155,21 @@ pub fn clear_region(
                 }
             }
             OverwriteAction::Split { clip_id, .. } => {
-                if let Some(location) = find_clip(timeline, &clip_id) {
-                    let original_track_index = location.track_index;
-                    split_clip(timeline, &clip_id, start);
-                    let right_clip_id = timeline.tracks[original_track_index]
-                        .clips
-                        .iter()
-                        .find(|clip| clip.start_frame == start && clip.id != clip_id)
-                        .map(|clip| clip.id.clone());
-
-                    if let Some(right_clip_id) = right_clip_id {
-                        if let Some(right_location) = find_clip(timeline, &right_clip_id) {
-                            let right_end = timeline.tracks[right_location.track_index].clips
-                                [right_location.clip_index]
-                                .end_frame();
-                            if right_end > end {
-                                split_clip(timeline, &right_clip_id, end);
-                            }
+                // Track-LOCAL split: clearing a region on one track must not touch a
+                // link-grouped partner on another track. `split_clip` is link-aware
+                // and would split (and orphan) every group member across all tracks;
+                // the other overwrite branches all operate on the single found clip,
+                // so this one must too.
+                if let Some(right_clip_id) = split_single_clip(timeline, &clip_id, start) {
+                    if let Some(right_location) = find_clip(timeline, &right_clip_id) {
+                        let right_end = timeline.tracks[right_location.track_index].clips
+                            [right_location.clip_index]
+                            .end_frame();
+                        if right_end > end {
+                            split_single_clip(timeline, &right_clip_id, end);
                         }
-                        remove_clips(timeline, [right_clip_id], prune);
                     }
+                    remove_clips(timeline, [right_clip_id], prune);
                 }
             }
         }
