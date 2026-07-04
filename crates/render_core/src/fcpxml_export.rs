@@ -22,10 +22,29 @@ use std::fmt::Write;
 
 pub struct FcpxmlExport;
 
+/// Which NLE the FCPXML is calibrated for (upstream #254). Resolve and Final Cut interpret
+/// `<adjust-transform>`/`<adjust-crop>` values differently: Resolve wants values relative to the
+/// aspect-fit source, FCP wants raw frame-relative values. Defaults to Resolve (Swift's default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FcpxmlTarget {
+    #[default]
+    Resolve,
+    Fcp,
+}
+
 impl FcpxmlExport {
-    /// Generate an FCPXML 1.10 document for `timeline`, resolving asset paths and
-    /// source durations from `manifest`.
+    /// Generate an FCPXML 1.10 document for `timeline` (Resolve calibration — Swift's default),
+    /// resolving asset paths and source durations from `manifest`.
     pub fn export(timeline: &Timeline, manifest: &MediaManifest) -> String {
+        Self::export_with_target(timeline, manifest, FcpxmlTarget::Resolve)
+    }
+
+    /// Generate an FCPXML 1.10 document calibrated for a specific NLE `target` (#254).
+    pub fn export_with_target(
+        timeline: &Timeline,
+        manifest: &MediaManifest,
+        target: FcpxmlTarget,
+    ) -> String {
         let fps = timeline.fps.max(1);
         let total = timeline_total_frames(timeline).max(1);
 
@@ -263,6 +282,7 @@ impl FcpxmlExport {
                     seq_h,
                     fps,
                     collapsed_audio_vol.get(&clip.id).copied(),
+                    target,
                 ));
                 if children.is_empty() {
                     writeln!(xml, "{open}/>").ok();
@@ -417,11 +437,17 @@ fn clip_adjustments(
     seq_h: i64,
     fps: i64,
     collapsed_audio_volume: Option<f64>,
+    target: FcpxmlTarget,
 ) -> String {
     let mut out = String::new();
     if !is_audio {
         let t = &clip.transform;
-        let fit = fit_fractions(clip, manifest, seq_w, seq_h);
+        // Resolve wants scale/position relative to the aspect-fit source; FCP wants them raw.
+        let fit = if target == FcpxmlTarget::Resolve {
+            fit_fractions(clip, manifest, seq_w, seq_h)
+        } else {
+            (1.0, 1.0)
+        };
         let base = scale_value(clip, t.width, t.height, fit);
         let moved = (t.center_x - 0.5).abs() > 0.0005 || (t.center_y - 0.5).abs() > 0.0005;
         let rotated = t.rotation.abs() > 0.005;
@@ -435,16 +461,19 @@ fn clip_adjustments(
 
         if crop_needed {
             let c = &clip.crop;
-            // Resolve encodes the trim-rect against source pixels fit into the sequence.
+            // Resolve encodes the trim-rect against source pixels fit into the sequence; FCP uses
+            // plain 0..100 percentages of the frame.
             let (mut lr, mut tb) = (100.0, 100.0);
-            if let Some((sw, sh)) = manifest
-                .entry_for(&clip.media_ref)
-                .and_then(|e| e.source_width.zip(e.source_height))
-            {
-                if sw > 0 && sh > 0 {
-                    let f = (seq_w as f64 / sw as f64).min(seq_h as f64 / sh as f64);
-                    lr = sw as f64 * 100.0 / seq_h as f64;
-                    tb = 100.0 / f;
+            if target == FcpxmlTarget::Resolve {
+                if let Some((sw, sh)) = manifest
+                    .entry_for(&clip.media_ref)
+                    .and_then(|e| e.source_width.zip(e.source_height))
+                {
+                    if sw > 0 && sh > 0 {
+                        let f = (seq_w as f64 / sw as f64).min(seq_h as f64 / sh as f64);
+                        lr = sw as f64 * 100.0 / seq_h as f64;
+                        tb = 100.0 / f;
+                    }
                 }
             }
             let _ = writeln!(out, "                <adjust-crop mode=\"trim\">");
@@ -1198,6 +1227,43 @@ mod tests {
         assert_eq!(format_number(1.0), "1");
         assert_eq!(format_number(-6.020599913), "-6.0206");
         assert_eq!(format_number(0.80000), "0.8");
+    }
+
+    #[test]
+    fn fcpxml_fcp_target_uses_raw_scale_and_crop() {
+        // Square source (1080x1080) with a half-size transform + crop, in a 1920x1080 timeline.
+        // Resolve fits against the source aspect; FCP uses raw frame-relative values.
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.transform.width = 0.5;
+        c.transform.height = 0.5;
+        c.crop.top = 0.2;
+        let mut manifest = MediaManifest::default();
+        let mut e = entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4");
+        e.source_width = Some(1080);
+        e.source_height = Some(1080);
+        manifest.entries.push(e);
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let resolve = FcpxmlExport::export(&tl, &manifest);
+        let fcp = FcpxmlExport::export_with_target(&tl, &manifest, FcpxmlTarget::Fcp);
+        // Resolve fit=(0.5625,1) → scale (0.5/0.5625, 0.5) = 0.8889 0.5; FCP fit=(1,1) → 0.5 0.5.
+        assert!(resolve.contains("scale=\"0.8889 0.5\""), "resolve scale\n{resolve}");
+        assert!(fcp.contains("scale=\"0.5 0.5\""), "fcp scale\n{fcp}");
+        // Resolve crop tb = 100/min(1920/1080,1080/1080)=100 → top 20; FCP also 100 here (square).
+        // Use a 4K source to separate them:
+        let mut c2 = clip("c2", "v2", ClipType::Video, 0, 60);
+        c2.crop.top = 0.2;
+        let mut m2 = MediaManifest::default();
+        let mut e2 = entry("v2", "uhd.mp4", ClipType::Video, 10.0, "/media/uhd.mp4");
+        e2.source_width = Some(3840);
+        e2.source_height = Some(2160);
+        m2.entries.push(e2);
+        let tl2 = timeline(vec![track(ClipType::Video, vec![c2])]);
+        // Resolve tb = 100/min(1920/3840,1080/2160) = 100/0.5 = 200 → top 40; FCP → 20.
+        assert!(FcpxmlExport::export(&tl2, &m2).contains("top=\"40\""), "resolve crop");
+        assert!(
+            FcpxmlExport::export_with_target(&tl2, &m2, FcpxmlTarget::Fcp).contains("top=\"20\""),
+            "fcp crop"
+        );
     }
 
     #[test]
