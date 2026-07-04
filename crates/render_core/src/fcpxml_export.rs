@@ -660,6 +660,17 @@ fn write_title(
         core_model::TextAlignment::Center => "center",
         core_model::TextAlignment::Right => "right",
     };
+    // Border → glyph stroke. Swift's glyphBorderStrokeWidth is -4 (a percent-of-font-size
+    // convention), so strokeWidth = |−4|/100 * fontSize = 0.04 * fontSize.
+    let stroke = if style.border.enabled {
+        format!(
+            " strokeColor=\"{}\" strokeWidth=\"{}\"",
+            color_string(&style.border.color),
+            format_number(0.04 * font_size)
+        )
+    } else {
+        String::new()
+    };
     let _ = writeln!(
         xml,
         "              <title ref=\"titleBasic\" name=\"{}\" lane=\"{lane}\" offset=\"{}\" start=\"0s\" duration=\"{}\"{enabled_attr}>",
@@ -677,7 +688,7 @@ fn write_title(
     let _ = writeln!(xml, "                <text-style-def id=\"{style_id}\">");
     let _ = writeln!(
         xml,
-        "                  <text-style font=\"{}\" fontFace=\"{face}\" fontSize=\"{}\" fontColor=\"{color}\" alignment=\"{align}\"/>",
+        "                  <text-style font=\"{}\" fontFace=\"{face}\" fontSize=\"{}\" fontColor=\"{color}\" alignment=\"{align}\"{stroke}/>",
         xml_escape(&family),
         format_number(font_size)
     );
@@ -1236,6 +1247,62 @@ mod tests {
             "text-style attrs\n{xml}"
         );
         assert!(xml.contains("</title>"), "title closed");
+    }
+
+    #[test]
+    fn fcpxml_title_border_emits_stroke() {
+        let mut c = clip("t1", "", ClipType::Text, 0, 60);
+        c.media_type = ClipType::Text;
+        c.text_content = Some("Outlined".to_string());
+        c.text_style = Some(core_model::TextStyle {
+            font_size: 50.0,
+            border: core_model::TextFill {
+                enabled: true,
+                color: core_model::TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+                padding: None,
+                corner_radius: None,
+            },
+            ..Default::default()
+        });
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &MediaManifest::default());
+        // strokeWidth = 0.04 * 50 = 2.
+        assert!(
+            xml.contains("strokeColor=\"0 0 0 1\" strokeWidth=\"2\""),
+            "border stroke\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_keyframe_time_is_clip_relative_at_nonzero_start() {
+        // Regression: a keyframed clip that STARTS at frame 100 must still emit clip-relative
+        // keyframe times (0s, 30/30s), not absolute (100/30s, 130/30s).
+        let mut c = clip("c1", "v1", ClipType::Video, 100, 60);
+        c.opacity_track = Some(core_model::KeyframeTrack {
+            keyframes: vec![
+                core_model::Keyframe {
+                    frame: 0,
+                    value: 1.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+                core_model::Keyframe {
+                    frame: 30,
+                    value: 0.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+            ],
+        });
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("<keyframe time=\"0s\""), "clip-relative start\n{xml}");
+        assert!(xml.contains("<keyframe time=\"30/30s\""), "clip-relative end\n{xml}");
+        assert!(!xml.contains("time=\"100/30s\""), "not absolute");
+        // The asset-clip offset IS absolute (timeline position 100).
+        assert!(xml.contains("offset=\"100/30s\""), "clip offset is absolute\n{xml}");
     }
 
     #[test]

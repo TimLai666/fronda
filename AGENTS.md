@@ -160,7 +160,7 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 | #8   | Colors + Effects via Metal              | DONE        | agent_contract (effects pipeline)            |
 | #46  | Shape annotations + animation tools     | DONE        | core_model, agent_contract                   |
 | #40  | Transcription language setting          | DONE        | core_model (Timeline.transcription_language) |
-| #65  | Font weight in TextStyle                | DONE        | core_model (TextStyle.font_weight)           |
+| #65  | Font weight in TextStyle                | DIVERGES    | core_model (TextStyle.font_weight) — **on-disk-format compat BUG**: current Swift `TextStyle` (9a3ae50) stores `isBold: Bool = true` + `isItalic: Bool` (CodingKeys), inferring bold from the fontName when absent; Rust stores `font_weight: f64` (default 400) and reads neither `isBold`/`isItalic` nor infers from fontName. So a Swift-authored project loses bold/italic on load into Rust (defaults to weight 400 = regular), and Rust's `fontWeight` is ignored by Swift on save. Also default divergence (Swift bold-by-default vs Rust regular). Fix = a serde bridge reading `isBold`/`isItalic`→`font_weight` (+ fontName inference) and writing both, plus an `is_italic` field; ripples to TextStyle literals — a careful high-stakes data-model change (surfaced 2026-07-05 by FCPXML title verification). |
 | #92  | Words-per-caption setting               | DONE        | search_core (CaptionConfig)                  |
 | #105 | .aifc/.flac import support              | DONE        | core_model (ClipType::from_extension)        |
 | #114 | Fix set_clip_properties rotation        | DONE        | timeline_core                                |
