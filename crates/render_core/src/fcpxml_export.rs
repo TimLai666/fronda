@@ -511,30 +511,7 @@ fn clip_adjustments(
             }
         }
 
-        let opacity_kf = clip
-            .opacity_track
-            .as_ref()
-            .map(|t| t.keyframes.as_slice())
-            .filter(|k| !k.is_empty());
-        if clip.opacity < 0.9995 || opacity_kf.is_some() {
-            let amount = format_number(clip.opacity);
-            match opacity_kf {
-                Some(kfs) => {
-                    // Keyframed opacity → <param>/<keyframeAnimation>; time is on the clip's
-                    // output axis (keyframes are clip-relative), value in 0..1.
-                    let _ = writeln!(out, "                <adjust-blend amount=\"{amount}\">");
-                    let rows: Vec<(i64, core_model::Interpolation, String)> = kfs
-                        .iter()
-                        .map(|k| (k.frame, k.interpolation_out, format_number(k.value)))
-                        .collect();
-                    write_kf_param(&mut out, "amount", &amount, &rows, fps);
-                    let _ = writeln!(out, "                </adjust-blend>");
-                }
-                None => {
-                    let _ = writeln!(out, "                <adjust-blend amount=\"{amount}\"/>");
-                }
-            }
-        }
+        append_opacity_blend(&mut out, clip, fps);
     }
     let asset_has_audio = manifest
         .entry_for(&clip.media_ref)
@@ -618,6 +595,35 @@ fn format_number(value: f64) -> String {
         s.pop();
     }
     s
+}
+
+/// Append an `<adjust-blend>` for opacity — self-closing for static, or with a keyframed
+/// `<param name="amount">` when the clip has an opacity track. Emits nothing at full opacity with
+/// no keyframes. Shared by asset-clips and titles.
+fn append_opacity_blend(out: &mut String, clip: &Clip, fps: i64) {
+    let opacity_kf = clip
+        .opacity_track
+        .as_ref()
+        .map(|t| t.keyframes.as_slice())
+        .filter(|k| !k.is_empty());
+    if clip.opacity >= 0.9995 && opacity_kf.is_none() {
+        return;
+    }
+    let amount = format_number(clip.opacity);
+    match opacity_kf {
+        Some(kfs) => {
+            let _ = writeln!(out, "                <adjust-blend amount=\"{amount}\">");
+            let rows: Vec<(i64, core_model::Interpolation, String)> = kfs
+                .iter()
+                .map(|k| (k.frame, k.interpolation_out, format_number(k.value)))
+                .collect();
+            write_kf_param(out, "amount", &amount, &rows, fps);
+            let _ = writeln!(out, "                </adjust-blend>");
+        }
+        None => {
+            let _ = writeln!(out, "                <adjust-blend amount=\"{amount}\"/>");
+        }
+    }
 }
 
 /// Emit a keyframed `<param>`: the base value on the param, then a `<keyframeAnimation>` with one
@@ -723,13 +729,7 @@ fn write_title(
         "                <adjust-transform scale=\"1 1\" anchor=\"0 0\" position=\"{}\"/>",
         position_value(&clip.transform, seq_w, seq_h, (1.0, 1.0))
     );
-    if clip.opacity < 0.9995 {
-        let _ = writeln!(
-            xml,
-            "                <adjust-blend amount=\"{}\"/>",
-            format_number(clip.opacity)
-        );
-    }
+    append_opacity_blend(xml, clip, fps);
     let _ = writeln!(xml, "              </title>");
 }
 
@@ -1300,6 +1300,39 @@ mod tests {
             xml.matches("<asset-clip").count(),
             1,
             "audio partner dropped\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_title_keyframed_opacity() {
+        let mut c = clip("t1", "", ClipType::Text, 0, 60);
+        c.media_type = ClipType::Text;
+        c.text_content = Some("Fade".to_string());
+        c.opacity_track = Some(core_model::KeyframeTrack {
+            keyframes: vec![
+                core_model::Keyframe {
+                    frame: 0,
+                    value: 0.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+                core_model::Keyframe {
+                    frame: 15,
+                    value: 1.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+            ],
+        });
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &MediaManifest::default());
+        assert!(xml.contains("<title "), "title emitted\n{xml}");
+        assert!(xml.contains("<param name=\"amount\""), "keyframed opacity param\n{xml}");
+        assert!(
+            xml.contains("<keyframe time=\"0s\" curve=\"linear\" value=\"0\"/>"),
+            "kf 0\n{xml}"
+        );
+        assert!(
+            xml.contains("<keyframe time=\"15/30s\" curve=\"linear\" value=\"1\"/>"),
+            "kf 15\n{xml}"
         );
     }
 
