@@ -30,8 +30,8 @@ fn mcp_003_exposes_54_tools() {
     let tools = agent_contract::all_tools();
     assert_eq!(
         tools.len(),
-        57,
-        "MCP-003: 57 tools (56 + apply_layout #226)"
+        58,
+        "MCP-003: 58 tools (57 + remove_words #160)"
     );
 }
 
@@ -60,7 +60,7 @@ fn mcp_003_all_tool_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 57, "all 57 tool names must be unique");
+    assert_eq!(names.len(), 58, "all 58 tool names must be unique");
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn json_rpc_tools_list_response_format() {
         .pointer("/result/tools")
         .and_then(|v| v.as_array())
         .unwrap();
-    assert_eq!(tools_arr.len(), 57);
+    assert_eq!(tools_arr.len(), 58);
 
     // Each tool entry has required fields
     for tool_val in tools_arr {

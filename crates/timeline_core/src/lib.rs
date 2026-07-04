@@ -18,6 +18,7 @@ mod range_selection;
 mod ripple;
 mod snapping;
 mod track_ops;
+mod word_cut;
 mod workflow;
 
 use core_model::{Clip, Timeline};
@@ -75,6 +76,10 @@ pub use track_ops::{
     clamp_track_height, display_label_for_track, insert_track_at, remove_track,
     sort_clips_on_track, toggle_track_hidden, toggle_track_mute, toggle_track_sync_lock,
     TrackInsertionError, MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT,
+};
+pub use word_cut::{
+    cut_ranges, ms_to_frames, plan_word_removal, span_frames, CutAggressiveness, PlannerWord,
+    TimelineWord, WordRemovalPlan,
 };
 pub use workflow::{
     apply_ripple_insert_with_split, compute_ripple_delete, compute_ripple_delete_gap,

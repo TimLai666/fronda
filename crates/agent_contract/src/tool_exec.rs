@@ -348,6 +348,10 @@ pub struct ToolExecutor {
     revision: u64,
     /// Skills loaded from `~/.palmier/skills`, sorted by id (upstream #199).
     skills: Vec<AgentSkill>,
+    /// Transcript words mapped onto the current timeline, in global index order
+    /// (upstream #160). The host transcriber supplies these (source audio → words is
+    /// a platform concern); `remove_words`/`get_transcript` read them. Empty until set.
+    timeline_words: Vec<timeline_core::TimelineWord>,
 }
 
 /// Read-only tools: successful execution does not bump the revision.
@@ -373,7 +377,19 @@ impl ToolExecutor {
             search_status: String::new(),
             revision: 0,
             skills: Vec::new(),
+            timeline_words: Vec::new(),
         }
+    }
+
+    /// Supply the timeline-mapped transcript words (upstream #160). The host runs
+    /// on-device/cloud transcription and maps each word onto its clip; `remove_words`
+    /// and transcript-driven tools read this. Empty means no transcription is connected.
+    pub fn set_timeline_words(&mut self, words: Vec<timeline_core::TimelineWord>) {
+        self.timeline_words = words;
+    }
+
+    pub fn timeline_words(&self) -> &[timeline_core::TimelineWord] {
+        &self.timeline_words
     }
 
     /// Load the in-app agent's skills (upstream #199). The app scans
@@ -507,6 +523,7 @@ impl ToolExecutor {
             "ripple_delete_ranges" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_ripple_delete_ranges, args)
             }
+            "remove_words" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_words, args),
             "remove_tracks" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_tracks, args),
             "add_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_add_clips, args),
             "insert_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_insert_clips, args),
@@ -1036,34 +1053,55 @@ impl ToolExecutor {
             })
             .unwrap_or_default();
 
+        match self.apply_ripple_delete_on_track(track_index, ranges, ignore_sync_lock_track_indices)
+        {
+            Ok((removed_frames, removed)) => Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!(
+                        "Ripple-deleted {removed_frames} frames across {removed} track(s)"
+                    )
+                }]
+            })),
+            Err(msg) => Ok(json!({
+                "content": [{ "type": "text", "text": msg }],
+                "isError": true,
+            })),
+        }
+    }
+
+    /// Apply a ripple delete on one track and return `(removed_frames, cleared_track_count)`.
+    /// Fragment-cuts each range on every cleared track (anchor + linked partners + non-ignored
+    /// sync-locked followers per #227), then closes the gaps by shifting later clips left on
+    /// exactly the cleared tracks (#207-ignored sync-locked tracks are absent → left in place).
+    /// `Err` carries the refuse message. Shared by ripple_delete_ranges and remove_words.
+    fn apply_ripple_delete_on_track(
+        &mut self,
+        track_index: usize,
+        ranges: Vec<timeline_core::FrameRange>,
+        ignore_sync_lock_track_indices: std::collections::BTreeSet<usize>,
+    ) -> Result<(i64, usize), String> {
         let range_list = ranges.clone();
         let config = timeline_core::RippleDeleteConfig {
             anchor_track_index: track_index,
             ignore_sync_lock_track_indices,
             ranges,
         };
-        let outcome = timeline_core::compute_ripple_delete(&self.timeline, config);
-
-        let result = match outcome {
+        match timeline_core::compute_ripple_delete(&self.timeline, config) {
             timeline_core::RippleDeleteOutcome::Ok(report) => {
                 let merged = timeline_core::merge_ranges(&range_list);
                 let cleared: std::collections::HashSet<usize> =
                     report.cleared_track_indices.iter().copied().collect();
 
-                // RPL-004: fragment-cut each range on every cleared track (anchor +
-                // linked partners) — a clip fully inside a range is removed, a
-                // partial overlap is trimmed/split so only the non-overlapping
-                // fragments survive. (Previously the whole clip was deleted whenever
-                // it merely touched a range, silently losing media.)
+                // RPL-004: fragment-cut each range on every cleared track — a clip fully
+                // inside a range is removed, a partial overlap is trimmed/split so only the
+                // non-overlapping fragments survive.
                 for ti in &report.cleared_track_indices {
                     for r in &merged {
                         timeline_core::clear_region(&mut self.timeline, *ti, r.start, r.end, false);
                     }
                 }
-
-                // Close the gaps: shift later clips left on every cleared track. Post-#227
-                // all non-ignored sync-locked followers are already in `cleared`, so this
-                // shifts them too; #207-ignored sync-locked tracks are absent → left in place.
+                // Close the gaps: shift later clips left on every cleared track.
                 for (ti, track) in self.timeline.tracks.iter_mut().enumerate() {
                     if !cleared.contains(&ti) {
                         continue;
@@ -1076,28 +1114,199 @@ impl ToolExecutor {
                         }
                     }
                 }
-
-                let removed_frames = report.removed_frames;
-                let removed = report.cleared_track_indices.len();
-                json!({
-                    "content": [{
-                        "type": "text",
-                        "text": format!(
-                            "Ripple-deleted {removed_frames} frames across {removed} track(s)"
-                        )
-                    }]
-                })
+                Ok((report.removed_frames, report.cleared_track_indices.len()))
             }
-            timeline_core::RippleDeleteOutcome::Refused(msg) => json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!("Ripple delete refused: {msg}")
-                }],
-                "isError": true,
-            }),
+            timeline_core::RippleDeleteOutcome::Refused(msg) => {
+                Err(format!("Ripple delete refused: {msg}"))
+            }
+        }
+    }
+
+    /// remove_words (upstream #160, #245): cut speech by the word. Resolve the selected
+    /// get_transcript indices (or exact `matches` tokens) to frames, plan the cut + kept-gap
+    /// ranges, and ripple-delete the primary track (linked A/V partners follow). Requires the
+    /// host to have supplied timeline words via `set_timeline_words`; empty → refuse.
+    fn cmd_remove_words(&mut self, args: &Value) -> Result<Value, String> {
+        let raw_words = args.get("words").and_then(|v| v.as_array());
+        let raw_matches = args.get("matches").and_then(|v| v.as_array());
+        if raw_words.map(|a| a.is_empty()).unwrap_or(false)
+            || raw_matches.map(|a| a.is_empty()).unwrap_or(false)
+        {
+            return Err("remove_words: words or matches must not be empty.".to_string());
+        }
+        if raw_words.is_none() && raw_matches.is_none() {
+            return Err("Missing 'words' or 'matches'. Pass word indices from get_transcript, e.g. [5, [12, 18]], or exact words like [\"um\", \"uh\"].".to_string());
+        }
+        if raw_words.is_some() && raw_matches.is_some() {
+            return Err("remove_words: pass either words or matches, not both.".to_string());
+        }
+
+        let aggressiveness = match args.get("cutAggressiveness").and_then(|v| v.as_str()) {
+            Some(raw) => timeline_core::CutAggressiveness::from_raw(raw).ok_or_else(|| {
+                format!(
+                    "cutAggressiveness must be one of: {}.",
+                    timeline_core::CutAggressiveness::ALL
+                        .iter()
+                        .map(|a| a.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?,
+            None => timeline_core::CutAggressiveness::Balanced,
         };
 
-        Ok(result)
+        let all_words = self.timeline_words.clone();
+        if all_words.is_empty() {
+            return Err("No transcribable speech on the timeline.".to_string());
+        }
+        let max_index = (all_words.len() - 1) as i64;
+
+        let mut selected: std::collections::BTreeSet<usize> = Default::default();
+        let mut ignored: Vec<i64> = Vec::new();
+        if let Some(raw) = raw_words {
+            for (a, b) in Self::parse_word_spans(raw)? {
+                let lo = a.min(b);
+                let hi = a.max(b);
+                // Clamp to the valid range so an out-of-range span can't iterate wildly.
+                if hi < 0 || lo > max_index {
+                    ignored.push(lo);
+                    continue;
+                }
+                if lo < 0 {
+                    ignored.push(lo);
+                }
+                if hi > max_index {
+                    ignored.push(hi);
+                }
+                for idx in lo.max(0)..=hi.min(max_index) {
+                    selected.insert(idx as usize);
+                }
+            }
+            if selected.is_empty() {
+                return Err(format!(
+                    "None of the requested word indices are in range 0...{max_index}. Re-read get_transcript."
+                ));
+            }
+        } else if let Some(raw) = raw_matches {
+            let matches = Self::parse_word_matches(raw)?;
+            for w in &all_words {
+                if matches.contains(&Self::normalized_word_match(&w.text)) {
+                    selected.insert(w.index);
+                }
+            }
+            if selected.is_empty() {
+                let joined = matches
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "No transcript words matched: {joined}. Re-read get_transcript or pass exact word indices."
+                ));
+            }
+        }
+
+        let keep_gap_frames =
+            timeline_core::ms_to_frames(aggressiveness.kept_gap_ms(), self.timeline.fps);
+        let plan =
+            timeline_core::plan_word_removal(&self.timeline, &all_words, &selected, keep_gap_frames)?;
+        let removed_words = plan.removed_texts.len();
+        let removed_texts = plan.removed_texts.clone();
+        let (removed_frames, tracks_edited) =
+            self.apply_ripple_delete_on_track(plan.primary_track, plan.ranges, Default::default())?;
+
+        let mut payload = json!({
+            "removedWords": removed_words,
+            "removedFrames": removed_frames,
+            "tracksEdited": tracks_edited,
+            "cutAggressiveness": aggressiveness.as_str(),
+            "note": "Removed and closed the gaps. Re-read get_transcript before another remove_words.",
+        });
+        let preview: String = removed_texts
+            .iter()
+            .take(24)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !preview.is_empty() {
+            payload["removedText"] = json!(if removed_texts.len() > 24 {
+                format!("{preview} …")
+            } else {
+                preview
+            });
+        }
+        if !ignored.is_empty() {
+            ignored.sort();
+            payload["indicesIgnored"] = json!(ignored);
+        }
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&payload).unwrap_or_default()
+            }]
+        }))
+    }
+
+    /// Parse the `words` arg: each element is a single integer index or an inclusive
+    /// `[start, end]` pair. Mirrors Swift `parseWordSpans`.
+    fn parse_word_spans(raw: &[Value]) -> Result<Vec<(i64, i64)>, String> {
+        raw.iter()
+            .enumerate()
+            .map(|(i, element)| {
+                if let Some(n) = Self::int_from_value(element) {
+                    return Ok((n, n));
+                }
+                if let Some(pair) = element.as_array() {
+                    if pair.len() == 2 {
+                        if let (Some(a), Some(b)) =
+                            (Self::int_from_value(&pair[0]), Self::int_from_value(&pair[1]))
+                        {
+                            return Ok((a, b));
+                        }
+                    }
+                }
+                Err(format!(
+                    "words[{i}]: expected an integer index or an [start, end] pair."
+                ))
+            })
+            .collect()
+    }
+
+    /// Parse the `matches` arg into a set of normalized single-word tokens.
+    /// Mirrors Swift `parseWordMatches`.
+    fn parse_word_matches(raw: &[Value]) -> Result<std::collections::BTreeSet<String>, String> {
+        let mut set = std::collections::BTreeSet::new();
+        for (i, element) in raw.iter().enumerate() {
+            let text = element
+                .as_str()
+                .ok_or_else(|| format!("matches[{i}]: expected a string."))?;
+            let normalized = Self::normalized_word_match(text);
+            if normalized.is_empty() {
+                return Err(format!("matches[{i}]: expected a non-empty word."));
+            }
+            set.insert(normalized);
+        }
+        Ok(set)
+    }
+
+    /// Normalize a match token: strip leading/trailing whitespace and punctuation, lowercase.
+    /// Mirrors Swift `normalizedWordMatch` (Unicode punctuation approximated by ASCII).
+    fn normalized_word_match(text: &str) -> String {
+        text.trim_matches(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
+            .to_lowercase()
+    }
+
+    fn int_from_value(v: &Value) -> Option<i64> {
+        if let Some(i) = v.as_i64() {
+            return Some(i);
+        }
+        if let Some(f) = v.as_f64() {
+            if f.fract() == 0.0 {
+                return Some(f as i64);
+            }
+        }
+        None
     }
 
     fn cmd_remove_tracks(&mut self, args: &Value) -> Result<Value, String> {
@@ -6155,6 +6364,146 @@ mod tests {
             vec![(0, 25), (25, 75)],
             "sync-locked follower cut+rippled in sync with anchor"
         );
+    }
+
+    // ── remove_words (#160/#245) ─────────────────────────────────────────────
+
+    #[test]
+    fn remove_words_parses_mixed_spans() {
+        // Swift parsesMixedSpans: [3, [12,18], 40] → [(3,3),(12,18),(40,40)].
+        let spans = ToolExecutor::parse_word_spans(&[json!(3), json!([12, 18]), json!(40)]).unwrap();
+        assert_eq!(spans, vec![(3, 3), (12, 18), (40, 40)]);
+    }
+
+    #[test]
+    fn remove_words_parse_matches_normalizes() {
+        let set = ToolExecutor::parse_word_matches(&[json!("Um,"), json!("  UH  "), json!("...hmm")])
+            .unwrap();
+        assert!(set.contains("um"));
+        assert!(set.contains("uh"));
+        assert!(set.contains("hmm"));
+        // Empty-after-normalize is rejected.
+        assert!(ToolExecutor::parse_word_matches(&[json!("!!!")]).is_err());
+        assert!(ToolExecutor::parse_word_matches(&[json!(5)]).is_err());
+    }
+
+    #[test]
+    fn remove_words_rejects_empty_words() {
+        let mut exec = make_executor();
+        assert!(exec.execute("remove_words", &json!({"words": []})).is_err());
+        assert!(exec
+            .execute("remove_words", &json!({"matches": []}))
+            .is_err());
+    }
+
+    #[test]
+    fn remove_words_rejects_both_and_neither() {
+        let mut exec = make_executor();
+        assert!(exec.execute("remove_words", &json!({})).is_err());
+        assert!(exec
+            .execute("remove_words", &json!({"words": [1], "matches": ["um"]}))
+            .is_err());
+    }
+
+    #[test]
+    fn remove_words_refuses_without_transcription() {
+        // No words supplied by the host → the tool can't operate.
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let c = crate::test_helpers::make_clip(0, 100);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[c]);
+        let err = exec.execute("remove_words", &json!({"words": [0]})).unwrap_err();
+        assert!(err.contains("No transcribable speech"), "{err}");
+    }
+
+    fn tw(index: usize, track: usize, start: i64, end: i64, text: &str) -> timeline_core::TimelineWord {
+        timeline_core::TimelineWord {
+            index,
+            clip_id: "c".into(),
+            track_index: track,
+            clip_start_frame: 0,
+            clip_end_frame: 100,
+            text: text.into(),
+            start_frame: start,
+            end_frame: end,
+        }
+    }
+
+    fn remove_words_exec() -> ToolExecutor {
+        // one video track, one clip [0,100); host supplies 3 timeline words.
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let mut c = crate::test_helpers::make_clip(0, 100);
+        c.id = "c".into();
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[c]);
+        exec.set_timeline_words(vec![
+            tw(0, 0, 0, 10, "hello"),
+            tw(1, 0, 11, 20, "um"),
+            tw(2, 0, 21, 30, "world"),
+        ]);
+        exec
+    }
+
+    fn report_payload(v: &Value) -> Value {
+        let text = v["content"][0]["text"].as_str().unwrap();
+        serde_json::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn remove_words_by_index_cuts_and_reports() {
+        let mut exec = remove_words_exec();
+        let out = exec.execute("remove_words", &json!({"words": [1]})).unwrap();
+        let p = report_payload(&out);
+        assert_eq!(p["removedWords"], 1);
+        assert_eq!(p["removedFrames"], 9); // frames 11..20
+        assert_eq!(p["tracksEdited"], 1);
+        assert_eq!(p["cutAggressiveness"], "balanced");
+        assert_eq!(p["removedText"], "um");
+        // The clip was cut+rippled: word 1's span removed, gap closed.
+        let spans = track_spans(&exec, 0);
+        assert_eq!(spans, vec![(0, 11), (11, 91)], "cut [11,20) then closed gap");
+    }
+
+    #[test]
+    fn remove_words_by_matches_selects_token() {
+        let mut exec = remove_words_exec();
+        let out = exec
+            .execute("remove_words", &json!({"matches": ["UM"]}))
+            .unwrap();
+        let p = report_payload(&out);
+        assert_eq!(p["removedWords"], 1);
+        assert_eq!(p["removedText"], "um");
+    }
+
+    #[test]
+    fn remove_words_reports_out_of_range_ignored() {
+        let mut exec = remove_words_exec();
+        let out = exec
+            .execute("remove_words", &json!({"words": [1, 99]}))
+            .unwrap();
+        let p = report_payload(&out);
+        assert_eq!(p["indicesIgnored"], json!([99]));
+        assert_eq!(p["removedWords"], 1);
+    }
+
+    #[test]
+    fn remove_words_all_out_of_range_errors() {
+        let mut exec = remove_words_exec();
+        let err = exec
+            .execute("remove_words", &json!({"words": [99]}))
+            .unwrap_err();
+        assert!(err.contains("in range 0...2"), "{err}");
+    }
+
+    #[test]
+    fn remove_words_bad_aggressiveness_errors() {
+        let mut exec = remove_words_exec();
+        assert!(exec
+            .execute(
+                "remove_words",
+                &json!({"words": [1], "cutAggressiveness": "nuclear"})
+            )
+            .is_err());
     }
 
     #[test]

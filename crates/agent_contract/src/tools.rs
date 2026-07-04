@@ -65,6 +65,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         remove_clips(),
         remove_silence(),
         remove_tracks(),
+        remove_words(),
         rename_folder(),
         rename_media(),
         ripple_delete_ranges(),
@@ -110,7 +111,8 @@ Placements must match track type. The editing surface mirrors human gestures —
 - set_clip_properties: apply the same values (duration, trim, speed, volume, opacity, transform, or text style) to one or more clipIds. Setting volume or opacity here clears existing keyframes on that property.
 - set_keyframes: replace the keyframe track for one (clipId, property) pair. Frames are clip-relative; an empty array clears.
 - split_clips: pass one or more cut points (each strictly inside its clip) in one call. Splits only insert boundaries; nothing shifts.
-- ripple_delete_ranges: cut spans out and close the gaps in one action — the fast path for filler-word/dead-air removal.
+- remove_words: cut speech by the word — pass get_transcript indices (or exact `matches` tokens like "um"/"uh") to drop those words plus the surrounding pause; linked A/V partners are cut automatically and gaps close. Prefer this for anything you can point at in the transcript; re-read get_transcript afterwards.
+- ripple_delete_ranges: cut spans out and close the gaps in one action — the fast path for non-word-aligned dead-air removal.
 - apply_layout: for any multi-video composition (split screen, picture-in-picture, grid), assign a clip to each slot instead of hand-setting transforms; it fills every region without stretching.
 - set_project_settings: change fps, resolution, or aspect ratio; existing clips re-fit and frame values rescale automatically.
 
@@ -529,6 +531,47 @@ fn ripple_delete_ranges() -> ToolDefinition {
             (
                 "ignoreSyncLockTrackIndices",
                 array("Optional: track indices to treat as unlocked (left in place) for this call"),
+            ),
+        ]),
+    }
+}
+
+fn remove_words() -> ToolDefinition {
+    ToolDefinition {
+        name: "remove_words",
+        description: "Cut speech by the word, Descript-style — the primary tool for text-based \
+            editing (filler words, flubbed sentences, dropped retakes, tightening a ramble). Pass \
+            `words` for precise get_transcript indices/ranges, or `matches` for exact filler tokens \
+            like \"um\" and \"uh\". This resolves them to frames, removes the surrounding pause so \
+            survivors don't end up double-spaced, merges adjacent removals, cuts linked A/V \
+            partners, and closes the gaps. Words across multiple clips on ONE track are handled in \
+            a single undoable action; if your selection spans multiple UNLINKED tracks the call is \
+            refused — cut one track at a time, or link the tracks first. After it runs, indices \
+            have shifted — re-read get_transcript before another remove_words.",
+        input_schema: object_optional(&[
+            (
+                "words",
+                array(
+                    "Words to remove, by get_transcript index. Each element is a single index \
+                    (e.g. 42) or an inclusive [startIndex, endIndex] span (e.g. [12, 18]). Mix \
+                    freely: [3, [12, 18], 40]. Mutually exclusive with matches. Re-read after any edit.",
+                ),
+            ),
+            (
+                "matches",
+                array(
+                    "Exact single-word tokens to remove everywhere, case-insensitive with \
+                    surrounding punctuation ignored, e.g. [\"um\", \"uh\", \"hmm\"]. Mutually \
+                    exclusive with words. Avoid broad words like \"like\" unless the user wants every occurrence.",
+                ),
+            ),
+            (
+                "cutAggressiveness",
+                string(
+                    "How much silence to leave between the words on either side of a cut: 'tight' \
+                    (snappy), 'balanced' (default, natural beat), or 'loose' (more breathing room). \
+                    The removed words' own frames always go regardless.",
+                ),
             ),
         ]),
     }
@@ -1110,8 +1153,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            57,
-            "TDEF-001: 57 tools (56 + apply_layout, upstream #226)"
+            58,
+            "TDEF-001: 58 tools (57 + remove_words, upstream #160)"
         );
     }
 
@@ -1140,7 +1183,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 57, "all 57 tool names must be unique");
+        assert_eq!(names.len(), 58, "all 58 tool names must be unique");
     }
 
     #[test]

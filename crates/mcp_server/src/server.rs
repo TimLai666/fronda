@@ -767,8 +767,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            57,
-            "MCP-003: 57 tools (56 + apply_layout #226)"
+            58,
+            "MCP-003: 58 tools (57 + remove_words #160)"
         );
     }
 
