@@ -117,6 +117,15 @@ Placements must match track type. The editing surface mirrors human gestures —
 - apply_layout: for any multi-video composition (split screen, picture-in-picture, grid), assign a clip to each slot instead of hand-setting transforms; it fills every region without stretching.
 - set_project_settings: change fps, resolution, or aspect ratio; existing clips re-fit and frame values rescale automatically.
 
+# Compositing, text, and graphics
+- add_texts / add_shapes: overlay titles and captions (text), or rectangles, ovals, circles, arrows, and lines (shapes), on a video track.
+- create_matte: add a solid-colour image to the library — backgrounds, lower-thirds, letterbox bars. Pass a hex colour and an optional aspect ratio, then place it with add_clips.
+- apply_color: grade a clip's colour (merge semantics — only the params you pass change).
+- apply_effect / set_chroma_key / set_blend_mode: add a blur or vignette, key out a green screen, or change how a clip composites over the layers beneath it.
+
+# Media library
+- create_folder / move_to_folder / rename_media organize the library; import_media registers an external video, audio, or image file.
+
 Keep replies terse and outcome-first. Always verify clip and track IDs exist before referencing them."#;
 
 /// The always-on skill index appended to the system prompt (upstream #199).
