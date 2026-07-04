@@ -179,7 +179,7 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 | #204 | Window sizing (Home/Settings)           | DONE        | app_shell_gpui window.rs (project maximize-to-screen deferred) |
 | #214 | FCPXML format naming + Rec.709           | DONE        | render_core fcpxml_export.rs (NTSC-aware naming) |
 | #206 | FCPXML per-asset formats (partial)       | PARTIAL     | render_core fcpxml_export.rs; cross-file A/V linked collapse pending |
-| #226 | apply_layout geometry + placement + tool   | PARTIAL     | core_model video_layout.rs + agent_contract cmd_apply_layout (re-layout mode); place-new mode pending |
+| #226 | apply_layout geometry + placement + tool   | PARTIAL     | core_model video_layout.rs + agent_contract cmd_apply_layout: re-layout mode at full parity (batch clipIds per slot, same-track overlap + coincidence checks); place-new (mediaRef) mode deferred pending project-settings auto-match seam |
 | #199 | Skills: store + read_skill tool + prompt | PARTIAL     | skill_store.rs + agent_contract read_skill/set_skills/prompt inject + boot load; catalog/UI pending |
 | #74  | naturalTimeScale for clip inserts       | DEFERRED    | AVFoundation-specific                        |
 | #119 | Audio syncing multiple tracks           | NOT_STARTED | Swift-only, large feature                    |
