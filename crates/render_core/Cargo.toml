@@ -12,5 +12,6 @@ path = "src/lib.rs"
 core_model = { package = "fronda-core-model", path = "../core_model" }
 timeline_core = { package = "fronda-timeline-core", path = "../timeline_core" }
 audio_core = { package = "fronda-audio-core", path = "../audio_core" }
+ab_glyph = "0.2"
 serde.workspace = true
 serde_json.workspace = true

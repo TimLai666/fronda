@@ -567,10 +567,16 @@ fn visible_clips(timeline: &Timeline, frame: i64) -> Vec<&Clip> {
         }
         for clip in &track.clips {
             let is_shape = clip.media_type == ClipType::Shape && clip.shape_style.is_some();
-            if clip.media_type == ClipType::Text {
+            let is_text = clip.media_type == ClipType::Text
+                && clip.text_style.is_some()
+                && clip
+                    .text_content
+                    .as_ref()
+                    .is_some_and(|t| !t.trim().is_empty());
+            if clip.media_type == ClipType::Text && !is_text {
                 continue;
             }
-            if !is_shape && clip.media_ref.is_empty() {
+            if !is_shape && !is_text && clip.media_ref.is_empty() {
                 continue;
             }
             if frame >= clip.start_frame && frame < clip.start_frame + clip.duration_frames {
@@ -609,9 +615,22 @@ pub fn compose_frame(
         let dx = t.center_x * cw - dw / 2.0;
         let dy = t.center_y * ch - dh / 2.0;
 
-        // Shape annotations are rasterized procedurally (full source region);
-        // media clips are fetched and cropped.
-        let (src, src_region) = if clip.media_type == ClipType::Shape {
+        // Shape annotations are rasterized procedurally; text is rasterized into a
+        // full-canvas layer (already positioned); media clips are fetched/cropped.
+        // `dst` is the blit target rect; `rotation` the blit rotation.
+        let mut dst = (dx, dy, dw, dh);
+        let mut rotation = t.rotation;
+        let (src, src_region) = if clip.media_type == ClipType::Text {
+            let Some(ts) = clip.text_style.as_ref() else {
+                continue;
+            };
+            let text = clip.text_content.as_deref().unwrap_or("");
+            let img = crate::text::render_text(text, ts, width, height, t.center_x, t.center_y);
+            // The text layer is already positioned on the full canvas.
+            dst = (0.0, 0.0, cw, ch);
+            rotation = 0.0;
+            (img, (0.0, 0.0, 1.0, 1.0))
+        } else if clip.media_type == ClipType::Shape {
             let Some(shape) = clip.shape_style.as_ref() else {
                 continue;
             };
@@ -661,9 +680,9 @@ pub fn compose_frame(
             &mut canvas,
             &src,
             src_region,
-            (dx, dy, dw, dh),
+            dst,
             opacity,
-            t.rotation,
+            rotation,
             clip.blend_mode,
         );
     }
@@ -1173,6 +1192,38 @@ mod tests {
         };
         apply_chroma_key(&mut img, &key);
         assert_eq!(px(&img, 0, 0), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn compose_renders_text_clip() {
+        use core_model::{TextAlignment, TextRgba, TextStyle};
+        let mut c = clip("t1", "", 0, 10);
+        c.media_type = ClipType::Text;
+        c.text_content = Some("Hi".into());
+        c.transform = Transform::from_top_left(0.0, 0.0, 1.0, 1.0);
+        c.text_style = Some(TextStyle {
+            font_name: "Poppins".into(),
+            font_size: 40.0,
+            font_scale: 1.0,
+            color: TextRgba { r: 1.0, g: 0.0, b: 0.0, a: 1.0 },
+            alignment: TextAlignment::Center,
+            shadow: Default::default(),
+            background: Default::default(),
+            border: Default::default(),
+            font_weight: 400.0,
+            variable_font_axes: None,
+            letter_spacing: None,
+            line_height: None,
+        });
+        let timeline = tl(vec![c]);
+        // Text is procedural — fetch_source is never consulted.
+        let out = compose_frame(&timeline, &MediaManifest::default(), 0, 120, 80, |_| None);
+        // Some pixels are painted with the (red) text colour.
+        let lit = out
+            .pixels
+            .chunks_exact(4)
+            .any(|p| p[3] > 150 && p[0] > p[1] && p[0] > p[2]);
+        assert!(lit, "text glyphs composited onto the canvas");
     }
 
     #[test]

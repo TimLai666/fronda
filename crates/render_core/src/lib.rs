@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub mod audio_plan;
 pub mod bundle_export;
 pub mod compositor;
+pub mod text;
 pub mod effects;
 pub mod export_stall_watchdog;
 pub mod fcpxml_export;
