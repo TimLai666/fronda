@@ -148,6 +148,11 @@ impl ChatView {
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
+                // If the user pressed Stop mid-turn (is_agent_running cleared),
+                // discard the late result instead of appending a reply.
+                if !view.model.is_agent_running {
+                    return;
+                }
                 match result {
                     Ok(outcome) => {
                         let tool_calls =
