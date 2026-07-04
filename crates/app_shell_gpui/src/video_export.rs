@@ -5,8 +5,10 @@
 //! compositing live in the pure `render_core::compositor`. ffmpeg is compiled
 //! into the binary, so no ffmpeg executable is needed at runtime.
 //!
-//! The encoder prefers H.264 and falls back to MPEG-4 Part 2, which is present
-//! in stock ffmpeg builds even without the (GPL) libx264 encoder.
+//! Supports H.264 (default, always available), ProRes (native, .mov), and H.265
+//! (libx265 when present, else H.264). Optional AAC audio mux, output-fps
+//! frame-rate conversion, and still-image sources (via the `image` crate, since
+//! the linked ffmpeg has no image decoders).
 
 use core_model::{Clip, MediaManifest, MediaSource, Timeline};
 use ffmpeg::format::sample::Type as SampleType;
