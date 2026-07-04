@@ -313,16 +313,36 @@ fn write_clip(
         &rotation_kf,
     );
 
-    let center_kf: Vec<(i64, String)> = clip
+    // Center keyframes: position_track stores TOP-LEFT, but the "center" param is
+    // the resolved centre (top_left + size/2). Because centre depends on both
+    // position and size, sample the resolved transform at the union of position +
+    // scale keyframe frames (matches Swift XMLExporter.motionFilter). Only emitted
+    // when position is animated — a static position keeps centre fixed even under
+    // an animated scale, which scales around the centre.
+    let position_active = clip
         .position_track
         .as_ref()
-        .map(|t| {
-            t.keyframes
-                .iter()
-                .map(|k| (k.frame, format!("{:.6} {:.6}", k.value.a, k.value.b)))
-                .collect()
-        })
-        .unwrap_or_default();
+        .is_some_and(|t| !t.keyframes.is_empty());
+    let center_kf: Vec<(i64, String)> = if position_active {
+        let mut frames: Vec<i64> = Vec::new();
+        if let Some(t) = clip.position_track.as_ref() {
+            frames.extend(t.keyframes.iter().map(|k| k.frame));
+        }
+        if let Some(t) = clip.scale_track.as_ref() {
+            frames.extend(t.keyframes.iter().map(|k| k.frame));
+        }
+        frames.sort_unstable();
+        frames.dedup();
+        frames
+            .into_iter()
+            .map(|f| {
+                let tr = timeline_core::resolved_transform_at(clip, f);
+                (f, format!("{:.6} {:.6}", tr.center_x, tr.center_y))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     write_motion_param(
         xml,
         "center",

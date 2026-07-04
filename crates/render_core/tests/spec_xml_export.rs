@@ -3,7 +3,10 @@
 //! These tests construct realistic timelines and verify the XML output
 //! against multiple spec requirements in a single comprehensive scenario.
 
-use core_model::{Clip, ClipType, Crop, Interpolation, Timeline, Track, Transform};
+use core_model::{
+    AnimPair, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack, Timeline, Track,
+    Transform,
+};
 use render_core::xml_export::XmlExport;
 
 /// Build a timeline with video, audio, and text clips that exercises all
@@ -434,4 +437,83 @@ fn xml_spec_sequence_metadata() {
         "timebase should be 30 fps"
     );
     assert!(xml.contains("<ntsc>FALSE</ntsc>"), "ntsc should be FALSE");
+}
+
+// ---------------------------------------------------------------------------
+// XML-012 / INS-003: position keyframes store TOP-LEFT; the exported "center"
+// param must be the resolved centre (top_left + size/2), not the raw value.
+// ---------------------------------------------------------------------------
+#[test]
+fn xml_spec_position_keyframes_export_resolved_center() {
+    let mut clip = Clip {
+        id: "pv".into(),
+        media_ref: "asset.mp4".into(),
+        media_type: ClipType::Video,
+        source_clip_type: ClipType::Video,
+        start_frame: 0,
+        duration_frames: 100,
+        trim_start_frame: 0,
+        trim_end_frame: 0,
+        speed: 1.0,
+        volume: 1.0,
+        opacity: 1.0,
+        fade_in_frames: 0,
+        fade_out_frames: 0,
+        fade_in_interpolation: Interpolation::Linear,
+        fade_out_interpolation: Interpolation::Linear,
+        transform: Transform {
+            width: 0.5,
+            height: 0.5,
+            rotation: 0.0,
+            center_x: 0.5,
+            center_y: 0.5,
+            flip_horizontal: false,
+            flip_vertical: false,
+        },
+        crop: Crop::default(),
+        link_group_id: None,
+        caption_group_id: None,
+        text_content: None,
+        text_style: None,
+        opacity_track: None,
+        position_track: None,
+        scale_track: None,
+        rotation_track: None,
+        crop_track: None,
+        volume_track: None,
+        effects: None,
+        shape_style: None,
+        stroke_progress_track: None,
+        compound_timeline_id: None,
+        blend_mode: Default::default(),
+        chroma_key: None,
+    };
+    // Top-left held at the origin; a half-canvas clip → resolved centre (0.25, 0.25).
+    clip.position_track = Some(KeyframeTrack {
+        keyframes: vec![Keyframe {
+            frame: 0,
+            value: AnimPair { a: 0.0, b: 0.0 },
+            interpolation_out: Interpolation::Hold,
+        }],
+    });
+    let timeline = Timeline {
+        tracks: vec![Track {
+            id: "t1".into(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            clips: vec![clip],
+        }],
+        ..Timeline::default()
+    };
+    let xml = XmlExport::export(&timeline);
+    assert!(
+        xml.contains("<keyframe><when>0</when><value>0.250000 0.250000</value></keyframe>"),
+        "center keyframe should be resolved centre (0.25,0.25), not raw top-left (0,0):\n{xml}"
+    );
+    assert!(
+        !xml.contains("<value>0.000000 0.000000</value>"),
+        "raw top-left (0,0) must not leak into the center param"
+    );
 }
