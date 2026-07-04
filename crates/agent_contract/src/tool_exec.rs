@@ -1291,10 +1291,28 @@ impl ToolExecutor {
     }
 
     /// Normalize a match token: strip leading/trailing whitespace and punctuation, lowercase.
-    /// Mirrors Swift `normalizedWordMatch` (Unicode punctuation approximated by ASCII).
+    /// Mirrors Swift `normalizedWordMatch` (trim whitespace ∪ Unicode punctuation, lowercase).
     fn normalized_word_match(text: &str) -> String {
-        text.trim_matches(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
+        text.trim_matches(|c: char| c.is_whitespace() || Self::is_boundary_punctuation(c))
             .to_lowercase()
+    }
+
+    /// Approximates Swift's `CharacterSet.punctuationCharacters` (Unicode general category P):
+    /// ASCII punctuation plus the common Unicode punctuation blocks (smart quotes, dashes,
+    /// ellipsis, inverted marks, CJK and fullwidth punctuation). Not a full category-P table,
+    /// but covers the tokens a transcriber or model realistically wraps a word in.
+    fn is_boundary_punctuation(c: char) -> bool {
+        c.is_ascii_punctuation()
+            || matches!(c,
+                '\u{00A1}' | '\u{00A7}' | '\u{00B6}' | '\u{00B7}' | '\u{00BF}'
+                | '\u{2010}'..='\u{2027}'   // dashes, hyphens, quotes, ellipsis, bullets
+                | '\u{2030}'..='\u{205E}'   // general punctuation block
+                | '\u{3000}'..='\u{303F}'   // CJK symbols and punctuation
+                | '\u{FF01}'..='\u{FF0F}'
+                | '\u{FF1A}'..='\u{FF20}'
+                | '\u{FF3B}'..='\u{FF40}'
+                | '\u{FF5B}'..='\u{FF65}'   // fullwidth/halfwidth punctuation
+            )
     }
 
     fn int_from_value(v: &Value) -> Option<i64> {
@@ -1302,7 +1320,10 @@ impl ToolExecutor {
             return Some(i);
         }
         if let Some(f) = v.as_f64() {
-            if f.fract() == 0.0 {
+            // Whole number within i64 range only — an out-of-range float is not an index
+            // (Swift `Int(exactly:)` returns nil, failing the parse rather than saturating).
+            if f.fract() == 0.0 && f >= -9_223_372_036_854_775_808.0 && f < 9_223_372_036_854_775_808.0
+            {
                 return Some(f as i64);
             }
         }
@@ -6385,6 +6406,24 @@ mod tests {
         // Empty-after-normalize is rejected.
         assert!(ToolExecutor::parse_word_matches(&[json!("!!!")]).is_err());
         assert!(ToolExecutor::parse_word_matches(&[json!(5)]).is_err());
+        // Unicode punctuation is trimmed like Swift's category-P (smart quotes, ellipsis).
+        assert_eq!(ToolExecutor::normalized_word_match("\u{2018}um\u{2019}"), "um");
+        assert_eq!(ToolExecutor::normalized_word_match("\u{2026}uh\u{2026}"), "uh");
+        // A lone Unicode-punctuation token normalizes to empty → rejected.
+        assert!(ToolExecutor::parse_word_matches(&[json!("\u{2026}")]).is_err());
+        // Internal apostrophe (curly or straight) is preserved.
+        assert_eq!(ToolExecutor::normalized_word_match("don\u{2019}t"), "don\u{2019}t");
+    }
+
+    #[test]
+    fn remove_words_int_from_value_rejects_out_of_range_float() {
+        // Swift Int(exactly:) returns nil for an astronomical float; parse fails rather than
+        // saturating to i64::MAX.
+        assert!(ToolExecutor::parse_word_spans(&[json!(1e19)]).is_err());
+        assert_eq!(
+            ToolExecutor::parse_word_spans(&[json!(5.0), json!(7)]).unwrap(),
+            vec![(5, 5), (7, 7)]
+        );
     }
 
     #[test]
