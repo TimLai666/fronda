@@ -118,6 +118,53 @@ fn upstream_065_font_weight_defaults_and_round_trips() {
 }
 
 #[test]
+fn upstream_065_swift_isbold_isitalic_on_disk_compat() {
+    // #65 on-disk compat: a Swift-authored TextStyle stores isBold/isItalic (bools) and NO
+    // fontWeight. Rust must read them so Swift-authored bold/italic text isn't lost on load.
+    let swift_bold = json!({ "fontName": "Poppins", "isBold": true, "isItalic": true });
+    let s: TextStyle = serde_json::from_value(swift_bold).unwrap();
+    approx_eq(s.font_weight, 700.0); // isBold=true → weight 700
+    assert!(s.is_italic, "isItalic read");
+
+    let swift_regular = json!({ "fontName": "Poppins", "isBold": false, "isItalic": false });
+    let r: TextStyle = serde_json::from_value(swift_regular).unwrap();
+    approx_eq(r.font_weight, 400.0);
+    assert!(!r.is_italic);
+
+    // fontWeight wins over isBold when both present (Rust is more expressive).
+    let both = json!({ "fontName": "X", "fontWeight": 600, "isBold": true });
+    let b: TextStyle = serde_json::from_value(both).unwrap();
+    approx_eq(b.font_weight, 600.0);
+}
+
+#[test]
+fn upstream_065_serialize_writes_both_swift_and_rust_keys() {
+    // On save, Rust writes BOTH isBold/isItalic (for Swift) AND fontWeight (for Rust), so a
+    // .palmier written by Rust round-trips bold/italic into Swift and back.
+    let mut style = TextStyle {
+        font_weight: 700.0,
+        is_italic: true,
+        ..Default::default()
+    };
+    style.font_name = "Anton".into();
+    let j = serde_json::to_value(&style).unwrap();
+    assert_eq!(j["fontWeight"], json!(700.0), "Rust key");
+    assert_eq!(j["isBold"], json!(true), "Swift bold key");
+    assert_eq!(j["isItalic"], json!(true), "Swift italic key");
+
+    // Weight below 700 → isBold false.
+    let light = TextStyle { font_weight: 400.0, ..Default::default() };
+    let jl = serde_json::to_value(&light).unwrap();
+    assert_eq!(jl["isBold"], json!(false));
+
+    // Full round-trip preserves weight + italic + other fields.
+    let back: TextStyle = serde_json::from_value(j).unwrap();
+    approx_eq(back.font_weight, 700.0);
+    assert!(back.is_italic);
+    assert_eq!(back.font_name, "Anton");
+}
+
+#[test]
 fn upstream_065_font_weight_legacy_missing_defaults_to_400() {
     // Legacy fixture has no fontWeight → should decode as 400
     let timeline: Timeline = read_fixture_json("legacy-defaults.palmier", "project.json");
@@ -666,6 +713,7 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
                             corner_radius: None,
                         },
                         font_weight: 700.0,
+                        is_italic: false,
                         variable_font_axes: None,
                         letter_spacing: None,
                         line_height: None,

@@ -678,10 +678,12 @@ fn write_title(
     let style = clip.text_style.clone().unwrap_or_default();
     let enabled_attr = if disabled { " enabled=\"0\"" } else { "" };
     let family = font_family_fallback(&style.font_name);
-    let face = if style.font_weight >= 700.0 {
-        "Bold"
-    } else {
-        "Regular"
+    // Mirrors Swift `fontFaceFallback(isBold:isItalic:)`.
+    let face = match (style.font_weight >= 700.0, style.is_italic) {
+        (true, true) => "Bold Italic",
+        (true, false) => "Bold",
+        (false, true) => "Italic",
+        (false, false) => "Regular",
     };
     let font_size = style.font_size * style.font_scale;
     let color = color_string(&style.color);

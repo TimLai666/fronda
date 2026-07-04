@@ -518,39 +518,112 @@ pub struct TextFill {
     pub corner_radius: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Serde bridge for [`TextStyle`] (on-disk compat, #65): Swift's `TextStyle` stores `isBold`/
+/// `isItalic` bools (bold-by-default), Rust keeps a richer `font_weight`. On load we accept
+/// EITHER key set; on save we write BOTH, so a `.palmier` written by either app round-trips
+/// bold/italic. `fontWeight` wins when present (it's more expressive); `isBold` maps 700/400.
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TextStyle {
+struct TextStyleWire {
     #[serde(default = "default_text_font_name")]
-    pub font_name: String,
+    font_name: String,
     #[serde(default = "default_text_font_size")]
-    pub font_size: f64,
+    font_size: f64,
     #[serde(default = "default_one_f64")]
-    pub font_scale: f64,
+    font_scale: f64,
     #[serde(default)]
-    pub color: TextRgba,
+    color: TextRgba,
     #[serde(default = "default_text_alignment")]
-    pub alignment: TextAlignment,
+    alignment: TextAlignment,
     #[serde(default)]
-    pub shadow: TextShadow,
+    shadow: TextShadow,
     #[serde(default = "default_text_background")]
-    pub background: TextFill,
+    background: TextFill,
     #[serde(default = "default_text_border")]
-    pub border: TextFill,
-    /// Font weight (400 = normal, 700 = bold). Upstream PR #65.
-    #[serde(default = "default_font_weight")]
-    pub font_weight: f64,
-    /// Variable font axis values (Issue #50).
-    ///
-    /// Maps OpenType axis tag → value, e.g. {"wdth": 100.0, "GRAD": 0.0}.
-    /// Requires a variable font; ignored on static fonts.
+    border: TextFill,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    font_weight: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    is_bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    is_italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    variable_font_axes: Option<std::collections::HashMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    letter_spacing: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line_height: Option<f64>,
+}
+
+impl From<TextStyleWire> for TextStyle {
+    fn from(w: TextStyleWire) -> Self {
+        // fontWeight (Rust, richer) wins; else derive from Swift's isBold; else the default.
+        let font_weight = w
+            .font_weight
+            .or_else(|| w.is_bold.map(|b| if b { 700.0 } else { 400.0 }))
+            .unwrap_or_else(default_font_weight);
+        TextStyle {
+            font_name: w.font_name,
+            font_size: w.font_size,
+            font_scale: w.font_scale,
+            color: w.color,
+            alignment: w.alignment,
+            shadow: w.shadow,
+            background: w.background,
+            border: w.border,
+            font_weight,
+            is_italic: w.is_italic.unwrap_or(false),
+            variable_font_axes: w.variable_font_axes,
+            letter_spacing: w.letter_spacing,
+            line_height: w.line_height,
+        }
+    }
+}
+
+impl From<TextStyle> for TextStyleWire {
+    fn from(s: TextStyle) -> Self {
+        TextStyleWire {
+            font_name: s.font_name,
+            font_size: s.font_size,
+            font_scale: s.font_scale,
+            color: s.color,
+            alignment: s.alignment,
+            shadow: s.shadow,
+            background: s.background,
+            border: s.border,
+            font_weight: Some(s.font_weight),
+            // Written for Swift (which reads isBold/isItalic, not fontWeight).
+            is_bold: Some(s.font_weight >= 700.0),
+            is_italic: Some(s.is_italic),
+            variable_font_axes: s.variable_font_axes,
+            letter_spacing: s.letter_spacing,
+            line_height: s.line_height,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "TextStyleWire", into = "TextStyleWire")]
+pub struct TextStyle {
+    pub font_name: String,
+    pub font_size: f64,
+    pub font_scale: f64,
+    pub color: TextRgba,
+    pub alignment: TextAlignment,
+    pub shadow: TextShadow,
+    pub background: TextFill,
+    pub border: TextFill,
+    /// Font weight (400 = normal, 700 = bold). Upstream PR #65. On disk it round-trips via BOTH
+    /// `fontWeight` (Rust) and `isBold` (Swift) — see [`TextStyleWire`].
+    pub font_weight: f64,
+    /// Italic flag (Swift `isItalic`, #65 compat). Preserved on round-trip; the Rust text
+    /// renderer does not yet slant glyphs, but the FCPXML `fontFace` reflects it.
+    pub is_italic: bool,
+    /// Variable font axis values (Issue #50). Maps OpenType axis tag → value.
     pub variable_font_axes: Option<std::collections::HashMap<String, f64>>,
     /// Letter spacing in points (Issue #50 / motion typography).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub letter_spacing: Option<f64>,
     /// Line height multiplier (Issue #50). 1.0 = normal.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_height: Option<f64>,
 }
 
@@ -566,6 +639,7 @@ impl Default for TextStyle {
             background: default_text_background(),
             border: default_text_border(),
             font_weight: 400.0,
+            is_italic: false,
             variable_font_axes: None,
             letter_spacing: None,
             line_height: None,

@@ -286,6 +286,7 @@ mod tests {
             background: Default::default(),
             border: Default::default(),
             font_weight: 400.0,
+            is_italic: false,
             variable_font_axes: None,
             letter_spacing: None,
             line_height: None,
