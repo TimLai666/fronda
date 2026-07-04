@@ -50,6 +50,31 @@ fn font_for(font_name: &str, bold: bool) -> &'static [u8] {
     }
 }
 
+/// Source-over composite `src` onto `dst` (same size), per pixel.
+fn composite_over(dst: &mut RgbaImage, src: &RgbaImage) {
+    if dst.width != src.width || dst.height != src.height {
+        return;
+    }
+    for (d, s) in dst.pixels.chunks_exact_mut(4).zip(src.pixels.chunks_exact(4)) {
+        let sa = s[3] as f32 / 255.0;
+        if sa <= 0.0 {
+            continue;
+        }
+        let da = d[3] as f32 / 255.0;
+        let out_a = sa + da * (1.0 - sa);
+        if out_a <= 0.0 {
+            continue;
+        }
+        for k in 0..3 {
+            let sc = s[k] as f32 / 255.0;
+            let dc = d[k] as f32 / 255.0;
+            let out = (sc * sa + dc * da * (1.0 - sa)) / out_a;
+            d[k] = (out * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+        d[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+}
+
 fn blend_over(img: &mut RgbaImage, x: usize, y: usize, color: [u8; 3], a: f32) {
     if a <= 0.0 {
         return;
@@ -185,7 +210,7 @@ pub fn render_text(
         }
     }
 
-    // Drop shadow behind the text (offset; blur is a follow-up).
+    // Drop shadow behind the text (offset + optional blur).
     if style.shadow.enabled && style.shadow.color.a > 0.0 {
         let sc = [
             (style.shadow.color.r * 255.0).round().clamp(0.0, 255.0) as u8,
@@ -193,13 +218,17 @@ pub fn render_text(
             (style.shadow.color.b * 255.0).round().clamp(0.0, 255.0) as u8,
         ];
         let sa = style.shadow.color.a.clamp(0.0, 1.0) as f32;
-        draw_glyphs(
-            &mut img,
-            style.shadow.offset_x as f32,
-            style.shadow.offset_y as f32,
-            sc,
-            sa,
-        );
+        let (ox, oy) = (style.shadow.offset_x as f32, style.shadow.offset_y as f32);
+        let blur = (style.shadow.blur as f32 * canvas_scale).round() as usize;
+        if blur > 0 {
+            // Render + blur the shadow on its own layer, then composite it under.
+            let mut shadow = RgbaImage::new(cw, ch);
+            draw_glyphs(&mut shadow, ox, oy, sc, sa);
+            crate::compositor::apply_blur(&mut shadow, blur);
+            composite_over(&mut img, &shadow);
+        } else {
+            draw_glyphs(&mut img, ox, oy, sc, sa);
+        }
     }
 
     // Text outline/stroke: draw the glyphs in the border colour at 8 offsets so
@@ -243,7 +272,8 @@ mod tests {
             font_scale: 1.0,
             color,
             alignment: align,
-            shadow: Default::default(),
+            // Off by default so tests opt in; TextStyle's Default enables a shadow.
+            shadow: core_model::TextShadow { enabled: false, ..Default::default() },
             background: Default::default(),
             border: Default::default(),
             font_weight: 400.0,
@@ -303,6 +333,12 @@ mod tests {
             any_opaque(&with_shadow) > any_opaque(&no_shadow),
             "shadow paints extra pixels"
         );
+
+        // A blurred shadow still renders and differs from the sharp one.
+        s.shadow.blur = 8.0;
+        let blurred = render_text("Hi", &s, 400, 1080, 0.5, 0.5);
+        assert!(any_opaque(&blurred) > 0, "blurred shadow renders");
+        assert!(blurred.pixels != with_shadow.pixels, "blur changed the shadow");
     }
 
     #[test]
