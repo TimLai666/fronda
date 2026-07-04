@@ -2322,10 +2322,50 @@ impl ToolExecutor {
                 _ => core_model::ShapeKind::Rect,
             };
 
-            let shape_style = core_model::ShapeStyle {
+            let mut shape_style = core_model::ShapeStyle {
                 kind: shape_kind,
                 ..core_model::ShapeStyle::default()
             };
+            // style → stroke (color/width/dashed/arrowheadStyle).
+            if let Some(st) = entry.get("style") {
+                if let Some(hex) = st.get("color").and_then(|v| v.as_str()) {
+                    shape_style.stroke.color = core_model::shape_style::Rgba::from_hex(hex)
+                        .ok_or_else(|| format!("invalid style color '{hex}'"))?;
+                }
+                if let Some(w) = st.get("width").and_then(|v| v.as_f64()) {
+                    shape_style.stroke.width = w;
+                }
+                if let Some(d) = st.get("dashed").and_then(|v| v.as_bool()) {
+                    shape_style.stroke.dashed = d;
+                }
+                if let Some(a) = st.get("arrowheadStyle").and_then(|v| v.as_str()) {
+                    shape_style.stroke.arrowhead_style = Some(a.to_string());
+                }
+            }
+            // fill → enabled + colour.
+            if let Some(f) = entry.get("fill") {
+                if let Some(en) = f.get("enabled").and_then(|v| v.as_bool()) {
+                    shape_style.fill.enabled = en;
+                }
+                if let Some(hex) = f.get("color").and_then(|v| v.as_str()) {
+                    shape_style.fill.color = core_model::shape_style::Rgba::from_hex(hex)
+                        .ok_or_else(|| format!("invalid fill color '{hex}'"))?;
+                }
+            }
+
+            let mut transform = Transform::default();
+            if let Some(t) = entry.get("transform") {
+                transform = timeline_core::PartialTransform {
+                    center_x: t.get("centerX").and_then(|v| v.as_f64()),
+                    center_y: t.get("centerY").and_then(|v| v.as_f64()),
+                    width: t.get("width").and_then(|v| v.as_f64()),
+                    height: t.get("height").and_then(|v| v.as_f64()),
+                    rotation: t.get("rotation").and_then(|v| v.as_f64()),
+                    flip_horizontal: None,
+                    flip_vertical: None,
+                }
+                .merge_into(&transform);
+            }
 
             let clip = Clip {
                 id: Uuid::new_v4().to_string(),
@@ -2343,7 +2383,7 @@ impl ToolExecutor {
                 fade_in_interpolation: Interpolation::Linear,
                 fade_out_interpolation: Interpolation::Linear,
                 opacity: 1.0,
-                transform: Transform::default(),
+                transform,
                 crop: core_model::Crop::default(),
                 link_group_id: None,
                 caption_group_id: None,
@@ -4229,6 +4269,45 @@ mod tests {
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("shape clip"));
+    }
+
+    #[test]
+    fn add_shapes_applies_style_fill_and_transform() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_shapes",
+            &json!({"entries": [{
+                "type": "oval",
+                "style": {"color": "#FF0000", "width": 5.0, "dashed": true},
+                "fill": {"enabled": true, "color": "#0000FF"},
+                "transform": {"centerX": 0.25, "centerY": 0.75, "width": 0.4, "height": 0.3}
+            }]}),
+        )
+        .unwrap();
+        let clip = &exec.timeline.tracks[0].clips[0];
+        let ss = clip.shape_style.as_ref().unwrap();
+        assert_eq!(ss.kind, core_model::ShapeKind::Oval);
+        assert_eq!((ss.stroke.color.r, ss.stroke.color.g, ss.stroke.color.b), (1.0, 0.0, 0.0));
+        assert_eq!(ss.stroke.width, 5.0);
+        assert!(ss.stroke.dashed);
+        assert!(ss.fill.enabled);
+        assert_eq!((ss.fill.color.r, ss.fill.color.g, ss.fill.color.b), (0.0, 0.0, 1.0));
+        assert!((clip.transform.center_x - 0.25).abs() < 1e-9);
+        assert!((clip.transform.width - 0.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn add_shapes_rejects_bad_fill_color() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "add_shapes",
+                &json!({"entries": [{"type": "rect", "fill": {"color": "zzz"}}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("invalid fill color"), "got: {err}");
     }
 
     #[test]

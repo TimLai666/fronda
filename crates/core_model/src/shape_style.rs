@@ -112,6 +112,20 @@ impl Default for Rgba {
     }
 }
 
+impl Rgba {
+    /// Parse `#RGB` / `#RRGGBB` / `#RRGGBBAA` (leading `#` optional). Delegates to
+    /// the shared `TextRgba` hex parser so the two colour types stay identical.
+    pub fn from_hex(hex: &str) -> Option<Self> {
+        let c = crate::timeline::TextRgba::from_hex(hex)?;
+        Some(Self {
+            r: c.r,
+            g: c.g,
+            b: c.b,
+            a: c.a,
+        })
+    }
+}
+
 impl Default for ShapeStyle {
     fn default() -> Self {
         Self {
@@ -185,6 +199,16 @@ mod tests {
     #[test]
     fn issue_045_shape_animation_preset_default_is_none() {
         assert_eq!(ShapeAnimationPreset::default(), ShapeAnimationPreset::None);
+    }
+
+    #[test]
+    fn rgba_from_hex_matches_text_rgba() {
+        let c = Rgba::from_hex("#0080FF").unwrap();
+        assert!((c.r - 0.0).abs() < 1e-9);
+        assert!((c.g - 128.0 / 255.0).abs() < 1e-9);
+        assert!((c.b - 1.0).abs() < 1e-9);
+        assert_eq!(c.a, 1.0);
+        assert!(Rgba::from_hex("nope").is_none());
     }
 
     #[test]
