@@ -108,34 +108,79 @@ pub fn render_text(
     let center_x = (cx * cw as f64) as f32;
     let center_y = (cy * ch as f64) as f32;
     let block_top = center_y - lines.len() as f32 * line_h / 2.0;
+    let block_bottom = block_top + lines.len() as f32 * line_h;
     let ascent = sf.ascent();
 
-    for (li, line) in lines.iter().enumerate() {
-        let width = line_width(line);
-        // Block is centered at center_x; alignment anchors lines within it.
-        let start_x = match style.alignment {
-            TextAlignment::Left => center_x - max_width / 2.0,
-            TextAlignment::Center => center_x - width / 2.0,
-            TextAlignment::Right => center_x + max_width / 2.0 - width,
-        };
-        let base_y = block_top + li as f32 * line_h + ascent;
-        let mut pen_x = start_x;
-        for c in line.chars() {
-            let gid = font.glyph_id(c);
-            let glyph = gid.with_scale_and_position(scale, ab_glyph::point(pen_x, base_y));
-            if let Some(outlined) = font.outline_glyph(glyph) {
-                let bounds = outlined.px_bounds();
-                outlined.draw(|gx, gy, coverage| {
-                    let x = bounds.min.x as i32 + gx as i32;
-                    let y = bounds.min.y as i32 + gy as i32;
-                    if x >= 0 && (x as usize) < cw && y >= 0 && (y as usize) < ch {
-                        blend_over(&mut img, x as usize, y as usize, color, coverage * alpha);
-                    }
-                });
+    // One glyph-drawing pass, offset by (dx, dy) in `color` — used for the drop
+    // shadow and the main fill.
+    let draw_glyphs = |img: &mut RgbaImage, dx: f32, dy: f32, color: [u8; 3], alpha: f32| {
+        for (li, line) in lines.iter().enumerate() {
+            let width = line_width(line);
+            let start_x = match style.alignment {
+                TextAlignment::Left => center_x - max_width / 2.0,
+                TextAlignment::Center => center_x - width / 2.0,
+                TextAlignment::Right => center_x + max_width / 2.0 - width,
+            };
+            let base_y = block_top + li as f32 * line_h + ascent;
+            let mut pen_x = start_x;
+            for c in line.chars() {
+                let gid = font.glyph_id(c);
+                let glyph =
+                    gid.with_scale_and_position(scale, ab_glyph::point(pen_x + dx, base_y + dy));
+                if let Some(outlined) = font.outline_glyph(glyph) {
+                    let bounds = outlined.px_bounds();
+                    outlined.draw(|gx, gy, coverage| {
+                        let x = bounds.min.x as i32 + gx as i32;
+                        let y = bounds.min.y as i32 + gy as i32;
+                        if x >= 0 && (x as usize) < cw && y >= 0 && (y as usize) < ch {
+                            blend_over(img, x as usize, y as usize, color, coverage * alpha);
+                        }
+                    });
+                }
+                pen_x += sf.h_advance(gid) + letter;
             }
-            pen_x += sf.h_advance(gid) + letter;
+        }
+    };
+
+    // Caption background pill behind the text block (Issue #18). Corner rounding
+    // is a follow-up; padding is honoured.
+    if style.background.enabled {
+        let pad = style.background.padding.unwrap_or(0.0) as f32;
+        let bg = [
+            (style.background.color.r * 255.0).round().clamp(0.0, 255.0) as u8,
+            (style.background.color.g * 255.0).round().clamp(0.0, 255.0) as u8,
+            (style.background.color.b * 255.0).round().clamp(0.0, 255.0) as u8,
+        ];
+        let ba = style.background.color.a.clamp(0.0, 1.0) as f32;
+        let x0 = (center_x - max_width / 2.0 - pad).floor().max(0.0) as usize;
+        let x1 = ((center_x + max_width / 2.0 + pad).ceil().max(0.0) as usize).min(cw);
+        let y0 = (block_top - pad).floor().max(0.0) as usize;
+        let y1 = ((block_bottom + pad).ceil().max(0.0) as usize).min(ch);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                blend_over(&mut img, x, y, bg, ba);
+            }
         }
     }
+
+    // Drop shadow behind the text (offset; blur is a follow-up).
+    if style.shadow.enabled && style.shadow.color.a > 0.0 {
+        let sc = [
+            (style.shadow.color.r * 255.0).round().clamp(0.0, 255.0) as u8,
+            (style.shadow.color.g * 255.0).round().clamp(0.0, 255.0) as u8,
+            (style.shadow.color.b * 255.0).round().clamp(0.0, 255.0) as u8,
+        ];
+        let sa = style.shadow.color.a.clamp(0.0, 1.0) as f32;
+        draw_glyphs(
+            &mut img,
+            style.shadow.offset_x as f32,
+            style.shadow.offset_y as f32,
+            sc,
+            sa,
+        );
+    }
+
+    draw_glyphs(&mut img, 0.0, 0.0, color, alpha);
     img
 }
 
@@ -191,6 +236,47 @@ mod tests {
         let c = TextRgba::default();
         let img = render_text("   ", &style(40.0, c, TextAlignment::Left), 100, 50, 0.5, 0.5);
         assert_eq!(any_opaque(&img), 0);
+    }
+
+    #[test]
+    fn shadow_adds_painted_pixels() {
+        use core_model::TextShadow;
+        let w = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let mut s = style(40.0, w, TextAlignment::Center);
+        let no_shadow = render_text("Hi", &s, 200, 120, 0.5, 0.5);
+        s.shadow = TextShadow {
+            enabled: true,
+            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+            offset_x: 6.0,
+            offset_y: 6.0,
+            blur: 0.0,
+        };
+        let with_shadow = render_text("Hi", &s, 200, 120, 0.5, 0.5);
+        assert!(
+            any_opaque(&with_shadow) > any_opaque(&no_shadow),
+            "shadow paints extra pixels"
+        );
+    }
+
+    #[test]
+    fn background_fills_behind_text() {
+        use core_model::TextFill;
+        let black = TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+        let mut s = style(30.0, black, TextAlignment::Center);
+        s.background = TextFill {
+            enabled: true,
+            color: TextRgba { r: 0.0, g: 0.5, b: 1.0, a: 1.0 },
+            padding: Some(8.0),
+            corner_radius: None,
+        };
+        let img = render_text("Hi", &s, 200, 120, 0.5, 0.5);
+        // A solid rectangle of the (blue) background is painted.
+        let blue = img
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| p[3] > 200 && p[2] > p[0] && p[2] > p[1])
+            .count();
+        assert!(blue > 200, "background rect painted, got {blue}");
     }
 
     #[test]
