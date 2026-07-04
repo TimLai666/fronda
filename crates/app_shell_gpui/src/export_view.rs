@@ -17,6 +17,7 @@ use gpui::*;
 
 use crate::export_model::{ExportMode, ExportViewModel};
 use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
+use render_core::fcpxml_export::FcpxmlTarget;
 use render_core::{ExportFormat, ExportResolution};
 
 /// Export sheet view.
@@ -377,6 +378,48 @@ impl Render for ExportView {
                                             .text_color(Text::SECONDARY)
                                             .text_size(px(FontSize::SM))
                                             .child("Exports an FCPXML 1.10 timeline file for Final Cut Pro X and DaVinci Resolve."),
+                                    )
+                                    .child(
+                                        // #254: pick which NLE the transform/crop values are calibrated for.
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(Spacing::SM))
+                                            .child(
+                                                div()
+                                                    .text_color(Text::SECONDARY)
+                                                    .text_size(px(FontSize::SM))
+                                                    .child("Calibrate for:"),
+                                            )
+                                            .children([FcpxmlTarget::Resolve, FcpxmlTarget::Fcp].iter().map(|t| {
+                                                let selected = *t == self.model.fcpxml_target;
+                                                let t_copy = *t;
+                                                let label = match t {
+                                                    FcpxmlTarget::Resolve => "DaVinci Resolve",
+                                                    FcpxmlTarget::Fcp => "Final Cut Pro",
+                                                };
+                                                div()
+                                                    .id(gpui::SharedString::from(format!("fcp-target-{label}")))
+                                                    .px(px(Spacing::SM))
+                                                    .py(px(Spacing::XS))
+                                                    .rounded(px(Radius::XS_SM))
+                                                    .border_1()
+                                                    .border_color(if selected { Accent::PRIMARY } else { BorderColors::SUBTLE })
+                                                    .when(selected, |el| {
+                                                        el.bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.08 })
+                                                    })
+                                                    .cursor_pointer()
+                                                    .on_click(cx.listener(move |this, _: &ClickEvent, _: &mut Window, cx| {
+                                                        this.model.set_fcpxml_target(t_copy);
+                                                        cx.notify();
+                                                    }))
+                                                    .child(
+                                                        div()
+                                                            .text_color(Text::PRIMARY)
+                                                            .text_size(px(FontSize::SM))
+                                                            .child(label),
+                                                    )
+                                            })),
                                     )
                                     .children(self.model.status_text().map(|s| {
                                         div()
