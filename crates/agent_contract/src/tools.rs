@@ -196,14 +196,17 @@ fn add_texts() -> ToolDefinition {
             single undoable action. Pass a `texts` array; each entry takes: content \
             (the text), startFrame, durationFrames, and optional styling — fontName, \
             fontSize, fontWeight (400 = regular, 700 = bold), color ('#RGB' / \
-            '#RRGGBB' / '#RRGGBBAA'), alignment ('left' / 'center' / 'right'), and \
-            transform ({centerX, centerY, width, height} in \
-            0–1 normalized canvas coords; centre-only shifts position). For \
-            captioning spoken audio, prefer add_captions.",
+            '#RRGGBB' / '#RRGGBBAA'), alignment ('left' / 'center' / 'right'), \
+            transform ({centerX, centerY, width, height} in 0–1 normalized canvas \
+            coords; centre-only shifts position), and animation ('off', 'fadeIn', \
+            'popIn', 'slideUp', 'typewriter', 'wordReveal', 'wordSlide', 'wordPop', \
+            'wordCycle', 'highlightPop', 'highlightBlock') with an optional \
+            highlightColor hex for the per-word highlight presets. For captioning \
+            spoken audio, prefer add_captions.",
         input_schema: object(&[(
             "texts",
             array(
-                "Array of {content, startFrame, durationFrames, fontName?, fontSize?, color?, alignment?, transform?}",
+                "Array of {content, startFrame, durationFrames, fontName?, fontSize?, color?, alignment?, transform?, animation?, highlightColor?}",
             ),
         )]),
     }

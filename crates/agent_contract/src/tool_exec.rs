@@ -109,6 +109,36 @@ fn resolve_placement(
     })
 }
 
+/// Parse an agent text-animation spec into a `TextAnimation`, or `None` when the
+/// preset is `off`/absent (upstream #225 `parseTextAnimation`).
+fn parse_text_animation(
+    preset: Option<&str>,
+    highlight_hex: Option<&str>,
+) -> Result<Option<core_model::TextAnimation>, String> {
+    let Some(raw) = preset else {
+        return Ok(None);
+    };
+    let Some(p) = core_model::TextAnimationPreset::from_agent_str(raw) else {
+        return Err(format!(
+            "invalid animation '{raw}'. Valid: {}",
+            core_model::TextAnimationPreset::agent_values().join(", ")
+        ));
+    };
+    if p == core_model::TextAnimationPreset::None {
+        return Ok(None);
+    }
+    let mut anim = core_model::TextAnimation {
+        preset: p,
+        ..Default::default()
+    };
+    if let Some(hex) = highlight_hex {
+        anim.highlight = Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+            format!("invalid highlightColor '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
+        })?);
+    }
+    Ok(Some(anim))
+}
+
 /// Base pixel dimensions for an aspect-ratio preset (upstream #177).
 /// Mirrors Swift `AspectPreset.width/height`.
 fn aspect_preset_dims(aspect: &str) -> Result<(i64, i64), String> {
@@ -2739,6 +2769,11 @@ impl ToolExecutor {
                 .merge_into(&transform);
             }
 
+            let text_animation = parse_text_animation(
+                t_val.get("animation").and_then(|v| v.as_str()),
+                t_val.get("highlightColor").and_then(|v| v.as_str()),
+            )?;
+
             let clip = Clip {
                 id: Uuid::new_v4().to_string(),
                 media_ref: String::new(),
@@ -2777,7 +2812,7 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
-                text_animation: None,
+                text_animation,
                 word_timings: None,
             };
             let clip_id = clip.id.clone();
@@ -5292,6 +5327,47 @@ mod tests {
             .execute("add_texts", &json!({"texts": [{"content": "x", "color": "zzz"}]}))
             .unwrap_err();
         assert!(err.contains("invalid color"), "got: {err}");
+    }
+
+    #[test]
+    fn add_texts_applies_animation_and_highlight() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_texts",
+            &json!({"texts": [{
+                "content": "Go",
+                "animation": "wordReveal",
+                "highlightColor": "#FF8800"
+            }]}),
+        )
+        .unwrap();
+        let anim = exec.timeline.tracks[0].clips[0]
+            .text_animation
+            .as_ref()
+            .expect("animation set");
+        assert_eq!(anim.preset, core_model::TextAnimationPreset::WordReveal);
+        let hl = anim.highlight.as_ref().expect("highlight parsed");
+        assert!((hl.r - 1.0).abs() < 1e-6 && hl.g > 0.5 && hl.b == 0.0);
+    }
+
+    #[test]
+    fn add_texts_animation_off_leaves_none() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute("add_texts", &json!({"texts": [{"content": "x", "animation": "off"}]}))
+            .unwrap();
+        assert!(exec.timeline.tracks[0].clips[0].text_animation.is_none());
+    }
+
+    #[test]
+    fn add_texts_rejects_bad_animation() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute("add_texts", &json!({"texts": [{"content": "x", "animation": "bogus"}]}))
+            .unwrap_err();
+        assert!(err.contains("invalid animation"), "got: {err}");
     }
 
     #[test]
