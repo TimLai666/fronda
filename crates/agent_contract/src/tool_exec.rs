@@ -1439,24 +1439,30 @@ impl ToolExecutor {
 
         match outcome {
             timeline_core::RippleInsertWithSplitOutcome::Ok(plan) => {
-                // Apply split actions before shifting
+                // Apply split actions before shifting.
                 for (_, clip_id, split_at) in &plan.split_actions {
                     timeline_core::split_clip(&mut self.timeline, clip_id, *split_at);
                 }
-                // Apply shifts
-                for (ti, shifts) in plan.insert.shifts_by_track.iter().enumerate() {
-                    if ti < self.timeline.tracks.len() {
-                        for shift in shifts {
-                            if let Some(clip) = self.timeline.tracks[ti]
-                                .clips
-                                .iter_mut()
-                                .find(|c| c.id == shift.clip_id)
-                            {
-                                clip.start_frame = shift.new_start_frame;
-                            }
-                        }
-                        timeline_core::sort_clips_on_track(&mut self.timeline, ti);
+                // Shift POSITIONALLY, not by clip id: splitting a straddling clip
+                // creates a fresh right-half id the pre-computed shift list cannot
+                // reference, so a by-id apply left it un-shifted and place_clips then
+                // trimmed (destroyed) its tail. Push every clip at/after the insert
+                // frame by total_push on each pushed track (matches the library
+                // apply_ripple_insert_with_split).
+                let push_tracks: std::collections::BTreeSet<usize> =
+                    plan.insert.push_track_indices.iter().copied().collect();
+                let insert_frame = plan.insert.insert_frame;
+                let total_push = plan.insert.total_push;
+                for ti in 0..self.timeline.tracks.len() {
+                    if !push_tracks.contains(&ti) {
+                        continue;
                     }
+                    for clip in &mut self.timeline.tracks[ti].clips {
+                        if clip.start_frame >= insert_frame {
+                            clip.start_frame += total_push;
+                        }
+                    }
+                    timeline_core::sort_clips_on_track(&mut self.timeline, ti);
                 }
                 // Place new clips
                 let new_clips: Vec<Clip> = plan
@@ -4830,6 +4836,30 @@ mod tests {
             .execute("ripple_delete_ranges", &json!({}))
             .unwrap_err();
         assert!(err.contains("Missing trackIndex"));
+    }
+
+    #[test]
+    fn insert_clips_pushes_split_tail_preserving_frames() {
+        // Inserting inside a clip must split it and push the tail, not overwrite it.
+        // Regression: the tail (a fresh split id) was not shifted, then place_clips
+        // trimmed it — destroying original frames.
+        let mut exec = executor_with_clip(); // track 0, clip "c" span [0,100)
+        exec.execute(
+            "insert_clips",
+            &json!({"mediaIds": ["new-media"], "trackIndex": 0, "frame": 40, "durationFrames": 50}),
+        )
+        .unwrap();
+        let clips = &exec.timeline().tracks[0].clips;
+        let total: i64 = clips.iter().map(|c| c.duration_frames).sum();
+        // 100 original frames preserved + 50 inserted = 150 (not 100 with 50 lost).
+        assert_eq!(total, 150, "no frames destroyed: {:?}",
+            clips.iter().map(|c| (c.start_frame, c.duration_frames)).collect::<Vec<_>>());
+        let mut spans: Vec<(i64, i64)> = clips
+            .iter()
+            .map(|c| (c.start_frame, c.start_frame + c.duration_frames))
+            .collect();
+        spans.sort();
+        assert_eq!(spans, vec![(0, 40), (40, 90), (90, 150)]);
     }
 
     #[test]
