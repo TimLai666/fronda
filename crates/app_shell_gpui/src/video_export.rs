@@ -569,10 +569,31 @@ pub fn export_project(
     )
 }
 
-/// A video source opened once and reused across many frame requests. Avoids the
-/// per-frame file-open + stream-probe cost of [`decode_frame_rgba`], which makes
-/// a full-timeline export dramatically faster.
-pub struct SourceDecoder {
+/// Extensions decoded via the `image` crate — the linked ffmpeg has no image
+/// decoders (e.g. no PNG decoder), so stills go through `image`, not ffmpeg.
+fn is_image_source(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "bmp" | "gif" | "webp")
+    )
+}
+
+/// Load a still image as native-resolution RGBA via the `image` crate.
+fn load_still_rgba(path: &Path) -> Option<RgbaImage> {
+    let img = image::open(path).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    Some(RgbaImage {
+        width: w as usize,
+        height: h as usize,
+        pixels: img.into_raw(),
+    })
+}
+
+/// ffmpeg-backed video source opened once and reused across frame requests.
+pub struct VideoDecoder {
     ictx: ffmpeg::format::context::Input,
     decoder: ffmpeg::decoder::Video,
     scaler: ffmpeg::software::scaling::Context,
@@ -581,9 +602,21 @@ pub struct SourceDecoder {
     height: u32,
 }
 
+/// A source opened once and reused across many frame requests, avoiding the
+/// per-frame file-open + stream-probe cost of [`decode_frame_rgba`]. Video
+/// decodes via ffmpeg; still images (which the linked ffmpeg cannot decode) are
+/// loaded once via the `image` crate and returned for every frame.
+pub enum SourceDecoder {
+    Video(VideoDecoder),
+    Still(RgbaImage),
+}
+
 impl SourceDecoder {
-    /// Open `source`'s best video stream. `None` when it has no decodable video.
+    /// Open `source`. `None` when it has no decodable video / image.
     pub fn open(source: &Path) -> Option<Self> {
+        if is_image_source(source) {
+            return load_still_rgba(source).map(SourceDecoder::Still);
+        }
         init_ffmpeg();
         let ictx = ffmpeg::format::input(source).ok()?;
         let stream = ictx.streams().best(ffmpeg::media::Type::Video)?;
@@ -605,20 +638,29 @@ impl SourceDecoder {
             ffmpeg::software::scaling::Flags::BILINEAR,
         )
         .ok()?;
-        Some(Self {
+        Some(SourceDecoder::Video(VideoDecoder {
             ictx,
             decoder,
             scaler,
             video_index,
             width,
             height,
-        })
+        }))
     }
 
-    /// Decode the frame nearest `time_seconds` as native-resolution RGBA, reusing
-    /// the already-open context. `None` on decode failure.
+    /// Decode the frame nearest `time_seconds` as native-resolution RGBA. A still
+    /// returns its single image for any time.
     pub fn frame_at_seconds(&mut self, time_seconds: f64) -> Option<RgbaImage> {
-        if time_seconds >= 0.0 {
+        match self {
+            SourceDecoder::Still(img) => Some(img.clone()),
+            SourceDecoder::Video(v) => v.frame_at_seconds(time_seconds),
+        }
+    }
+}
+
+impl VideoDecoder {
+    fn frame_at_seconds(&mut self, time_seconds: f64) -> Option<RgbaImage> {
+        if time_seconds > 0.0 {
             let ts = (time_seconds * 1_000_000.0) as i64;
             let _ = self.ictx.seek(ts, ..=ts);
         }
@@ -662,8 +704,12 @@ impl SourceDecoder {
 }
 
 /// Decode the frame nearest `time_seconds` from `source` as RGBA at the
-/// source's native resolution. `None` on any decode failure.
+/// source's native resolution. Still images load via the `image` crate; video
+/// decodes via ffmpeg. `None` on any decode failure.
 pub fn decode_frame_rgba(source: &Path, time_seconds: f64) -> Option<RgbaImage> {
+    if is_image_source(source) {
+        return load_still_rgba(source);
+    }
     init_ffmpeg();
     let mut ictx = ffmpeg::format::input(source).ok()?;
     let stream = ictx.streams().best(ffmpeg::media::Type::Video)?;
@@ -963,6 +1009,25 @@ mod tests {
         for (codec, ext) in [(VideoCodec::H265, "mp4"), (VideoCodec::ProRes, "mov")] {
             eprintln!("codec {codec:?} usable = {}", try_codec(&dir, codec, ext));
         }
+    }
+
+    #[test]
+    fn source_decoder_decodes_a_still_image() {
+        // Image clips reference stills; SourceDecoder loads them via the `image`
+        // crate (the linked ffmpeg has no PNG decoder).
+        let dir = temp_dir("still");
+        let png = dir.join("still.png");
+        let mut img = image::RgbaImage::new(32, 24);
+        for p in img.pixels_mut() {
+            *p = image::Rgba([10, 200, 40, 255]);
+        }
+        img.save_with_format(&png, image::ImageFormat::Png).unwrap();
+
+        let mut dec = SourceDecoder::open(&png).expect("PNG opens as a source");
+        let frame = dec.frame_at_seconds(0.0).expect("still decodes");
+        assert_eq!((frame.width, frame.height), (32, 24));
+        // Green channel dominates (the fill was green).
+        assert!(frame.pixels[1] > frame.pixels[0] && frame.pixels[1] > frame.pixels[2]);
     }
 
     #[test]

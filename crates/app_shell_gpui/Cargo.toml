@@ -34,5 +34,5 @@ audio_core = { package = "fronda-audio-core", path = "../audio_core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ffmpeg-the-third = { version = "5.0.0", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
