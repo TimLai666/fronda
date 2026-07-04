@@ -178,7 +178,7 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 | #193 | FCPXML export v1 baseline                | DONE (v1)   | render_core (fcpxml_export.rs) + ExportMode::Fcpxml + write_interchange (save dialog writes .xml/.fcpxml); refinements #197/#206/#214/#247/#254 pending |
 | #204 | Window sizing (Home/Settings)           | DONE        | app_shell_gpui window.rs (project maximize-to-screen deferred) |
 | #214 | FCPXML format naming + Rec.709           | DONE        | render_core fcpxml_export.rs (NTSC-aware naming) |
-| #206 | FCPXML per-asset formats (partial)       | PARTIAL     | render_core fcpxml_export.rs; cross-file A/V linked collapse pending |
+| #206 | FCPXML per-asset formats (partial)       | PARTIAL     | render_core fcpxml_export.rs: per-asset formats keep source resolution but frameDuration on the PROJECT grid (asset duration + asset-clip in-point now align, no FCP conform-snap); each asset-clip references its own format (audio omits it). Cross-file A/V linked collapse still pending |
 | #226 | apply_layout geometry + placement + tool   | PARTIAL     | core_model video_layout.rs + agent_contract cmd_apply_layout: re-layout mode at full parity (batch clipIds per slot, same-track overlap + coincidence checks); place-new (mediaRef) mode deferred pending project-settings auto-match seam |
 | #199 | Skills: store + read_skill tool + prompt | PARTIAL     | skill_store.rs + agent_contract read_skill/set_skills/prompt inject + boot load; catalog/UI pending |
 | #74  | naturalTimeScale for clip inserts       | DEFERRED    | AVFoundation-specific                        |
