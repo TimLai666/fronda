@@ -212,6 +212,50 @@ fn save_removes_stale_optional_files_and_directories_when_absent() {
 }
 
 #[test]
+fn save_preserves_unreadable_chat_files() {
+    // A corrupt / unknown-format chat file is skipped on load; a later save must NOT
+    // delete it. Previously the whole chat directory was wiped on save, permanently
+    // losing any session that failed to parse on open.
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("modern-rich.palmier");
+    copy_dir_all(&fixture_bundle_path("modern-rich.palmier"), &destination);
+    let corrupt = destination
+        .join(CHAT_DIRECTORY_NAME)
+        .join("99999999-0000-0000-0000-000000000099.json");
+    fs::write(&corrupt, "not valid json").unwrap();
+
+    let mut bundle = ProjectBundle::open(&destination).unwrap();
+    assert!(!bundle.chat_sessions.is_empty(), "valid session still loads");
+    bundle.timeline.fps = 24; // unrelated change → triggers a full save
+    bundle.save().unwrap();
+
+    assert!(corrupt.exists(), "unreadable chat file must survive a save");
+    assert_eq!(fs::read_to_string(&corrupt).unwrap(), "not valid json");
+    let reopened = ProjectBundle::open(&destination).unwrap();
+    assert!(!reopened.chat_sessions.is_empty(), "valid session rewritten");
+}
+
+#[test]
+fn save_leaves_no_stray_temp_files() {
+    // Atomic writes go via a sibling .tmp then rename; none must linger after save.
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("modern-rich.palmier");
+    copy_dir_all(&fixture_bundle_path("modern-rich.palmier"), &destination);
+    let mut bundle = ProjectBundle::open(&destination).unwrap();
+    bundle.timeline.fps = 24;
+    bundle.save().unwrap();
+
+    for entry in fs::read_dir(&destination).unwrap() {
+        let path = entry.unwrap().path();
+        assert_ne!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("tmp"),
+            "stray temp file left behind: {path:?}"
+        );
+    }
+}
+
+#[test]
 fn saves_and_loads_transcripts() {
     let temp = tempdir().unwrap();
     let source = ProjectBundle::open(fixture_bundle_path("modern-rich.palmier")).unwrap();

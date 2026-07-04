@@ -267,9 +267,27 @@ where
     })?;
     bytes.push(b'\n');
 
-    fs::write(path, bytes).map_err(|source| BundleError::WriteFile {
-        path: path.to_path_buf(),
+    write_bytes_atomic(path, &bytes)
+}
+
+/// Write `bytes` to `path` atomically: write a sibling temp file, then rename it
+/// over the target. A crash or power loss mid-write then leaves either the prior
+/// good file or the complete new one — never a truncated/corrupt file. Rename over
+/// an existing destination is atomic and replaces on both Unix and Windows.
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), BundleError> {
+    let mut tmp_os = path.as_os_str().to_owned();
+    tmp_os.push(".tmp");
+    let tmp = PathBuf::from(tmp_os);
+    fs::write(&tmp, bytes).map_err(|source| BundleError::WriteFile {
+        path: tmp.clone(),
         source,
+    })?;
+    fs::rename(&tmp, path).map_err(|source| {
+        let _ = fs::remove_file(&tmp);
+        BundleError::WriteFile {
+            path: path.to_path_buf(),
+            source,
+        }
     })
 }
 
@@ -426,16 +444,58 @@ where
 }
 
 fn write_chat_sessions(path: &Path, sessions: &[ChatSession]) -> Result<(), BundleError> {
-    if sessions.is_empty() {
-        return remove_path_if_exists(path);
+    let in_memory: std::collections::HashSet<String> =
+        sessions.iter().map(|s| s.id.to_string()).collect();
+
+    // Prune the chat directory per-file WITHOUT wiping it: remove only .json files
+    // that parse as a ChatSession no longer held in memory (i.e. the user deleted
+    // that session). Files that fail to parse (corrupt, or an unknown/newer format)
+    // are PRESERVED — never silently delete chat data we cannot read. Previously the
+    // whole directory was wiped and only in-memory sessions rewritten, so a session
+    // dropped on load (parse failure) was permanently deleted on the next save.
+    if path.exists() {
+        for entry in fs::read_dir(path).map_err(|source| BundleError::ReadDirectory {
+            path: path.to_path_buf(),
+            source,
+        })? {
+            let entry = entry.map_err(|source| BundleError::ReadDirectory {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            let file = entry.path();
+            if file.extension() != Some(OsStr::new("json")) {
+                continue;
+            }
+            let is_removed_valid_session = fs::read(&file)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<ChatSession>(&b).ok())
+                .map(|s| !in_memory.contains(&s.id.to_string()))
+                .unwrap_or(false); // unparseable → preserve
+            if is_removed_valid_session {
+                fs::remove_file(&file).map_err(|source| BundleError::RemovePath {
+                    path: file.clone(),
+                    source,
+                })?;
+            }
+        }
     }
 
-    remove_path_if_exists(path)?;
-    ensure_directory(path)?;
+    if sessions.is_empty() {
+        // Nothing to write. If the directory is now empty (no preserved files), clean
+        // it up; otherwise leave the preserved files in place.
+        if path.exists()
+            && fs::read_dir(path)
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false)
+        {
+            remove_path_if_exists(path)?;
+        }
+        return Ok(());
+    }
 
+    ensure_directory(path)?;
     let mut ordered_sessions: Vec<&ChatSession> = sessions.iter().collect();
     ordered_sessions.sort_by_key(|session| session.id);
-
     for session in ordered_sessions {
         write_json(&path.join(format!("{}.json", session.id)), session)?;
     }
