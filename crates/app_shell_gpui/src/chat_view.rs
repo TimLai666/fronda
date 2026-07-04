@@ -157,7 +157,8 @@ impl ChatView {
                     Ok(outcome) => {
                         let tool_calls =
                             crate::agent_bridge::tool_calls_from_records(&outcome.tool_calls);
-                        view.model.complete_agent_turn(outcome.final_text, tool_calls)
+                        view.model
+                            .complete_agent_turn(outcome.final_text, tool_calls)
                     }
                     Err(err) => view.model.fail_agent_turn(err),
                 }

@@ -9,11 +9,11 @@
 //! in stock ffmpeg builds even without the (GPL) libx264 encoder.
 
 use core_model::{Clip, MediaManifest, MediaSource, Timeline};
-use ffmpeg_the_third as ffmpeg;
 use ffmpeg::format::sample::Type as SampleType;
 use ffmpeg::format::{Pixel, Sample};
 use ffmpeg::util::channel_layout::ChannelLayout;
 use ffmpeg::Rational;
+use ffmpeg_the_third as ffmpeg;
 use render_core::compositor::{compose_frame, RgbaImage};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -393,8 +393,8 @@ fn build_audio_track(
     channels: u16,
     global_header: bool,
 ) -> Result<AudioTrack, String> {
-    let acodec = ffmpeg::encoder::find(ffmpeg::codec::Id::AAC)
-        .ok_or("no AAC encoder in linked ffmpeg")?;
+    let acodec =
+        ffmpeg::encoder::find(ffmpeg::codec::Id::AAC).ok_or("no AAC encoder in linked ffmpeg")?;
     let layout = ChannelLayout::default_for_channels(channels as u32);
     let layout_mask = layout.mask().ok_or("audio channel layout has no mask")?;
     let enc_time_base = Rational(1, rate as i32);
@@ -738,12 +738,12 @@ pub fn decode_frame_rgba(source: &Path, time_seconds: f64) -> Option<RgbaImage> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core_model::{
-        ClipType, Crop, Interpolation, MediaManifestEntry, Track, Transform,
-    };
+    use core_model::{ClipType, Crop, Interpolation, MediaManifestEntry, Track, Transform};
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("fronda-video-export-tests").join(name);
+        let dir = std::env::temp_dir()
+            .join("fronda-video-export-tests")
+            .join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -933,7 +933,9 @@ mod tests {
         if enc.finish().is_err() {
             return false;
         }
-        std::fs::metadata(&out).map(|m| m.len() > 0).unwrap_or(false)
+        std::fs::metadata(&out)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false)
             && decode_frame_rgba(&out, 0.0).is_some()
     }
 
@@ -944,7 +946,10 @@ mod tests {
         }
         let dir = temp_dir("codec-h264");
         // H.264 must always work (it's the default and universally available).
-        assert!(try_codec(&dir, VideoCodec::H264, "mp4"), "H.264 round-trips");
+        assert!(
+            try_codec(&dir, VideoCodec::H264, "mp4"),
+            "H.264 round-trips"
+        );
     }
 
     #[test]
@@ -972,8 +977,12 @@ mod tests {
 
         let mut enc = Mp4Encoder::new_with_audio(&out, w, h, fps, 48_000, 2).expect("open av");
         for _ in 0..10 {
-            enc.write_frame(&RgbaImage::solid(w as usize, h as usize, [200, 30, 30, 255]))
-                .unwrap();
+            enc.write_frame(&RgbaImage::solid(
+                w as usize,
+                h as usize,
+                [200, 30, 30, 255],
+            ))
+            .unwrap();
         }
         // ~0.5s of a quiet stereo tone at 48 kHz.
         let samples: Vec<f32> = (0..48_000)
@@ -988,14 +997,19 @@ mod tests {
         assert!(std::fs::metadata(&out).unwrap().len() > 0);
         // Both streams must survive the mux and re-decode.
         let audio = crate::audio_export::decode_audio_pcm(&out, 48_000, 2);
-        assert!(audio.as_ref().is_some_and(|p| !p.is_empty()), "audio stream decodes");
-        assert!(decode_frame_rgba(&out, 0.0).is_some(), "video stream decodes");
+        assert!(
+            audio.as_ref().is_some_and(|p| !p.is_empty()),
+            "audio stream decodes"
+        );
+        assert!(
+            decode_frame_rgba(&out, 0.0).is_some(),
+            "video stream decodes"
+        );
     }
 
     #[test]
     fn source_decoder_reads_frames_from_one_open() {
-        let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
         let mut dec = SourceDecoder::open(&fixture).expect("fixture opens");
         // Two frames from a single open decoder — no reopen between them.
         let a = dec.frame_at_seconds(0.0).expect("frame 0");
@@ -1011,8 +1025,7 @@ mod tests {
             eprintln!("skipping: no video encoder in linked ffmpeg");
             return;
         }
-        let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
         assert!(fixture.is_file(), "fixture missing: {}", fixture.display());
 
         let dir = temp_dir("export-project");

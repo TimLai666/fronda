@@ -180,7 +180,9 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("fronda-skill-store-tests").join(name);
+        let dir = std::env::temp_dir()
+            .join("fronda-skill-store-tests")
+            .join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -216,8 +218,16 @@ mod tests {
     #[test]
     fn load_skills_reads_valid_and_skips_invalid() {
         let root = temp_dir("load");
-        write_skill(&root, "b-skill", "---\nname: Bravo\ndescription: second\n---\nbody");
-        write_skill(&root, "a-skill", "---\nname: Alpha\ndescription: first\n---\nbody");
+        write_skill(
+            &root,
+            "b-skill",
+            "---\nname: Bravo\ndescription: second\n---\nbody",
+        );
+        write_skill(
+            &root,
+            "a-skill",
+            "---\nname: Alpha\ndescription: first\n---\nbody",
+        );
         // No name → skipped.
         write_skill(&root, "nameless", "---\ndescription: no name\n---\nbody");
         // No SKILL.md at all → skipped (folder created empty).

@@ -57,7 +57,14 @@ impl WindowConfig {
 
     /// WIN-004: Settings default 1200×900, min 860×640 (upstream palmier-pro #204).
     pub fn for_settings() -> Self {
-        Self::new(WindowKind::Settings, "Settings", 1200.0, 900.0, 860.0, 640.0)
+        Self::new(
+            WindowKind::Settings,
+            "Settings",
+            1200.0,
+            900.0,
+            860.0,
+            640.0,
+        )
     }
 
     /// WIN-006: Help window with tabs (Shortcuts, MCP).

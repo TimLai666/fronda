@@ -111,7 +111,10 @@ mod tests {
     #[test]
     fn default_config_targets_public_api() {
         let config = AnthropicConfig::new("sk-test");
-        assert_eq!(config.messages_url(), "https://api.anthropic.com/v1/messages");
+        assert_eq!(
+            config.messages_url(),
+            "https://api.anthropic.com/v1/messages"
+        );
         assert_eq!(config.anthropic_version, "2023-06-01");
     }
 
@@ -123,7 +126,8 @@ mod tests {
 
     #[test]
     fn error_message_prefers_structured_field() {
-        let body = serde_json::json!({ "error": { "type": "invalid_request", "message": "bad model" } });
+        let body =
+            serde_json::json!({ "error": { "type": "invalid_request", "message": "bad model" } });
         assert_eq!(
             AnthropicTransport::error_message(400, &body),
             "anthropic API error 400: bad model"

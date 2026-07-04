@@ -59,7 +59,9 @@ mod tests {
     };
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("fronda-preview-render-tests").join(name);
+        let dir = std::env::temp_dir()
+            .join("fronda-preview-render-tests")
+            .join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -126,20 +128,13 @@ mod tests {
     #[test]
     fn cache_path_is_revision_and_frame_keyed() {
         let dir = Path::new("/cache");
-        assert_ne!(
-            preview_cache_path(dir, 1, 0),
-            preview_cache_path(dir, 1, 5)
-        );
-        assert_ne!(
-            preview_cache_path(dir, 1, 0),
-            preview_cache_path(dir, 2, 0)
-        );
+        assert_ne!(preview_cache_path(dir, 1, 0), preview_cache_path(dir, 1, 5));
+        assert_ne!(preview_cache_path(dir, 1, 0), preview_cache_path(dir, 2, 0));
     }
 
     #[test]
     fn renders_fixture_frame_to_png() {
-        let fixture =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
         assert!(fixture.is_file(), "fixture missing: {}", fixture.display());
 
         let clip = full_frame_clip("m1");
@@ -171,8 +166,7 @@ mod tests {
 
         let dir = temp_dir("fixture");
         let out = dir.join("frame0.png");
-        render_frame_png(&timeline, &manifest, &dir, 0, &out)
-            .expect("fixture frame should render");
+        render_frame_png(&timeline, &manifest, &dir, 0, &out).expect("fixture frame should render");
 
         let bytes = std::fs::read(&out).unwrap();
         assert!(!bytes.is_empty());

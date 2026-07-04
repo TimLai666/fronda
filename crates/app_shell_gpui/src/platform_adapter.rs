@@ -29,6 +29,30 @@ pub trait PlatformAdapter {
     fn reveal_generated_asset(&self, _asset_id: &str) {}
 }
 
+/// The program + args to reveal `path` in the OS file manager, selecting the
+/// file where the platform supports it. `os` is `std::env::consts::OS`. Pure so
+/// the argv is unit-tested for every platform; the spawn is platform I/O.
+pub fn reveal_argv(path: &std::path::Path, os: &str) -> (String, Vec<String>) {
+    match os {
+        "windows" => (
+            "explorer".into(),
+            vec![format!("/select,{}", path.display())],
+        ),
+        "macos" => ("open".into(), vec!["-R".into(), path.display().to_string()]),
+        // Linux/other: no portable "select", so open the containing folder.
+        _ => {
+            let dir = path.parent().unwrap_or(path);
+            ("xdg-open".into(), vec![dir.display().to_string()])
+        }
+    }
+}
+
+/// Reveal `path` in the OS file manager (best-effort; ignores spawn failure).
+pub fn reveal_in_file_manager(path: &std::path::Path) {
+    let (program, args) = reveal_argv(path, std::env::consts::OS);
+    let _ = std::process::Command::new(program).args(args).spawn();
+}
+
 /// Adapter that performs no platform operations.
 ///
 /// Useful for cross-platform compilation without platform dependencies,
@@ -100,5 +124,23 @@ mod tests {
     fn app_006_reveal_generated_asset_no_panic() {
         let a = NoopPlatformAdapter;
         a.reveal_generated_asset("gen-asset-abc");
+    }
+
+    #[test]
+    fn reveal_argv_per_platform() {
+        let p = std::path::Path::new("/media/out.mp4");
+        assert_eq!(
+            reveal_argv(p, "windows"),
+            ("explorer".into(), vec!["/select,/media/out.mp4".into()])
+        );
+        assert_eq!(
+            reveal_argv(p, "macos"),
+            ("open".into(), vec!["-R".into(), "/media/out.mp4".into()])
+        );
+        // Linux opens the containing folder.
+        assert_eq!(
+            reveal_argv(p, "linux"),
+            ("xdg-open".into(), vec!["/media".into()])
+        );
     }
 }

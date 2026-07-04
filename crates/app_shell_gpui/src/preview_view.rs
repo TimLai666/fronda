@@ -118,14 +118,14 @@ impl PreviewView {
                         (
                             guard.timeline().clone(),
                             guard.media_manifest().clone(),
-                            hub.project_root().unwrap_or_else(|| {
-                                std::env::temp_dir().join("fronda-preview")
-                            }),
+                            hub.project_root()
+                                .unwrap_or_else(|| std::env::temp_dir().join("fronda-preview")),
                         )
                     };
                     let cache_dir =
                         crate::project_registry_store::fronda_config_dir().join("preview");
-                    let out = crate::preview_render::preview_cache_path(&cache_dir, revision, frame);
+                    let out =
+                        crate::preview_render::preview_cache_path(&cache_dir, revision, frame);
                     if out.is_file() {
                         return Some(out);
                     }
@@ -462,7 +462,11 @@ impl Render for PreviewView {
                 .find(|q| q.matches(w, h))
                 .map(|q| q.label.to_string())
                 .unwrap_or_else(|| "Custom".into());
-            (timeline_core::format_aspect_ratio(w, h), format!("{fps} fps"), quality)
+            (
+                timeline_core::format_aspect_ratio(w, h),
+                format!("{fps} fps"),
+                quality,
+            )
         };
         div()
             .id("preview-panel")
@@ -607,20 +611,23 @@ impl Render for PreviewView {
                     .relative()
                     .bg(Background::BASE)
                     // Composited frame (or placeholder) — hidden when an overlay is shown
-                    .when(canvas_overlay == CanvasOverlay::None, |el| match &frame_png {
-                        Some(path) => el.child(
-                            gpui::img(path.clone())
-                                .max_w_full()
-                                .max_h_full()
-                                .object_fit(gpui::ObjectFit::Contain),
-                        ),
-                        None => el.child(
-                            div()
-                                .text_color(Text::MUTED)
-                                .text_size(px(FontSize::SM))
-                                .child("Preview"),
-                        ),
-                    })
+                    .when(
+                        canvas_overlay == CanvasOverlay::None,
+                        |el| match &frame_png {
+                            Some(path) => el.child(
+                                gpui::img(path.clone())
+                                    .max_w_full()
+                                    .max_h_full()
+                                    .object_fit(gpui::ObjectFit::Contain),
+                            ),
+                            None => el.child(
+                                div()
+                                    .text_color(Text::MUTED)
+                                    .text_size(px(FontSize::SM))
+                                    .child("Preview"),
+                            ),
+                        },
+                    )
                     // Offline overlay (Swift: "Media Offline" message)
                     .when(canvas_overlay == CanvasOverlay::Offline, |el| {
                         el.child(

@@ -26,11 +26,7 @@ fn init_ffmpeg() {
 /// Decode `source`'s audio as interleaved f32 PCM resampled to
 /// `target_rate`/`target_channels`. `None` when there is no audio stream or on
 /// any decode failure.
-pub fn decode_audio_pcm(
-    source: &Path,
-    target_rate: u32,
-    target_channels: u16,
-) -> Option<Vec<f32>> {
+pub fn decode_audio_pcm(source: &Path, target_rate: u32, target_channels: u16) -> Option<Vec<f32>> {
     init_ffmpeg();
     let mut ictx = ffmpeg::format::input(source).ok()?;
     let stream = ictx.streams().best(ffmpeg::media::Type::Audio)?;
@@ -193,7 +189,10 @@ pub fn export_project_with_audio(
         });
         enc.write_frame(&img)?;
         // Report video progress as 0..=95%; the trailing 5% covers audio + mux.
-        progress.store(((frame + 1) as u64 * 95 / total as u64).min(95), Ordering::Relaxed);
+        progress.store(
+            ((frame + 1) as u64 * 95 / total as u64).min(95),
+            Ordering::Relaxed,
+        );
     }
     if has_audio {
         enc.write_audio(&mixed)?;
@@ -235,7 +234,9 @@ mod tests {
     };
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("fronda-audio-export-tests").join(name);
+        let dir = std::env::temp_dir()
+            .join("fronda-audio-export-tests")
+            .join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -342,7 +343,12 @@ mod tests {
         c
     }
 
-    fn external_entry(id: &str, path: &Path, kind: ClipType, has_audio: bool) -> MediaManifestEntry {
+    fn external_entry(
+        id: &str,
+        path: &Path,
+        kind: ClipType,
+        has_audio: bool,
+    ) -> MediaManifestEntry {
         MediaManifestEntry {
             id: id.into(),
             name: id.into(),
@@ -379,9 +385,7 @@ mod tests {
     #[test]
     fn export_project_with_audio_muxes_video_and_audio() {
         use crate::video_export::encoder_available;
-        if !encoder_available()
-            || ffmpeg::encoder::find(ffmpeg::codec::Id::AAC).is_none()
-        {
+        if !encoder_available() || ffmpeg::encoder::find(ffmpeg::codec::Id::AAC).is_none() {
             eprintln!("skipping: no video/AAC encoder");
             return;
         }
@@ -393,7 +397,9 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
 
         let mut manifest = MediaManifest::default();
-        manifest.entries.push(external_entry_video("v1", &video_fixture));
+        manifest
+            .entries
+            .push(external_entry_video("v1", &video_fixture));
         manifest.entries.push(external_entry_audio("a1", &wav));
 
         let timeline = Timeline {
@@ -437,7 +443,11 @@ mod tests {
             &progress,
         )
         .expect("av export");
-        assert_eq!(progress.load(std::sync::atomic::Ordering::Relaxed), 100, "progress completes");
+        assert_eq!(
+            progress.load(std::sync::atomic::Ordering::Relaxed),
+            100,
+            "progress completes"
+        );
         assert!(std::fs::metadata(&out).unwrap().len() > 0);
         assert!(decode_audio_pcm(&out, 48_000, 2).is_some_and(|p| !p.is_empty()));
         assert!(crate::video_export::decode_frame_rgba(&out, 0.0).is_some());

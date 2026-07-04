@@ -1,13 +1,16 @@
 #[cfg(feature = "desktop-app")]
 pub mod account_view;
+pub mod agent_bridge;
 #[cfg(feature = "desktop-app")]
 pub mod agent_panel_view;
 #[cfg(feature = "desktop-app")]
 pub mod ai_edit_tab_view;
+pub mod anthropic_transport;
 #[cfg(feature = "desktop-app")]
 pub mod app_root;
 #[cfg(feature = "desktop-app")]
 pub mod assets;
+pub mod audio_export;
 #[cfg(feature = "desktop-app")]
 pub mod chat_history_view;
 #[cfg(feature = "desktop-app")]
@@ -37,7 +40,6 @@ pub mod keyframes_view;
 pub mod mcp_service;
 pub mod media_import;
 pub mod media_panel_model;
-pub mod skill_store;
 #[cfg(feature = "desktop-app")]
 pub mod media_panel_view;
 #[cfg(feature = "desktop-app")]
@@ -48,6 +50,7 @@ pub mod pane;
 pub mod platform_adapter;
 pub mod preview_guides;
 pub mod preview_model;
+pub mod preview_render;
 #[cfg(feature = "desktop-app")]
 pub mod preview_view;
 #[cfg(feature = "desktop-app")]
@@ -57,6 +60,7 @@ pub mod project_registry_store;
 pub mod settings_mismatch_view;
 #[cfg(feature = "desktop-app")]
 pub mod settings_view;
+pub mod skill_store;
 #[cfg(feature = "desktop-app")]
 pub mod theme;
 pub mod timeline_model;
@@ -73,10 +77,6 @@ pub mod tour_overlay_view;
 pub mod transform_overlay_view;
 #[cfg(feature = "desktop-app")]
 pub mod update_overlay_view;
-pub mod agent_bridge;
-pub mod anthropic_transport;
-pub mod audio_export;
-pub mod preview_render;
 pub mod video_export;
 pub mod video_thumbnails;
 pub mod window;

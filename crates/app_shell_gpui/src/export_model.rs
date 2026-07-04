@@ -232,7 +232,10 @@ mod tests {
 
         vm.set_interchange_result(Err("disk full".into()));
         assert_eq!(vm.panel.stage, ExportStage::Failed);
-        assert!(vm.status_text().unwrap().contains("Export failed: disk full"));
+        assert!(vm
+            .status_text()
+            .unwrap()
+            .contains("Export failed: disk full"));
     }
 
     #[test]

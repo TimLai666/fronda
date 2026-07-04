@@ -637,7 +637,8 @@ impl Render for ExportView {
                                                 .map(|()| path.clone())
                                             };
                                             let _ = this.update(cx, |view, cx| {
-                                                view.model.set_interchange_result(result);
+                                                if let Ok(ref p) = result { crate::platform_adapter::reveal_in_file_manager(p); }
+                                            view.model.set_interchange_result(result);
                                                 cx.notify();
                                             });
                                         }
@@ -664,7 +665,8 @@ impl Render for ExportView {
                                                 .map(|()| path.clone())
                                             };
                                             let _ = this.update(cx, |view, cx| {
-                                                view.model.set_interchange_result(result);
+                                                if let Ok(ref p) = result { crate::platform_adapter::reveal_in_file_manager(p); }
+                                            view.model.set_interchange_result(result);
                                                 cx.notify();
                                             });
                                         }
@@ -758,6 +760,7 @@ impl Render for ExportView {
                                             })
                                             .await;
                                         let _ = this.update(cx, |view, cx| {
+                                            if let Ok(ref p) = result { crate::platform_adapter::reveal_in_file_manager(p); }
                                             view.model.set_interchange_result(result);
                                             cx.notify();
                                         });
