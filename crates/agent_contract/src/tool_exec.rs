@@ -1189,8 +1189,8 @@ impl ToolExecutor {
         let mut seen_slots: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut seen_clips: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut uses_media = false;
-        // (slot, clip_id, anchor)
-        let mut entries: Vec<(core_model::LayoutSlot, String, (f64, f64))> = Vec::new();
+        // (slot, clip_ids, anchor)
+        let mut entries: Vec<(core_model::LayoutSlot, Vec<String>, (f64, f64))> = Vec::new();
         for (i, e) in slots_val.iter().enumerate() {
             let slot_name = e
                 .get("slot")
@@ -1210,26 +1210,40 @@ impl ToolExecutor {
                 return Err(format!("slots[{i}]: duplicate slot '{slot_name}'"));
             }
             let media_ref = e.get("mediaRef").and_then(Value::as_str);
-            let clip_id = e.get("clipId").and_then(Value::as_str);
-            if media_ref.is_some() == clip_id.is_some() {
+            // Clip assignment: 'clipIds' array (batch) preferred; 'clipId' singular accepted.
+            let clip_ids: Option<Vec<String>> =
+                if let Some(arr) = e.get("clipIds").and_then(Value::as_array) {
+                    Some(
+                        arr.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect(),
+                    )
+                } else {
+                    e.get("clipId")
+                        .and_then(Value::as_str)
+                        .map(|c| vec![c.to_string()])
+                };
+            if media_ref.is_some() == clip_ids.is_some() {
                 return Err(format!(
-                    "slots[{i}]: provide exactly one of 'mediaRef' or 'clipId'"
+                    "slots[{i}]: provide exactly one of 'mediaRef' or 'clipIds'"
                 ));
             }
-            if let Some(cid) = clip_id {
-                if !seen_clips.insert(cid.to_string()) {
-                    return Err(format!(
-                        "slots[{i}]: clip '{cid}' is assigned to more than one slot"
-                    ));
+            if let Some(cids) = &clip_ids {
+                if cids.is_empty() {
+                    return Err(format!("slots[{i}]: 'clipIds' must not be empty"));
+                }
+                for cid in cids {
+                    if !seen_clips.insert(cid.clone()) {
+                        return Err(format!(
+                            "slots[{i}]: clip '{cid}' is assigned to more than one slot; each clip can fill only one."
+                        ));
+                    }
                 }
             }
             uses_media = uses_media || media_ref.is_some();
             let anchor = resolve_layout_anchor(e).map_err(|m| format!("slots[{i}]: {m}"))?;
-            entries.push((
-                slot.clone(),
-                clip_id.unwrap_or_default().to_string(),
-                anchor,
-            ));
+            entries.push((slot.clone(), clip_ids.unwrap_or_default(), anchor));
         }
 
         let missing: Vec<&str> = layout_slots
@@ -1245,52 +1259,111 @@ impl ToolExecutor {
         }
         if uses_media {
             return Err(
-                "apply_layout: placing new clips by 'mediaRef' is not yet supported; \
-                 assign 'clipId' to re-layout existing clips."
+                "apply_layout: placing new clips by 'mediaRef' is not yet supported \
+                 (needs project-settings auto-match); assign 'clipIds' to re-layout \
+                 existing clips."
                     .to_string(),
             );
+        }
+
+        // Re-layout co-visibility validation (before any mutation):
+        //   (a) two clips in DIFFERENT slots on the SAME track must not overlap in
+        //       time — only the first would render; (b) with more than one slot,
+        //       some frame must have every slot playing, else no frame shows all
+        //       regions. Also validates every clip exists and is video/image.
+        let mut ranges_by_track: std::collections::HashMap<String, Vec<(String, i64, i64)>> =
+            std::collections::HashMap::new();
+        let mut intervals_by_slot: std::collections::HashMap<String, Vec<(i64, i64)>> =
+            std::collections::HashMap::new();
+        for (slot, clip_ids, _) in &entries {
+            for cid in clip_ids {
+                let loc = timeline_core::find_clip(&self.timeline, cid)
+                    .ok_or_else(|| format!("slot '{}': clip not found: {cid}", slot.id))?;
+                let track = &self.timeline.tracks[loc.track_index];
+                let clip = &track.clips[loc.clip_index];
+                if !matches!(clip.media_type, ClipType::Video | ClipType::Image) {
+                    return Err(format!(
+                        "slot '{}': clip {cid} is {:?}; layout applies to video/image clips",
+                        slot.id, clip.media_type
+                    ));
+                }
+                let (start, end) = (clip.start_frame, clip.start_frame + clip.duration_frames);
+                let track_id = track.id.clone();
+                if let Some(existing) = ranges_by_track.get(&track_id) {
+                    for (other_slot, o_start, o_end) in existing {
+                        if other_slot != &slot.id && start < *o_end && *o_start < end {
+                            return Err(format!(
+                                "clips in slots '{other_slot}' and '{}' are on the same track \
+                                 and their times overlap; only the first would render. Move them \
+                                 to separate tracks so every region shows.",
+                                slot.id
+                            ));
+                        }
+                    }
+                }
+                ranges_by_track
+                    .entry(track_id)
+                    .or_default()
+                    .push((slot.id.to_string(), start, end));
+                intervals_by_slot
+                    .entry(slot.id.to_string())
+                    .or_default()
+                    .push((start, end));
+            }
+        }
+        if entries.len() > 1 {
+            let candidates: Vec<i64> = intervals_by_slot
+                .values()
+                .flat_map(|ivs| ivs.iter().map(|(s, _)| *s))
+                .collect();
+            let coincides = candidates.iter().any(|&f| {
+                intervals_by_slot
+                    .values()
+                    .all(|ivs| ivs.iter().any(|&(s, e)| s <= f && f < e))
+            });
+            if !coincides {
+                return Err(
+                    "the selected clips never play at the same time, so no single frame shows \
+                     every region. Overlap their timeline ranges before laying them out."
+                        .to_string(),
+                );
+            }
         }
 
         // Re-layout mode: set each clip's transform + crop from its slot.
         let canvas_w = self.timeline.width;
         let canvas_h = self.timeline.height;
         let mut applied: Vec<String> = Vec::new();
-        for (slot, clip_id, anchor) in &entries {
-            let loc = self.timeline.tracks.iter().enumerate().find_map(|(ti, t)| {
-                t.clips.iter().position(|c| c.id == *clip_id).map(|ci| (ti, ci))
-            });
-            let Some((ti, ci)) = loc else {
-                return Err(format!("slot '{}': clip not found: {clip_id}", slot.id));
-            };
-            let media_type = self.timeline.tracks[ti].clips[ci].media_type.clone();
-            if !matches!(media_type, ClipType::Video | ClipType::Image) {
-                return Err(format!(
-                    "slot '{}': clip {clip_id} is {media_type:?}; layout applies to video/image clips",
-                    slot.id
-                ));
+        for (slot, clip_ids, anchor) in &entries {
+            for clip_id in clip_ids {
+                let loc = timeline_core::find_clip(&self.timeline, clip_id)
+                    .ok_or_else(|| format!("slot '{}': clip not found: {clip_id}", slot.id))?;
+                let (ti, ci) = (loc.track_index, loc.clip_index);
+                let media_ref = self.timeline.tracks[ti].clips[ci].media_ref.clone();
+                let entry = self.media_manifest.entry_for(&media_ref);
+                let sw = entry.and_then(|e| e.source_width).unwrap_or(0);
+                let sh = entry.and_then(|e| e.source_height).unwrap_or(0);
+                let (transform, crop) = core_model::video_layout::layout_placement(
+                    slot.rect, fit, sw, sh, canvas_w, canvas_h, anchor.0, anchor.1,
+                );
+                let clip = &mut self.timeline.tracks[ti].clips[ci];
+                clip.transform = transform;
+                clip.crop = crop;
+                clip.position_track = None;
+                clip.scale_track = None;
+                clip.rotation_track = None;
+                clip.crop_track = None;
             }
-            let media_ref = self.timeline.tracks[ti].clips[ci].media_ref.clone();
-            let entry = self.media_manifest.entry_for(&media_ref);
-            let sw = entry.and_then(|e| e.source_width).unwrap_or(0);
-            let sh = entry.and_then(|e| e.source_height).unwrap_or(0);
-            let (transform, crop) = core_model::video_layout::layout_placement(
-                slot.rect, fit, sw, sh, canvas_w, canvas_h, anchor.0, anchor.1,
-            );
-            let clip = &mut self.timeline.tracks[ti].clips[ci];
-            clip.transform = transform;
-            clip.crop = crop;
-            clip.position_track = None;
-            clip.scale_track = None;
-            clip.rotation_track = None;
-            clip.crop_track = None;
-            applied.push(format!("{} -> {clip_id}", slot.id));
+            applied.push(format!("{} -> {}", slot.id, clip_ids.join(", ")));
         }
 
         Ok(json!({
             "content": [{
                 "type": "text",
                 "text": format!(
-                    "Applied '{layout_name}' layout ({}) on existing clips: {}",
+                    "Applied '{layout_name}' layout ({}) on existing clips: {}. \
+                     Stacking follows current track order; reorder tracks if a PIP inset \
+                     isn't on top.",
                     fit.as_str(),
                     applied.join("; ")
                 )
@@ -3922,33 +3995,30 @@ mod tests {
     #[test]
     fn apply_layout_side_by_side_sets_transforms_and_crop() {
         let mut exec = make_executor_with_media(); // media-001 Video 1920x1080, canvas 1920x1080
+        // One clip per track, both starting at frame 0 → co-visible for side_by_side.
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
-        exec.execute(
-            "add_clips",
-            &json!({"mediaIds": ["media-001", "media-001"], "trackIndex": 0}),
-        )
-        .unwrap();
-        let ids: Vec<String> = exec.timeline().tracks[0]
-            .clips
-            .iter()
-            .map(|c| c.id.clone())
-            .collect();
-        assert_eq!(ids.len(), 2);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 0}))
+            .unwrap();
+        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 1}))
+            .unwrap();
+        let id0 = exec.timeline().tracks[0].clips[0].id.clone();
+        let id1 = exec.timeline().tracks[1].clips[0].id.clone();
 
         exec.execute(
             "apply_layout",
             &json!({
                 "layout": "side_by_side",
                 "slots": [
-                    {"slot": "left", "clipId": ids[0]},
-                    {"slot": "right", "clipId": ids[1]}
+                    {"slot": "left", "clipId": id0},
+                    {"slot": "right", "clipId": id1}
                 ]
             }),
         )
         .unwrap();
 
         let left = &exec.timeline().tracks[0].clips[0];
-        let right = &exec.timeline().tracks[0].clips[1];
+        let right = &exec.timeline().tracks[1].clips[0];
         assert!(
             (left.transform.center_x - 0.25).abs() < 1e-6,
             "left cx={}",
@@ -3961,6 +4031,109 @@ mod tests {
         );
         // 16:9 source cover-cropped into a half-width slot → 0.25 side crops.
         assert!((left.crop.left - 0.25).abs() < 1e-6, "crop.left={}", left.crop.left);
+    }
+
+    #[test]
+    fn apply_layout_batches_multiple_clips_per_slot() {
+        let mut exec = make_executor_with_media();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
+        // Two sequential takes in the left region (same track), one clip on the right.
+        exec.execute(
+            "add_clips",
+            &json!({"mediaIds": ["media-001", "media-001"], "trackIndex": 0}),
+        )
+        .unwrap();
+        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 1}))
+            .unwrap();
+        let a = exec.timeline().tracks[0].clips[0].id.clone();
+        let b = exec.timeline().tracks[0].clips[1].id.clone();
+        let c = exec.timeline().tracks[1].clips[0].id.clone();
+        exec.execute(
+            "apply_layout",
+            &json!({
+                "layout": "side_by_side",
+                "slots": [
+                    {"slot": "left", "clipIds": [a, b]},
+                    {"slot": "right", "clipIds": [c]}
+                ]
+            }),
+        )
+        .unwrap();
+        // Both left-slot clips are framed into the left region.
+        for clip in &exec.timeline().tracks[0].clips {
+            assert!(
+                (clip.transform.center_x - 0.25).abs() < 1e-6,
+                "left cx={}",
+                clip.transform.center_x
+            );
+        }
+        let right = &exec.timeline().tracks[1].clips[0];
+        assert!(
+            (right.transform.center_x - 0.75).abs() < 1e-6,
+            "right cx={}",
+            right.transform.center_x
+        );
+    }
+
+    #[test]
+    fn apply_layout_same_track_overlap_errors() {
+        let mut exec = make_executor_with_media();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_clips",
+            &json!({"mediaIds": ["media-001", "media-001"], "trackIndex": 0}),
+        )
+        .unwrap();
+        // Force the two clips to overlap in time on the SAME track.
+        exec.timeline_mut().tracks[0].clips[1].start_frame = 100;
+        let a = exec.timeline().tracks[0].clips[0].id.clone();
+        let b = exec.timeline().tracks[0].clips[1].id.clone();
+        let err = exec
+            .execute(
+                "apply_layout",
+                &json!({
+                    "layout": "side_by_side",
+                    "slots": [
+                        {"slot": "left", "clipId": a},
+                        {"slot": "right", "clipId": b}
+                    ]
+                }),
+            )
+            .unwrap_err();
+        assert!(err.contains("same track") && err.contains("overlap"), "err={err}");
+    }
+
+    #[test]
+    fn apply_layout_non_coincident_clips_error() {
+        let mut exec = make_executor_with_media();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 0}))
+            .unwrap();
+        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 1}))
+            .unwrap();
+        // Right clip starts only after the left one ends → never co-visible.
+        let left_end = {
+            let l = &exec.timeline().tracks[0].clips[0];
+            l.start_frame + l.duration_frames
+        };
+        exec.timeline_mut().tracks[1].clips[0].start_frame = left_end;
+        let a = exec.timeline().tracks[0].clips[0].id.clone();
+        let b = exec.timeline().tracks[1].clips[0].id.clone();
+        let err = exec
+            .execute(
+                "apply_layout",
+                &json!({
+                    "layout": "side_by_side",
+                    "slots": [
+                        {"slot": "left", "clipId": a},
+                        {"slot": "right", "clipId": b}
+                    ]
+                }),
+            )
+            .unwrap_err();
+        assert!(err.contains("never play at the same time"), "err={err}");
     }
 
     #[test]
