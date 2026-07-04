@@ -313,7 +313,14 @@ pub fn phrases_from_words(
             // Emit the current group and start a new one.
             if let Some(start) = group_start {
                 let start_frame = (start * fps as f64).round() as i64;
-                let end_frame = (group_end * fps as f64).round() as i64;
+                // Clamp the end to the next group's onset so slightly-overlapping
+                // ASR word intervals on a word-count-cap break can't emit
+                // overlapping segments. A no-op for well-ordered words (rounding is
+                // monotonic). Never below the group's own start.
+                let next_start_frame = (word.start_seconds * fps as f64).round() as i64;
+                let end_frame = ((group_end * fps as f64).round() as i64)
+                    .min(next_start_frame)
+                    .max(start_frame);
                 segments.push(CaptionSegment::new(
                     &group_words.join(" "),
                     start_frame,

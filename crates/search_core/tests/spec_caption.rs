@@ -329,6 +329,33 @@ fn cap_010_no_overlapping_segments_same_source() {
     }
 }
 
+#[test]
+fn cap_010_no_overlap_on_word_cap_break_with_overlapping_asr() {
+    // ASR word intervals can overlap slightly. When the group is split by the
+    // word-count cap (not a silence gap), the emitted segment's end must be
+    // clamped to the next word's onset so the segments do not overlap.
+    let words = vec![
+        word("a", 0.0, 0.5),
+        word("b", 0.5, 1.0),
+        word("c", 0.8, 1.2), // onset 0.8s is BEFORE b ends at 1.0s
+    ];
+    let config = CaptionConfig {
+        words_per_caption: 2,
+        max_gap_seconds: 10.0, // force a word-count-cap break, not a gap break
+        ..Default::default()
+    };
+    let segs = phrases_from_words(&words, &config, 30);
+    assert_eq!(segs.len(), 2);
+    // seg0 [a b] end clamped to seg1's onset (0.8s → 24), NOT b's end (1.0s → 30).
+    assert_eq!(segs[0].start_frame, 0);
+    assert_eq!(segs[0].end_frame, 24);
+    assert_eq!(segs[1].start_frame, 24, "next onset stays at its real time");
+    assert!(
+        segs[0].end_frame <= segs[1].start_frame,
+        "segments must not overlap"
+    );
+}
+
 // ===================================================================
 // CAP-013: Caption text case modes (auto, upper, lower)
 // ===================================================================
