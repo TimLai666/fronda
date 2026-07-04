@@ -347,11 +347,21 @@ fn xml_spec_transform_and_crop_preserved() {
 #[test]
 fn xml_spec_fades_preserved() {
     let xml = XmlExport::export(&comprehensive_timeline());
-    // v1 has fade_in=5, fade_out=8
-    assert!(xml.contains("<fadein>"), "fadein element should exist");
-    assert!(xml.contains("<duration>5</duration>"), "fadein duration 5");
-    assert!(xml.contains("<fadeout>"), "fadeout element should exist");
-    assert!(xml.contains("<duration>8</duration>"), "fadeout duration 8");
+    // v1 has fade_in=5, fade_out=8, now exported as single-sided <transitionitem>s (the
+    // Premiere-read form) rather than <fadein>/<fadeout> tags.
+    assert!(
+        !xml.contains("<fadein>") && !xml.contains("<fadeout>"),
+        "legacy fade tags removed"
+    );
+    assert!(xml.contains("<transitionitem>"), "transitionitem emitted");
+    assert!(
+        xml.contains("<alignment>start-black</alignment>"),
+        "fade-in edge"
+    );
+    assert!(
+        xml.contains("<alignment>end-black</alignment>"),
+        "fade-out edge"
+    );
 }
 
 // ---------------------------------------------------------------------------

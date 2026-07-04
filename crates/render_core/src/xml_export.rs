@@ -131,7 +131,9 @@ impl XmlExport {
                     continue;
                 }
                 let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
+                write_fade_transition(&mut xml, clip, timeline.fps, true, false);
                 write_clip(&mut xml, clip, timeline.fps, tc, manifest, false, &mut emitted);
+                write_fade_transition(&mut xml, clip, timeline.fps, false, false);
             }
             writeln!(xml, "          </videotrack>").ok();
             writeln!(xml, "        </track>").ok();
@@ -158,7 +160,9 @@ impl XmlExport {
             writeln!(xml, "            <locked>FALSE</locked>").ok();
             for clip in &track.clips {
                 let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
+                write_fade_transition(&mut xml, clip, timeline.fps, true, true);
                 write_clip(&mut xml, clip, timeline.fps, tc, manifest, true, &mut emitted);
+                write_fade_transition(&mut xml, clip, timeline.fps, false, true);
             }
             writeln!(xml, "          </audiotrack>").ok();
             writeln!(xml, "        </track>").ok();
@@ -180,6 +184,60 @@ fn timeline_total_frames(timeline: &Timeline) -> i64 {
         .map(|c| c.start_frame + c.duration_frames)
         .max()
         .unwrap_or(0)
+}
+
+/// Emit a fade as a single-sided `<transitionitem>` — the form Premiere reads (XML-007), a
+/// dissolve to black (video) / silence (audio). `is_left` = the fade-in edge; the right edge is
+/// the fade-out. Sibling of the clipitem at the track level. Mirrors Swift `fadeTransition`.
+fn write_fade_transition(xml: &mut String, clip: &Clip, fps: i64, is_left: bool, is_audio: bool) {
+    let frames = if is_left {
+        clip.fade_in_frames
+    } else {
+        clip.fade_out_frames
+    };
+    if frames <= 0 || clip.media_ref.is_empty() {
+        return;
+    }
+    let end_frame = clip.start_frame + clip.duration_frames;
+    let (start, end, alignment, cut_frames) = if is_left {
+        (clip.start_frame, clip.start_frame + frames, "start-black", 0)
+    } else {
+        (end_frame - frames, end_frame, "end-black", frames)
+    };
+    writeln!(xml, "            <transitionitem>").ok();
+    writeln!(xml, "              <start>{start}</start>").ok();
+    writeln!(xml, "              <end>{end}</end>").ok();
+    writeln!(xml, "              <alignment>{alignment}</alignment>").ok();
+    if !is_audio {
+        // Premiere's private cut-point in ticks (254016000000/sec): 0 for a fade-in, the full
+        // length for a fade-out.
+        let cut_point_ticks = cut_frames as i64 * (254_016_000_000i64 / fps.max(1));
+        writeln!(xml, "              <cutPointTicks>{cut_point_ticks}</cutPointTicks>").ok();
+    }
+    writeln!(xml, "              <rate>").ok();
+    writeln!(xml, "                <timebase>{fps}</timebase>").ok();
+    writeln!(xml, "                <ntsc>FALSE</ntsc>").ok();
+    writeln!(xml, "              </rate>").ok();
+    writeln!(xml, "              <effect>").ok();
+    if is_audio {
+        writeln!(xml, "                <name>Cross Fade ( 0dB)</name>").ok();
+        writeln!(xml, "                <effectid>KGAudioTransCrossFade0dB</effectid>").ok();
+        writeln!(xml, "                <effecttype>transition</effecttype>").ok();
+        writeln!(xml, "                <mediatype>audio</mediatype>").ok();
+    } else {
+        writeln!(xml, "                <name>Cross Dissolve</name>").ok();
+        writeln!(xml, "                <effectid>Cross Dissolve</effectid>").ok();
+        writeln!(xml, "                <effectcategory>Dissolve</effectcategory>").ok();
+        writeln!(xml, "                <effecttype>transition</effecttype>").ok();
+        writeln!(xml, "                <mediatype>video</mediatype>").ok();
+        writeln!(xml, "                <wipecode>0</wipecode>").ok();
+        writeln!(xml, "                <wipeaccuracy>100</wipeaccuracy>").ok();
+        writeln!(xml, "                <startratio>0</startratio>").ok();
+        writeln!(xml, "                <endratio>1</endratio>").ok();
+        writeln!(xml, "                <reverse>FALSE</reverse>").ok();
+    }
+    writeln!(xml, "              </effect>").ok();
+    writeln!(xml, "            </transitionitem>").ok();
 }
 
 /// Write a single clip element.
@@ -256,27 +314,8 @@ fn write_clip(
     writeln!(xml, "              </volume>").ok();
     // XML-005: opacity
     writeln!(xml, "              <opacity>{:.6}</opacity>", clip.opacity).ok();
-    // XML-007: fades
-    if clip.fade_in_frames > 0 {
-        writeln!(xml, "              <fadein>").ok();
-        writeln!(
-            xml,
-            "                <duration>{}</duration>",
-            clip.fade_in_frames
-        )
-        .ok();
-        writeln!(xml, "              </fadein>").ok();
-    }
-    if clip.fade_out_frames > 0 {
-        writeln!(xml, "              <fadeout>").ok();
-        writeln!(
-            xml,
-            "                <duration>{}</duration>",
-            clip.fade_out_frames
-        )
-        .ok();
-        writeln!(xml, "              </fadeout>").ok();
-    }
+    // XML-007: fades are emitted as sibling <transitionitem>s at the track level (Premiere
+    // reads those, not <fadein>/<fadeout>), so they're written around the clipitem, not here.
     // XML-006: transform and crop
     writeln!(xml, "              <filter>").ok();
     writeln!(xml, "                <effect>").ok();
@@ -731,12 +770,55 @@ mod tests {
     }
 
     #[test]
-    fn xml_007_fades_preserved() {
+    fn xml_007_fades_are_transitionitems() {
+        // XML-007: fades export as single-sided Cross Dissolve <transitionitem>s (the form
+        // Premiere reads), not <fadein>/<fadeout> tags. Clip is [0,100), fade-in 5, fade-out 8.
         let xml = XmlExport::export(&sample_timeline());
-        assert!(xml.contains("<fadein>"));
-        assert!(xml.contains("<duration>5</duration>"));
-        assert!(xml.contains("<fadeout>"));
-        assert!(xml.contains("<duration>8</duration>"));
+        assert!(
+            !xml.contains("<fadein>") && !xml.contains("<fadeout>"),
+            "legacy fade tags removed\n{xml}"
+        );
+        assert!(xml.contains("<transitionitem>"), "transitionitem emitted");
+        assert!(xml.contains("<name>Cross Dissolve</name>"), "video dissolve");
+        assert!(xml.contains("<effectid>Cross Dissolve</effectid>"));
+        // fade-in: start-black, ends at frame 5, cut at 0.
+        assert!(xml.contains("<alignment>start-black</alignment>"), "fade-in edge");
+        assert!(xml.contains("<end>5</end>"), "fade-in ends at 5");
+        assert!(xml.contains("<cutPointTicks>0</cutPointTicks>"), "fade-in cut at 0");
+        // fade-out: end-black, starts at frame 92 (100-8).
+        assert!(xml.contains("<alignment>end-black</alignment>"), "fade-out edge");
+        assert!(xml.contains("<start>92</start>"), "fade-out starts at 92");
+    }
+
+    #[test]
+    fn xml_007_audio_fade_is_cross_fade() {
+        // An audio fade uses Cross Fade (not Cross Dissolve) and omits the video-only
+        // cutPointTicks/wipe params.
+        let mut c = mk_clip("a1", "voice.wav", ClipType::Audio, 0);
+        c.fade_in_frames = 4;
+        let tl = Timeline {
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            settings_configured: true,
+            selected_clip_ids: Default::default(),
+            tracks: vec![Track {
+                id: "aud".into(),
+                r#type: ClipType::Audio,
+                muted: false,
+                hidden: false,
+                sync_locked: false,
+                clips: vec![c],
+            }],
+            transcription_language: None,
+            compound_timelines: Default::default(),
+        };
+        let xml = XmlExport::export(&tl);
+        assert!(xml.contains("<transitionitem>"), "audio transitionitem\n{xml}");
+        assert!(xml.contains("<name>Cross Fade ( 0dB)</name>"), "cross fade name");
+        assert!(xml.contains("<effectid>KGAudioTransCrossFade0dB</effectid>"));
+        assert!(!xml.contains("<cutPointTicks>"), "audio omits cutPointTicks");
+        assert!(!xml.contains("<wipecode>"), "audio omits video wipe params");
     }
 
     #[test]

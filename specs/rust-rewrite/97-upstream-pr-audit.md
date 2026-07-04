@@ -117,9 +117,14 @@ drag-segment `#start-end` (timeline_core::drag_payload); `EmbeddingStore`
 binary `to_bytes`/`from_bytes` (search_visual).
 
 Still-open pure-logic items: pack the 144-line Swift AgentInstructions into
-`SYSTEM_INSTRUCTION`; keyframed XMEML export + `file://` path norm + `<file>`
-dedup + fade→transitionitem (all need the media manifest threaded into
-`xml_export` as done for FCPXML); SHA256 transcript cache identity (needs `sha2`).
+`SYSTEM_INSTRUCTION`; SHA256 transcript cache identity (needs `sha2`).
+The XMEML `xml_export` items from the earlier note are now DONE (verified
+2026-07-04): keyframed motion+opacity (XML-012), `file://` path norm, `<file>`
+dedup (manifest threaded via `export_with_manifest`), and **fade→transitionitem**
+— fades now export as single-sided Cross Dissolve (video) / Cross Fade (audio)
+`<transitionitem>`s, the form Premiere actually reads, instead of the ignored
+`<fadein>/<fadeout>` tags (`write_fade_transition`, 3 tests; mirrors Swift
+`XMLExporter.fadeTransition` incl. `cutPointTicks`, alignment, effect IDs).
 The sweep also confirmed many suspected gaps are already DONE (keyframe
 smoothstep interpolation, folder-drag, `resolved_transform_at`/`crop_at`,
 model-config validate/discount).
