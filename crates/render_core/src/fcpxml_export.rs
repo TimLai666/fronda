@@ -205,7 +205,7 @@ impl FcpxmlExport {
                 // Scalar adjustments that round-trip without coordinate calibration: opacity
                 // (<adjust-blend>) and audio volume (<adjust-volume>, in dB). Transform/crop
                 // (coordinate-space sensitive) and keyframed opacity are #254 follow-ups.
-                let adjustments = clip_adjustments(clip, manifest, is_audio, seq_w, seq_h);
+                let adjustments = clip_adjustments(clip, manifest, is_audio, seq_w, seq_h, fps);
                 if adjustments.is_empty() {
                     writeln!(xml, "{open}/>").ok();
                 } else {
@@ -345,6 +345,7 @@ fn clip_adjustments(
     is_audio: bool,
     seq_w: i64,
     seq_h: i64,
+    fps: i64,
 ) -> String {
     let mut out = String::new();
     if !is_audio {
@@ -398,16 +399,43 @@ fn clip_adjustments(
             let _ = writeln!(out, "                <adjust-transform{attrs}/>");
         }
 
-        let has_opacity_kf = clip
+        let opacity_kf = clip
             .opacity_track
             .as_ref()
-            .is_some_and(|t| !t.keyframes.is_empty());
-        if clip.opacity < 0.9995 || has_opacity_kf {
-            let _ = writeln!(
-                out,
-                "                <adjust-blend amount=\"{}\"/>",
-                format_number(clip.opacity)
-            );
+            .map(|t| t.keyframes.as_slice())
+            .filter(|k| !k.is_empty());
+        if clip.opacity < 0.9995 || opacity_kf.is_some() {
+            let amount = format_number(clip.opacity);
+            match opacity_kf {
+                Some(kfs) => {
+                    // Keyframed opacity → <param>/<keyframeAnimation>; time is on the clip's
+                    // output axis (keyframes are clip-relative), value in 0..1.
+                    let _ = writeln!(out, "                <adjust-blend amount=\"{amount}\">");
+                    let _ = writeln!(out, "                  <param name=\"amount\" value=\"{amount}\">");
+                    let _ = writeln!(out, "                    <keyframeAnimation>");
+                    let mut sorted: Vec<_> = kfs.iter().collect();
+                    sorted.sort_by_key(|k| k.frame);
+                    for k in sorted {
+                        let curve = if k.interpolation_out == core_model::Interpolation::Linear {
+                            " curve=\"linear\""
+                        } else {
+                            ""
+                        };
+                        let _ = writeln!(
+                            out,
+                            "                      <keyframe time=\"{}\"{curve} value=\"{}\"/>",
+                            time_str(k.frame, fps),
+                            format_number(k.value)
+                        );
+                    }
+                    let _ = writeln!(out, "                    </keyframeAnimation>");
+                    let _ = writeln!(out, "                  </param>");
+                    let _ = writeln!(out, "                </adjust-blend>");
+                }
+                None => {
+                    let _ = writeln!(out, "                <adjust-blend amount=\"{amount}\"/>");
+                }
+            }
         }
     }
     let asset_has_audio = manifest
@@ -890,6 +918,44 @@ mod tests {
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
         assert!(xml.contains("scale=\"-0.5 0.5\""), "h-flip negates sx\n{xml}");
+    }
+
+    #[test]
+    fn fcpxml_keyframed_opacity_emits_keyframe_animation() {
+        // Opacity ramp 1.0 → 0.0 over frames 0..30 (clip-relative). Emits a
+        // <param>/<keyframeAnimation> inside adjust-blend.
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.opacity_track = Some(core_model::KeyframeTrack {
+            keyframes: vec![
+                core_model::Keyframe {
+                    frame: 0,
+                    value: 1.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+                core_model::Keyframe {
+                    frame: 30,
+                    value: 0.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+            ],
+        });
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("<param name=\"amount\" value=\"1\">"), "param\n{xml}");
+        assert!(xml.contains("<keyframeAnimation>"), "keyframeAnimation");
+        assert!(
+            xml.contains("<keyframe time=\"0s\" curve=\"linear\" value=\"1\"/>"),
+            "first keyframe\n{xml}"
+        );
+        assert!(
+            xml.contains("<keyframe time=\"30/30s\" curve=\"linear\" value=\"0\"/>"),
+            "second keyframe\n{xml}"
+        );
+        assert!(xml.contains("</adjust-blend>"), "open/close blend");
     }
 
     #[test]
