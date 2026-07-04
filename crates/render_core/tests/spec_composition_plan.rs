@@ -56,6 +56,8 @@ fn make_single_clip_timeline() -> Timeline {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                text_animation: None,
+                word_timings: None,
             }],
         }],
     }
@@ -96,6 +98,8 @@ fn make_base_clip() -> Clip {
         compound_timeline_id: None,
         blend_mode: Default::default(),
         chroma_key: None,
+        text_animation: None,
+        word_timings: None,
     }
 }
 

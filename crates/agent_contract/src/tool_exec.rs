@@ -1515,6 +1515,8 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                text_animation: None,
+                word_timings: None,
             };
             let Some(tid) = track_id_by_slot.get(slot.id) else {
                 continue;
@@ -1678,6 +1680,8 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                text_animation: None,
+                word_timings: None,
             });
         }
 
@@ -1953,6 +1957,8 @@ impl ToolExecutor {
                         compound_timeline_id: None,
                         blend_mode: Default::default(),
                         chroma_key: None,
+                        text_animation: None,
+                        word_timings: None,
                         }
                     })
                     .collect();
@@ -2769,6 +2775,8 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                text_animation: None,
+                word_timings: None,
             };
             let clip_id = clip.id.clone();
             created_ids.push(clip_id);
@@ -2917,6 +2925,8 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                text_animation: None,
+                word_timings: None,
             };
             let clip_id = clip.id.clone();
             created_ids.push(clip_id);
@@ -4946,6 +4956,8 @@ mod tests {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                text_animation: None,
+                word_timings: None,
             }],
         });
         let mut exec = ToolExecutor::new(timeline, manifest);
@@ -5617,6 +5629,8 @@ mod tests {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                text_animation: None,
+                word_timings: None,
             }],
         });
         ToolExecutor::new(timeline, MediaManifest::default())

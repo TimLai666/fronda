@@ -6,6 +6,7 @@ pub mod library;
 pub mod media_manifest;
 pub mod project_registry;
 pub mod shape_style;
+pub mod text_animation;
 pub mod timeline;
 pub mod video_layout;
 
@@ -22,6 +23,9 @@ pub use media_manifest::{
 pub use project_registry::{ProjectEntry, ProjectRegistry};
 pub use shape_style::{
     Arrowhead, Endpoints, Fill, Point2d, Rgba, ShapeAnimationPreset, ShapeKind, ShapeStyle, Stroke,
+};
+pub use text_animation::{
+    TextAnimation, TextAnimationPreset, TextAnimationRenderMode, WordTiming,
 };
 pub use timeline::{
     AnimPair, BlendMode, ChromaKey, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack,

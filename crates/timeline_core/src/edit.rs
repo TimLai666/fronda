@@ -501,6 +501,8 @@ pub fn link_audio_for_placed_clips(
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         });
     }
     sort_clips(&mut timeline.tracks[audio_track_index]);

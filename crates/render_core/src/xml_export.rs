@@ -554,6 +554,8 @@ mod tests {
                     compound_timeline_id: None,
                     blend_mode: Default::default(),
                     chroma_key: None,
+                    text_animation: None,
+                    word_timings: None,
                 }],
             }],
             settings_configured: true,
@@ -598,6 +600,8 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         }
     }
 
@@ -893,6 +897,8 @@ mod tests {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                text_animation: None,
+                word_timings: None,
             }],
         });
         let xml = XmlExport::export(&timeline);

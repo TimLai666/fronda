@@ -60,6 +60,8 @@ fn comprehensive_timeline() -> Timeline {
         compound_timeline_id: None,
         blend_mode: Default::default(),
         chroma_key: None,
+        text_animation: None,
+        word_timings: None,
     };
 
     // Second video on a separate visual track (to test reversal)
@@ -97,6 +99,8 @@ fn comprehensive_timeline() -> Timeline {
         compound_timeline_id: None,
         blend_mode: Default::default(),
         chroma_key: None,
+        text_animation: None,
+        word_timings: None,
     };
 
     // Audio clip linked to v1 (same link group)
@@ -134,6 +138,8 @@ fn comprehensive_timeline() -> Timeline {
         compound_timeline_id: None,
         blend_mode: Default::default(),
         chroma_key: None,
+        text_animation: None,
+        word_timings: None,
     };
 
     // Text clip (should NOT appear in XML output - XML-013)
@@ -171,6 +177,8 @@ fn comprehensive_timeline() -> Timeline {
         compound_timeline_id: None,
         blend_mode: Default::default(),
         chroma_key: None,
+        text_animation: None,
+        word_timings: None,
     };
 
     // Unresolved clip (empty media_ref, should be skipped - XML-012)
@@ -487,6 +495,8 @@ fn xml_spec_position_keyframes_export_resolved_center() {
         compound_timeline_id: None,
         blend_mode: Default::default(),
         chroma_key: None,
+        text_animation: None,
+        word_timings: None,
     };
     // Top-left held at the origin; a half-canvas clip → resolved centre (0.25, 0.25).
     clip.position_track = Some(KeyframeTrack {

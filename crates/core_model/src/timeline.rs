@@ -664,6 +664,13 @@ pub struct Clip {
     pub caption_group_id: Option<String>,
     pub text_content: Option<String>,
     pub text_style: Option<TextStyle>,
+    /// Text animation settings (upstream #225). Renderer is UI-deferred; the data
+    /// model round-trips so animated-text projects don't lose these on save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_animation: Option<crate::text_animation::TextAnimation>,
+    /// Per-word timings driving word-level text animation (upstream #225).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word_timings: Option<Vec<crate::text_animation::WordTiming>>,
     pub opacity_track: Option<KeyframeTrack<f64>>,
     pub position_track: Option<KeyframeTrack<AnimPair>>,
     pub scale_track: Option<KeyframeTrack<AnimPair>>,
@@ -1090,6 +1097,8 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: BlendMode::Multiply,
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         };
         let json = serde_json::to_string(&clip).unwrap();
         assert!(

@@ -1051,6 +1051,8 @@ mod tests {
                             compound_timeline_id: None,
                             blend_mode: Default::default(),
                             chroma_key: None,
+                            text_animation: None,
+                            word_timings: None,
                         },
                         Clip {
                             id: "clip-002".into(),
@@ -1086,6 +1088,8 @@ mod tests {
                             compound_timeline_id: None,
                             blend_mode: Default::default(),
                             chroma_key: None,
+                            text_animation: None,
+                            word_timings: None,
                         },
                     ],
                 },
@@ -1129,6 +1133,8 @@ mod tests {
                         compound_timeline_id: None,
                         blend_mode: Default::default(),
                         chroma_key: None,
+                        text_animation: None,
+                        word_timings: None,
                     }],
                 },
             ],
@@ -1971,6 +1977,8 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         }
     }
 

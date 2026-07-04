@@ -625,6 +625,8 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         };
         let a1 = Clip {
             id: "a1".into(),
@@ -660,6 +662,8 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         };
         Timeline {
             fps: 30,
@@ -856,6 +860,8 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         }
     }
 
@@ -895,6 +901,8 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         };
         let video = Clip {
             id: "v1".into(),
@@ -993,6 +1001,8 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         };
         let v2 = Clip {
             id: "v2".into(),

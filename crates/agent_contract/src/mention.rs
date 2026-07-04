@@ -284,6 +284,8 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            text_animation: None,
+            word_timings: None,
         };
         let clip_m = clip_mention(&clip_data, "V1", 30);
         assert!(

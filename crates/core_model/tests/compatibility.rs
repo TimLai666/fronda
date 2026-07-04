@@ -451,6 +451,46 @@ fn fmt_008_minimal_clip_decodes_with_correct_defaults() {
     assert!(clip.crop_track.is_none());
     assert!(clip.volume_track.is_none());
     assert!(clip.stroke_progress_track.is_none());
+    // Upstream #225 fields default to None.
+    assert!(clip.text_animation.is_none());
+    assert!(clip.word_timings.is_none());
+}
+
+#[test]
+fn upstream_225_text_animation_and_word_timings_round_trip() {
+    // Upstream #225: a text clip's textAnimation + wordTimings survive load/save
+    // (present values are preserved, not dropped), under the Swift camelCase keys.
+    let encoded = json!({
+        "mediaRef": "",
+        "mediaType": "text",
+        "startFrame": 0,
+        "durationFrames": 30,
+        "textAnimation": {
+            "preset": "wordReveal",
+            "perWordFrames": 8,
+            "highlight": {"r": 1.0, "g": 0.5, "b": 0.0, "a": 1.0}
+        },
+        "wordTimings": [
+            {"text": "Hello", "startFrame": 0, "endFrame": 10},
+            {"text": "World", "startFrame": 10, "endFrame": 30}
+        ]
+    });
+    let clip: Clip = serde_json::from_value(encoded).unwrap();
+    let anim = clip.text_animation.as_ref().expect("textAnimation decoded");
+    assert_eq!(anim.preset, core_model::TextAnimationPreset::WordReveal);
+    assert_eq!(anim.per_word_frames, 8);
+    assert!(anim.highlight.is_some());
+    let timings = clip.word_timings.as_ref().expect("wordTimings decoded");
+    assert_eq!(timings.len(), 2);
+    assert_eq!(timings[1].text, "World");
+    assert_eq!(timings[1].end_frame, 30);
+
+    // Re-encoding preserves the Swift keys (so a Swift↔Rust round-trip is lossless).
+    let re = serde_json::to_value(&clip).unwrap();
+    assert_eq!(re["textAnimation"]["preset"], json!("wordReveal"));
+    assert_eq!(re["textAnimation"]["perWordFrames"], json!(8));
+    assert_eq!(re["wordTimings"][0]["startFrame"], json!(0));
+    assert_eq!(re["wordTimings"][1]["text"], json!("World"));
 }
 
 #[test]
@@ -673,6 +713,8 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
                     compound_timeline_id: None,
                     blend_mode: Default::default(),
                     chroma_key: None,
+                    text_animation: None,
+                    word_timings: None,
                 }],
             },
             Track {
@@ -728,6 +770,8 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
                     compound_timeline_id: None,
                     blend_mode: Default::default(),
                     chroma_key: None,
+                    text_animation: None,
+                    word_timings: None,
                 }],
             },
         ],
