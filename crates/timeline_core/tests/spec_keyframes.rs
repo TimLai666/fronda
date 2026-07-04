@@ -46,6 +46,37 @@ fn clip(id: &str, start_frame: i64, duration_frames: i64) -> Clip {
     }
 }
 
+#[test]
+fn set_duration_rescales_word_timings_on_text_clips() {
+    use core_model::WordTiming;
+    let mut c = clip("t", 0, 30);
+    c.media_type = ClipType::Text;
+    c.word_timings = Some(vec![
+        WordTiming { text: "Hello".into(), start_frame: 0, end_frame: 15 },
+        WordTiming { text: "World".into(), start_frame: 15, end_frame: 30 },
+    ]);
+    // Doubling the duration doubles the word timings (Swift rescaleWordTimings).
+    set_clip_duration(&mut c, 60);
+    let t = c.word_timings.as_ref().unwrap();
+    assert_eq!((t[0].start_frame, t[0].end_frame), (0, 30));
+    assert_eq!((t[1].start_frame, t[1].end_frame), (30, 60));
+}
+
+#[test]
+fn set_duration_leaves_non_text_word_timings_untouched() {
+    use core_model::WordTiming;
+    // word_timings only apply to text clips; a non-text clip is never rescaled.
+    let mut c = clip("v", 0, 30); // Video
+    c.word_timings = Some(vec![WordTiming {
+        text: "x".into(),
+        start_frame: 10,
+        end_frame: 20,
+    }]);
+    set_clip_duration(&mut c, 60);
+    let t = c.word_timings.as_ref().unwrap();
+    assert_eq!((t[0].start_frame, t[0].end_frame), (10, 20));
+}
+
 // INS-012: Keyframes remain clip-relative in storage.
 // Verify keyframe frames are always relative to clip.start_frame (0-based).
 #[test]

@@ -1,6 +1,6 @@
 use crate::keyframes::{
     clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, rescale_clip_keyframes,
-    set_clip_duration, split_all_clip_keyframe_tracks,
+    rescale_word_timings, set_clip_duration, split_all_clip_keyframe_tracks,
 };
 use crate::{
     compute_overwrite, expand_to_link_group, linked_partner_ids, partner_moves_for_move_of,
@@ -91,6 +91,10 @@ pub fn apply_clip_speed(timeline: &mut Timeline, clip_id: &str, new_speed: f64) 
     rescale_clip_keyframes(
         &mut timeline.tracks[track_index].clips[location.clip_index],
         rescale_ratio,
+    );
+    rescale_word_timings(
+        &mut timeline.tracks[track_index].clips[location.clip_index],
+        basis.duration_frames,
     );
     clamp_clip_keyframes_to_duration(&mut timeline.tracks[track_index].clips[location.clip_index]);
     clamp_clip_fades_to_duration(&mut timeline.tracks[track_index].clips[location.clip_index]);

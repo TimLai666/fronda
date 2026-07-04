@@ -97,9 +97,28 @@ fn rescale_keyframe_track<V: Clone + PartialEq>(
 }
 
 pub fn set_clip_duration(clip: &mut Clip, new_duration: i64) {
+    let old_duration = clip.duration_frames;
     clip.duration_frames = new_duration;
+    rescale_word_timings(clip, old_duration);
     clamp_clip_keyframes_to_duration(clip);
     clamp_clip_fades_to_duration(clip);
+}
+
+/// Rescale a text clip's per-word timings when its duration changes, so word-level
+/// text animation stays aligned to the clip (mirrors Swift `Clip.rescaleWordTimings`).
+/// No-op for non-text clips, clips without word timings, or non-positive durations.
+pub fn rescale_word_timings(clip: &mut Clip, old_duration: i64) {
+    let new_duration = clip.duration_frames;
+    if clip.media_type != core_model::ClipType::Text || old_duration <= 0 || new_duration <= 0 {
+        return;
+    }
+    let ratio = new_duration as f64 / old_duration as f64;
+    if let Some(timings) = clip.word_timings.as_mut() {
+        for t in timings.iter_mut() {
+            t.start_frame = (t.start_frame as f64 * ratio).round() as i64;
+            t.end_frame = (t.end_frame as f64 * ratio).round() as i64;
+        }
+    }
 }
 
 pub fn split_all_clip_keyframe_tracks(clip: &Clip, split_offset: i64) -> (Clip, Clip) {

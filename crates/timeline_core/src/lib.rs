@@ -7,8 +7,8 @@ mod project_presets;
 mod project_settings;
 mod project_settings_guard;
 pub use keyframes::{
-    clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, sample_keyframe_track,
-    set_clip_duration, split_all_clip_keyframe_tracks, split_keyframe_track,
+    clamp_clip_fades_to_duration, clamp_clip_keyframes_to_duration, rescale_word_timings,
+    sample_keyframe_track, set_clip_duration, split_all_clip_keyframe_tracks, split_keyframe_track,
 };
 
 mod keyframes;
