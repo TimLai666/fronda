@@ -169,7 +169,7 @@ impl FcpxmlExport {
         // A synced A/V pair (same source, timing, trim, speed) collapses into the
         // single video asset-clip — the asset already carries audio — so the audio
         // partner is dropped (upstream #206/#254).
-        let redundant_audio = redundant_audio_clip_ids(timeline);
+        let (redundant_audio, collapsed_audio_vol) = redundant_audio_clip_ids(timeline);
 
         let mut title_style_id = 0usize;
         for (ti, track) in timeline.tracks.iter().enumerate() {
@@ -243,7 +243,15 @@ impl FcpxmlExport {
                 // Scalar adjustments that round-trip without coordinate calibration: opacity
                 // (<adjust-blend>) and audio volume (<adjust-volume>, in dB). Transform/crop
                 // (coordinate-space sensitive) and keyframed opacity are #254 follow-ups.
-                let adjustments = clip_adjustments(clip, manifest, is_audio, seq_w, seq_h, fps);
+                let adjustments = clip_adjustments(
+                    clip,
+                    manifest,
+                    is_audio,
+                    seq_w,
+                    seq_h,
+                    fps,
+                    collapsed_audio_vol.get(&clip.id).copied(),
+                );
                 if adjustments.is_empty() {
                     writeln!(xml, "{open}/>").ok();
                 } else {
@@ -275,7 +283,16 @@ impl FcpxmlExport {
 /// enabled state. `enabled` derives from the TRACK (video/image → `!hidden`, audio →
 /// `!muted`), so a MUTED audio partner is NOT collapsed — folding it into the video
 /// asset-clip (which carries audio) would make the muted audio audible in the export.
-fn redundant_audio_clip_ids(timeline: &Timeline) -> std::collections::HashSet<String> {
+/// Synced-A/V-pair collapse (#206/#254): the dropped audio clip ids, plus a map from the
+/// surviving VIDEO clip id → the collapsed audio partner's volume (the audio clip carries the
+/// gain; the video clip's own volume is often a default 1.0). Mirrors Swift's `linkedAudio ?? clip`
+/// volume source for the collapsed asset-clip.
+fn redundant_audio_clip_ids(
+    timeline: &Timeline,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashMap<String, f64>,
+) {
     // (clip, enabled) grouped by link group.
     let mut by_group: std::collections::HashMap<&str, (Vec<(&Clip, bool)>, Vec<(&Clip, bool)>)> =
         std::collections::HashMap::new();
@@ -293,6 +310,7 @@ fn redundant_audio_clip_ids(timeline: &Timeline) -> std::collections::HashSet<St
         }
     }
     let mut redundant = std::collections::HashSet::new();
+    let mut video_audio_volume = std::collections::HashMap::new();
     for (videos, audios) in by_group.into_values() {
         if videos.len() != 1 || audios.len() != 1 {
             continue;
@@ -307,9 +325,10 @@ fn redundant_audio_clip_ids(timeline: &Timeline) -> std::collections::HashSet<St
             && (v.speed - a.speed).abs() < 0.0001
         {
             redundant.insert(a.id.clone());
+            video_audio_volume.insert(v.id.clone(), a.volume);
         }
     }
-    redundant
+    (redundant, video_audio_volume)
 }
 
 fn write_asset(
@@ -377,6 +396,7 @@ fn start_timecode_frames(entry: Option<&MediaManifestEntry>, fps: i64) -> i64 {
 /// fit-relative scale/position stay consistent. Deferred: keyframed transform/opacity animation,
 /// the FCP target's alternate value encoding, and same-aspect/different-resolution auto-fit for
 /// clips with NO explicit transform (they stay native rather than filling the frame).
+#[allow(clippy::too_many_arguments)]
 fn clip_adjustments(
     clip: &Clip,
     manifest: &MediaManifest,
@@ -384,6 +404,7 @@ fn clip_adjustments(
     seq_w: i64,
     seq_h: i64,
     fps: i64,
+    collapsed_audio_volume: Option<f64>,
 ) -> String {
     let mut out = String::new();
     if !is_audio {
@@ -519,9 +540,12 @@ fn clip_adjustments(
         .entry_for(&clip.media_ref)
         .map(|e| e.r#type == ClipType::Audio || e.has_audio.unwrap_or(false))
         .unwrap_or(is_audio);
-    if asset_has_audio && (clip.volume - 1.0).abs() > 0.0005 {
-        let db = if clip.volume > 0.0 {
-            20.0 * clip.volume.log10()
+    // For a collapsed synced pair, the gain lives on the dropped audio partner, not the surviving
+    // video clip (whose own volume is usually a default 1.0).
+    let volume = collapsed_audio_volume.unwrap_or(clip.volume);
+    if asset_has_audio && (volume - 1.0).abs() > 0.0005 {
+        let db = if volume > 0.0 {
+            20.0 * volume.log10()
         } else {
             -96.0
         };
@@ -1247,6 +1271,36 @@ mod tests {
             "text-style attrs\n{xml}"
         );
         assert!(xml.contains("</title>"), "title closed");
+    }
+
+    #[test]
+    fn fcpxml_collapsed_pair_uses_audio_partner_volume() {
+        // Linked video+audio of the same source (volume lives on the audio: 0.5). The pair
+        // collapses into the video asset-clip, which must carry the audio's gain (-6.0206 dB),
+        // not the video clip's own 1.0.
+        let mut v = clip("v", "m1", ClipType::Video, 0, 60);
+        v.link_group_id = Some("g1".into());
+        let mut a = clip("a", "m1", ClipType::Audio, 0, 60);
+        a.link_group_id = Some("g1".into());
+        a.volume = 0.5;
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("m1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![
+            track(ClipType::Video, vec![v]),
+            track(ClipType::Audio, vec![a]),
+        ]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(
+            xml.contains("<adjust-volume amount=\"-6.0206\"/>"),
+            "collapsed clip uses audio partner volume\n{xml}"
+        );
+        assert_eq!(
+            xml.matches("<asset-clip").count(),
+            1,
+            "audio partner dropped\n{xml}"
+        );
     }
 
     #[test]
