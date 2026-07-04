@@ -1368,6 +1368,18 @@ impl ToolExecutor {
             });
         }
 
+        // Reject type-incompatible placement (audio onto a visual track or a visual
+        // clip onto an audio track) before mutating anything.
+        let track = &self.timeline.tracks[track_index];
+        for clip in &clips {
+            if !track.is_compatible_with(clip.media_type) {
+                return Err(format!(
+                    "media type {:?} is not compatible with track {track_index} ({:?})",
+                    clip.media_type, track.r#type
+                ));
+            }
+        }
+
         let placed_ids = timeline_core::place_clips(&mut self.timeline, track_index, 0, &clips);
         let mut text = format!(
             "Added {} clip(s) to track {track_index}: {placed_ids:?}",
@@ -1426,6 +1438,24 @@ impl ToolExecutor {
                 trim_start_frame: Some(placement.trim_start_frame),
                 trim_end_frame: Some(placement.trim_end_frame),
             });
+        }
+
+        // Reject type-incompatible placement before mutating anything.
+        {
+            let track = &self.timeline.tracks[track_index];
+            for media_id in &media_ids {
+                let media_type = self
+                    .media_manifest
+                    .entry_for(media_id)
+                    .map(|e| e.r#type)
+                    .unwrap_or(ClipType::Video);
+                if !track.is_compatible_with(media_type) {
+                    return Err(format!(
+                        "media type {media_type:?} is not compatible with track {track_index} ({:?})",
+                        track.r#type
+                    ));
+                }
+            }
         }
 
         let config = timeline_core::RippleInsertConfig {
@@ -3273,6 +3303,45 @@ mod tests {
         assert_eq!(clip.duration_frames, (10.0 * fps as f64).round() as i64);
         assert_eq!(clip.trim_start_frame, 0);
         assert_eq!(clip.trim_end_frame, 0);
+    }
+
+    #[test]
+    fn add_clips_rejects_type_incompatible_track() {
+        // An audio asset must not be placed on a video track (and vice versa).
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(core_model::MediaManifestEntry {
+            id: "aud".into(),
+            name: "a.wav".into(),
+            r#type: ClipType::Audio,
+            source: core_model::MediaSource::External {
+                absolute_path: "/a.wav".into(),
+            },
+            duration: 5.0,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: Some(true),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+        });
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute("add_clips", &json!({"mediaIds": ["aud"], "trackIndex": 0}))
+            .unwrap_err();
+        assert!(err.contains("not compatible"), "got: {err}");
+        assert!(
+            exec.timeline().tracks[0].clips.is_empty(),
+            "nothing placed on rejection"
+        );
     }
 
     #[test]
