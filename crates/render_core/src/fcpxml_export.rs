@@ -458,9 +458,11 @@ fn clip_adjustments(
             );
             let _ = writeln!(out, "                </adjust-crop>");
         }
-        if crop_needed || transform_needed {
-            out.push_str("                <adjust-conform type=\"fit\"/>\n");
-        }
+        // Swift emits <adjust-conform type="fit"> for EVERY visual clip, so a source whose
+        // resolution/aspect differs from the timeline is fit into the frame (not shown at native
+        // size). For a matching source it's a no-op. Must accompany any transform, since scale/
+        // position are computed relative to the fit.
+        out.push_str("                <adjust-conform type=\"fit\"/>\n");
         if transform_needed {
             let pos_base = position_value(t, seq_w, seq_h, fit);
             let rot_base = format_number(-t.rotation);
@@ -1173,12 +1175,21 @@ mod tests {
     }
 
     #[test]
-    fn fcpxml_default_opacity_volume_stays_self_closing() {
-        // Default opacity/volume → no adjustments → self-closing asset-clip (backward-compat).
+    fn fcpxml_default_visual_clip_has_only_conform() {
+        // A default visual clip carries just <adjust-conform type="fit"> (Swift emits it for every
+        // visual clip) — no blend/volume/transform/crop. Audio stays self-closing.
         let (tl, m) = sample();
         let xml = FcpxmlExport::export(&tl, &m);
-        assert!(!xml.contains("</asset-clip>"), "no adjustments → self-closing\n{xml}");
-        assert!(!xml.contains("<adjust-blend"), "no opacity adjustment for default");
+        assert!(xml.contains("<adjust-conform type=\"fit\"/>"), "conform for visual\n{xml}");
+        assert!(!xml.contains("<adjust-blend"), "no opacity for default");
+        assert!(!xml.contains("<adjust-transform"), "no transform for default same-res");
+        assert!(!xml.contains("<adjust-crop"), "no crop for default");
+        // Audio clip (r4) has no conform and stays self-closing.
+        let audio_line = xml
+            .lines()
+            .find(|l| l.contains("<asset-clip") && l.contains("ref=\"r4\""))
+            .expect("audio asset-clip");
+        assert!(audio_line.trim_end().ends_with("/>"), "audio self-closing: {audio_line}");
     }
 
     #[test]
