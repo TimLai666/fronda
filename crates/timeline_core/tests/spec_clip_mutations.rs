@@ -533,6 +533,29 @@ fn clp_004_move_partner_on_primary_track_loses_no_clip() {
 }
 
 #[test]
+fn clp_move_negative_dest_preserves_linked_av_offset() {
+    // Moving the primary to a negative dest clamps it to frame 0; the linked partner
+    // must shift by the SAME clamped delta so the A/V offset is preserved. (Was: the
+    // partner used the UNCLAMPED delta, collapsing a +100 offset to +50.)
+    let mut v1 = clip("v1", ClipType::Video, 100, 30);
+    v1.link_group_id = Some("g1".to_string());
+    let mut a1 = clip("a1", ClipType::Video, 200, 30);
+    a1.link_group_id = Some("g1".to_string());
+    let mut t = timeline(vec![video_track(vec![v1]), video_track(vec![a1])]);
+
+    move_clips(&mut t, &["v1".to_string()], 0, -50);
+
+    let vstart = t.tracks[0].clips[0].start_frame;
+    let astart = t.tracks[1].clips[0].start_frame;
+    assert_eq!(vstart, 0, "primary clamped to frame 0");
+    assert_eq!(
+        astart - vstart,
+        100,
+        "linked A/V offset preserved (v={vstart}, a={astart})"
+    );
+}
+
+#[test]
 fn clp_006_move_linked_partner_clears_destination_overlap() {
     // v1 (track0) linked g1 to p1 (track1); unrelated x1 on track1 at the move
     // destination. Moving v1 must clear the partner's destination so p1 does not

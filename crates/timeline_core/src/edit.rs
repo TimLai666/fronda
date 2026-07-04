@@ -281,12 +281,18 @@ pub fn move_clips(
         return Vec::new();
     }
 
+    // Clamp the destination to the frame-0 floor ONCE (Swift moveClips uses
+    // max(0, toFrame)) and derive BOTH the primary placement and each linked-partner
+    // delta from it. Deriving the partner delta from the UNCLAMPED dest while the
+    // primary lands at the clamped one desyncs an A/V link on a negative dest.
+    let clamped_dest = dest_start_frame.max(0);
+
     // Compute each primary clip's new frame for linked-partner delta propagation
     let mut primary_new_frames: Vec<(String, i64)> = Vec::new();
     {
         let mut offset = 0i64;
         for clip in &primary_clips {
-            primary_new_frames.push((clip.id.clone(), dest_start_frame + offset));
+            primary_new_frames.push((clip.id.clone(), clamped_dest + offset));
             offset += clip.duration_frames;
         }
     }
@@ -314,10 +320,6 @@ pub fn move_clips(
     }
 
     let total_duration: i64 = primary_clips.iter().map(|c| c.duration_frames).sum();
-    // Clamp the destination to the frame-0 floor ONCE (Swift moveClips uses
-    // max(0, toFrame)) and use it for both the clear and the placement, so the
-    // cleared region matches where the clips actually land.
-    let clamped_dest = dest_start_frame.max(0);
 
     // Phase 2: CLP-003 — remove moved clips (primary + partners, via `expanded`)
     // from source BEFORE clearing destinations.
