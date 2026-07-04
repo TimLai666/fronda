@@ -195,8 +195,16 @@ impl FcpxmlExport {
                 // exporter, so origin lands directly on `start`; a retimed clip would carry it
                 // in a timeMap instead.)
                 let origin = start_timecode_frames(manifest.entry_for(&clip.media_ref), fps);
+                // A hidden video track / muted audio track exports its clips disabled, so the
+                // export mirrors what's actually visible/audible (Swift emits `enabled`).
+                let track_disabled = if track.r#type == ClipType::Audio {
+                    track.muted
+                } else {
+                    track.hidden
+                };
+                let enabled_attr = if track_disabled { " enabled=\"0\"" } else { "" };
                 let open = format!(
-                    "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{format_attr}",
+                    "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{format_attr}{enabled_attr}",
                     time_str(clip.start_frame, fps),
                     xml_escape(&file_name(manifest, &clip.media_ref)),
                     time_str(clip.duration_frames.max(1), fps),
@@ -956,6 +964,25 @@ mod tests {
             "second keyframe\n{xml}"
         );
         assert!(xml.contains("</adjust-blend>"), "open/close blend");
+    }
+
+    #[test]
+    fn fcpxml_hidden_track_clip_is_disabled() {
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let mut t = track(ClipType::Video, vec![clip("c1", "v1", ClipType::Video, 0, 60)]);
+        t.hidden = true;
+        let tl = timeline(vec![t]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("enabled=\"0\""), "hidden track → disabled\n{xml}");
+        // A visible track carries no enabled attribute (FCP defaults to enabled).
+        let (vis_tl, vis_m) = sample();
+        assert!(
+            !FcpxmlExport::export(&vis_tl, &vis_m).contains("enabled="),
+            "visible tracks omit enabled"
+        );
     }
 
     #[test]
