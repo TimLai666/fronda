@@ -1,5 +1,6 @@
 mod clip_clipboard;
 mod clip_properties;
+mod compound;
 mod drag_payload;
 mod edit;
 mod inspector;
@@ -31,6 +32,7 @@ pub use clip_properties::{
     set_clip_properties, write_position, write_scale, ClipPropertyUpdate, PartialTransform,
     PropertyChanges,
 };
+pub use compound::{create_compound_clip, dissolve_compound_clip, flatten_compound_clips};
 pub use drag_payload::{
     is_internal_drag_payload, parse_asset_segment, parse_drag_payload, DragItem, DragPayload,
 };
