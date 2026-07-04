@@ -535,11 +535,29 @@ fn set_clip_properties() -> ToolDefinition {
 fn set_keyframes() -> ToolDefinition {
     ToolDefinition {
         name: "set_keyframes",
-        description: "Set keyframe values for clip properties.",
+        description: "Set animated keyframes on one property of one clip. Replaces the \
+            existing keyframe track for that property (pass an empty array to clear). \
+            Frames are CLIP-RELATIVE offsets (0 = first frame of the clip). Rows are \
+            sorted by frame internally and the LAST row for any duplicate frame wins. \
+            Each row is `[frame, ...values, interp?]` where interp ∈ {linear, hold, \
+            smooth} (default smooth). Value layouts per property:\n\
+            • volume `[frame, value]` — value is decibels (0 = unity)\n\
+            • opacity `[frame, value]` — value 0.0–1.0\n\
+            • rotation `[frame, degrees]` — clockwise degrees\n\
+            • position `[frame, topLeftX, topLeftY]` — TOP-LEFT corner in 0–1 canvas \
+            coords, NOT the centre\n\
+            • scale `[frame, width, height]` — normalized 0–1 canvas size, NOT a factor\n\
+            • crop `[frame, top, right, bottom, left]` — side insets in 0–1 of the source",
         input_schema: object(&[
             ("clipId", string("Clip id")),
-            ("property", string("Property name to keyframe")),
-            ("keyframes", array("Array of {frame, value} keyframes")),
+            (
+                "property",
+                string("One of: opacity, volume, rotation, position, scale, crop"),
+            ),
+            (
+                "keyframes",
+                array("Rows of [frame, ...values, interp?] — see the tool description"),
+            ),
         ]),
     }
 }

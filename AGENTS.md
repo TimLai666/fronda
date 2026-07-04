@@ -107,6 +107,7 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
   - `position_track` stores normalized **top-left**, not centre (spec `INS-003`). `resolved_transform_at` resolves scale first, then centre = top_left + size/2. Any renderer/exporter reading position keyframes must apply the same conversion (XMEML `center` param does).
   - `volume_track` keyframe values are **decibels**. Effective linear gain = `clip.volume * linear_from_db(sampled_dB)` (static volume is an outer gain, keyframes do not replace it). `opacity_track` is plain linear 0..1 and does replace the static.
   - Fade multiplier = `min(in_ramp, out_ramp)` where each ramp is `t` or `smoothstep(t)` per `fade_in/out_interpolation`; no half-frame offset. Applies to video opacity (`fade_multiplier_at`) and audio (`audio_mixer::fade_gain`) identically.
+  - The agent `set_keyframes` tool takes Swift-format array rows `[frame, ...values, interp?]` (interp ∈ linear/hold/smooth, default smooth), supporting all six properties: opacity/volume/rotation (1 value), position/scale (2), crop (4, order top,right,bottom,left). `tool_exec::parse_keyframe_rows` + `keyframe_property_arity` are the shared parser used by both the executor and `mutation::validate_set_keyframes` so the two never diverge.
 - Avoid expanding the Swift app with large new features unless explicitly requested. While the rewrite is in progress, prefer:
   - bug fixes
   - parity/spec capture

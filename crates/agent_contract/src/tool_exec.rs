@@ -9,8 +9,9 @@ use crate::read_tools::{
 };
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
-    Clip, ClipType, Effect, GenerationInput, Interpolation, Keyframe, KeyframeTrack, LayoutFit,
-    MediaManifest, MediaManifestEntry, MediaSource, TextStyle, Timeline, Transform, VideoLayout,
+    AnimPair, Clip, ClipType, Crop, Effect, GenerationInput, Interpolation, Keyframe, KeyframeTrack,
+    LayoutFit, MediaManifest, MediaManifestEntry, MediaSource, TextStyle, Timeline, Transform,
+    VideoLayout,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -172,6 +173,82 @@ pub struct AgentSkill {
 
 /// Resolve a layout slot entry's crop anchor (upstream #226). A named `anchor`
 /// picks a preset; `anchorX`/`anchorY` (0..1) override each axis. Default center.
+/// Value-column count and label for a keyframe `property`, or `None` if the
+/// property is not keyframable. Shared by the executor and `validate_set_keyframes`.
+pub(crate) fn keyframe_property_arity(property: &str) -> Option<(usize, &'static str)> {
+    match property {
+        "opacity" | "volume" | "rotation" => Some((1, "value")),
+        "position" => Some((2, "topLeftX, topLeftY")),
+        "scale" => Some((2, "width, height")),
+        "crop" => Some((4, "top, right, bottom, left")),
+        _ => None,
+    }
+}
+
+/// Parse `[[frame, v0, v1, ..., interp?], ...]` keyframe rows (Swift set_keyframes
+/// format) into `(frame, values, interp)` triples with `arity` value columns. Rows
+/// are stable-sorted by frame, then de-duplicated so the last row for any repeated
+/// frame wins (matches Swift `sortAndDedupe`).
+pub(crate) fn parse_keyframe_rows(
+    rows: &[Value],
+    arity: usize,
+    labels: &str,
+) -> Result<Vec<(i64, Vec<f64>, Interpolation)>, String> {
+    let min_len = arity + 1;
+    let max_len = arity + 2;
+    let mut out: Vec<(i64, Vec<f64>, Interpolation)> = Vec::with_capacity(rows.len());
+    for (i, raw) in rows.iter().enumerate() {
+        let row = raw
+            .as_array()
+            .ok_or_else(|| format!("keyframes[{i}]: expected array [frame, {labels}, interp?]"))?;
+        if row.len() != min_len && row.len() != max_len {
+            return Err(format!(
+                "keyframes[{i}]: expected [frame, {labels}] or [frame, {labels}, interp] (got {} elements)",
+                row.len()
+            ));
+        }
+        let frame = row[0]
+            .as_i64()
+            .ok_or_else(|| format!("keyframes[{i}][0]: frame must be an integer"))?;
+        let mut values = Vec::with_capacity(arity);
+        for k in 0..arity {
+            let v = row[k + 1]
+                .as_f64()
+                .ok_or_else(|| format!("keyframes[{i}][{}]: expected a number", k + 1))?;
+            if !v.is_finite() {
+                return Err(format!("keyframes[{i}][{}]: value must be finite", k + 1));
+            }
+            values.push(v);
+        }
+        let interp = if row.len() > min_len {
+            match row[min_len].as_str() {
+                Some("linear") => Interpolation::Linear,
+                Some("hold") => Interpolation::Hold,
+                Some("smooth") => Interpolation::Smooth,
+                Some(other) => {
+                    return Err(format!(
+                        "keyframes[{i}]: invalid interp '{other}' (expected linear, hold, or smooth)"
+                    ))
+                }
+                None => return Err(format!("keyframes[{i}]: interp must be a string")),
+            }
+        } else {
+            Interpolation::Smooth
+        };
+        out.push((frame, values, interp));
+    }
+    out.sort_by_key(|(f, _, _)| *f);
+    let mut deduped: Vec<(i64, Vec<f64>, Interpolation)> = Vec::with_capacity(out.len());
+    for row in out {
+        if deduped.last().map(|(f, _, _)| *f) == Some(row.0) {
+            *deduped.last_mut().unwrap() = row;
+        } else {
+            deduped.push(row);
+        }
+    }
+    Ok(deduped)
+}
+
 fn resolve_layout_anchor(entry: &Value) -> Result<(f64, f64), String> {
     const ANCHORS: &[(&str, (f64, f64))] = &[
         ("center", (0.5, 0.5)),
@@ -742,54 +819,88 @@ impl ToolExecutor {
             .and_then(|v| v.as_array())
             .ok_or_else(|| "Missing keyframes array".to_string())?;
 
+        // Rows are `[frame, ...values, interp?]` (Swift set_keyframes format);
+        // validate the property up front so we know how many value columns to expect.
+        let (arity, labels) = keyframe_property_arity(property).ok_or_else(|| {
+            format!(
+                "Unknown keyframe property '{property}'. Expected one of: opacity, volume, rotation, position, scale, crop"
+            )
+        })?;
+
         let Some(loc) = timeline_core::find_clip(&self.timeline, clip_id) else {
             return Err(format!("Clip '{clip_id}' not found"));
         };
+        let rows = parse_keyframe_rows(kf_array, arity, labels)?;
         let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
 
-        let keyframes: Vec<Keyframe<f64>> = kf_array
-            .iter()
-            .filter_map(|kf| {
-                let frame = kf.get("frame").and_then(|v| v.as_i64())?;
-                let value = kf.get("value").and_then(|v| v.as_f64())?;
-                let interp = match kf
-                    .get("interpolation")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("smooth")
-                {
-                    "linear" => Interpolation::Linear,
-                    "hold" => Interpolation::Hold,
-                    _ => Interpolation::Smooth,
-                };
-                Some(Keyframe {
-                    frame,
-                    value,
-                    interpolation_out: interp,
+        let kf_len = rows.len();
+        // An empty array clears the track.
+        let scalar = |col: usize| {
+            if rows.is_empty() {
+                None
+            } else {
+                Some(KeyframeTrack {
+                    keyframes: rows
+                        .iter()
+                        .map(|(f, v, i)| Keyframe {
+                            frame: *f,
+                            value: v[col],
+                            interpolation_out: *i,
+                        })
+                        .collect(),
                 })
-            })
-            .collect();
-
-        if keyframes.is_empty() && !kf_array.is_empty() {
-            return Err("Could not parse any valid keyframes".to_string());
-        }
-
-        let track = KeyframeTrack {
-            keyframes: keyframes.clone(),
+            }
         };
-        let trimmed = if track.keyframes.is_empty() {
-            None
-        } else {
-            Some(track)
-        };
-
         match property {
-            "opacity" => clip.opacity_track = trimmed,
-            "volume" => clip.volume_track = trimmed,
-            "rotation" => clip.rotation_track = trimmed,
-            other => return Err(format!("Unknown keyframe property '{other}'")),
+            "opacity" => clip.opacity_track = scalar(0),
+            "volume" => clip.volume_track = scalar(0),
+            "rotation" => clip.rotation_track = scalar(0),
+            "position" | "scale" => {
+                let track = if rows.is_empty() {
+                    None
+                } else {
+                    Some(KeyframeTrack {
+                        keyframes: rows
+                            .iter()
+                            .map(|(f, v, i)| Keyframe {
+                                frame: *f,
+                                value: AnimPair { a: v[0], b: v[1] },
+                                interpolation_out: *i,
+                            })
+                            .collect(),
+                    })
+                };
+                if property == "position" {
+                    clip.position_track = track;
+                } else {
+                    clip.scale_track = track;
+                }
+            }
+            "crop" => {
+                clip.crop_track = if rows.is_empty() {
+                    None
+                } else {
+                    Some(KeyframeTrack {
+                        keyframes: rows
+                            .iter()
+                            .map(|(f, v, i)| Keyframe {
+                                // Input order is [top, right, bottom, left].
+                                frame: *f,
+                                value: Crop {
+                                    top: v[0],
+                                    right: v[1],
+                                    bottom: v[2],
+                                    left: v[3],
+                                },
+                                interpolation_out: *i,
+                            })
+                            .collect(),
+                    })
+                };
+            }
+            _ => unreachable!("property validated above"),
         }
 
-        let kf_len = keyframes.len();
         Ok(json!({
             "content": [{
                 "type": "text",
@@ -4263,9 +4374,176 @@ mod tests {
     fn exec_055_set_keyframes_missing_clip() {
         let mut exec = make_executor();
         let err = exec
-            .execute("set_keyframes", &json!({"clipId": "nonexistent", "property": "opacity", "keyframes": [{"frame": 0, "value": 1.0}]}))
+            .execute("set_keyframes", &json!({"clipId": "nonexistent", "property": "opacity", "keyframes": [[0, 1.0]]}))
             .unwrap_err();
         assert!(err.contains("not found"));
+    }
+
+    fn executor_with_clip() -> ToolExecutor {
+        let mut timeline = Timeline::default();
+        timeline.tracks.push(core_model::Track {
+            id: "t".into(),
+            r#type: core_model::ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            clips: vec![core_model::Clip {
+                id: "c".into(),
+                media_ref: "m".into(),
+                media_type: core_model::ClipType::Video,
+                source_clip_type: core_model::ClipType::Video,
+                start_frame: 0,
+                duration_frames: 100,
+                trim_start_frame: 0,
+                trim_end_frame: 0,
+                speed: 1.0,
+                volume: 1.0,
+                fade_in_frames: 0,
+                fade_out_frames: 0,
+                fade_in_interpolation: core_model::Interpolation::Linear,
+                fade_out_interpolation: core_model::Interpolation::Linear,
+                opacity: 1.0,
+                transform: core_model::Transform::default(),
+                crop: core_model::Crop::default(),
+                link_group_id: None,
+                caption_group_id: None,
+                text_content: None,
+                text_style: None,
+                opacity_track: None,
+                position_track: None,
+                scale_track: None,
+                rotation_track: None,
+                crop_track: None,
+                volume_track: None,
+                effects: None,
+                shape_style: None,
+                stroke_progress_track: None,
+                compound_timeline_id: None,
+                blend_mode: Default::default(),
+                chroma_key: None,
+            }],
+        });
+        ToolExecutor::new(timeline, MediaManifest::default())
+    }
+
+    fn only_clip(exec: &ToolExecutor) -> &core_model::Clip {
+        &exec.timeline().tracks[0].clips[0]
+    }
+
+    #[test]
+    fn set_keyframes_scalar_opacity_with_interp_default() {
+        let mut exec = executor_with_clip();
+        exec.execute(
+            "set_keyframes",
+            &json!({"clipId": "c", "property": "opacity", "keyframes": [[0, 0.0, "linear"], [100, 1.0]]}),
+        )
+        .unwrap();
+        let kfs = &only_clip(&exec).opacity_track.as_ref().unwrap().keyframes;
+        assert_eq!(kfs.len(), 2);
+        assert_eq!(kfs[0].frame, 0);
+        assert_eq!(kfs[0].value, 0.0);
+        assert_eq!(kfs[0].interpolation_out, core_model::Interpolation::Linear);
+        // Missing interp defaults to smooth.
+        assert_eq!(kfs[1].interpolation_out, core_model::Interpolation::Smooth);
+    }
+
+    #[test]
+    fn set_keyframes_position_stores_top_left_pair() {
+        let mut exec = executor_with_clip();
+        exec.execute(
+            "set_keyframes",
+            &json!({"clipId": "c", "property": "position", "keyframes": [[0, 0.1, 0.2], [50, 0.3, 0.4]]}),
+        )
+        .unwrap();
+        let kfs = &only_clip(&exec).position_track.as_ref().unwrap().keyframes;
+        assert_eq!(kfs.len(), 2);
+        assert_eq!(kfs[0].value, AnimPair { a: 0.1, b: 0.2 });
+        assert_eq!(kfs[1].value, AnimPair { a: 0.3, b: 0.4 });
+    }
+
+    #[test]
+    fn set_keyframes_scale_stores_pair() {
+        let mut exec = executor_with_clip();
+        exec.execute(
+            "set_keyframes",
+            &json!({"clipId": "c", "property": "scale", "keyframes": [[0, 0.5, 0.25]]}),
+        )
+        .unwrap();
+        let kfs = &only_clip(&exec).scale_track.as_ref().unwrap().keyframes;
+        assert_eq!(kfs[0].value, AnimPair { a: 0.5, b: 0.25 });
+    }
+
+    #[test]
+    fn set_keyframes_crop_maps_top_right_bottom_left() {
+        let mut exec = executor_with_clip();
+        // Input order [top, right, bottom, left].
+        exec.execute(
+            "set_keyframes",
+            &json!({"clipId": "c", "property": "crop", "keyframes": [[0, 0.1, 0.2, 0.3, 0.4]]}),
+        )
+        .unwrap();
+        let c = only_clip(&exec).crop_track.as_ref().unwrap().keyframes[0].value;
+        assert_eq!(c.top, 0.1);
+        assert_eq!(c.right, 0.2);
+        assert_eq!(c.bottom, 0.3);
+        assert_eq!(c.left, 0.4);
+    }
+
+    #[test]
+    fn set_keyframes_empty_array_clears_track() {
+        let mut exec = executor_with_clip();
+        exec.execute(
+            "set_keyframes",
+            &json!({"clipId": "c", "property": "opacity", "keyframes": [[0, 0.5]]}),
+        )
+        .unwrap();
+        assert!(only_clip(&exec).opacity_track.is_some());
+        exec.execute(
+            "set_keyframes",
+            &json!({"clipId": "c", "property": "opacity", "keyframes": []}),
+        )
+        .unwrap();
+        assert!(only_clip(&exec).opacity_track.is_none(), "empty clears");
+    }
+
+    #[test]
+    fn set_keyframes_sorts_and_dedupes_last_wins() {
+        let mut exec = executor_with_clip();
+        exec.execute(
+            "set_keyframes",
+            &json!({"clipId": "c", "property": "opacity", "keyframes": [[50, 0.5], [0, 0.1], [0, 0.9]]}),
+        )
+        .unwrap();
+        let kfs = &only_clip(&exec).opacity_track.as_ref().unwrap().keyframes;
+        assert_eq!(kfs.len(), 2, "duplicate frame 0 collapsed");
+        assert_eq!(kfs[0].frame, 0);
+        assert_eq!(kfs[0].value, 0.9, "last row for frame 0 wins");
+        assert_eq!(kfs[1].frame, 50);
+    }
+
+    #[test]
+    fn set_keyframes_wrong_arity_errors() {
+        let mut exec = executor_with_clip();
+        // position needs two values.
+        let err = exec
+            .execute(
+                "set_keyframes",
+                &json!({"clipId": "c", "property": "position", "keyframes": [[0, 0.5]]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("topLeftX, topLeftY"), "got: {err}");
+    }
+
+    #[test]
+    fn set_keyframes_unknown_property_errors() {
+        let mut exec = executor_with_clip();
+        let err = exec
+            .execute(
+                "set_keyframes",
+                &json!({"clipId": "c", "property": "warp", "keyframes": [[0, 1.0]]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("Unknown keyframe property"));
     }
 
     #[test]

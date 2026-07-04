@@ -225,17 +225,23 @@ pub fn validate_set_clip_properties(
     })
 }
 
-/// Parsed and validated `set_keyframes` input.
+/// Parsed and validated `set_keyframes` input. `keyframes` is one row per
+/// keyframe: `(frame, values, interp)`, where `values` has the property's arity
+/// (1 for scalars, 2 for position/scale, 4 for crop). Matches the executor's
+/// row format exactly (shared parser).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetKeyframesInput {
     pub clip_id: String,
     pub property: String,
-    pub keyframes: Vec<(i64, f64)>,
+    pub keyframes: Vec<(i64, Vec<f64>, core_model::Interpolation)>,
 }
 
 /// MUT-013: replaces the full keyframe track for one (clipId, property) pair.
 /// MUT-014: empty arrays clear the track.
 /// MUT-015: keyframe rows are sorted; duplicate frames are last-write-wins.
+///
+/// Shares the executor's `[frame, ...values, interp?]` row parsing so validation
+/// and execution never diverge; supports all six keyframable properties.
 pub fn validate_set_keyframes(input: &Value) -> ValidationResult<SetKeyframesInput> {
     let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
         Some(id) if !id.is_empty() => id.to_string(),
@@ -247,34 +253,24 @@ pub fn validate_set_keyframes(input: &Value) -> ValidationResult<SetKeyframesInp
         _ => return ValidationResult::Error("set_keyframes: missing or empty 'property'".into()),
     };
 
-    let keyframes = match input.get("keyframes").and_then(|v| v.as_array()) {
-        Some(arr) => {
-            let mut pairs: Vec<(i64, f64)> = arr
-                .iter()
-                .filter_map(|kf| {
-                    let frame = kf.get("frame").and_then(|v| v.as_i64())?;
-                    let value = kf.get("value").and_then(|v| v.as_f64())?;
-                    Some((frame, value))
-                })
-                .collect();
-
-            // MUT-015: sort by frame, last-write-wins for duplicates.
-            // dedup_by_key keeps the *first* of consecutive duplicates,
-            // so reverse after sorting so the *last* value survives.
-            pairs.sort_by_key(|&(frame, _)| frame);
-            pairs.reverse();
-            pairs.dedup_by_key(|&mut (frame, _)| frame);
-            pairs.reverse();
-            pairs
-        }
-        None => return ValidationResult::Error("set_keyframes: missing 'keyframes' array".into()),
+    let Some((arity, labels)) = crate::tool_exec::keyframe_property_arity(&property) else {
+        return ValidationResult::Error(format!(
+            "set_keyframes: unknown property '{property}' (expected opacity, volume, rotation, position, scale, or crop)"
+        ));
     };
 
-    ValidationResult::Ok(SetKeyframesInput {
-        clip_id,
-        property,
-        keyframes,
-    })
+    let Some(kf_array) = input.get("keyframes").and_then(|v| v.as_array()) else {
+        return ValidationResult::Error("set_keyframes: missing 'keyframes' array".into());
+    };
+
+    match crate::tool_exec::parse_keyframe_rows(kf_array, arity, labels) {
+        Ok(keyframes) => ValidationResult::Ok(SetKeyframesInput {
+            clip_id,
+            property,
+            keyframes,
+        }),
+        Err(e) => ValidationResult::Error(format!("set_keyframes: {e}")),
+    }
 }
 
 /// Parsed and validated `remove_clips` input.
@@ -1184,15 +1180,13 @@ mod tests {
         let input = json!({
             "clipId": "c1",
             "property": "opacity",
-            "keyframes": [
-                {"frame": 0, "value": 1.0},
-                {"frame": 50, "value": 0.5}
-            ]
+            "keyframes": [[0, 1.0], [50, 0.5]]
         });
         let result = validate_set_keyframes(&input);
         let parsed = result.into_ok().expect("MUT-013: valid");
         assert_eq!(parsed.keyframes.len(), 2);
-        assert_eq!(parsed.keyframes[0], (0, 1.0));
+        assert_eq!(parsed.keyframes[0].0, 0);
+        assert_eq!(parsed.keyframes[0].1, vec![1.0]);
     }
 
     #[test]
@@ -1212,17 +1206,36 @@ mod tests {
         let input = json!({
             "clipId": "c1",
             "property": "opacity",
-            "keyframes": [
-                {"frame": 50, "value": 0.5},
-                {"frame": 0, "value": 1.0},
-                {"frame": 50, "value": 0.8}
-            ]
+            "keyframes": [[50, 0.5], [0, 1.0], [50, 0.8]]
         });
         let result = validate_set_keyframes(&input);
         let parsed = result.into_ok().expect("MUT-015: sorted & deduped");
         assert_eq!(parsed.keyframes.len(), 2, "MUT-015: two unique frames");
         // Last-write-wins at frame 50: value should be 0.8
-        assert_eq!(parsed.keyframes[1], (50, 0.8));
+        assert_eq!(parsed.keyframes[1].0, 50);
+        assert_eq!(parsed.keyframes[1].1, vec![0.8]);
+    }
+
+    #[test]
+    fn mut_013_set_keyframes_position_pair() {
+        let input = json!({
+            "clipId": "c1",
+            "property": "position",
+            "keyframes": [[0, 0.1, 0.2]]
+        });
+        let parsed = validate_set_keyframes(&input)
+            .into_ok()
+            .expect("position pair valid");
+        assert_eq!(parsed.keyframes[0].1, vec![0.1, 0.2]);
+    }
+
+    #[test]
+    fn mut_013_set_keyframes_unknown_property_rejected() {
+        let input = json!({"clipId": "c1", "property": "warp", "keyframes": [[0, 1.0]]});
+        assert!(matches!(
+            validate_set_keyframes(&input),
+            ValidationResult::Error(_)
+        ));
     }
 
     // ---- MUT-005: remove_clips ------------------------------------------
