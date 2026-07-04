@@ -15,21 +15,9 @@ use std::f64::consts::PI;
 pub fn resolved_transform_at(clip: &Clip, frame: i64) -> Transform {
     let mut t = clip.transform;
 
-    if let Some(ref track) = clip.position_track {
-        if !track.keyframes.is_empty() {
-            let pos = sample_with_fallback(
-                track,
-                frame,
-                AnimPair {
-                    a: t.center_x,
-                    b: t.center_y,
-                },
-            );
-            t.center_x = pos.a;
-            t.center_y = pos.b;
-        }
-    }
-
+    // Size first: the position track stores TOP-LEFT, so converting it to the
+    // stored centre needs the (possibly keyframed) size. Mirrors Swift
+    // `sizeAt` + `topLeftAt` + `transformAt(topLeft:width:height:)`.
     if let Some(ref track) = clip.scale_track {
         if !track.keyframes.is_empty() {
             let s = sample_with_fallback(
@@ -42,6 +30,21 @@ pub fn resolved_transform_at(clip: &Clip, frame: i64) -> Transform {
             );
             t.width = s.a;
             t.height = s.b;
+        }
+    }
+
+    if let Some(ref track) = clip.position_track {
+        if !track.keyframes.is_empty() {
+            let tl = sample_with_fallback(
+                track,
+                frame,
+                AnimPair {
+                    a: t.center_x - t.width / 2.0,
+                    b: t.center_y - t.height / 2.0,
+                },
+            );
+            t.center_x = tl.a + t.width / 2.0;
+            t.center_y = tl.b + t.height / 2.0;
         }
     }
 
@@ -585,27 +588,58 @@ mod tests {
         assert_eq!(resolved.rotation, 0.0);
     }
 
-    // INS-002: Position keyframes override static centre.
+    // INS-002: Position keyframes store TOP-LEFT; the resolved transform centre is
+    // top-left + size/2 (Swift parity, not a raw passthrough into centre).
     #[test]
     fn ins_002_resolved_transform_position_keyframe() {
         let mut clip = make_clip();
+        clip.transform.width = 0.5;
+        clip.transform.height = 0.5;
         clip.position_track = Some(KeyframeTrack {
             keyframes: vec![
                 Keyframe {
                     frame: 0,
-                    value: AnimPair { a: 0.1, b: 0.2 },
+                    value: AnimPair { a: 0.0, b: 0.0 },
                     interpolation_out: Interpolation::Linear,
                 },
                 Keyframe {
                     frame: 100,
-                    value: AnimPair { a: 0.9, b: 0.8 },
+                    value: AnimPair { a: 0.5, b: 0.5 },
                     interpolation_out: Interpolation::Linear,
                 },
             ],
         });
+        // Frame 50 → top-left (0.25, 0.25); + size/2 (0.25) → centre (0.5, 0.5).
         let resolved = resolved_transform_at(&clip, 50);
-        assert!((resolved.center_x - 0.5).abs() < 1e-9);
-        assert!((resolved.center_y - 0.5).abs() < 1e-9);
+        assert!((resolved.center_x - 0.5).abs() < 1e-9, "cx={}", resolved.center_x);
+        assert!((resolved.center_y - 0.5).abs() < 1e-9, "cy={}", resolved.center_y);
+    }
+
+    // INS-002: The top-left→centre conversion uses the *keyframed* size, so a
+    // simultaneously animated scale shifts the centre (Swift samples both).
+    #[test]
+    fn ins_002_resolved_transform_position_uses_keyframed_size() {
+        let mut clip = make_clip();
+        clip.position_track = Some(KeyframeTrack {
+            keyframes: vec![Keyframe {
+                frame: 0,
+                value: AnimPair { a: 0.0, b: 0.0 }, // top-left at origin
+                interpolation_out: Interpolation::Hold,
+            }],
+        });
+        clip.scale_track = Some(KeyframeTrack {
+            keyframes: vec![Keyframe {
+                frame: 0,
+                value: AnimPair { a: 0.5, b: 0.5 }, // half-canvas
+                interpolation_out: Interpolation::Hold,
+            }],
+        });
+        // top-left (0,0) + size/2 (0.25) → centre (0.25, 0.25), using the resolved
+        // size, not the static 1.0.
+        let resolved = resolved_transform_at(&clip, 0);
+        assert!((resolved.center_x - 0.25).abs() < 1e-9, "cx={}", resolved.center_x);
+        assert!((resolved.center_y - 0.25).abs() < 1e-9, "cy={}", resolved.center_y);
+        assert!((resolved.width - 0.5).abs() < 1e-9);
     }
 
     // INS-002: Scale keyframes override static size.
