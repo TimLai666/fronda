@@ -35,15 +35,33 @@ fn extract_clip_audio(source: &[f32], channels: usize, clip: &Clip, spf: usize) 
         return Vec::new();
     }
     let total_frames = source.len() / channels;
-    // Source range the clip consumes: [trim_start, trim_start + duration*speed)
-    // in project frames → sample frames.
-    let consumed = (clip.duration_frames as f64 * clip.speed.max(0.0)).round() as i64;
+    let mut out = vec![0.0f32; out_frames * channels];
+    // Source sample-frames the clip consumes at its speed. Computed at SAMPLE
+    // granularity (not rounded to whole project frames) so a slow-mo short clip
+    // still consumes a non-zero slice instead of collapsing to silence.
+    let consumed = (out_frames as f64 * clip.speed.max(0.0)).round() as usize;
     let src_start = (clip.trim_start_frame.max(0) as usize * spf).min(total_frames);
-    let src_end = ((clip.trim_start_frame.max(0) + consumed.max(0)) as usize * spf)
-        .min(total_frames)
-        .max(src_start);
-    let excerpt = &source[src_start * channels..src_end * channels];
-    let mut out = resample_linear(excerpt, channels, out_frames);
+    if consumed > 0 {
+        let src_end = (src_start + consumed).min(total_frames);
+        let available = src_end.saturating_sub(src_start);
+        if available > 0 {
+            // Resample the AVAILABLE excerpt at the clip's intended speed ratio; when
+            // the source is short this fills only the front and the tail stays silent
+            // (rather than stretching the short excerpt across the whole duration).
+            let resampled_len = if available >= consumed {
+                out_frames
+            } else {
+                ((available as f64 / consumed as f64) * out_frames as f64).round() as usize
+            }
+            .min(out_frames);
+            if resampled_len > 0 {
+                let excerpt = &source[src_start * channels..src_end * channels];
+                let resampled = resample_linear(excerpt, channels, resampled_len);
+                let n = resampled.len().min(out.len());
+                out[..n].copy_from_slice(&resampled[..n]);
+            }
+        }
+    }
 
     // Bake the per-frame volume envelope (static volume or keyframed volume
     // track) so automation is honoured; the placement gain is then 1.0.
@@ -256,6 +274,36 @@ mod tests {
         // dB ramps up over the clip, so the linear samples ramp up.
         assert!(out[0] < out[1] && out[1] < out[2], "volume automation ramps: {out:?}");
         assert!(out[0] < 0.1, "starts near silent, got {}", out[0]);
+    }
+
+    #[test]
+    fn short_source_pads_with_silence_not_stretch() {
+        // 30 Hz / 30 fps → 1 sample/frame. A 10-frame clip at 1× wants 10 source
+        // frames but the source only has 4 → the first 4 play, the tail is silence
+        // (NOT the 4 frames stretched across all 10).
+        let clip = audio_clip("c", 0, 10, 1.0);
+        let tl = timeline_with(vec![track("a", false, vec![clip])]);
+        let source: Vec<f32> = vec![1.0, 1.0, 1.0, 1.0];
+        let out = mix_timeline_audio(&tl, 30, 1, |_| Some(source.clone()));
+        assert_eq!(out.len(), 10);
+        assert!((out[0] - 1.0).abs() < 1e-6, "front is real audio, got {}", out[0]);
+        assert!((out[3] - 1.0).abs() < 1e-6, "front is real audio, got {}", out[3]);
+        assert!(out[9].abs() < 1e-6, "tail must be silent, got {}", out[9]);
+    }
+
+    #[test]
+    fn slow_motion_short_clip_is_not_silent() {
+        // 300 Hz / 30 fps → 10 samples/frame. A 1-frame clip at 0.3× consumes
+        // round(1×0.3)=0 whole PROJECT frames under naive rounding → whole-clip
+        // silence. Sample-granular consumption (round(10×0.3)=3) keeps it audible.
+        let mut clip = audio_clip("c", 0, 1, 1.0);
+        clip.speed = 0.3;
+        let tl = timeline_with(vec![track("a", false, vec![clip])]);
+        let out = mix_timeline_audio(&tl, 300, 1, |_| Some(vec![1.0; 20]));
+        assert!(
+            out.iter().any(|&s| s.abs() > 0.0),
+            "slow-mo short clip must not be silent: {out:?}"
+        );
     }
 
     #[test]

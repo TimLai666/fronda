@@ -74,14 +74,20 @@ pub fn blend_channel(mode: BlendMode, s: f64, d: f64) -> f64 {
         Darken => s.min(d),
         Lighten => s.max(d),
         ColorDodge => {
-            if s >= 1.0 {
+            // W3C order: backdrop-zero check first (black backdrop stays black).
+            if d <= 0.0 {
+                0.0
+            } else if s >= 1.0 {
                 1.0
             } else {
                 (d / (1.0 - s)).min(1.0)
             }
         }
         ColorBurn => {
-            if s <= 0.0 {
+            // W3C order: backdrop-one check first (white backdrop stays white).
+            if d >= 1.0 {
+                1.0
+            } else if s <= 0.0 {
                 0.0
             } else {
                 1.0 - ((1.0 - d) / s).min(1.0)
@@ -439,20 +445,21 @@ pub fn flip_image(img: &RgbaImage, horizontal: bool, vertical: bool) -> RgbaImag
     out
 }
 
-/// Apply a per-channel RGB function (result clamped to `0..=255`), leaving alpha.
-fn map_rgb(img: &mut RgbaImage, f: impl Fn(f64) -> f64) {
-    for px in img.pixels.chunks_exact_mut(4) {
-        for c in px.iter_mut().take(3) {
-            *c = (f(*c as f64 / 255.0) * 255.0).round().clamp(0.0, 255.0) as u8;
-        }
-    }
-}
-
 /// Apply the compositor-supported colour adjustments (exposure, contrast,
 /// saturation, brightness) from a clip's resolved effect states, in that order.
 /// Each is a single-parameter effect; unrecognised or grading effects are left
 /// for a dedicated pass. PR #8 colour-adjustment path.
 pub fn apply_color_adjustments(img: &mut RgbaImage, effects: &[crate::effects::EffectState]) {
+    // Collect the four supported adjustments (last value per type), then apply them
+    // ONCE per pixel in the documented fixed order — accumulating in f64 with a
+    // single final clamp. Applying each op through a u8 round-trip (as before) threw
+    // away out-of-[0,1] intermediates, so e.g. exposure blowing a value past 1.0
+    // then a brightness cut flattened a highlight to mid-gray instead of white.
+    let mut exposure = 0.0f64;
+    let mut contrast = 1.0f64;
+    let mut saturation = 1.0f64;
+    let mut brightness = 0.0f64;
+    let mut any = false;
     for e in effects {
         if !e.enabled {
             continue;
@@ -460,39 +467,49 @@ pub fn apply_color_adjustments(img: &mut RgbaImage, effects: &[crate::effects::E
         let amount = e.params.values().next().copied();
         match e.effect_type.as_str() {
             "color.exposure" => {
-                let ev = amount.unwrap_or(0.0);
-                if ev != 0.0 {
-                    let m = 2f64.powf(ev);
-                    map_rgb(img, |c| c * m);
-                }
-            }
-            "color.brightness" => {
-                let b = amount.unwrap_or(0.0);
-                if b != 0.0 {
-                    map_rgb(img, |c| c + b);
-                }
+                exposure = amount.unwrap_or(0.0);
+                any = true;
             }
             "color.contrast" => {
-                let c = amount.unwrap_or(1.0);
-                if c != 1.0 {
-                    map_rgb(img, |v| (v - 0.5) * c + 0.5);
-                }
+                contrast = amount.unwrap_or(1.0);
+                any = true;
             }
             "color.saturation" => {
-                let s = amount.unwrap_or(1.0);
-                if s != 1.0 {
-                    for px in img.pixels.chunks_exact_mut(4) {
-                        let (r, g, b) =
-                            (px[0] as f64 / 255.0, px[1] as f64 / 255.0, px[2] as f64 / 255.0);
-                        let luma = 0.299 * r + 0.587 * g + 0.114 * b;
-                        let adj = |c: f64| (luma + (c - luma) * s).clamp(0.0, 1.0);
-                        px[0] = (adj(r) * 255.0).round() as u8;
-                        px[1] = (adj(g) * 255.0).round() as u8;
-                        px[2] = (adj(b) * 255.0).round() as u8;
-                    }
-                }
+                saturation = amount.unwrap_or(1.0);
+                any = true;
+            }
+            "color.brightness" => {
+                brightness = amount.unwrap_or(0.0);
+                any = true;
             }
             _ => {}
+        }
+    }
+    if !any {
+        return;
+    }
+    let m = 2f64.powf(exposure);
+    for px in img.pixels.chunks_exact_mut(4) {
+        let mut rgb = [
+            px[0] as f64 / 255.0,
+            px[1] as f64 / 255.0,
+            px[2] as f64 / 255.0,
+        ];
+        for c in &mut rgb {
+            *c *= m; // exposure
+        }
+        for c in &mut rgb {
+            *c = (*c - 0.5) * contrast + 0.5; // contrast
+        }
+        let luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+        for c in &mut rgb {
+            *c = luma + (*c - luma) * saturation; // saturation
+        }
+        for c in &mut rgb {
+            *c += brightness; // brightness
+        }
+        for (i, c) in rgb.iter().enumerate() {
+            px[i] = (c * 255.0).round().clamp(0.0, 255.0) as u8;
         }
     }
 }
@@ -575,10 +592,25 @@ pub fn rasterize_shape(shape: &ShapeStyle, w: usize, h: usize) -> RgbaImage {
             let nx = (x as f64 + 0.5) / w as f64;
             let ny = (y as f64 + 0.5) / h as f64;
             let (inside, on_stroke) = if is_ellipse {
-                let (ex, ey) = (nx * 2.0 - 1.0, ny * 2.0 - 1.0);
-                let r = ex * ex + ey * ey;
-                let inner = (1.0 - 2.0 * band_x.max(band_y)).max(0.0);
-                (r <= 1.0, r > inner * inner)
+                let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+                // A Circle is a TRUE circle (min half-extent on both axes); an Oval
+                // fills the box.
+                let (rx, ry) = if shape.kind == ShapeKind::Circle {
+                    let r = cx.min(cy);
+                    (r, r)
+                } else {
+                    (cx, cy)
+                };
+                let dx = x as f64 + 0.5 - cx;
+                let dy = y as f64 + 0.5 - cy;
+                let outer = (dx / rx).powi(2) + (dy / ry).powi(2) <= 1.0;
+                // Uniform sw-pixel stroke: the inner ellipse is shrunk by sw pixels
+                // per axis (was a single normalized band → non-uniform on non-square).
+                let (irx, iry) = ((rx - sw).max(0.0), (ry - sw).max(0.0));
+                let inner = irx > 0.0
+                    && iry > 0.0
+                    && (dx / irx).powi(2) + (dy / iry).powi(2) <= 1.0;
+                (outer, outer && !inner)
             } else {
                 let on = nx < band_x || nx > 1.0 - band_x || ny < band_y || ny > 1.0 - band_y;
                 (true, on)
@@ -1003,6 +1035,21 @@ mod tests {
     }
 
     #[test]
+    fn color_dodge_burn_w3c_degenerate_corners() {
+        use BlendMode::*;
+        // W3C orders the backdrop check first: a black backdrop stays black under
+        // ColorDodge even with a full-white source (source-first order gave 1.0).
+        assert_eq!(blend_channel(ColorDodge, 1.0, 0.0), 0.0);
+        assert!((blend_channel(ColorDodge, 0.5, 0.4) - (0.4f64 / 0.5).min(1.0)).abs() < 1e-9);
+        // A white backdrop stays white under ColorBurn even with a black source.
+        assert_eq!(blend_channel(ColorBurn, 0.0, 1.0), 1.0);
+        assert!(
+            (blend_channel(ColorBurn, 0.5, 0.6) - (1.0 - ((1.0 - 0.6) / 0.5f64).min(1.0))).abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
     fn compose_samples_opacity_keyframes() {
         let mut c = clip("c1", "m1", 0, 100);
         c.transform = Transform::from_top_left(0.0, 0.0, 1.0, 1.0); // full frame
@@ -1133,6 +1180,50 @@ mod tests {
         let img = rasterize_shape(&solid_shape(ShapeKind::Oval, [0.0, 0.0, 1.0, 1.0]), 8, 8);
         assert_eq!(px(&img, 4, 4), [0, 0, 255, 255], "center filled");
         assert_eq!(px(&img, 0, 0), [0, 0, 0, 0], "corner transparent");
+    }
+
+    #[test]
+    fn rasterize_circle_is_a_true_circle_not_stretched() {
+        use core_model::shape_style::ShapeKind;
+        // In a wide 16×4 box a Circle has radius min(8,2)=2 centred at (8,2); the
+        // far-left mid-row pixel is well outside it — an Oval fills the box width.
+        let circle = rasterize_shape(&solid_shape(ShapeKind::Circle, [1.0, 0.0, 0.0, 1.0]), 16, 4);
+        assert_eq!(px(&circle, 1, 2), [0, 0, 0, 0], "circle does not reach the box edge");
+        assert_eq!(px(&circle, 8, 2), [255, 0, 0, 255], "circle centre filled");
+        let oval = rasterize_shape(&solid_shape(ShapeKind::Oval, [1.0, 0.0, 0.0, 1.0]), 16, 4);
+        assert_eq!(px(&oval, 1, 2)[3], 255, "oval fills the box width at mid-row");
+    }
+
+    #[test]
+    fn ellipse_stroke_has_uniform_pixel_thickness() {
+        use core_model::shape_style::{Fill, Rgba, ShapeKind, Stroke};
+        // A wide 24×8 oval with a 2px stroke and no fill. Scanning the mid-row, the
+        // two ring crossings should stay thin (~2px each) — the old max-band inner
+        // ellipse ballooned the horizontal stroke to ~6px on non-square boxes.
+        let shape = ShapeStyle {
+            kind: ShapeKind::Oval,
+            stroke: Stroke {
+                color: Rgba {
+                    r: 0.0,
+                    g: 1.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+                width: 2.0,
+                dashed: false,
+                arrowhead_style: None,
+            },
+            fill: Fill {
+                enabled: false,
+                color: Rgba::default(),
+            },
+            arrowhead: None,
+            endpoints: None,
+        };
+        let img = rasterize_shape(&shape, 24, 8);
+        let stroke_run = (0..24).filter(|&x| px(&img, x, 4)[3] > 0).count();
+        assert!(stroke_run >= 2, "mid-row must have some stroke, got {stroke_run}px");
+        assert!(stroke_run <= 6, "mid-row stroke stays thin, got {stroke_run}px");
     }
 
     #[test]
@@ -1337,6 +1428,46 @@ mod tests {
         // Fully desaturated red → its luma in every channel (~76).
         assert!(p[0] == p[1] && p[1] == p[2], "grey: {p:?}");
         assert!((p[0] as i32 - 76).abs() <= 1, "luma of red, got {}", p[0]);
+    }
+
+    #[test]
+    fn color_adjust_accumulates_in_float_no_midpoint_clamp() {
+        // Exposure over-drives 0.5 to ~2.0; a following brightness cut of -0.5 must
+        // leave it clamped at white (1.5→1.0), NOT re-derived from a clamped-to-1.0
+        // u8 intermediate (which would give 0.5 → 128).
+        let mut img = RgbaImage::solid(1, 1, [128, 128, 128, 255]);
+        apply_color_adjustments(
+            &mut img,
+            &[
+                color_effect("color.exposure", 2.0),
+                color_effect("color.brightness", -0.5),
+            ],
+        );
+        assert_eq!(
+            px(&img, 0, 0),
+            [255, 255, 255, 255],
+            "highlight survives the brightness cut"
+        );
+    }
+
+    #[test]
+    fn color_adjust_order_is_canonical_not_list_order() {
+        // The documented order (exposure→contrast→saturation→brightness) is applied
+        // regardless of the effect-list order, so reordering the list is a no-op.
+        let run = |effects: &[crate::effects::EffectState]| {
+            let mut img = RgbaImage::solid(1, 1, [100, 150, 200, 255]);
+            apply_color_adjustments(&mut img, effects);
+            px(&img, 0, 0)
+        };
+        let a = run(&[
+            color_effect("color.brightness", 0.1),
+            color_effect("color.exposure", 0.5),
+        ]);
+        let b = run(&[
+            color_effect("color.exposure", 0.5),
+            color_effect("color.brightness", 0.1),
+        ]);
+        assert_eq!(a, b, "adjustment order is canonical, not list-order-dependent");
     }
 
     #[test]
