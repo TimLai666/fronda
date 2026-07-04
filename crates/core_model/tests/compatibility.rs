@@ -976,6 +976,23 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
     approx_eq(ts.font_scale, 1.2);
     assert_eq!(ts.alignment, TextAlignment::Left);
     approx_eq(ts.font_weight, 700.0);
+    // Full TextStyle fidelity — assert the remaining data-carrying fields too, so a future
+    // dropped field (e.g. a wire-bridge regression) fails this round-trip test.
+    approx_eq(ts.color.r, 1.0);
+    approx_eq(ts.color.g, 0.0);
+    approx_eq(ts.color.b, 0.0);
+    approx_eq(ts.color.a, 1.0);
+    assert!(!ts.is_italic);
+    assert!(!ts.shadow.enabled);
+    approx_eq(ts.shadow.offset_x, 2.0);
+    approx_eq(ts.shadow.offset_y, 3.0);
+    approx_eq(ts.shadow.blur, 4.0);
+    assert!(ts.background.enabled);
+    approx_eq(ts.background.color.a, 0.3);
+    assert!(ts.border.enabled);
+    approx_eq(ts.border.color.r, 1.0);
+    approx_eq(ts.border.color.g, 1.0);
+    approx_eq(ts.border.color.b, 1.0);
 
     // Keyframes — opacity
     let ot = clip.opacity_track.as_ref().unwrap();
