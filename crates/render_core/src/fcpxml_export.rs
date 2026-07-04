@@ -225,25 +225,37 @@ impl FcpxmlExport {
                         .unwrap_or("r1");
                     format!(" format=\"{fid}\"")
                 };
-                // #247: the in-point reads from the asset's timecode origin, so the source
-                // frame is offset by the asset's embedded start timecode. (No retiming in this
-                // exporter, so origin lands directly on `start`; a retimed clip would carry it
-                // in a timeMap instead.)
                 let origin = start_timecode_frames(manifest.entry_for(&clip.media_ref), fps);
                 // A hidden video track / muted audio track exports its clips disabled, so the
                 // export mirrors what's actually visible/audible (Swift emits `enabled`).
                 let enabled_attr = if track_disabled { " enabled=\"0\"" } else { "" };
+                // #197: a retimed clip (speed != 1) carries a <timeMap> and its in-point is on the
+                // retimed axis (trim/speed); a 1x clip's in-point is the source origin + trim (#247).
+                let retimed = (clip.speed - 1.0).abs() > 0.001;
+                let start_str = if retimed {
+                    let (p, q) = rational_speed(clip.speed);
+                    rational_time(clip.trim_start_frame.max(0) * q, fps * p)
+                } else {
+                    time_str(origin + clip.trim_start_frame.max(0), fps)
+                };
+                let time_map = if retimed {
+                    let media_frames = manifest
+                        .entry_for(&clip.media_ref)
+                        .map(|e| (e.duration * fps as f64).round() as i64)
+                        .unwrap_or(0);
+                    build_time_map(clip.speed, origin, media_frames, fps)
+                } else {
+                    String::new()
+                };
                 let open = format!(
-                    "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{format_attr}{enabled_attr}",
+                    "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{start_str}\"{format_attr}{enabled_attr}",
                     time_str(clip.start_frame, fps),
                     xml_escape(&file_name(manifest, &clip.media_ref)),
                     time_str(clip.duration_frames.max(1), fps),
-                    time_str(origin + clip.trim_start_frame.max(0), fps),
                 );
-                // Scalar adjustments that round-trip without coordinate calibration: opacity
-                // (<adjust-blend>) and audio volume (<adjust-volume>, in dB). Transform/crop
-                // (coordinate-space sensitive) and keyframed opacity are #254 follow-ups.
-                let adjustments = clip_adjustments(
+                // Children in Swift's order: timeMap, then crop/conform/transform/blend/volume.
+                let mut children = time_map;
+                children.push_str(&clip_adjustments(
                     clip,
                     manifest,
                     is_audio,
@@ -251,12 +263,12 @@ impl FcpxmlExport {
                     seq_h,
                     fps,
                     collapsed_audio_vol.get(&clip.id).copied(),
-                );
-                if adjustments.is_empty() {
+                ));
+                if children.is_empty() {
                     writeln!(xml, "{open}/>").ok();
                 } else {
                     writeln!(xml, "{open}>").ok();
-                    xml.push_str(&adjustments);
+                    xml.push_str(&children);
                     writeln!(xml, "              </asset-clip>").ok();
                 }
             }
@@ -463,49 +475,44 @@ fn clip_adjustments(
             } else {
                 // Keyframed transform: each animated property is a <param>; values are sampled
                 // through resolved_transform_at (which applies the top-left→centre + size
-                // coupling) and encoded in FCP units. Keyframe time is clip-relative.
+                // coupling) and encoded in FCP units. Keyframe time is on the (retiming-aware)
+                // output axis via kf_rows.
                 let _ = writeln!(out, "                <adjust-transform{attrs}>");
                 if has_scale_kf {
-                    let rows: Vec<(i64, core_model::Interpolation, String)> = clip
-                        .scale_track
-                        .as_ref()
-                        .unwrap()
-                        .keyframes
-                        .iter()
-                        .map(|k| {
+                    let rows = kf_rows(
+                        &clip.scale_track.as_ref().unwrap().keyframes,
+                        clip,
+                        fps,
+                        |k| {
                             let rt = timeline_core::resolved_transform_at(clip, k.frame);
-                            (k.frame, k.interpolation_out, scale_value(clip, rt.width, rt.height, fit))
-                        })
-                        .collect();
-                    write_kf_param(&mut out, "scale", &base, &rows, fps);
+                            scale_value(clip, rt.width, rt.height, fit)
+                        },
+                    );
+                    write_kf_param(&mut out, "scale", &base, &rows);
                 }
                 if has_pos_kf {
-                    let rows: Vec<(i64, core_model::Interpolation, String)> = clip
-                        .position_track
-                        .as_ref()
-                        .unwrap()
-                        .keyframes
-                        .iter()
-                        .map(|k| {
+                    let rows = kf_rows(
+                        &clip.position_track.as_ref().unwrap().keyframes,
+                        clip,
+                        fps,
+                        |k| {
                             let rt = timeline_core::resolved_transform_at(clip, k.frame);
-                            (k.frame, k.interpolation_out, position_value(&rt, seq_w, seq_h, fit))
-                        })
-                        .collect();
-                    write_kf_param(&mut out, "position", &pos_base, &rows, fps);
+                            position_value(&rt, seq_w, seq_h, fit)
+                        },
+                    );
+                    write_kf_param(&mut out, "position", &pos_base, &rows);
                 }
                 if has_rot_kf {
-                    let rows: Vec<(i64, core_model::Interpolation, String)> = clip
-                        .rotation_track
-                        .as_ref()
-                        .unwrap()
-                        .keyframes
-                        .iter()
-                        .map(|k| {
+                    let rows = kf_rows(
+                        &clip.rotation_track.as_ref().unwrap().keyframes,
+                        clip,
+                        fps,
+                        |k| {
                             let rt = timeline_core::resolved_transform_at(clip, k.frame);
-                            (k.frame, k.interpolation_out, format_number(-rt.rotation))
-                        })
-                        .collect();
-                    write_kf_param(&mut out, "rotation", &rot_base, &rows, fps);
+                            format_number(-rt.rotation)
+                        },
+                    );
+                    write_kf_param(&mut out, "rotation", &rot_base, &rows);
                 }
                 let _ = writeln!(out, "                </adjust-transform>");
             }
@@ -597,6 +604,89 @@ fn format_number(value: f64) -> String {
     s
 }
 
+/// Best rational approximation `p/q` of a playback speed (`q ≤ 1000`), mirroring Swift
+/// `rationalSpeed`. FCPXML expresses retiming as a rational time scale.
+fn rational_speed(speed: f64) -> (i64, i64) {
+    let mut best = (1i64, 1i64);
+    let mut best_err = f64::INFINITY;
+    for q in 1..=1000i64 {
+        let p = (speed * q as f64).round() as i64;
+        if p <= 0 {
+            continue;
+        }
+        let err = (speed - p as f64 / q as f64).abs();
+        if err < best_err {
+            best = (p, q);
+            best_err = err;
+            if err == 0.0 {
+                break;
+            }
+        }
+    }
+    best
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let (mut a, mut b) = (a.abs(), b.abs());
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a.max(1)
+}
+
+/// Rational project time `num/den s`, reduced by gcd; `0s` for zero. Mirrors Swift `rationalTime`.
+fn rational_time(num: i64, den: i64) -> String {
+    if num == 0 {
+        return "0s".to_string();
+    }
+    let g = gcd(num, den);
+    let n = num / g;
+    let d = den / g;
+    if d == 1 {
+        format!("{n}s")
+    } else {
+        format!("{n}/{d}s")
+    }
+}
+
+/// A `<timeMap>` retiming a clip whose `speed != 1` (upstream #197): two `<timept>`s map the
+/// clip's output span to `[origin, origin+mediaFrames)` of the source at the retimed rate.
+/// Empty when the clip runs at 1× or the source length is unknown. Mirrors Swift `timeMapNode`.
+fn build_time_map(speed: f64, origin: i64, media_frames: i64, fps: i64) -> String {
+    if (speed - 1.0).abs() <= 0.001 || media_frames <= 0 {
+        return String::new();
+    }
+    let (p, q) = rational_speed(speed);
+    let mut s = String::new();
+    let _ = writeln!(s, "                <timeMap frameSampling=\"floor\">");
+    let _ = writeln!(
+        s,
+        "                  <timept time=\"0s\" value=\"{}\" interp=\"linear\"/>",
+        time_str(origin, fps)
+    );
+    let _ = writeln!(
+        s,
+        "                  <timept time=\"{}\" value=\"{}\" interp=\"linear\"/>",
+        rational_time(media_frames * q, fps * p),
+        time_str(origin + media_frames, fps)
+    );
+    let _ = writeln!(s, "                </timeMap>");
+    s
+}
+
+/// A keyframe's `<keyframe time>` on the clip's OUTPUT axis. At 1× it's the clip-relative frame;
+/// under retiming it's `(trimStart*q + frame*p)/(fps*p)`. Mirrors Swift `keyframeTime`.
+fn keyframe_time_str(frame: i64, clip: &Clip, fps: i64) -> String {
+    if (clip.speed - 1.0).abs() <= 0.001 {
+        time_str(frame, fps)
+    } else {
+        let (p, q) = rational_speed(clip.speed);
+        rational_time(clip.trim_start_frame.max(0) * q + frame * p, fps * p)
+    }
+}
+
 /// Append an `<adjust-blend>` for opacity — self-closing for static, or with a keyframed
 /// `<param name="amount">` when the clip has an opacity track. Emits nothing at full opacity with
 /// no keyframes. Shared by asset-clips and titles.
@@ -613,11 +703,8 @@ fn append_opacity_blend(out: &mut String, clip: &Clip, fps: i64) {
     match opacity_kf {
         Some(kfs) => {
             let _ = writeln!(out, "                <adjust-blend amount=\"{amount}\">");
-            let rows: Vec<(i64, core_model::Interpolation, String)> = kfs
-                .iter()
-                .map(|k| (k.frame, k.interpolation_out, format_number(k.value)))
-                .collect();
-            write_kf_param(out, "amount", &amount, &rows, fps);
+            let rows = kf_rows(kfs, clip, fps, |k| format_number(k.value));
+            write_kf_param(out, "amount", &amount, &rows);
             let _ = writeln!(out, "                </adjust-blend>");
         }
         None => {
@@ -627,20 +714,18 @@ fn append_opacity_blend(out: &mut String, clip: &Clip, fps: i64) {
 }
 
 /// Emit a keyframed `<param>`: the base value on the param, then a `<keyframeAnimation>` with one
-/// `<keyframe>` per row (clip-relative time, `curve="linear"` for linear segments, else FCP's
-/// default smoothing). Rows are `(clip_relative_frame, interpolation_out, formatted_value)`.
+/// `<keyframe>` per row (`curve="linear"` for linear segments, else FCP's default smoothing).
+/// Rows are `(time_string, interpolation_out, formatted_value)`, pre-sorted by the caller — the
+/// `time` is precomputed so it can be on the retimed output axis (#197).
 fn write_kf_param(
     out: &mut String,
     name: &str,
     base: &str,
-    rows: &[(i64, core_model::Interpolation, String)],
-    fps: i64,
+    rows: &[(String, core_model::Interpolation, String)],
 ) {
-    let mut sorted: Vec<&(i64, core_model::Interpolation, String)> = rows.iter().collect();
-    sorted.sort_by_key(|r| r.0);
     let _ = writeln!(out, "                  <param name=\"{name}\" value=\"{base}\">");
     let _ = writeln!(out, "                    <keyframeAnimation>");
-    for (frame, interp, value) in sorted {
+    for (time, interp, value) in rows {
         let curve = if *interp == core_model::Interpolation::Linear {
             " curve=\"linear\""
         } else {
@@ -648,12 +733,34 @@ fn write_kf_param(
         };
         let _ = writeln!(
             out,
-            "                      <keyframe time=\"{}\"{curve} value=\"{value}\"/>",
-            time_str(*frame, fps)
+            "                      <keyframe time=\"{time}\"{curve} value=\"{value}\"/>"
         );
     }
     let _ = writeln!(out, "                    </keyframeAnimation>");
     let _ = writeln!(out, "                  </param>");
+}
+
+/// Build sorted keyframe rows `(time, interp, value)` from a track's keyframes, with the time on
+/// the clip's output axis (retiming-aware) and the value produced by `value_of`.
+fn kf_rows<V>(
+    keyframes: &[core_model::Keyframe<V>],
+    clip: &Clip,
+    fps: i64,
+    value_of: impl Fn(&core_model::Keyframe<V>) -> String,
+) -> Vec<(String, core_model::Interpolation, String)> {
+    let mut rows: Vec<(i64, String, core_model::Interpolation, String)> = keyframes
+        .iter()
+        .map(|k| {
+            (
+                k.frame,
+                keyframe_time_str(k.frame, clip, fps),
+                k.interpolation_out,
+                value_of(k),
+            )
+        })
+        .collect();
+    rows.sort_by_key(|r| r.0);
+    rows.into_iter().map(|(_, t, i, v)| (t, i, v)).collect()
 }
 
 /// Emit a text overlay as a `<title>` generator (#254). The title references the shared
@@ -1080,6 +1187,92 @@ mod tests {
         assert_eq!(format_number(1.0), "1");
         assert_eq!(format_number(-6.020599913), "-6.0206");
         assert_eq!(format_number(0.80000), "0.8");
+    }
+
+    #[test]
+    fn fcpxml_rational_speed_and_time() {
+        assert_eq!(rational_speed(2.0), (2, 1));
+        assert_eq!(rational_speed(1.5), (3, 2));
+        assert_eq!(rational_speed(0.5), (1, 2));
+        assert_eq!(rational_time(300, 60), "5s");
+        assert_eq!(rational_time(15, 60), "1/4s");
+        assert_eq!(rational_time(0, 60), "0s");
+    }
+
+    #[test]
+    fn fcpxml_retimed_clip_emits_timemap() {
+        // 2x speed, source 10s (300f @ 30fps). Output span = 300/(30*2) = 5s; the timeMap maps
+        // it to the full source [0, 300/30s).
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 30);
+        c.speed = 2.0;
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("<timeMap frameSampling=\"floor\">"), "timeMap\n{xml}");
+        assert!(
+            xml.contains("<timept time=\"0s\" value=\"0s\" interp=\"linear\"/>"),
+            "timept 0\n{xml}"
+        );
+        assert!(
+            xml.contains("<timept time=\"5s\" value=\"300/30s\" interp=\"linear\"/>"),
+            "timept 1\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_1x_clip_has_no_timemap() {
+        let (tl, m) = sample();
+        assert!(!FcpxmlExport::export(&tl, &m).contains("<timeMap"), "1x → no timeMap");
+    }
+
+    #[test]
+    fn fcpxml_retimed_clip_keyframe_time_on_output_axis() {
+        // speed 2x, opacity kf at clip-relative frame 30 → keyframeTime = (0 + 30*2)/(30*2) = 1s
+        // (rational-reduced), i.e. the output axis, not the raw 1x frame form.
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 30);
+        c.speed = 2.0;
+        c.opacity_track = Some(core_model::KeyframeTrack {
+            keyframes: vec![
+                core_model::Keyframe {
+                    frame: 0,
+                    value: 1.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+                core_model::Keyframe {
+                    frame: 30,
+                    value: 0.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+            ],
+        });
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(
+            xml.contains("<keyframe time=\"1s\" curve=\"linear\" value=\"0\"/>"),
+            "retimed keyframe time on output axis\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_retimed_clip_start_on_retimed_axis() {
+        // trim 15 at 2x → start = 15*q/(fps*p) = 15*1/(30*2) = 15/60 = 1/4s.
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 30);
+        c.speed = 2.0;
+        c.trim_start_frame = 15;
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("start=\"1/4s\""), "retimed in-point\n{xml}");
     }
 
     #[test]
