@@ -586,6 +586,30 @@ impl ToolExecutor {
                  yet — ask the user to manage projects from the Home screen."
                     .to_string(),
             ),
+            // Advertised-but-not-yet-implemented tools (schemas landed ahead of the executor logic
+            // in Issues #154/#155/#157/#158/#165/#174). Report the limitation honestly rather than
+            // the misleading "Unknown tool" a fallthrough gives; each needs its own port (some are
+            // host-gated: audio DSP, on-device silence analysis, XML parsing, a preset store).
+            "create_compound_clip" | "dissolve_compound_clip" => Err(
+                "Compound clips (nested sub-sequences) aren't implemented through the agent yet."
+                    .to_string(),
+            ),
+            "import_xml" => Err(
+                "Importing an XMEML/FCPXML timeline isn't implemented through the agent yet."
+                    .to_string(),
+            ),
+            "apply_clip_preset" | "save_clip_preset" | "list_clip_presets" => {
+                Err("Clip presets aren't implemented through the agent yet.".to_string())
+            }
+            "remove_silence" => Err(
+                "Silence removal needs on-device audio analysis, which isn't available through the \
+                 agent yet."
+                    .to_string(),
+            ),
+            "set_clip_audio_effects" | "set_clip_noise_reduction" => Err(
+                "Audio effects and noise reduction aren't implemented through the agent yet."
+                    .to_string(),
+            ),
 
             // ── Read-only tools ──────────────────────────────────────────
             "get_media" => self.cmd_get_media(args),
@@ -6713,6 +6737,26 @@ mod tests {
         let (_, w, h, name) = writer.last.lock().unwrap().clone().unwrap();
         assert_eq!((w, h), (1920, 1080), "default aspect = Project");
         assert_eq!(name, "Matte", "default name");
+    }
+
+    #[test]
+    fn every_advertised_tool_is_dispatched() {
+        // Definitive guard: no tool in the advertised registry should reach the executor's
+        // "Unknown tool" fallthrough. Empty args mean tools may error on missing params — that's
+        // fine; we only assert each NAME is routed to a handler.
+        let mut exec = make_executor();
+        let mut undispatched: Vec<&str> = Vec::new();
+        for tool in crate::all_tools() {
+            if let Err(e) = exec.execute(tool.name, &json!({})) {
+                if e.contains("Unknown tool") {
+                    undispatched.push(tool.name);
+                }
+            }
+        }
+        assert!(
+            undispatched.is_empty(),
+            "advertised tools with no executor dispatch: {undispatched:?}"
+        );
     }
 
     #[test]
