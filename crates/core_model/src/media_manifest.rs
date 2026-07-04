@@ -121,6 +121,10 @@ pub struct GenerationInput {
     pub aspect_ratio: String,
     pub resolution: Option<String>,
     pub quality: Option<String>,
+    // serde's camelCase lowercases acronyms (URL→Url); Swift's Codable keeps them
+    // uppercase and the on-disk media.json uses "imageURLs" etc. Rename to match, and
+    // alias the wrong camelCase form so any file Rust already mis-wrote still loads.
+    #[serde(rename = "imageURLs", alias = "imageUrls")]
     pub image_urls: Option<Vec<String>>,
     pub num_images: Option<i64>,
     pub voice: Option<String>,
@@ -128,9 +132,13 @@ pub struct GenerationInput {
     pub style_instructions: Option<String>,
     pub instrumental: Option<bool>,
     pub generate_audio: Option<bool>,
+    #[serde(rename = "referenceImageURLs", alias = "referenceImageUrls")]
     pub reference_image_urls: Option<Vec<String>>,
+    #[serde(rename = "referenceVideoURLs", alias = "referenceVideoUrls")]
     pub reference_video_urls: Option<Vec<String>>,
+    #[serde(rename = "referenceAudioURLs", alias = "referenceAudioUrls")]
     pub reference_audio_urls: Option<Vec<String>>,
+    #[serde(rename = "imageURLAssetIds", alias = "imageUrlAssetIds")]
     pub image_url_asset_ids: Option<Vec<String>>,
     pub reference_image_asset_ids: Option<Vec<String>>,
     pub reference_video_asset_ids: Option<Vec<String>>,
@@ -179,11 +187,20 @@ pub struct MediaManifestEntry {
     pub generation_input: Option<GenerationInput>,
     pub source_width: Option<i64>,
     pub source_height: Option<i64>,
+    // Acronym-casing renames (see GenerationInput): Swift/on-disk use uppercase
+    // "sourceFPS" / "cachedRemoteURL"; serde's camelCase would emit "sourceFps" etc.
+    #[serde(rename = "sourceFPS", alias = "sourceFps")]
     pub source_fps: Option<f64>,
     pub has_audio: Option<bool>,
     pub folder_id: Option<String>,
+    #[serde(rename = "cachedRemoteURL", alias = "cachedRemoteUrl")]
     pub cached_remote_url: Option<String>,
-    #[serde(default, with = "crate::date_serde::option_foundation_date")]
+    #[serde(
+        rename = "cachedRemoteURLExpiresAt",
+        alias = "cachedRemoteUrlExpiresAt",
+        default,
+        with = "crate::date_serde::option_foundation_date"
+    )]
     pub cached_remote_url_expires_at: Option<DateTime<Utc>>,
     /// Source timecode frame from QuickTime `tmcd` track. Upstream PR #136.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -337,6 +337,50 @@ fn media_manifest_missing_version_decodes_as_v1() {
     assert_eq!(manifest.entries.len(), 2);
 }
 
+#[test]
+fn media_manifest_acronym_keys_roundtrip_without_data_loss() {
+    // serde's camelCase lowercases acronyms; Swift/on-disk use uppercase (sourceFPS,
+    // cachedRemoteURL, imageURLs, imageURLAssetIds). The real media.json must load
+    // these WITHOUT dropping them, and re-serialization must emit the Swift keys.
+    let manifest: MediaManifest = read_fixture_json("modern-rich.palmier", "media.json");
+
+    let video = manifest
+        .entries
+        .iter()
+        .find(|e| e.id == "asset-project-video")
+        .expect("video entry");
+    assert_eq!(video.source_fps, Some(30.0), "sourceFPS must load");
+    let gi = video.generation_input.as_ref().expect("generationInput");
+    assert_eq!(gi.image_urls, Some(vec!["https://example.com/board.png".to_string()]));
+    assert_eq!(gi.reference_image_urls, Some(vec!["https://example.com/ref-image.png".to_string()]));
+    assert_eq!(gi.reference_video_urls, Some(vec!["https://example.com/ref-video.mp4".to_string()]));
+    assert_eq!(gi.reference_audio_urls, Some(vec!["https://example.com/ref-audio.wav".to_string()]));
+    assert_eq!(gi.image_url_asset_ids, Some(vec!["asset-image-ref-1".to_string()]));
+
+    let audio = manifest
+        .entries
+        .iter()
+        .find(|e| e.id == "asset-external-audio")
+        .expect("audio entry");
+    assert_eq!(
+        audio.cached_remote_url.as_deref(),
+        Some("https://cdn.example.com/interview.wav"),
+        "cachedRemoteURL must load"
+    );
+    assert!(
+        audio.cached_remote_url_expires_at.is_some(),
+        "cachedRemoteURLExpiresAt must load"
+    );
+
+    // Re-serialization emits Swift-compatible uppercase acronym keys, not lowercased.
+    let out = serde_json::to_string(&manifest).unwrap();
+    for key in ["\"sourceFPS\"", "\"cachedRemoteURL\"", "\"imageURLs\"", "\"imageURLAssetIds\""] {
+        assert!(out.contains(key), "save must emit {key}");
+    }
+    assert!(!out.contains("\"sourceFps\""), "no lowercased acronym key on save");
+    assert!(!out.contains("\"cachedRemoteUrl\""), "no lowercased acronym key on save");
+}
+
 // ── FMT round-trip tests ──────────────────────────────────────────────────
 
 #[test]
