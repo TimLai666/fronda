@@ -314,31 +314,42 @@ pub fn move_clips(
     }
 
     let total_duration: i64 = primary_clips.iter().map(|c| c.duration_frames).sum();
+    // Clamp the destination to the frame-0 floor ONCE (Swift moveClips uses
+    // max(0, toFrame)) and use it for both the clear and the placement, so the
+    // cleared region matches where the clips actually land.
+    let clamped_dest = dest_start_frame.max(0);
 
-    // Phase 2: CLP-003 — remove moved clips from source BEFORE clearing destination
+    // Phase 2: CLP-003 — remove moved clips (primary + partners, via `expanded`)
+    // from source BEFORE clearing destinations.
     let remove_ids: Vec<String> = expanded.into_iter().collect();
     remove_clips(timeline, remove_ids, false);
 
-    // Phase 3: CLP-004 — clear destination conflicts
+    // Phase 3: CLP-004/006 — clear ALL destination regions (primary + every
+    // partner) before placing anything, so a clear never runs against an
+    // already-placed moved clip (which it would Remove, losing it).
     if total_duration > 0 {
         clear_region(
             timeline,
             dest_track_index,
-            dest_start_frame,
-            dest_start_frame + total_duration,
+            clamped_dest,
+            clamped_dest + total_duration,
             false,
         );
     }
+    for (clip, track_index, new_start_frame) in &linked_partner_clips {
+        let start = (*new_start_frame).max(0);
+        if clip.duration_frames > 0 && *track_index < timeline.tracks.len() {
+            clear_region(timeline, *track_index, start, start + clip.duration_frames, false);
+        }
+    }
 
-    // Phase 4: insert primary clips at target
+    // Phase 4: insert primary clips at the clamped target.
     let mut offset = 0i64;
     let mut placed_ids = Vec::new();
     for mut clip in primary_clips {
         let new_id = Uuid::new_v4().to_string();
         clip.id = new_id.clone();
-        // Clamp to the frame-0 floor (Swift moveClips uses max(0, toFrame));
-        // the linked-partner path below already clamps, this one did not.
-        clip.start_frame = (dest_start_frame + offset).max(0);
+        clip.start_frame = clamped_dest + offset;
         let duration = clip.duration_frames;
         timeline.tracks[dest_track_index].clips.push(clip);
         placed_ids.push(new_id);
@@ -346,18 +357,10 @@ pub fn move_clips(
     }
     sort_clips(&mut timeline.tracks[dest_track_index]);
 
-    // Phase 5: place linked partners at their delta positions
+    // Phase 5: place linked partners (destinations already cleared in Phase 3).
     let mut partner_tracks: BTreeSet<usize> = BTreeSet::new();
     for (mut clip, track_index, new_start_frame) in linked_partner_clips {
-        let start = new_start_frame.max(0);
-        clip.start_frame = start;
-        let duration = clip.duration_frames;
-        // Clear the partner's destination region too (CLP-006). Swift clears every
-        // moved clip's destination; the Rust port cleared only the primary track,
-        // leaving a partner to overlap an unrelated clip on its track.
-        if duration > 0 && track_index < timeline.tracks.len() {
-            clear_region(timeline, track_index, start, start + duration, false);
-        }
+        clip.start_frame = new_start_frame.max(0);
         timeline.tracks[track_index].clips.push(clip);
         partner_tracks.insert(track_index);
     }

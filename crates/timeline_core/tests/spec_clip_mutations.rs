@@ -490,6 +490,49 @@ fn clp_004_move_clips_clamps_primary_to_frame_zero() {
 }
 
 #[test]
+fn clp_004_move_negative_dest_clears_the_clamped_frame_zero_region() {
+    // Moving to a negative frame clamps to 0; the clear must use the SAME clamped
+    // start so an existing frame-0 clip is cleared, not left to overlap.
+    let c1 = clip("c1", ClipType::Video, 100, 30);
+    let x1 = clip("x1", ClipType::Video, 0, 30);
+    let mut t = timeline(vec![video_track(vec![c1, x1])]);
+    let placed = move_clips(&mut t, &["c1".to_string()], 0, -50);
+    assert_eq!(placed.len(), 1);
+    let moved = t.tracks[0].clips.iter().find(|c| c.id == placed[0]).unwrap();
+    assert_eq!(moved.start_frame, 0);
+    // The pre-existing frame-0 clip was cleared; no overlap remains.
+    let mut spans: Vec<(i64, i64)> = t.tracks[0]
+        .clips
+        .iter()
+        .map(|c| (c.start_frame, c.start_frame + c.duration_frames))
+        .collect();
+    spans.sort();
+    for w in spans.windows(2) {
+        assert!(w[0].1 <= w[1].0, "overlap after clamped move: {spans:?}");
+    }
+}
+
+#[test]
+fn clp_004_move_partner_on_primary_track_loses_no_clip() {
+    // A partner sharing the primary's track must not be destroyed by a clear that
+    // runs after the primary is placed (data-loss regression). Both moved clips
+    // survive (the degenerate same-track clamp overlap is inherent / Swift-equal).
+    let mut v1 = clip("v1", ClipType::Video, 100, 30);
+    v1.link_group_id = Some("g1".to_string());
+    let mut p1 = clip("p1", ClipType::Video, 0, 30);
+    p1.link_group_id = Some("g1".to_string());
+    let mut t = timeline(vec![video_track(vec![v1, p1])]);
+    move_clips(&mut t, &["v1".to_string()], 0, -50);
+    // Neither moved clip vanished (old bug: the partner's clear deleted the primary).
+    assert_eq!(
+        t.tracks[0].clips.len(),
+        2,
+        "both moved clips must survive: {:?}",
+        t.tracks[0].clips.iter().map(|c| (c.start_frame, c.duration_frames)).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn clp_006_move_linked_partner_clears_destination_overlap() {
     // v1 (track0) linked g1 to p1 (track1); unrelated x1 on track1 at the move
     // destination. Moving v1 must clear the partner's destination so p1 does not

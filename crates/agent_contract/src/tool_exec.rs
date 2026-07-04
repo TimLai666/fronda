@@ -1395,12 +1395,25 @@ impl ToolExecutor {
             .collect();
         let mut linked_audio_count = 0usize;
         if !video_with_audio.is_empty() {
-            let audio_ti = match self
-                .timeline
-                .tracks
-                .iter()
-                .position(|t| t.r#type == ClipType::Audio)
-            {
+            // Span the linked audio will occupy (each audio clip mirrors its video's
+            // position). Pick the first audio track FREE over that span so existing
+            // audio is never clobbered; otherwise create a new track (Swift's
+            // availableAudioTrackIndex / resolveOrCreateAudioTrack).
+            let (mut span_start, mut span_end) = (i64::MAX, i64::MIN);
+            for pid in &video_with_audio {
+                if let Some(loc) = timeline_core::find_clip(&self.timeline, pid) {
+                    let c = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+                    span_start = span_start.min(c.start_frame);
+                    span_end = span_end.max(c.start_frame + c.duration_frames);
+                }
+            }
+            let free = self.timeline.tracks.iter().position(|t| {
+                t.r#type == ClipType::Audio
+                    && !t.clips.iter().any(|c| {
+                        c.start_frame < span_end && c.start_frame + c.duration_frames > span_start
+                    })
+            });
+            let audio_ti = match free {
                 Some(ti) => ti,
                 None => {
                     let at = self.timeline.tracks.len();
@@ -3431,6 +3444,74 @@ mod tests {
         assert_eq!(audio.start_frame, video.start_frame);
         assert_eq!(audio.duration_frames, video.duration_frames);
         assert!(matches!(audio.media_type, ClipType::Audio));
+    }
+
+    #[test]
+    fn add_clips_linked_audio_does_not_clobber_existing_audio() {
+        // The existing audio track holds music over the target span; the linked
+        // audio must go to a free/new track, never overwriting the music.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(core_model::MediaManifestEntry {
+            id: "vid".into(),
+            name: "v.mp4".into(),
+            r#type: ClipType::Video,
+            source: core_model::MediaSource::External {
+                absolute_path: "/v.mp4".into(),
+            },
+            duration: 4.0, // 120 frames @ 30fps
+            generation_input: None,
+            source_width: Some(1920),
+            source_height: Some(1080),
+            source_fps: Some(30.0),
+            has_audio: Some(true),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+        });
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let audio_ti =
+            timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Audio).unwrap();
+        // Pre-existing music spanning the whole target region.
+        exec.timeline_mut().tracks[audio_ti].clips.push(only_clip_helper_music());
+
+        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+            .unwrap();
+
+        // The music clip must still exist somewhere untouched.
+        let music_alive = exec
+            .timeline()
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .any(|c| c.id == "music" && c.start_frame == 0 && c.duration_frames == 300);
+        assert!(music_alive, "pre-existing audio was clobbered");
+        // The linked audio landed on a different audio track (not over the music).
+        let audio_clip_count: usize = exec
+            .timeline()
+            .tracks
+            .iter()
+            .filter(|t| t.r#type == ClipType::Audio)
+            .map(|t| t.clips.len())
+            .sum();
+        assert_eq!(audio_clip_count, 2, "music + linked audio both present");
+    }
+
+    fn only_clip_helper_music() -> Clip {
+        let mut c = executor_with_clip().timeline().tracks[0].clips[0].clone();
+        c.id = "music".into();
+        c.media_type = ClipType::Audio;
+        c.source_clip_type = ClipType::Audio;
+        c.start_frame = 0;
+        c.duration_frames = 300;
+        c.link_group_id = None;
+        c
     }
 
     #[test]
