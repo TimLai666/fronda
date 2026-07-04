@@ -342,12 +342,47 @@ pub fn phrases_from_words(
         ));
     }
 
+    // CAP-008 / spec THM-015: floor each caption's display duration.
+    let min_frames = (config.min_duration_seconds * fps as f64).round() as i64;
+    enforce_min_duration(&mut segments, min_frames);
+
     // Apply text case to all segments (CAP-013).
     for seg in &mut segments {
         seg.apply_text_case(config.text_case);
     }
 
     segments
+}
+
+/// CAP-008: enforce a minimum display duration on word-timestamp caption segments
+/// (assumed chronological and non-overlapping) by **clamping, not shifting**.
+///
+/// Each segment's `end_frame` extends toward `start_frame + min_frames`, but never
+/// past the next segment's `start_frame`; the final segment extends freely. Starts
+/// are never moved and segments are never shrunk, so real word onsets stay synced
+/// to speech and the non-overlap invariant (`end <= next.start`) is preserved.
+///
+/// This deliberately diverges from Swift `CaptionBuilder.enforceMinDuration`, which
+/// extends *and shifts every later phrase* to avoid overlap. That is safe in Swift
+/// because its phrases are synthetic character-distributed subdivisions of a single
+/// transcript segment (no real per-phrase timing); shifting them here — where each
+/// segment is anchored to real spoken word times — would drift captions
+/// progressively behind the audio across fast contiguous speech.
+fn enforce_min_duration(segments: &mut [CaptionSegment], min_frames: i64) {
+    if min_frames <= 0 {
+        return;
+    }
+    let n = segments.len();
+    for i in 0..n {
+        let desired_end = segments[i].start_frame + min_frames;
+        // Cap the extension at the next segment's (unchanged) start; last is free.
+        let cap = if i + 1 < n {
+            segments[i + 1].start_frame
+        } else {
+            i64::MAX
+        };
+        segments[i].end_frame = segments[i].end_frame.max(desired_end.min(cap));
+    }
 }
 
 #[cfg(test)]

@@ -186,12 +186,13 @@ fn cap_008_timing_multiple_phrases() {
     };
     let segs = phrases_from_words(&words, &config, 30);
     assert_eq!(segs.len(), 2);
-    // Group 1: frames 0–30 (0.0–1.0 s)
+    // Group 1: frames 0–30 (0.0–1.0 s); already ≥ the 0.7s floor.
     assert_eq!(segs[0].start_frame, 0);
     assert_eq!(segs[0].end_frame, 30);
-    // Group 2: frames 150–165 (5.0–5.5 s)
+    // Group 2: word span 5.0–5.5 s (150–165) is only 15 frames, below the 0.7s
+    // (21-frame) minimum; as the final segment it extends freely to 150 + 21 = 171.
     assert_eq!(segs[1].start_frame, 150);
-    assert_eq!(segs[1].end_frame, 165);
+    assert_eq!(segs[1].end_frame, 171);
 }
 
 #[test]
@@ -203,6 +204,81 @@ fn cap_008_zero_fps_does_not_crash() {
     assert_eq!(segs.len(), 1);
     assert_eq!(segs[0].start_frame, 0);
     assert_eq!(segs[0].end_frame, 1);
+}
+
+// ===================================================================
+// CAP-008: minimum display duration (clamp-without-shift floor)
+// ===================================================================
+
+// 0.7s @ 30fps = 21 frames is the default minimum display duration.
+
+#[test]
+fn cap_008_min_duration_final_segment_extends_freely() {
+    // A single quick word (0.2s = 6 frames) is floored to 21 frames.
+    let words = vec![word("hi", 0.0, 0.2)];
+    let segs = phrases_from_words(&words, &CaptionConfig::default(), 30);
+    assert_eq!(segs.len(), 1);
+    assert_eq!(segs[0].start_frame, 0, "onset stays pinned");
+    assert_eq!(segs[0].end_frame, 21, "floored to the 0.7s minimum");
+}
+
+#[test]
+fn cap_008_min_duration_extends_into_silent_gap() {
+    // Short first word, then a long silence before the next group: the caption
+    // grows into the silence up to the full minimum (21), well short of the gap.
+    let words = vec![word("a", 0.0, 0.1), word("b", 3.0, 3.5)];
+    let config = CaptionConfig {
+        words_per_caption: 1,
+        max_gap_seconds: 0.5,
+        ..Default::default()
+    };
+    let segs = phrases_from_words(&words, &config, 30);
+    assert_eq!(segs.len(), 2);
+    assert_eq!(segs[0].start_frame, 0);
+    assert_eq!(segs[0].end_frame, 21, "extends into the silent gap to the floor");
+    assert_eq!(segs[1].start_frame, 90, "next onset NOT shifted");
+}
+
+#[test]
+fn cap_008_min_duration_clamps_at_next_start_no_shift() {
+    // Two back-to-back short words (word cap = 1, tiny gap): the first can only
+    // grow up to the second's real onset, and the second is never shifted.
+    let words = vec![word("a", 0.0, 0.1), word("b", 0.2, 0.3)];
+    let config = CaptionConfig {
+        words_per_caption: 1,
+        max_gap_seconds: 1.0,
+        ..Default::default()
+    };
+    let segs = phrases_from_words(&words, &config, 30);
+    assert_eq!(segs.len(), 2);
+    // seg0 [0,3] → clamped to seg1.start = 6, NOT the full 21.
+    assert_eq!(segs[0].end_frame, 6, "clamped at next onset, not the floor");
+    // The critical anti-shift assertion: seg1's real onset is untouched.
+    assert_eq!(segs[1].start_frame, 6, "later onset must not be shifted");
+    // seg1 is last → extends freely to 6 + 21 = 27.
+    assert_eq!(segs[1].end_frame, 27);
+    // Non-overlap invariant preserved.
+    assert!(segs[0].end_frame <= segs[1].start_frame);
+}
+
+#[test]
+fn cap_008_min_duration_leaves_long_segments_untouched() {
+    // A 2.0s caption (60 frames) is already well above the floor.
+    let words = vec![word("plenty", 0.0, 2.0)];
+    let segs = phrases_from_words(&words, &CaptionConfig::default(), 30);
+    assert_eq!(segs[0].end_frame, 60, "no change to an already-long caption");
+}
+
+#[test]
+fn cap_008_min_duration_honours_config_value() {
+    // A smaller configured minimum yields a smaller floor — proves the field is read.
+    let words = vec![word("hi", 0.0, 0.1)];
+    let config = CaptionConfig {
+        min_duration_seconds: 0.2, // 6 frames @ 30fps
+        ..Default::default()
+    };
+    let segs = phrases_from_words(&words, &config, 30);
+    assert_eq!(segs[0].end_frame, 6, "floor tracks min_duration_seconds");
 }
 
 // ===================================================================
@@ -362,12 +438,13 @@ fn upstream_092_word_accurate_per_segment_timing() {
     };
     let segs = phrases_from_words(&words, &config, 30);
     assert_eq!(segs.len(), 2);
-    // Segment 0: first+group (1.0–1.8 s → frames 30–54)
+    // Segment 0: first+group (1.0–1.8 s → frames 30–54); 24 frames ≥ the 0.7s floor.
     assert_eq!(segs[0].start_frame, 30);
     assert_eq!(segs[0].end_frame, 54);
-    // Segment 1: delayed (5.0–5.4 s → frames 150–162)
+    // Segment 1: delayed word span 5.0–5.4 s (150–162) is 12 frames, below the 0.7s
+    // (21-frame) minimum; as the final segment it extends freely to 150 + 21 = 171.
     assert_eq!(segs[1].start_frame, 150);
-    assert_eq!(segs[1].end_frame, 162);
+    assert_eq!(segs[1].end_frame, 171);
 }
 
 // ===================================================================

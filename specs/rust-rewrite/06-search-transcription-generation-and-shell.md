@@ -81,7 +81,7 @@ Scope sources:
 - [x] `CAP-005`: Caption generation reuses cached transcripts by default.
 - [x] `CAP-006`: Caption generation bypasses transcript cache when profanity-censoring or explicit locale options would produce a different transcript.
 - [x] `CAP-007`: Phrase splitting preserves the current sentence/clause/word-grouping heuristics.
-- [x] `CAP-008`: Phrase timing remains distributed proportionally and respects the current minimum-display-duration behavior.
+- [x] `CAP-008`: Phrase timing remains distributed proportionally and respects the current minimum-display-duration behavior. _(Rust: `phrases_from_words` groups by real word timestamps, then `enforce_min_duration` floors each caption to `min_duration_seconds` (default 0.7s, THM-015). **Intentional divergence from Swift `CaptionBuilder.enforceMinDuration`**: the Rust word-timestamp path clamps a short caption's end up to the next caption's real onset — never shifting later captions — whereas Swift extends-and-shifts. Shifting is safe in Swift because its phrases are synthetic character-distributed subdivisions of one segment; here each segment is anchored to a real spoken word, so shifting would drift captions behind the audio across fast speech. Verified in `spec_caption.rs` `cap_008_min_duration_*`.)_
 - [x] `CAP-009`: Caption phrase ownership requires meaningful overlap with a destination clip before assignment.
 - [x] `CAP-010`: Generated captions are inserted on a fresh top video track.
 - [x] `CAP-011`: If caption placement yields no clips, the inserted caption track is reverted.
