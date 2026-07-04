@@ -762,7 +762,9 @@ pub fn render_sequence(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core_model::{Clip, Crop, Interpolation, Keyframe, KeyframeTrack, Track, Transform};
+    use core_model::{
+        AnimPair, Clip, Crop, Interpolation, Keyframe, KeyframeTrack, Track, Transform,
+    };
 
     fn clip(id: &str, media_ref: &str, start: i64, dur: i64) -> Clip {
         Clip {
@@ -1008,6 +1010,33 @@ mod tests {
         });
         let p = px(&f50, 0, 0);
         assert!(p[3] > 100 && p[3] < 160, "alpha ~0.5, got {}", p[3]);
+    }
+
+    #[test]
+    fn compose_position_keyframe_places_clip_by_top_left() {
+        // End-to-end: a half-canvas clip whose position track holds TOP-LEFT at the
+        // origin must render at the top-left corner (resolved centre 0.25,0.25 →
+        // dst (0,0,2,2) on a 4x4 canvas), not offset by half its size.
+        let mut c = clip("p", "m1", 0, 30);
+        c.transform.width = 0.5;
+        c.transform.height = 0.5;
+        c.position_track = Some(KeyframeTrack {
+            keyframes: vec![Keyframe {
+                frame: 0,
+                value: AnimPair { a: 0.0, b: 0.0 },
+                interpolation_out: Interpolation::Hold,
+            }],
+        });
+        let timeline = tl(vec![c]);
+        let out = compose_frame(&timeline, &MediaManifest::default(), 0, 4, 4, |_| {
+            Some(RgbaImage::solid(2, 2, [255, 0, 0, 255]))
+        });
+        // Clip covers pixels (0,0)-(1,1). The discriminating pixel is (1,1): under
+        // the old centre-passthrough bug the clip sat at (-1,-1,2,2) and (1,1) was
+        // empty.
+        assert_eq!(px(&out, 0, 0), [255, 0, 0, 255], "top-left pixel red");
+        assert_eq!(px(&out, 1, 1), [255, 0, 0, 255], "clip reaches (1,1)");
+        assert_eq!(px(&out, 3, 3), [0, 0, 0, 0], "clip does not reach bottom-right");
     }
 
     #[test]
