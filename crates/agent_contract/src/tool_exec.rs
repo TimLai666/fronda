@@ -2124,11 +2124,19 @@ impl ToolExecutor {
             .find(|e| e.id == media_id)
             .ok_or_else(|| format!("Media '{}' not found", media_id))?;
 
+        // Surface async-generation status (#216) so the agent waits for 'none'
+        // before referencing an asset that is still preparing/generating/downloading.
+        let status_note = match entry.generation_status.as_deref() {
+            Some(s) if s != "none" && !s.is_empty() => {
+                format!(", generationStatus: {s} (not ready — poll get_media until 'none')")
+            }
+            _ => String::new(),
+        };
         Ok(json!({
             "content": [{
                 "type": "text",
                 "text": format!(
-                    "Media: {} ({:?}), duration: {:.1}s, source: {:?}",
+                    "Media: {} ({:?}), duration: {:.1}s, source: {:?}{status_note}",
                     entry.name, entry.r#type, entry.duration, entry.source
                 )
             }]
@@ -2611,6 +2619,7 @@ impl ToolExecutor {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         };
         let entry_id = entry.id.clone();
         self.media_manifest.entries.push(entry);
@@ -3519,6 +3528,7 @@ impl ToolExecutor {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -3588,6 +3598,7 @@ impl ToolExecutor {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -3636,6 +3647,7 @@ impl ToolExecutor {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -3709,6 +3721,7 @@ impl ToolExecutor {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         };
         self.media_manifest.entries.push(entry);
 
@@ -3783,6 +3796,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         manifest.folders.push(core_model::MediaFolder {
             id: "folder-001".to_string(),
@@ -3815,6 +3829,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         }
     }
 
@@ -3896,6 +3911,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
@@ -3936,6 +3952,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
@@ -3981,6 +3998,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         }
     }
 
@@ -4051,6 +4069,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
@@ -4728,6 +4747,34 @@ mod tests {
     }
 
     #[test]
+    fn get_media_surfaces_generation_status() {
+        // #216: get_media surfaces a not-ready async-generation status so the agent
+        // waits for 'none' before referencing the asset.
+        let mut exec = make_executor_with_media();
+        exec.media_manifest.entries[0].generation_status = Some("generating".into());
+        let res = exec
+            .execute("get_media", &json!({"mediaId": "media-001"}))
+            .unwrap();
+        assert!(
+            res["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("generationStatus: generating"),
+            "got: {}",
+            res["content"][0]["text"]
+        );
+        // 'none' is ready → not surfaced.
+        exec.media_manifest.entries[0].generation_status = Some("none".into());
+        let res2 = exec
+            .execute("get_media", &json!({"mediaId": "media-001"}))
+            .unwrap();
+        assert!(!res2["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("generationStatus"));
+    }
+
+    #[test]
     fn exec_012_get_media_not_found() {
         let mut exec = make_executor_with_media();
         let err = exec
@@ -4916,6 +4963,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let mut exec = ToolExecutor::new(core_model::Timeline::default(), manifest);
         let result = exec
@@ -4957,6 +5005,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let mut timeline = core_model::Timeline::default();
         timeline.tracks.push(core_model::Track {
@@ -5949,6 +5998,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let mut exec = ToolExecutor::new(timeline, manifest);
         exec.execute(
@@ -6112,6 +6162,7 @@ mod tests {
                 ai_tags: None,
                 ai_description: None,
                 ai_label_status: None,
+                generation_status: None,
             });
         assert!(
             !exec.is_media_offline("cached", chrono::Utc::now(), |_| true),
@@ -6149,6 +6200,7 @@ mod tests {
                 ai_tags: None,
                 ai_description: None,
                 ai_label_status: None,
+                generation_status: None,
             });
         assert!(exec.is_media_offline("stale", chrono::Utc::now(), |_| true));
     }

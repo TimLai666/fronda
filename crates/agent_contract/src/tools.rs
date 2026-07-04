@@ -270,7 +270,9 @@ fn get_media() -> ToolDefinition {
     ToolDefinition {
         name: "get_media",
         description:
-            "Return the media manifest as JSON. Pass optional folderId to scope to a folder.",
+            "Return the media manifest as JSON. Pass optional folderId to scope to a folder. \
+             Also exposes generationStatus (preparing | generating | downloading | failed | none) \
+             for async-generated assets — wait until 'none' before referencing them.",
         input_schema: object(&[("folderId", string("Optional folder id to scope results"))]),
     }
 }

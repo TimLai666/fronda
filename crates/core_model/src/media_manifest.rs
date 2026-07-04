@@ -273,6 +273,11 @@ pub struct MediaManifestEntry {
     /// Label generation status (Issue #118).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_label_status: Option<AiLabelStatus>,
+    /// Async-generation lifecycle status (upstream #216): "preparing" | "generating"
+    /// | "downloading" | "failed" | "none". Persisted so a project saved mid-generation
+    /// round-trips its state; surfaced by get_media so the agent waits for "none".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_status: Option<String>,
 }
 
 /// Status of AI content label generation for a media asset (Issue #118).
@@ -399,6 +404,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         }
     }
 
@@ -562,6 +568,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let url = manifest.expected_url_for("ext");
         assert_eq!(url, Some("/path/to/file.mp4".to_string()));
@@ -599,6 +606,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let result = manifest.resolve_url_for("vid", now(), |p| p == "/path/to/vid.mp4");
         assert_eq!(result, Some(true), "RES-003: file exists");
@@ -629,6 +637,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let result = manifest.resolve_url_for("vid", now(), |_| false);
         assert_eq!(result, Some(false), "RES-003: file missing");
@@ -666,6 +675,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         let result = manifest.resolve_url_for("cached", now(), |_| false);
         assert_eq!(result, Some(true), "RES-003: cached is always resolvable");
@@ -696,6 +706,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         assert!(
             manifest.is_missing_for("vid", now(), |_| false),
@@ -737,6 +748,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         assert!(
             !manifest.is_missing_for("vid", now(), |_| true),
@@ -769,6 +781,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         assert_eq!(
             manifest.display_name_for("vid"),
@@ -812,6 +825,7 @@ mod tests {
             ai_tags: Some(vec!["outdoor".into(), "nature".into()]),
             ai_description: Some("Person hiking through a forest trail.".into()),
             ai_label_status: Some(AiLabelStatus::Complete),
+            generation_status: None,
         }
     }
 

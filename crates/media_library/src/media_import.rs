@@ -114,6 +114,7 @@ pub fn plan_import(
         ai_tags: None,
         ai_description: None,
         ai_label_status: None,
+        generation_status: None,
     };
 
     Some(ImportedEntry { entry })

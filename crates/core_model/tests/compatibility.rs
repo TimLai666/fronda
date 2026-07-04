@@ -403,6 +403,36 @@ fn upstream_216_generation_recovery_fields_round_trip() {
     );
 }
 
+#[test]
+fn upstream_216_generation_status_round_trips_on_entry() {
+    // #216: the persisted async-generation status round-trips (present → preserved,
+    // absent → None and omitted on save).
+    let encoded = json!({
+        "id": "gen1", "name": "g.mp4", "type": "video",
+        "source": {"external": {"absolutePath": "/g.mp4"}},
+        "duration": 3.0,
+        "generationStatus": "generating"
+    });
+    let entry: core_model::MediaManifestEntry = serde_json::from_value(encoded).unwrap();
+    assert_eq!(entry.generation_status.as_deref(), Some("generating"));
+    assert_eq!(
+        serde_json::to_value(&entry).unwrap()["generationStatus"],
+        json!("generating")
+    );
+
+    let bare: core_model::MediaManifestEntry = serde_json::from_value(json!({
+        "id": "x", "name": "x", "type": "video",
+        "source": {"external": {"absolutePath": "/x"}}, "duration": 1.0
+    }))
+    .unwrap();
+    assert!(bare.generation_status.is_none());
+    assert!(!serde_json::to_value(&bare)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .contains_key("generationStatus"));
+}
+
 // ── FMT round-trip tests ──────────────────────────────────────────────────
 
 #[test]

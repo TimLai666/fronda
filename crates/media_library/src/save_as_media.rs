@@ -219,6 +219,7 @@ pub fn finalize_placeholder(
                 ai_tags: None,
                 ai_description: None,
                 ai_label_status: None,
+                generation_status: None,
             };
             Some(PlaceholderResult::Success {
                 entry_id: entry_id.clone(),

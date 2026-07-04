@@ -649,6 +649,7 @@ mod tests {
             ai_tags: None,
             ai_description: None,
             ai_label_status: None,
+            generation_status: None,
         });
         m
     }
