@@ -1396,6 +1396,16 @@ impl ToolExecutor {
         if duration_frames < 1 {
             return Err("apply_layout placing new clips requires durationFrames >= 1.".to_string());
         }
+        // resolve_placement (called per slot below) errors when BOTH durationFrames
+        // and trimEndFrame are present. Reject that here, up front, so the failure
+        // can't fire mid-loop after tracks are already created (exec_mut does not
+        // roll back a partial mutation) — validate everything before mutating.
+        if args.get("trimEndFrame").is_some() {
+            return Err(
+                "apply_layout place-new sizes clips with durationFrames; remove trimEndFrame."
+                    .to_string(),
+            );
+        }
 
         // Validate every slot's asset exists and is video/image BEFORE mutating.
         for (slot, _clips, media_ref, _anchor) in entries {
@@ -1427,8 +1437,11 @@ impl ToolExecutor {
                     .map(|f| f.round() as i64)
                     .filter(|f| (1..=120).contains(f))
                     .unwrap_or(self.timeline.fps);
-                let width = sw.unwrap_or(self.timeline.width);
-                let height = sh.unwrap_or(self.timeline.height);
+                // Guard degenerate (0/negative) source dims: fall back to the current
+                // canvas so the applied settings match the reported note (apply_settings
+                // itself ignores a non-positive canvas).
+                let width = sw.filter(|&w| w > 0).unwrap_or(self.timeline.width);
+                let height = sh.filter(|&h| h > 0).unwrap_or(self.timeline.height);
                 let (pf, pw, ph) = (self.timeline.fps, self.timeline.width, self.timeline.height);
                 timeline_core::apply_settings(&mut self.timeline, fps, width, height, |c| {
                     c.transform == Transform::default()
@@ -1604,8 +1617,11 @@ impl ToolExecutor {
                     .map(|f| f.round() as i64)
                     .filter(|f| (1..=120).contains(f))
                     .unwrap_or(self.timeline.fps);
-                let width = sw.unwrap_or(self.timeline.width);
-                let height = sh.unwrap_or(self.timeline.height);
+                // Guard degenerate (0/negative) source dims: fall back to the current
+                // canvas so the applied settings match the reported note (apply_settings
+                // itself ignores a non-positive canvas).
+                let width = sw.filter(|&w| w > 0).unwrap_or(self.timeline.width);
+                let height = sh.filter(|&h| h > 0).unwrap_or(self.timeline.height);
                 let (pf, pw, ph) = (self.timeline.fps, self.timeline.width, self.timeline.height);
                 timeline_core::apply_settings(&mut self.timeline, fps, width, height, |c| {
                     c.transform == Transform::default()
@@ -4448,6 +4464,32 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("asset not found"), "err={err}");
+    }
+
+    #[test]
+    fn apply_layout_place_new_conflicting_args_leave_timeline_untouched() {
+        // durationFrames + trimEndFrame is rejected BEFORE any track is created, so a
+        // rejected place-new call does not leave orphaned empty tracks behind.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("L", 1920, 1080, 30.0));
+        manifest.entries.push(video_media("R", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let err = exec
+            .execute(
+                "apply_layout",
+                &json!({
+                    "layout": "side_by_side",
+                    "durationFrames": 60,
+                    "trimEndFrame": 10,
+                    "slots": [
+                        {"slot": "left", "mediaRef": "L"},
+                        {"slot": "right", "mediaRef": "R"}
+                    ]
+                }),
+            )
+            .unwrap_err();
+        assert!(err.contains("trimEndFrame"), "err={err}");
+        assert_eq!(exec.timeline().tracks.len(), 0, "no orphaned tracks created");
     }
 
     #[test]
