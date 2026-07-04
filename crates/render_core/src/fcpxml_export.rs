@@ -1306,6 +1306,33 @@ mod tests {
     }
 
     #[test]
+    fn fcpxml_title_face_reflects_bold_and_italic() {
+        // #65: fontFace mirrors Swift fontFaceFallback(isBold, isItalic).
+        let cases = [
+            (700.0, true, "Bold Italic"),
+            (700.0, false, "Bold"),
+            (400.0, true, "Italic"),
+            (400.0, false, "Regular"),
+        ];
+        for (weight, italic, expected) in cases {
+            let mut c = clip("t1", "", ClipType::Text, 0, 60);
+            c.media_type = ClipType::Text;
+            c.text_content = Some("T".to_string());
+            c.text_style = Some(core_model::TextStyle {
+                font_weight: weight,
+                is_italic: italic,
+                ..Default::default()
+            });
+            let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+            let xml = FcpxmlExport::export(&tl, &MediaManifest::default());
+            assert!(
+                xml.contains(&format!("fontFace=\"{expected}\"")),
+                "weight {weight} italic {italic} → {expected}\n{xml}"
+            );
+        }
+    }
+
+    #[test]
     fn fcpxml_title_keyframed_opacity() {
         let mut c = clip("t1", "", ClipType::Text, 0, 60);
         c.media_type = ClipType::Text;
