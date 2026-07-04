@@ -199,7 +199,7 @@ impl FcpxmlExport {
                     xml,
                     "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{format_attr}/>",
                     time_str(clip.start_frame, fps),
-                    xml_escape(&display_name(manifest, &clip.media_ref)),
+                    xml_escape(&file_name(manifest, &clip.media_ref)),
                     time_str(clip.duration_frames.max(1), fps),
                     time_str(origin + clip.trim_start_frame.max(0), fps),
                 )
@@ -274,7 +274,7 @@ fn write_asset(
     fps: i64,
 ) {
     let entry = manifest.entry_for(media_ref);
-    let name = display_name(manifest, media_ref);
+    let name = file_name(manifest, media_ref);
     let (has_video, has_audio) = match entry.map(|e| &e.r#type) {
         Some(ClipType::Audio) => (false, true),
         Some(ClipType::Image) => (true, false),
@@ -342,6 +342,22 @@ fn display_name(manifest: &MediaManifest, media_ref: &str) -> String {
         .entry_for(media_ref)
         .map(|e| e.name.clone())
         .unwrap_or_else(|| media_ref.to_string())
+}
+
+/// The on-disk filename (with extension) used for the `name` attribute (upstream #247).
+/// Resolve relinks by matching a clip/asset `name` to the file on disk, so the extension must
+/// be present — the source path's last component guarantees it. Falls back to the display name
+/// (then media_ref) when the source path has no usable component.
+fn file_name(manifest: &MediaManifest, media_ref: &str) -> String {
+    let from_source = manifest.entry_for(media_ref).and_then(|e| {
+        let path = match &e.source {
+            MediaSource::External { absolute_path } => absolute_path.as_str(),
+            MediaSource::Project { relative_path } => relative_path.as_str(),
+        };
+        let name = path.replace('\\', "/");
+        name.rsplit('/').next().filter(|s| !s.is_empty()).map(String::from)
+    });
+    from_source.unwrap_or_else(|| display_name(manifest, media_ref))
 }
 
 /// Final Cut rate suffix for a format name (upstream #214). Integer rates → the
@@ -584,6 +600,27 @@ mod tests {
             xml.contains("start=\"105/30s\""),
             "asset-clip in-point offset by origin\n{xml}"
         );
+    }
+
+    #[test]
+    fn fcpxml_name_uses_on_disk_filename_for_relink() {
+        // #247 relink: even when the asset's display name is a user label, the `name` attribute
+        // is the on-disk filename (with extension) so Resolve can relink.
+        let mut e = entry("v1", "My Interview", ClipType::Video, 10.0, "/media/C0012.MP4");
+        e.name = "My Interview".to_string();
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(e);
+        let tl = timeline(vec![track(
+            ClipType::Video,
+            vec![clip("c1", "v1", ClipType::Video, 0, 60)],
+        )]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(xml.contains("<asset id=\"r3\" name=\"C0012.MP4\""), "asset name = filename\n{xml}");
+        assert!(
+            xml.contains("<asset-clip ref=\"r3\"") && xml.contains("name=\"C0012.MP4\""),
+            "asset-clip name = filename\n{xml}"
+        );
+        assert!(!xml.contains("My Interview"), "display label not used for name\n{xml}");
     }
 
     #[test]
