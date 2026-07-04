@@ -195,15 +195,24 @@ impl FcpxmlExport {
                 // exporter, so origin lands directly on `start`; a retimed clip would carry it
                 // in a timeMap instead.)
                 let origin = start_timecode_frames(manifest.entry_for(&clip.media_ref), fps);
-                writeln!(
-                    xml,
-                    "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{format_attr}/>",
+                let open = format!(
+                    "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{format_attr}",
                     time_str(clip.start_frame, fps),
                     xml_escape(&file_name(manifest, &clip.media_ref)),
                     time_str(clip.duration_frames.max(1), fps),
                     time_str(origin + clip.trim_start_frame.max(0), fps),
-                )
-                .ok();
+                );
+                // Scalar adjustments that round-trip without coordinate calibration: opacity
+                // (<adjust-blend>) and audio volume (<adjust-volume>, in dB). Transform/crop
+                // (coordinate-space sensitive) and keyframed opacity are #254 follow-ups.
+                let adjustments = clip_adjustments(clip, manifest, is_audio);
+                if adjustments.is_empty() {
+                    writeln!(xml, "{open}/>").ok();
+                } else {
+                    writeln!(xml, "{open}>").ok();
+                    xml.push_str(&adjustments);
+                    writeln!(xml, "              </asset-clip>").ok();
+                }
             }
         }
 
@@ -321,6 +330,61 @@ fn start_timecode_frames(entry: Option<&MediaManifestEntry>, fps: i64) -> i64 {
         }
         _ => 0,
     }
+}
+
+/// Scalar clip adjustments as `<asset-clip>` children (upstream #254, scalar subset):
+/// `<adjust-blend amount>` for opacity (visual clips) and `<adjust-volume amount>` in dB for
+/// audio level. These need no coordinate calibration. Transform/crop and keyframed opacity
+/// animation are deferred (they need FCP↔Resolve value calibration). Empty string → none.
+fn clip_adjustments(clip: &Clip, manifest: &MediaManifest, is_audio: bool) -> String {
+    let mut out = String::new();
+    if !is_audio {
+        let has_opacity_kf = clip
+            .opacity_track
+            .as_ref()
+            .is_some_and(|t| !t.keyframes.is_empty());
+        if clip.opacity < 0.9995 || has_opacity_kf {
+            let _ = writeln!(
+                out,
+                "                <adjust-blend amount=\"{}\"/>",
+                format_number(clip.opacity)
+            );
+        }
+    }
+    let asset_has_audio = manifest
+        .entry_for(&clip.media_ref)
+        .map(|e| e.r#type == ClipType::Audio || e.has_audio.unwrap_or(false))
+        .unwrap_or(is_audio);
+    if asset_has_audio && (clip.volume - 1.0).abs() > 0.0005 {
+        let db = if clip.volume > 0.0 {
+            20.0 * clip.volume.log10()
+        } else {
+            -96.0
+        };
+        let _ = writeln!(
+            out,
+            "                <adjust-volume amount=\"{}\"/>",
+            format_number(db)
+        );
+    }
+    out
+}
+
+/// FCPXML number formatting (mirrors Swift `formatNumber`): round to 4 places, drop a
+/// trailing `.0`, and strip trailing zeros from a fractional value.
+fn format_number(value: f64) -> String {
+    let rounded = (value * 10_000.0).round() / 10_000.0;
+    if rounded == rounded.round() {
+        return format!("{}", rounded as i64);
+    }
+    let mut s = format!("{rounded:.4}");
+    while s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    s
 }
 
 fn media_src(source: &MediaSource) -> String {
@@ -600,6 +664,57 @@ mod tests {
             xml.contains("start=\"105/30s\""),
             "asset-clip in-point offset by origin\n{xml}"
         );
+    }
+
+    #[test]
+    fn fcpxml_static_opacity_emits_adjust_blend() {
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.opacity = 0.5;
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(
+            xml.contains("<adjust-blend amount=\"0.5\"/>"),
+            "opacity → adjust-blend\n{xml}"
+        );
+        assert!(xml.contains("</asset-clip>"), "open/close form when adjusted");
+    }
+
+    #[test]
+    fn fcpxml_static_volume_emits_adjust_volume_db() {
+        // Video asset carries audio (entry has_audio=true); clip volume 0.5 → dB.
+        let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
+        c.volume = 0.5;
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        assert!(
+            xml.contains("<adjust-volume amount=\"-6.0206\"/>"),
+            "volume 0.5 → -6.0206 dB\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_default_opacity_volume_stays_self_closing() {
+        // Default opacity/volume → no adjustments → self-closing asset-clip (backward-compat).
+        let (tl, m) = sample();
+        let xml = FcpxmlExport::export(&tl, &m);
+        assert!(!xml.contains("</asset-clip>"), "no adjustments → self-closing\n{xml}");
+        assert!(!xml.contains("<adjust-blend"), "no opacity adjustment for default");
+    }
+
+    #[test]
+    fn fcpxml_format_number_strips_trailing() {
+        assert_eq!(format_number(0.5), "0.5");
+        assert_eq!(format_number(1.0), "1");
+        assert_eq!(format_number(-6.020599913), "-6.0206");
+        assert_eq!(format_number(0.80000), "0.8");
     }
 
     #[test]
