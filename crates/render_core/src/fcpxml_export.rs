@@ -1230,6 +1230,65 @@ mod tests {
     }
 
     #[test]
+    fn fcpxml_rich_timeline_integration() {
+        // Exercise many features at once and check the document is well-formed and carries each:
+        // a transformed+cropped+opacity-keyframed video clip, a retimed clip, a volume audio clip,
+        // a text title, and a hidden track — all in one export.
+        let mut vid = clip("v-clip", "v1", ClipType::Video, 0, 60);
+        vid.transform.center_x = 0.25;
+        vid.transform.width = 0.5;
+        vid.transform.height = 0.5;
+        vid.crop.top = 0.1;
+        vid.opacity_track = Some(core_model::KeyframeTrack {
+            keyframes: vec![
+                core_model::Keyframe { frame: 0, value: 0.0, interpolation_out: core_model::Interpolation::Linear },
+                core_model::Keyframe { frame: 30, value: 1.0, interpolation_out: core_model::Interpolation::Linear },
+            ],
+        });
+        let mut slow = clip("slow-clip", "v2", ClipType::Video, 60, 30);
+        slow.speed = 2.0;
+        let mut aud = clip("a-clip", "a1", ClipType::Audio, 0, 120);
+        aud.volume = 0.5;
+        let mut txt = clip("t-clip", "", ClipType::Text, 0, 60);
+        txt.media_type = ClipType::Text;
+        txt.text_content = Some("Title".to_string());
+
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(entry("v1", "a.mp4", ClipType::Video, 10.0, "/m/a.mp4"));
+        manifest.entries.push(entry("v2", "b.mp4", ClipType::Video, 10.0, "/m/b.mp4"));
+        manifest.entries.push(entry("a1", "c.wav", ClipType::Audio, 10.0, "/m/c.wav"));
+        let mut hidden = track(ClipType::Video, vec![clip("h-clip", "v1", ClipType::Video, 0, 30)]);
+        hidden.hidden = true;
+        let tl = timeline(vec![
+            track(ClipType::Video, vec![vid, slow, txt]),
+            track(ClipType::Audio, vec![aud]),
+            hidden,
+        ]);
+        let xml = FcpxmlExport::export(&tl, &manifest);
+
+        // Well-formed envelope.
+        assert!(xml.starts_with("<?xml version=\"1.0\""));
+        assert!(xml.trim_end().ends_with("</fcpxml>"));
+        // Every always-paired container tag is balanced (these never self-close). Tags that CAN
+        // self-close (asset-clip, adjust-transform, adjust-blend) are checked for presence below.
+        for tag in ["fcpxml", "resources", "library", "event", "project", "sequence", "spine", "gap", "title", "timeMap", "adjust-crop", "keyframeAnimation"] {
+            let open = xml.matches(&format!("<{tag} ")).count() + xml.matches(&format!("<{tag}>")).count();
+            let close = xml.matches(&format!("</{tag}>")).count();
+            assert_eq!(open, close, "tag <{tag}> is unbalanced: {open} open vs {close} close");
+        }
+        // Each feature is present.
+        assert!(xml.contains("<effect id=\"titleBasic\""), "title effect resource");
+        assert!(xml.contains("<title "), "title node");
+        assert!(xml.contains("<timeMap "), "retimed clip timeMap");
+        assert!(xml.contains("<adjust-crop "), "crop");
+        assert!(xml.contains("<adjust-transform "), "transform");
+        assert!(xml.contains("<param name=\"amount\""), "keyframed opacity");
+        assert!(xml.contains("<adjust-volume "), "audio volume");
+        assert!(xml.contains("enabled=\"0\""), "hidden track disabled");
+        assert!(xml.contains("<adjust-conform type=\"fit\"/>"), "conform");
+    }
+
+    #[test]
     fn fcpxml_fcp_target_uses_raw_scale_and_crop() {
         // Square source (1080x1080) with a half-size transform + crop, in a 1920x1080 timeline.
         // Resolve fits against the source aspect; FCP uses raw frame-relative values.
