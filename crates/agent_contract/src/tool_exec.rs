@@ -2184,6 +2184,9 @@ impl ToolExecutor {
             if let Some(s) = t_val.get("fontSize").and_then(|v| v.as_f64()) {
                 style.font_size = s;
             }
+            if let Some(w) = t_val.get("fontWeight").and_then(|v| v.as_f64()) {
+                style.font_weight = w;
+            }
             if let Some(hex) = t_val.get("color").and_then(|v| v.as_str()) {
                 style.color = core_model::TextRgba::from_hex(hex).ok_or_else(|| {
                     format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
@@ -4188,6 +4191,7 @@ mod tests {
                 "content": "Title",
                 "fontName": "Anton",
                 "fontSize": 72.0,
+                "fontWeight": 700.0,
                 "color": "#00FF00",
                 "alignment": "left",
                 "transform": {"centerX": 0.5, "centerY": 0.9}
@@ -4199,6 +4203,7 @@ mod tests {
         let ts = clip.text_style.as_ref().unwrap();
         assert_eq!(ts.font_name, "Anton");
         assert_eq!(ts.font_size, 72.0);
+        assert_eq!(ts.font_weight, 700.0);
         assert_eq!((ts.color.r, ts.color.g, ts.color.b), (0.0, 1.0, 0.0));
         assert_eq!(ts.alignment, core_model::TextAlignment::Left);
         // Centre-only transform repositions; the y matches the request.
