@@ -11,7 +11,9 @@ This spec captures Swift's exact output (verbatim-audited from upstream
 > write_nest_clipitem inline-once/then-reference, frozen-carrier drop; the
 > cur_seq_width Scale% fix proved N/A — Rust's Scale uses the normalized
 > transform). XMEML carrier filters + root
-> sequence name landed too. Remaining: the FCPXML half below only.
+> sequence name landed too. **FCPXML half IMPLEMENTED same day** (BFS resource
+> collection, nestN media resources, ref-clip carriers with srcEnable rules,
+> sequence carriers in the video collapse bucket, project name). Spec COMPLETE.
 
 Current Rust seams: `FcpxmlExport::export_with_target_and_timelines(timeline,
 manifest, target, timelines)` and
