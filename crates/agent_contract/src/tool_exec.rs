@@ -656,6 +656,9 @@ impl ToolExecutor {
             "create_compound_clip" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_create_compound_clip, args)
             }
+            "create_timeline" => self.cmd_create_timeline(args),
+            "set_active_timeline" => self.cmd_set_active_timeline(args),
+            "duplicate_timeline" => self.cmd_duplicate_timeline(args),
             "dissolve_compound_clip" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_dissolve_compound_clip, args)
             }
@@ -730,8 +733,20 @@ impl ToolExecutor {
     // ── Tool implementations ─────────────────────────────────────────────
 
     fn cmd_get_timeline(&self) -> Result<Value, String> {
-        let timeline_json =
+        let mut timeline_json =
             serde_json::to_value(&self.timeline).map_err(|e| format!("Serialize error: {e}"))?;
+        // With >1 timeline, list them (Swift #255): {timelineId, name, active?}.
+        if !self.sibling_timelines.is_empty() {
+            let mut list = vec![json!({
+                "timelineId": self.timeline.id, "name": self.timeline.name, "active": true
+            })];
+            for t in &self.sibling_timelines {
+                list.push(json!({"timelineId": t.id, "name": t.name}));
+            }
+            if let Some(obj) = timeline_json.as_object_mut() {
+                obj.insert("timelines".into(), json!(list));
+            }
+        }
         Ok(json!({
             "content": [{
                 "type": "text",
@@ -3549,6 +3564,118 @@ impl ToolExecutor {
             format!("Disabled denoise on {count} {noun}.")
         };
         Ok(json!({ "content": [{ "type": "text", "text": text }] }))
+    }
+
+    /// CREATE_TIMELINE (#255): new empty timeline inheriting the active one's
+    /// settings; switches to it. Like Swift, the switch itself isn't undoable.
+    fn cmd_create_timeline(&mut self, args: &Value) -> Result<Value, String> {
+        let name = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| format!("Timeline {}", self.sibling_timelines.len() + 2));
+        let new_tl = Timeline {
+            name: name.clone(),
+            fps: self.timeline.fps,
+            width: self.timeline.width,
+            height: self.timeline.height,
+            settings_configured: self.timeline.settings_configured,
+            ..Default::default()
+        };
+        let id = new_tl.id.clone();
+        let prev = std::mem::replace(&mut self.timeline, new_tl);
+        self.sibling_timelines.push(prev);
+        Ok(json!({ "content": [{ "type": "text", "text": format!(
+            "Created and switched to timeline \"{name}\" (timelineId {id}). It is empty; all edit tools now target it."
+        )}]}))
+    }
+
+    /// SET_ACTIVE_TIMELINE (#255): swap the active timeline. Exempt from undo
+    /// (a switch changes the target without registering an undo — Swift parity).
+    fn cmd_set_active_timeline(&mut self, args: &Value) -> Result<Value, String> {
+        let id = args
+            .get("timelineId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "timelineId is required".to_string())?;
+        if self.timeline.id == id {
+            let name = self.timeline.name.clone();
+            return Ok(json!({ "content": [{ "type": "text", "text": format!(
+                "\"{name}\" is already the active timeline."
+            )}]}));
+        }
+        let Some(pos) = self.sibling_timelines.iter().position(|t| t.id == id) else {
+            return Err(format!(
+                "No timeline with id '{id}'. get_timeline lists the project's timelines."
+            ));
+        };
+        let target = self.sibling_timelines.remove(pos);
+        let prev = std::mem::replace(&mut self.timeline, target);
+        self.sibling_timelines.push(prev);
+        let name = self.timeline.name.clone();
+        let frames = timeline_core::TimelineMathExt::total_frames(&self.timeline);
+        let fps = self.timeline.fps;
+        Ok(json!({ "content": [{ "type": "text", "text": format!(
+            "Active timeline: \"{name}\" ({frames} frames, {fps} fps). Re-read get_timeline before editing."
+        )}]}))
+    }
+
+    /// DUPLICATE_TIMELINE (#255): copy a timeline (all-new clip/track ids) and
+    /// switch to the copy.
+    fn cmd_duplicate_timeline(&mut self, args: &Value) -> Result<Value, String> {
+        let source_id = args
+            .get("timelineId")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| self.timeline.id.clone());
+        let source = if self.timeline.id == source_id {
+            self.timeline.clone()
+        } else {
+            self.sibling_timelines
+                .iter()
+                .find(|t| t.id == source_id)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "No timeline with id '{source_id}'. get_timeline lists the project's timelines."
+                    )
+                })?
+        };
+        let source_name = source.name.clone();
+        let mut copy = source;
+        copy.id = Uuid::new_v4().to_string();
+        copy.name = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| format!("{source_name} copy"));
+        copy.selected_clip_ids.clear();
+        for track in &mut copy.tracks {
+            track.id = Uuid::new_v4().to_string();
+            // Re-id clips, keeping link groups intact via a per-group remap.
+            let mut group_map: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for clip in &mut track.clips {
+                clip.id = Uuid::new_v4().to_string();
+                if let Some(g) = &clip.link_group_id {
+                    let new_g = group_map
+                        .entry(g.clone())
+                        .or_insert_with(|| Uuid::new_v4().to_string())
+                        .clone();
+                    clip.link_group_id = Some(new_g);
+                }
+            }
+        }
+        let new_id = copy.id.clone();
+        let new_name = copy.name.clone();
+        let prev = std::mem::replace(&mut self.timeline, copy);
+        self.sibling_timelines.push(prev);
+        Ok(json!({ "content": [{ "type": "text", "text": format!(
+            "Duplicated \"{source_name}\" as \"{new_name}\" (timelineId {new_id}) and switched to it. Clip and track ids in the copy are new — re-read get_timeline before editing."
+        )}]}))
     }
 
     fn cmd_import_folder(&mut self, args: &Value) -> Result<Value, String> {
@@ -7792,6 +7919,66 @@ mod tests {
         assert!(err2.contains("0–100"), "{err2}");
         let err3 = exec.execute("denoise_audio", &json!({"clipIds": []})).unwrap_err();
         assert!(err3.contains("empty"), "{err3}");
+    }
+
+    #[test]
+    fn timeline_tools_create_switch_duplicate_round_trip() {
+        let mut exec = make_executor();
+        exec.timeline_mut().fps = 24;
+        let original_id = exec.timeline().id.clone();
+
+        // create_timeline inherits settings and switches.
+        let res = exec
+            .execute("create_timeline", &json!({"name": "Cutdown"}))
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Cutdown"), "{text}");
+        assert_eq!(exec.timeline().name, "Cutdown");
+        assert_eq!(exec.timeline().fps, 24, "settings inherited");
+        assert!(exec.timeline().tracks.is_empty(), "new timeline is empty");
+        assert_eq!(exec.sibling_timelines().len(), 1);
+        let new_id = exec.timeline().id.clone();
+
+        // get_timeline lists both, flagging the active one.
+        let gt = exec.execute("get_timeline", &json!({})).unwrap();
+        let tj: serde_json::Value =
+            serde_json::from_str(gt["content"][0]["text"].as_str().unwrap()).unwrap();
+        let list = tj["timelines"].as_array().expect("timelines listed when >1");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["timelineId"], json!(new_id));
+        assert_eq!(list[0]["active"], json!(true));
+
+        // set_active_timeline switches back; already-active early-exits.
+        let res = exec
+            .execute("set_active_timeline", &json!({"timelineId": original_id}))
+            .unwrap();
+        assert!(res["content"][0]["text"].as_str().unwrap().contains("Active timeline"));
+        assert_eq!(exec.timeline().id, original_id);
+        let res = exec
+            .execute("set_active_timeline", &json!({"timelineId": original_id}))
+            .unwrap();
+        assert!(res["content"][0]["text"].as_str().unwrap().contains("already"));
+        let err = exec
+            .execute("set_active_timeline", &json!({"timelineId": "ghost"}))
+            .unwrap_err();
+        assert!(err.contains("No timeline"), "{err}");
+
+        // duplicate_timeline: fresh ids, switches to the copy.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("m1", 1920, 1080, 24.0));
+        exec.media_manifest_mut().entries = manifest.entries;
+        exec.execute("add_clips", &json!({"mediaIds": ["m1"]})).unwrap();
+        let src_clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let res = exec.execute("duplicate_timeline", &json!({})).unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("copy"), "{text}");
+        assert_ne!(exec.timeline().id, original_id, "switched to the copy");
+        assert_eq!(exec.timeline().tracks[0].clips.len(), 1, "content copied");
+        assert_ne!(
+            exec.timeline().tracks[0].clips[0].id, src_clip_id,
+            "clip ids are new in the copy"
+        );
+        assert_eq!(exec.sibling_timelines().len(), 2);
     }
 
     #[test]

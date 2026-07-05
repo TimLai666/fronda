@@ -1,4 +1,4 @@
-//! All 59 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 62 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -8,6 +8,7 @@
 //! Issue #119: added sync_audio_clips (59 → 60).
 //! Upstream #251: replaced the speculative set_clip_noise_reduction/set_clip_audio_effects
 //! (never shipped upstream) with the real denoise_audio tool (60 → 59).
+//! Upstream #255: added create_timeline, set_active_timeline, duplicate_timeline (59 → 62).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -23,7 +24,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 59 tools exposed to the agent.
+/// Returns all 62 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -32,7 +33,10 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         add_clips(),
         apply_layout(),
         create_compound_clip(),
+        create_timeline(),
         dissolve_compound_clip(),
+        duplicate_timeline(),
+        set_active_timeline(),
         import_xml(),
         add_shapes(),
         add_texts(),
@@ -98,7 +102,8 @@ pub const SYSTEM_INSTRUCTION: &str = r#"You are a creative AI assistant integrat
 - Tracks are ordered and typed (video or audio). Video clips, images, and text overlays all live on video tracks; audio on audio tracks.
 - A clip references a media asset and occupies [startFrame, startFrame + durationFrames) on its track.
 - Clips carry trimStartFrame / trimEndFrame (source-media offsets, not timeline offsets), speed, volume, opacity, transform, and crop.
-- Media assets live in the project library and are referenced by ID. IDs (clipId, mediaRef, folderId, captionGroupId) are short prefixes — pass them back exactly as given; never pad, complete, or guess a longer form.
+- Media assets live in the project library and are referenced by ID. IDs (clipId, mediaRef, folderId, captionGroupId, timelineId) are short prefixes — pass them back exactly as given; never pad, complete, or guess a longer form.
+- A project can hold several timelines; exactly one is active and every read/edit tool targets it. get_timeline lists them when there is more than one; switch with set_active_timeline and re-read before editing. A timeline nested inside another appears as a clip with mediaType 'sequence' whose mediaRef is the child timelineId.
 
 # Always do
 - Call get_timeline once per session (or after an out-of-band change) for fps, tracks, and existing clip frames. Don't re-read between your own edits — mutation tools return the IDs and frames that changed; re-read only after a failure that suggests your model is stale.
@@ -964,6 +969,48 @@ fn object_any(description: &str) -> Value {
     Value::Object(map)
 }
 
+// ── Upstream #255: multi-timeline MCP tools ─────────────────────────────────
+
+fn create_timeline() -> ToolDefinition {
+    ToolDefinition {
+        name: "create_timeline",
+        description: "Creates a new empty timeline in the project and switches to it — every read             and edit tool now targets it. Settings (fps, resolution) are inherited from the             previously active timeline. Returns the new timelineId. Undoable.
+
+Use timelines to             organize a project: alternate versions, sections assembled separately, or reusable             groups. A timeline can be placed inside another as a single clip (the user drops it             from the media panel); it then appears as a clip with mediaType 'sequence' whose             mediaRef is the timelineId.",
+        input_schema: object(&[(
+            "name",
+            string("Optional display name. Defaults to 'Timeline N'."),
+        )]),
+    }
+}
+
+fn set_active_timeline() -> ToolDefinition {
+    ToolDefinition {
+        name: "set_active_timeline",
+        description: "Switches the active timeline — the one every read and edit tool targets and             the one the user sees. get_timeline lists the project's timelines (with timelineId)             whenever there is more than one. Always re-read get_timeline after switching; clip and             track ids from the previous timeline are no longer valid targets.
+
+To edit the             contents of a nested timeline (a clip with mediaType 'sequence'), switch to its             mediaRef.",
+        input_schema: object(&[(
+            "timelineId",
+            string("Timeline id from get_timeline's timelines list (or a sequence clip's mediaRef)."),
+        )]),
+    }
+}
+
+fn duplicate_timeline() -> ToolDefinition {
+    ToolDefinition {
+        name: "duplicate_timeline",
+        description: "Duplicates a timeline — the versioning primitive: copy, then edit the copy             (\"a tighter cut\", \"a 9:16 version\") while the original stays intact. Copies all             tracks, clips, and settings, switches to the copy, and returns its timelineId. Every             clip and track id in the copy is NEW — re-read get_timeline before editing. Undoable.",
+        input_schema: object(&[
+            (
+                "timelineId",
+                string("Timeline to duplicate. Defaults to the active timeline."),
+            ),
+            ("name", string("Optional name for the copy. Defaults to '<name> copy'.")),
+        ]),
+    }
+}
+
 // ── Upstream #251: audio denoise MCP tool ────────────────────────────────────
 
 fn denoise_audio() -> ToolDefinition {
@@ -1179,8 +1226,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            59,
-            "TDEF-001: 59 tools (see the header history; denoise_audio replaced the two speculative audio stubs)"
+            62,
+            "TDEF-001: 62 tools (see the header history)"
         );
     }
 
@@ -1209,7 +1256,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 59, "all 59 tool names must be unique");
+        assert_eq!(names.len(), 62, "all 62 tool names must be unique");
     }
 
     #[test]
