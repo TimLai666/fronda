@@ -216,7 +216,7 @@ Each Tier 3 subsystem gets its own spec file before implementation.
 
 | PR | Title | Scope | Action Needed |
 |----|-------|-------|---------------|
-| #119 | Syncing multiple audio tracks | Large feature. Audio DSP (AudioEnvelope, AudioSyncCorrelator, AudioTrackReader), new agent tool(s), sync menu and toast UI. ~600 LoC Swift. | **DESIGN SPEC WRITTEN 2026-07-05** → `specs/rust-rewrite/12-audio-sync.md`. The DSP core (`audio_core::audio_sync_correlator`, 13 tests) is already done + the #174 `ClipAudioSource` PCM seam is reusable, so the remaining port is ~150–250 LoC (a `sync_audio_clips` tool + executor + tests). **Gating decision:** apply the offset by moving the target clip (no model change — recommended) vs storing `sync_offset_frames` (data-model change + render/export invariant, per specs 01/04). Spec details both; needs the user to pick before implementation. |
+| #119 | Syncing multiple audio tracks | Large feature. Audio DSP (AudioEnvelope, AudioSyncCorrelator, AudioTrackReader), new agent tool(s), sync menu and toast UI. ~600 LoC Swift. | **IMPLEMENTED 2026-07-05 (Option A)** per `specs/rust-rewrite/12-audio-sync.md`: `sync_audio_clips` tool (60th) correlates each target against the reference (`AudioSyncCorrelator`, #174 `ClipAudioSource` seam) and moves it into sync via `move_clips` (undo via exec_mut; result reports `newClipId` since move re-ids the clip). Anchor formula `delta = ref_anchor − tgt_anchor − offset` with the sign pinned by a padded-clip oracle test; sub-`minConfidence` (default 0.5) targets stay put and are reported. Offset is baked into `start_frame` (no model change). Deferred: `sync_offset_frames` metadata (Option B), sync menu/toast UI, speed≠1 targets. |
 
 ---
 

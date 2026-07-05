@@ -193,5 +193,5 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 | #199 | Skills: store + read_skill tool + prompt | PARTIAL     | skill_store.rs + agent_contract read_skill/set_skills/prompt inject + boot load; catalog/UI pending |
 | #225 | Text animation (data model + agent args) | PARTIAL     | core_model text_animation.rs (WordTiming/TextAnimation/11-preset enum) + Clip.text_animation/word_timings serde + timeline_core rescale_word_timings + agent add_texts animation/highlightColor args; renderer (TextAnimator/TextFrameRenderer) UI-deferred |
 | #74  | naturalTimeScale for clip inserts       | DEFERRED    | AVFoundation-specific                        |
-| #119 | Audio syncing multiple tracks           | NOT_STARTED | Swift-only, large feature                    |
+| #119 | Audio syncing multiple tracks           | DONE (v1)   | agent_contract sync_audio_clips (spec 12-audio-sync.md; correlator + #174 seam; offset baked into start_frame, newClipId reported; UI + sync_offset_frames metadata deferred) |
 | #133 | Project thumbnail main-thread hang      | DEFERRED    | Swift-specific pattern                       |
