@@ -158,11 +158,10 @@ limitation message (or is now implemented); the test permanently guards the clas
   delete), and the ffmpeg-backed app decoder (`ProjectAudioSource`). Honest
   "unavailable" on the MCP/headless path.
 
-Remaining stubbed tools (3): `create_project`/`open_project`/`delete_project`
-(#238 — app-nav, `delete_project` destructive, needs confirmation).
-`import_xml` was REMOVED 2026-07-05 — the full upstream ToolDefinitions
-comparison showed it never shipped (speculative Issue #154 schema), same as the
-audio stubs.
+Stubbed tools: NONE remain (2026-07-05). `open_project` is now real and
+`new_project` joined it (ProjectNavigator seam); the speculative
+`create_project`/`delete_project`/`import_xml` names were removed after the
+full upstream ToolDefinitions comparison showed they never shipped.
 
 ## Tool-surface drift vs upstream v0.6.1 (full name-list diff, 2026-07-05)
 
