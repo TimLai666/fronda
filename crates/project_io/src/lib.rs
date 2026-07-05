@@ -80,6 +80,8 @@ pub struct MultiTimelineState {
     pub siblings: Vec<Timeline>,
     pub open_timeline_ids: Option<Vec<String>>,
     pub view_states: Option<HashMap<String, TimelineViewState>>,
+    /// Opaque speaker registry (upstream #261), preserved across saves.
+    pub speakers: Option<serde_json::Value>,
 }
 
 impl MultiTimelineState {
@@ -95,6 +97,7 @@ impl MultiTimelineState {
             active_timeline_id: Some(active.id.clone()),
             open_timeline_ids: self.open_timeline_ids.clone(),
             view_states: self.view_states.clone(),
+            speakers: self.speakers.clone(),
         }
     }
 
@@ -109,6 +112,7 @@ impl MultiTimelineState {
                 siblings: file.timelines,
                 open_timeline_ids: file.open_timeline_ids,
                 view_states: file.view_states,
+                speakers: file.speakers,
             },
         )
     }
@@ -268,13 +272,14 @@ pub fn save_project_state_with_siblings(
 ) -> Result<(), BundleError> {
     ensure_directory(root)?;
     let path = root.join(TIMELINE_FILENAME);
-    let (disk_order, open_ids, view_states) = match read_project_file(&path) {
+    let (disk_order, open_ids, view_states, speakers) = match read_project_file(&path) {
         Ok(f) => (
             f.timelines.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
             f.open_timeline_ids,
             f.view_states,
+            f.speakers,
         ),
-        Err(_) => (Vec::new(), None, None),
+        Err(_) => (Vec::new(), None, None, None),
     };
 
     let mut by_id: HashMap<&str, &Timeline> =
@@ -312,6 +317,7 @@ pub fn save_project_state_with_siblings(
                     .collect::<HashMap<_, _>>()
             })
             .filter(|vs| !vs.is_empty()),
+        speakers,
     };
     write_project_file_json(&path, &file)?;
     write_json(&root.join(MANIFEST_FILENAME), manifest)?;

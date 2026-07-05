@@ -37,6 +37,11 @@ pub struct ProjectFile {
     pub open_timeline_ids: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_states: Option<HashMap<String, TimelineViewState>>,
+    /// Per-project speaker identities (upstream #261: id/name/color/centroid).
+    /// Round-tripped opaquely - Fronda doesn't run speaker identification yet,
+    /// and dropping the field on save would erase Swift-computed registries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speakers: Option<serde_json::Value>,
 }
 
 impl ProjectFile {
@@ -48,6 +53,7 @@ impl ProjectFile {
             active_timeline_id: Some(id.clone()),
             open_timeline_ids: Some(vec![id]),
             view_states: None,
+            speakers: None,
         }
     }
 
@@ -121,6 +127,8 @@ mod tests {
                     scroll_offset_x: 250.0,
                 },
             )])),
+            speakers: Some(serde_json::json!([{"id": 1, "name": "Alex",
+                "color": [0.1, 0.2, 0.3], "centroid": [0.5]}])),
         };
         let bytes = serde_json::to_vec(&file).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -130,7 +138,7 @@ mod tests {
         assert_eq!(json["viewStates"]["tl-a"]["scrollOffsetX"], 250.0);
 
         let decoded = ProjectFile::decode(&bytes).unwrap();
-        assert_eq!(decoded, file);
+        assert_eq!(decoded, file, "incl. the opaque speakers registry (#261)");
         assert_eq!(decoded.active_index(), 1);
         assert_eq!(decoded.active_timeline().unwrap().name, "B-roll");
     }
