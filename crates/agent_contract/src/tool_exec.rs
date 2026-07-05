@@ -3487,19 +3487,13 @@ impl ToolExecutor {
     /// and ripple-delete them (#174). Decoding is a host seam; the detector and
     /// source→frame mapping are pure (`audio_core::silence_detector`).
     fn cmd_remove_silence(&mut self, args: &Value) -> Result<Value, String> {
-        use audio_core::silence_detector::{
-            detect_silence, rms_envelope, source_ranges_to_project_frames, ClipPlacement,
-            SilenceDetectionConfig,
-        };
-
-        let clip_id = args
-            .get("clipId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "remove_silence requires 'clipId'.".to_string())?;
-        let threshold_db = args
-            .get("thresholdDb")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(-40.0);
+        // Upstream #261 semantics by default: no arguments, whole-timeline
+        // dead-air removal with a threshold ADAPTIVE to each recording's own
+        // level (RMS approximation of upstream's speech detection - honest in
+        // the tool description). clipId + thresholdDb/minSilenceSeconds/
+        // edgePaddingSeconds remain as a Rust clip-scoped extension.
+        let clip_id = args.get("clipId").and_then(|v| v.as_str());
+        let threshold_db = args.get("thresholdDb").and_then(|v| v.as_f64());
         let min_silence_seconds = args
             .get("minSilenceSeconds")
             .and_then(|v| v.as_f64())
@@ -3511,85 +3505,161 @@ impl ToolExecutor {
             .filter(|s| *s >= 0.0)
             .unwrap_or(0.1);
 
-        let loc = timeline_core::find_clip(&self.timeline, clip_id)
-            .ok_or_else(|| format!("Clip '{clip_id}' was not found on the timeline."))?;
-        let clip = self.timeline.tracks[loc.track_index].clips[loc.clip_index].clone();
-        let source = self
-            .media_manifest
-            .entry_for(&clip.media_ref)
-            .map(|e| e.source.clone())
-            .ok_or_else(|| "The clip's media isn't in the library, so its audio can't be analysed.".to_string())?;
-
         let audio = self.audio_source.clone().ok_or_else(|| {
             "remove_silence is unavailable: no audio decoder is connected (run it from the app)."
                 .to_string()
         })?;
 
-        let sample_rate = 44_100u32;
-        let channels = 1usize;
-        let pcm = audio
-            .decode_source_pcm(&source, sample_rate, channels)
-            .ok_or_else(|| "Could not decode the clip's audio.".to_string())?;
-
-        // ~10 ms RMS windows → envelope at `sample_rate / window` Hz.
-        let window = (sample_rate as usize / 100).max(1);
-        let envelope = rms_envelope(&pcm, channels, window);
-        let envelope_rate = sample_rate as f64 / window as f64;
-        let config = SilenceDetectionConfig {
-            threshold: SilenceDetectionConfig::from_db(threshold_db),
-            min_silence_seconds,
-            edge_padding_seconds,
+        // Targets: one clip, or every audio-bearing clip on the timeline.
+        let targets: Vec<(usize, Clip)> = match clip_id {
+            Some(id) => {
+                let loc = timeline_core::find_clip(&self.timeline, id)
+                    .ok_or_else(|| format!("Clip '{id}' was not found on the timeline."))?;
+                vec![(
+                    loc.track_index,
+                    self.timeline.tracks[loc.track_index].clips[loc.clip_index].clone(),
+                )]
+            }
+            None => self
+                .timeline
+                .tracks
+                .iter()
+                .enumerate()
+                .flat_map(|(ti, t)| t.clips.iter().map(move |c| (ti, c.clone())))
+                .filter(|(_, c)| {
+                    let entry = self.media_manifest.entry_for(&c.media_ref);
+                    match entry.map(|e| e.r#type) {
+                        Some(ClipType::Audio) => true,
+                        Some(ClipType::Video) => entry
+                            .and_then(|e| e.has_audio)
+                            .unwrap_or(false),
+                        _ => false,
+                    }
+                })
+                .collect(),
         };
-        let source_ranges = detect_silence(&envelope, envelope_rate, &config);
-
-        let fps = self.timeline.fps as f64;
-        let placement = ClipPlacement {
-            timeline_start_frame: clip.start_frame,
-            duration_frames: clip.duration_frames,
-            source_offset_seconds: clip.trim_start_frame as f64 / fps,
-            speed: clip.speed,
-            fps,
-        };
-        let frame_ranges = source_ranges_to_project_frames(&source_ranges, &placement);
-        if frame_ranges.is_empty() {
-            return Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": serde_json::to_string(&json!({
-                        "clipId": clip_id,
-                        "removedRanges": 0,
-                        "removedFrames": 0,
-                        "message": "No silent regions matched the threshold and minimum duration."
-                    }))
-                    .unwrap_or_default()
-                }]
-            }));
+        if targets.is_empty() {
+            return Err(
+                "No dead air on the timeline. The timeline has no audio-bearing clips to analyse."
+                    .to_string(),
+            );
         }
 
-        let ranges: Vec<timeline_core::FrameRange> = frame_ranges
-            .iter()
-            .map(|&(start, end)| timeline_core::FrameRange { start, end })
-            .collect();
-        let range_count = ranges.len();
-        let (removed_frames, _tracks) =
-            self.apply_ripple_delete_on_track(loc.track_index, ranges, Default::default())?;
+        // Detect per clip; group frame ranges by track for the ripple pass.
+        let fps = self.timeline.fps as f64;
+        let sample_rate = 44_100u32;
+        let channels = 1usize;
+        let window = (sample_rate as usize / 100).max(1);
+        let mut ranges_by_track: std::collections::BTreeMap<usize, Vec<timeline_core::FrameRange>> =
+            Default::default();
+        let mut sections = 0usize;
+        for (ti, clip) in &targets {
+            let Some(source) = self
+                .media_manifest
+                .entry_for(&clip.media_ref)
+                .map(|e| e.source.clone())
+            else {
+                if clip_id.is_some() {
+                    return Err(
+                        "The clip's media isn't in the library, so its audio can't be analysed."
+                            .to_string(),
+                    );
+                }
+                continue;
+            };
+            let Some(pcm) = audio.decode_source_pcm(&source, sample_rate, channels) else {
+                if clip_id.is_some() {
+                    return Err("Could not decode the clip's audio.".to_string());
+                }
+                continue;
+            };
+            let envelope = audio_core::silence_detector::rms_envelope(&pcm, channels, window);
+            let envelope_rate = sample_rate as f64 / window as f64;
+            let threshold = match threshold_db {
+                Some(db) => audio_core::silence_detector::SilenceDetectionConfig::from_db(db),
+                None => audio_core::silence_detector::adaptive_silence_threshold(&envelope),
+            };
+            let config = audio_core::silence_detector::SilenceDetectionConfig {
+                threshold,
+                min_silence_seconds,
+                edge_padding_seconds,
+            };
+            let source_ranges =
+                audio_core::silence_detector::detect_silence(&envelope, envelope_rate, &config);
+            let placement = audio_core::silence_detector::ClipPlacement {
+                timeline_start_frame: clip.start_frame,
+                duration_frames: clip.duration_frames,
+                source_offset_seconds: clip.trim_start_frame as f64 / fps,
+                speed: clip.speed,
+                fps,
+            };
+            for (start, end) in audio_core::silence_detector::source_ranges_to_project_frames(
+                &source_ranges,
+                &placement,
+            ) {
+                ranges_by_track
+                    .entry(*ti)
+                    .or_default()
+                    .push(timeline_core::FrameRange { start, end });
+                sections += 1;
+            }
+        }
 
+        if sections == 0 {
+            if clip_id.is_some() {
+                return Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": serde_json::to_string(&json!({
+                            "sectionsRemoved": 0,
+                            "removedFrames": 0,
+                            "message": "No silent regions matched the threshold and minimum duration."
+                        }))
+                        .unwrap_or_default()
+                    }]
+                }));
+            }
+            return Err(
+                "No dead air on the timeline. The audio has no quiet non-speech sections at the current sensitivity."
+                    .to_string(),
+            );
+        }
+
+        // Ripple each track's ranges; a later track's refusal reports partial
+        // progress (upstream #261's payload shape).
+        let mut removed_frames = 0i64;
+        let mut partial: Option<String> = None;
+        for (ti, ranges) in ranges_by_track {
+            match self.apply_ripple_delete_on_track(ti, ranges, Default::default()) {
+                Ok((frames, _)) => removed_frames += frames,
+                Err(reason) => {
+                    partial = Some(format!(
+                        "A later track refused: {reason}. Earlier tracks were already edited."
+                    ));
+                    break;
+                }
+            }
+        }
+
+        let mut payload = json!({
+            "sectionsRemoved": sections,
+            "removedFrames": removed_frames,
+            "note": "Removed dead air and closed the gaps. Frames have shifted — re-read get_timeline or get_transcript before further edits.",
+        });
+        if let Some(p) = partial {
+            payload["partial"] = json!(p);
+        }
+        if let Some(id) = clip_id {
+            payload["clipId"] = json!(id);
+        }
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": serde_json::to_string(&json!({
-                    "clipId": clip_id,
-                    "removedRanges": range_count,
-                    "removedFrames": removed_frames,
-                }))
-                .unwrap_or_default()
+                "text": serde_json::to_string(&payload).unwrap_or_default()
             }]
         }))
     }
 
-    /// SYNC_AUDIO_CLIPS: align target clips to a reference by RMS cross-correlation
-    /// and move each into sync (#119). Decoding is the `ClipAudioSource` host seam
-    /// (shared with remove_silence); the correlation math is `audio_core`.
     fn cmd_sync_audio(&mut self, args: &Value) -> Result<Value, String> {
         use audio_core::audio_sync_correlator::AudioSyncCorrelator;
 
@@ -8293,7 +8363,7 @@ mod tests {
             .execute("remove_silence", &json!({"clipId": clip_id}))
             .unwrap();
         let text = res["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("\"removedRanges\":1"), "one silent region: {text}");
+        assert!(text.contains("\"sectionsRemoved\":1"), "one silent region: {text}");
         assert!(!text.contains("\"removedFrames\":0"), "frames removed: {text}");
     }
 
@@ -8324,7 +8394,7 @@ mod tests {
             .execute("remove_silence", &json!({"clipId": clip_id}))
             .unwrap();
         let text = res["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("\"removedRanges\":0"), "no cut: {text}");
+        assert!(text.contains("\"sectionsRemoved\":0"), "no cut: {text}");
         assert_eq!(
             exec.timeline().tracks[0].clips.len(),
             before,
@@ -8990,6 +9060,34 @@ mod tests {
             unknown.is_empty(),
             "dispatched but neither advertised nor documented internal: {unknown:?}"
         );
+    }
+
+    #[test]
+    fn remove_silence_no_args_sweeps_the_whole_timeline() {
+        // Upstream #261 semantics: no arguments, adaptive threshold, payload
+        // with sectionsRemoved/removedFrames/note.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("a1", 4.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockAudio));
+        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+
+        let res = exec.execute("remove_silence", &json!({})).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["sectionsRemoved"], 1, "{v}");
+        assert!(v["removedFrames"].as_i64().unwrap() > 0);
+        assert!(v["note"].as_str().unwrap().contains("re-read"));
+
+        // All-loud timeline: the no-arg form reports dead-air absence as an
+        // error (upstream throws), unlike the clip-scoped zero payload.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("a1", 4.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockLoudAudio));
+        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        let err = exec.execute("remove_silence", &json!({})).unwrap_err();
+        assert!(err.contains("No dead air"), "{err}");
     }
 
     #[test]

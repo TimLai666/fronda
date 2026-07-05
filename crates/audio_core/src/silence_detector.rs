@@ -87,6 +87,22 @@ pub fn rms_envelope(pcm: &[f32], channels: usize, window_samples: usize) -> Vec<
     env
 }
 
+/// Adaptive silence threshold relative to the recording's own speech level
+/// (approximates upstream #261's "well below the recording's speech level"
+/// without a VAD model): the 90th-percentile envelope value minus 25 dB,
+/// floored at -60 dBFS so near-silent recordings don't cut everything.
+pub fn adaptive_silence_threshold(envelope: &[f64]) -> f64 {
+    if envelope.is_empty() {
+        return SilenceDetectionConfig::from_db(-40.0);
+    }
+    let mut sorted: Vec<f64> = envelope.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((sorted.len() as f64) * 0.9) as usize;
+    let speech_level = sorted[idx.min(sorted.len() - 1)].max(1e-6);
+    let threshold = speech_level * SilenceDetectionConfig::from_db(-25.0);
+    threshold.max(SilenceDetectionConfig::from_db(-60.0))
+}
+
 /// Detect silence ranges in an RMS envelope.
 ///
 /// `samples` is a slice of linear RMS amplitudes (0.0–1.0), one per frame.
@@ -210,6 +226,21 @@ pub fn source_ranges_to_project_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adaptive_threshold_tracks_the_speech_level() {
+        // A loud recording (speech ~0.5) gets a much higher threshold than a
+        // quiet one (speech ~0.05); both sit 25 dB under their speech level.
+        let loud: Vec<f64> = (0..100).map(|i| if i % 4 == 0 { 0.0 } else { 0.5 }).collect();
+        let quiet: Vec<f64> = (0..100).map(|i| if i % 4 == 0 { 0.0 } else { 0.05 }).collect();
+        let t_loud = adaptive_silence_threshold(&loud);
+        let t_quiet = adaptive_silence_threshold(&quiet);
+        assert!(t_loud > t_quiet * 5.0, "loud {t_loud} vs quiet {t_quiet}");
+        assert!((t_loud / 0.5 - SilenceDetectionConfig::from_db(-25.0)).abs() < 1e-6);
+        // Near-silence floors at -60 dBFS instead of collapsing to ~0.
+        let silent = vec![1e-9; 50];
+        assert!(adaptive_silence_threshold(&silent) >= SilenceDetectionConfig::from_db(-60.0));
+    }
 
     #[test]
     fn rms_envelope_maps_loud_and_silent_windows() {

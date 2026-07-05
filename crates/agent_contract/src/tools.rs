@@ -1140,13 +1140,12 @@ fn dissolve_compound_clip() -> ToolDefinition {
 fn remove_silence() -> ToolDefinition {
     ToolDefinition {
         name: "remove_silence",
-        description: "Detect and ripple-delete silent regions in a clip using on-device RMS analysis. \
-            No AI or transcription dependency. Issue #174.",
+        description: "Remove dead air — quiet sections — from the timeline's audio, ripple-closing the gaps. With no arguments it sweeps every audio-bearing clip using a threshold adaptive to each recording's own level (an on-device RMS analysis; louder beds raise the bar so ambience isn't over-cut). Cuts linked A/V partners and honors sync lock; re-read get_timeline or get_transcript afterwards — frames have shifted. Use remove_words for fillers and flubbed lines; this handles pauses. Optionally scope to one clip with clipId and tune thresholdDb/minSilenceSeconds/edgePaddingSeconds.",
         input_schema: object(&[
-            ("clipId", string("Clip id to process (must be a single audio or video clip)")),
+            ("clipId", string("Optional. Restrict the sweep to one audio or video clip.")),
             (
                 "thresholdDb",
-                number("RMS amplitude threshold in dBFS (e.g. -40.0). Regions below this are considered silent. Default: -40."),
+                number("Optional dBFS override. Omit for the adaptive per-recording threshold."),
             ),
             (
                 "minSilenceSeconds",
