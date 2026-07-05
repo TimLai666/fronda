@@ -19,7 +19,7 @@ pub use agent_loop::{
 };
 pub use tool_exec::{
     AgentSkill, ClipAudioSource, ExportHost, ExportOutcome, ExportRequest, KnownProject,
-    MatteWriter, ProjectLister, ToolExecutor,
+    MatteWriter, OpenedProject, ProjectLister, ProjectNavigator, ProjectSeams, ToolExecutor,
 };
 pub use tools::{skill_prompt_index, system_instruction_with_skills};
 pub use undo::{UndoCommand, UndoError, UndoStack};

@@ -13,7 +13,7 @@ use project_io::ProjectBundle;
 /// Process-wide holder of the current project state.
 pub struct EditorStateHub {
     executor: Arc<Mutex<ToolExecutor>>,
-    project_root: Mutex<Option<PathBuf>>,
+    project_root: Arc<Mutex<Option<PathBuf>>>,
     /// Recent-project registry file (test constructors inject a temp path).
     registry_path: PathBuf,
 }
@@ -29,7 +29,7 @@ impl EditorStateHub {
                 Timeline::default(),
                 MediaManifest::default(),
             ))),
-            project_root: Mutex::new(None),
+            project_root: Arc::new(Mutex::new(None)),
             registry_path,
         }
     }
@@ -103,6 +103,12 @@ impl EditorStateHub {
                 crate::project_lister::AgentProjectLister::new(
                     self.registry_path.clone(),
                     Some(root),
+                ),
+            ));
+            exec.set_project_navigator(std::sync::Arc::new(
+                crate::project_navigator::AppProjectNavigator::new(
+                    self.registry_path.clone(),
+                    Arc::clone(&self.project_root),
                 ),
             ));
         }

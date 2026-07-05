@@ -97,6 +97,34 @@ pub trait ProjectLister: Send + Sync {
     fn list(&self) -> Result<(Vec<KnownProject>, Option<(String, String)>), String>;
 }
 
+/// Everything the executor needs to become another project (upstream
+/// open_project/new_project). The navigator builds this WITHOUT touching the
+/// executor lock (the command runs inside it), and the executor swaps itself.
+pub struct OpenedProject {
+    pub name: String,
+    pub root: String,
+    pub timeline: Timeline,
+    pub sibling_timelines: Vec<Timeline>,
+    pub manifest: MediaManifest,
+    pub seams: ProjectSeams,
+}
+
+/// Project-scoped host seams, rebuilt for the newly active project root.
+pub struct ProjectSeams {
+    pub matte_writer: Arc<dyn MatteWriter>,
+    pub audio_source: Arc<dyn ClipAudioSource>,
+    pub export_host: Arc<dyn ExportHost>,
+    pub project_lister: Arc<dyn ProjectLister>,
+}
+
+/// Host seam for open_project/new_project: resolves/loads (or creates) a
+/// project package and records it, returning the full replacement state.
+/// Must NOT take the executor lock. Unset on the pure path.
+pub trait ProjectNavigator: Send + Sync {
+    fn open(&self, id: Option<&str>, path: Option<&str>) -> Result<OpenedProject, String>;
+    fn create(&self, name: Option<&str>) -> Result<OpenedProject, String>;
+}
+
 const DEFAULT_CLIP_DURATION_FRAMES: i64 = 150;
 
 /// Resolved clip placement geometry from optional agent args + manifest entry.
@@ -460,6 +488,8 @@ pub struct ToolExecutor {
     export_host: Option<Arc<dyn ExportHost>>,
     /// Host recents-registry reader for `get_projects`. `None` on the pure/MCP path.
     project_lister: Option<Arc<dyn ProjectLister>>,
+    /// Host navigator for open_project/new_project. `None` on the pure path.
+    project_navigator: Option<Arc<dyn ProjectNavigator>>,
     /// The project's OTHER timelines (upstream #255) — nest carriers resolve
     /// their children here by id. The active timeline stays in `timeline`.
     sibling_timelines: Vec<Timeline>,
@@ -496,6 +526,7 @@ impl ToolExecutor {
             audio_source: None,
             export_host: None,
             project_lister: None,
+            project_navigator: None,
             sibling_timelines: Vec::new(),
         }
     }
@@ -521,6 +552,11 @@ impl ToolExecutor {
     /// Install the host recents-registry reader for `get_projects`.
     pub fn set_project_lister(&mut self, lister: Arc<dyn ProjectLister>) {
         self.project_lister = Some(lister);
+    }
+
+    /// Install the host navigator for open_project/new_project.
+    pub fn set_project_navigator(&mut self, nav: Arc<dyn ProjectNavigator>) {
+        self.project_navigator = Some(nav);
     }
 
     /// Replace the project's sibling timelines (upstream #255). The app shell
@@ -713,11 +749,8 @@ impl ToolExecutor {
             // whole app's active project, which needs an app-navigation seam (and delete_project is
             // destructive). Until that lands, report the limitation honestly instead of the
             // misleading "Unknown tool" a bare fallthrough would give.
-            "create_project" | "open_project" | "delete_project" => Err(
-                "Project management (create/open/delete) runs in the app, not through the agent \
-                 yet — ask the user to manage projects from the Home screen."
-                    .to_string(),
-            ),
+            "open_project" => self.cmd_open_project(args),
+            "new_project" => self.cmd_new_project(args),
             // Advertised-but-not-yet-implemented tools (schemas landed ahead of the executor logic
             // in Issues #154/#155/#157/#158/#165/#174). Report the limitation honestly rather than
             // the misleading "Unknown tool" a fallthrough gives; each needs its own port (some are
@@ -4253,6 +4286,58 @@ impl ToolExecutor {
                 "text": serde_json::to_string_pretty(&out).unwrap_or_default()
             }]
         }))
+    }
+
+    /// Swap this executor to a navigator-provided project.
+    fn adopt_project(&mut self, opened: OpenedProject) -> (String, String) {
+        let OpenedProject {
+            name,
+            root,
+            timeline,
+            sibling_timelines,
+            manifest,
+            seams,
+        } = opened;
+        self.load_project(timeline, manifest);
+        self.sibling_timelines = sibling_timelines;
+        self.timeline_words = Vec::new();
+        self.clip_presets.clear();
+        self.matte_writer = Some(seams.matte_writer);
+        self.audio_source = Some(seams.audio_source);
+        self.export_host = Some(seams.export_host);
+        self.project_lister = Some(seams.project_lister);
+        (name, root)
+    }
+
+    /// OPEN_PROJECT: make another project the active one (upstream).
+    fn cmd_open_project(&mut self, args: &Value) -> Result<Value, String> {
+        let nav = self.project_navigator.clone().ok_or_else(|| {
+            "open_project is unavailable: no project navigator is connected (run it from the app)."
+                .to_string()
+        })?;
+        let id = args.get("id").and_then(|v| v.as_str());
+        let path = args.get("path").and_then(|v| v.as_str());
+        if id.is_none() && path.is_none() {
+            return Err("open_project requires 'id' (from get_projects) or 'path'.".to_string());
+        }
+        let opened = nav.open(id, path)?;
+        let (name, root) = self.adopt_project(opened);
+        Ok(json!({ "content": [{ "type": "text", "text": format!(
+            "Opened \"{name}\" ({root}) and made it active. Re-read get_timeline and get_media before editing."
+        )}]}))
+    }
+
+    /// NEW_PROJECT: create an empty project and make it active (upstream).
+    fn cmd_new_project(&mut self, args: &Value) -> Result<Value, String> {
+        let nav = self.project_navigator.clone().ok_or_else(|| {
+            "new_project is unavailable: no project navigator is connected (run it from the app)."
+                .to_string()
+        })?;
+        let opened = nav.create(args.get("name").and_then(|v| v.as_str()))?;
+        let (name, root) = self.adopt_project(opened);
+        Ok(json!({ "content": [{ "type": "text", "text": format!(
+            "Created \"{name}\" ({root}) and made it active. It is empty; all edit tools now target it."
+        )}]}))
     }
 
     fn cmd_import_folder(&mut self, args: &Value) -> Result<Value, String> {
@@ -8003,14 +8088,17 @@ mod tests {
     }
 
     #[test]
-    fn project_nav_tools_report_honest_limitation_not_unknown() {
-        // #238 half-port: advertised but app-nav; must not return the misleading "Unknown tool".
+    fn project_nav_tools_unavailable_without_navigator() {
         let mut exec = make_executor();
-        for tool in ["create_project", "open_project", "delete_project"] {
-            let err = exec.execute(tool, &json!({})).unwrap_err();
-            assert!(!err.contains("Unknown tool"), "{tool}: {err}");
-            assert!(err.contains("runs in the app"), "{tool}: {err}");
-        }
+        let err = exec
+            .execute("open_project", &json!({"path": "/x.palmier"}))
+            .unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
+        let err = exec.execute("new_project", &json!({})).unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
+        // The speculative names were removed with the v0.6.1 alignment.
+        let err = exec.execute("create_project", &json!({})).unwrap_err();
+        assert!(err.contains("Unknown tool"), "{err}");
     }
 
     #[test]

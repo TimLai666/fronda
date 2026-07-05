@@ -1,4 +1,4 @@
-//! All 64 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 63 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -14,6 +14,8 @@
 //! v0.6.1 gap port: added upstream's update_text (61 → 62).
 //! v0.6.1 gap port: added upstream's export_project via the ExportHost seam (62 → 63).
 //! v0.6.1 gap port: added upstream's read-only get_projects via ProjectLister (63 → 64).
+//! v0.6.1 nav port: open_project implemented + new_project added via ProjectNavigator;
+//! the speculative create_project/delete_project stubs removed (64 → 63).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -29,7 +31,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 64 tools exposed to the agent.
+/// Returns all 63 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -51,10 +53,8 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         apply_effect(),
         create_folder(),
         create_matte(),
-        create_project(),
         delete_folder(),
         delete_media(),
-        delete_project(),
         duplicate_project(),
         list_clip_presets(),
         generate_audio(),
@@ -76,6 +76,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         list_models(),
         move_clips(),
         move_to_folder(),
+        new_project(),
         open_project(),
         remove_clips(),
         remove_silence(),
@@ -1222,24 +1223,6 @@ fn list_clip_presets() -> ToolDefinition {
 
 // ── Issue #172: project lifecycle MCP tools ──────────────────────────────────
 
-fn create_project() -> ToolDefinition {
-    ToolDefinition {
-        name: "create_project",
-        description: "Create a new Palmier project at the given path with an optional name. \
-            After creation the new project becomes the active project. \
-            Issue #172.",
-        input_schema: object(&[
-            (
-                "path",
-                string("File system path where the new .palmier project should be created"),
-            ),
-            (
-                "name",
-                string("Optional project name (defaults to the file's stem)"),
-            ),
-        ]),
-    }
-}
 
 fn get_projects() -> ToolDefinition {
     ToolDefinition {
@@ -1252,28 +1235,25 @@ fn get_projects() -> ToolDefinition {
 fn open_project() -> ToolDefinition {
     ToolDefinition {
         name: "open_project",
-        description: "Open an existing Palmier project by path. \
-            The project becomes the active project. \
-            Issue #172.",
+        description: "Open a project and make it the active one — every editing tool then acts on it. Identify it by `id` (from get_projects) or by `path` to a .palmier package. Returns the now-active project. The user sees the window change.",
+        input_schema: object(&[
+            ("id", string("Project id from get_projects. Provide this or path.")),
+            ("path", string("Filesystem path to a .palmier package. Provide this or id.")),
+        ]),
+    }
+}
+
+fn new_project() -> ToolDefinition {
+    ToolDefinition {
+        name: "new_project",
+        description: "Create a new empty project in the user's Palmier Pro folder and make it active. Fails if a project with that name already exists — pick another name. Returns the new project's name and path.",
         input_schema: object(&[(
-            "path",
-            string("File system path to an existing .palmier project package"),
+            "name",
+            string("Project name (without extension). Defaults to 'Untitled Project'."),
         )]),
     }
 }
 
-fn delete_project() -> ToolDefinition {
-    ToolDefinition {
-        name: "delete_project",
-        description: "Move a Palmier project to the Trash. \
-            This closes the project if it is currently open. \
-            Issue #172.",
-        input_schema: object(&[(
-            "path",
-            string("File system path to the .palmier project to delete"),
-        )]),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1288,8 +1268,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            64,
-            "TDEF-001: 64 tools (see the header history)"
+            63,
+            "TDEF-001: 63 tools (see the header history)"
         );
     }
 
@@ -1318,7 +1298,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 64, "all 64 tool names must be unique");
+        assert_eq!(names.len(), 63, "all 63 tool names must be unique");
     }
 
     #[test]
