@@ -188,9 +188,11 @@ consolidated shapes would break our own MCP surface — a user decision, not
 drift cleanup. `update_text` PORTED 2026-07-05 (merge semantics, clipIds +
 captionGroupId addressing, 'off' clears animation; auto-fit box on typography
 changes deferred - needs render-layer text measurement, same as add_texts).
-Remaining un-ported upstream tools: `export_project` (needs an export host
-seam), `send_feedback` (network backend), `get_projects`/`new_project` (#238
-app-nav).
+`export_project` PORTED 2026-07-05 via the ExportHost seam (validated enums,
+timelineId incl. palmier refusal, Downloads default path, overwrite handling;
+video renders on a background thread returning status=started; xml/fcpxml/
+palmier inline). Remaining un-ported upstream tools: `send_feedback` (network
+backend) and `get_projects`/`new_project` (#238 app-nav) only.
 
 **Resolved 2026-07-05 by the v0.6.1 re-audit:** the speculative
 `set_clip_audio_effects`/`set_clip_noise_reduction` stubs were REMOVED — upstream
