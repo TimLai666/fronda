@@ -166,12 +166,48 @@ impl ChatView {
         .detach();
     }
 
+    /// Keys while the @mention picker is open: navigate, pick, or filter.
+    fn handle_mention_picker_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                self.model.show_mention_picker = false;
+                self.mention_picker.close();
+            }
+            "enter" => {
+                if let Some(c) = self.mention_picker.selected_candidate() {
+                    let mention_text = format!("@{} ", c.label);
+                    self.model.input.text.push_str(&mention_text);
+                    self.model.input.cursor_position = self.model.input.text.len();
+                }
+                self.model.show_mention_picker = false;
+                self.mention_picker.close();
+            }
+            "down" => self.mention_picker.highlight_next(),
+            "up" => self.mention_picker.highlight_previous(),
+            "tab" => self.mention_picker.next_category(),
+            _ => {
+                let mut query = self.mention_picker.query.clone();
+                if crate::text_input::apply_editing_keystroke(&mut query, &event.keystroke) {
+                    self.mention_picker.query = query;
+                    self.mention_picker.highlighted_index = 0;
+                    self.mention_picker.refresh_filter();
+                }
+            }
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.model.show_mention_picker {
+            self.handle_mention_picker_key(event, cx);
+            return;
+        }
         match event.keystroke.key.as_str() {
             "enter" => {
                 if let Some(agent_text) = self
@@ -205,19 +241,9 @@ impl ChatView {
                 }
                 cx.notify();
             }
-            "escape" => {
-                if self.model.show_mention_picker {
-                    self.model.toggle_mention_picker();
-                    self.mention_picker.close();
-                    cx.notify();
-                }
-            }
             _ => {
-                // Composer typing (backspace/space/printable). While the
-                // mention picker is open, keys are left to the picker UI.
-                if self.model.show_mention_picker {
-                    return;
-                }
+                // Composer typing (backspace/space/printable); picker-open
+                // keys were already routed to handle_mention_picker_key.
                 let edited = crate::text_input::apply_editing_keystroke(
                     &mut self.model.input.text,
                     &event.keystroke,
@@ -958,6 +984,24 @@ impl ChatView {
             .rounded(px(Radius::SM))
             .mb(px(Spacing::XS))
             .mx(px(Spacing::SM_MD))
+            .child(
+                // Typed filter echo — arrow keys navigate, Enter picks.
+                div()
+                    .id("mention-query-row")
+                    .px(px(Spacing::SM_MD))
+                    .pt(px(Spacing::XS))
+                    .text_size(px(FontSize::SM))
+                    .text_color(if self.mention_picker.query.is_empty() {
+                        Text::MUTED
+                    } else {
+                        Text::PRIMARY
+                    })
+                    .child(if self.mention_picker.query.is_empty() {
+                        "@ type to filter\u{2026}".to_string()
+                    } else {
+                        format!("@{}", self.mention_picker.query)
+                    }),
+            )
             .child(category_bar)
             .child(div().h(px(1.0)).bg(BorderColors::SUBTLE).w_full())
             .child(candidate_list)

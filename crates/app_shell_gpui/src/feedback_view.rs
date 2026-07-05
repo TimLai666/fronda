@@ -9,9 +9,16 @@ use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, 
 use app_contract::feedback_model::FeedbackViewModel;
 use gpui::{
     div, prelude::*, px, Animation, AnimationExt as _, App, ClickEvent, Context, FocusHandle,
-    Focusable, InteractiveElement, ParentElement, Render, Styled, Window,
+    Focusable, InteractiveElement, KeyDownEvent, ParentElement, Render, Styled, Window,
 };
 use std::time::Duration;
+
+/// Which form field receives typing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FeedbackField {
+    Message,
+    Email,
+}
 
 /// gpui Feedback view component.
 #[derive(Debug, Clone)]
@@ -22,6 +29,7 @@ pub struct FeedbackView {
     pub is_signed_in: bool,
     /// True when a screenshot was captured at open time.
     pub has_screenshot: bool,
+    focused_field: FeedbackField,
 }
 
 impl FeedbackView {
@@ -31,6 +39,47 @@ impl FeedbackView {
             model: FeedbackViewModel::default(),
             is_signed_in: false,
             has_screenshot: false,
+            focused_field: FeedbackField::Message,
+        }
+    }
+
+    /// Form typing: click a field to target it, Tab switches, Enter is a
+    /// newline in the message (single-line email ignores it).
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let edited = match event.keystroke.key.as_str() {
+            "tab" => {
+                self.focused_field = match self.focused_field {
+                    FeedbackField::Message if !self.is_signed_in => FeedbackField::Email,
+                    _ => FeedbackField::Message,
+                };
+                true
+            }
+            "enter" => {
+                if self.focused_field == FeedbackField::Message {
+                    self.model.message.push('\n');
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => {
+                let target = match self.focused_field {
+                    FeedbackField::Message => &mut self.model.message,
+                    FeedbackField::Email => &mut self.model.email,
+                };
+                crate::text_input::apply_editing_keystroke(target, &event.keystroke)
+            }
+        };
+        // Swallow backspace even on empty text — bubbling would hit the
+        // global Delete shortcut.
+        if edited || event.keystroke.key.as_str() == "backspace" {
+            cx.stop_propagation();
+            cx.notify();
         }
     }
 
@@ -64,6 +113,14 @@ impl FeedbackView {
         } else {
             self.model.message.clone()
         };
+        let email_empty = self.model.email.is_empty();
+        let email_preview = if email_empty {
+            "you@example.com — so we can reply".to_string()
+        } else {
+            self.model.email.clone()
+        };
+        let msg_focused = self.focused_field == FeedbackField::Message;
+        let email_focused = self.focused_field == FeedbackField::Email;
         let error_text = self.model.error.clone();
 
         let mut form = div().flex().flex_col().gap(px(Spacing::LG));
@@ -77,12 +134,23 @@ impl FeedbackView {
                 .child(Self::render_field_label("Describe the issue or feedback"))
                 .child(
                     div()
+                        .id("feedback-message-input")
                         .h(px(160.0))
                         .rounded(px(Radius::SM))
                         .border_1()
-                        .border_color(BorderColors::SUBTLE)
+                        .border_color(if msg_focused {
+                            BorderColors::PRIMARY
+                        } else {
+                            BorderColors::SUBTLE
+                        })
                         .bg(Background::SURFACE)
                         .p(px(Spacing::SM_MD))
+                        .cursor_text()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.focused_field = FeedbackField::Message;
+                            window.focus(&this.focus_handle, cx);
+                            cx.notify();
+                        }))
                         .child(
                             div()
                                 .flex_1()
@@ -110,13 +178,27 @@ impl FeedbackView {
                             .id("feedback-email-input")
                             .rounded(px(Radius::SM))
                             .border_1()
-                            .border_color(BorderColors::SUBTLE)
+                            .border_color(if email_focused {
+                                BorderColors::PRIMARY
+                            } else {
+                                BorderColors::SUBTLE
+                            })
                             .bg(Background::SURFACE)
                             .px(px(Spacing::MD_LG))
                             .py(px(Spacing::SM_MD))
                             .text_size(px(FontSize::MD))
-                            .text_color(Text::MUTED)
-                            .child("you@example.com — so we can reply"),
+                            .text_color(if email_empty {
+                                Text::MUTED
+                            } else {
+                                Text::PRIMARY
+                            })
+                            .cursor_text()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.focused_field = FeedbackField::Email;
+                                window.focus(&this.focus_handle, cx);
+                                cx.notify();
+                            }))
+                            .child(email_preview),
                     ),
             );
         }
@@ -454,6 +536,7 @@ impl Render for FeedbackView {
         div()
             .id("fronda-feedback")
             .track_focus(&self.focus_handle.clone())
+            .on_key_down(cx.listener(Self::handle_key_down))
             .flex()
             .flex_col()
             .size_full()

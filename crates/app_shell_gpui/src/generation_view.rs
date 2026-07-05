@@ -9,7 +9,7 @@ use crate::theme::{
 };
 use gpui::{
     div, prelude::*, px, svg, App, ClickEvent, Context, FocusHandle, Focusable, Hsla,
-    InteractiveElement, ParentElement, Render, Styled, Window,
+    InteractiveElement, KeyDownEvent, ParentElement, Render, Styled, Window,
 };
 
 /// AI generation type (matches Swift GenerationType).
@@ -96,6 +96,31 @@ impl GenerationView {
             focus_handle: cx.focus_handle(),
         }
     }
+
+    /// Prompt typing (Swift TextEditor: Enter is a newline, not submit).
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let edited = match event.keystroke.key.as_str() {
+            "enter" => {
+                self.state.prompt.push('\n');
+                true
+            }
+            _ => crate::text_input::apply_editing_keystroke(
+                &mut self.state.prompt,
+                &event.keystroke,
+            ),
+        };
+        // Swallow backspace even on empty text — bubbling would hit the
+        // global Delete shortcut.
+        if edited || event.keystroke.key.as_str() == "backspace" {
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
 }
 
 impl Focusable for GenerationView {
@@ -164,6 +189,7 @@ impl Render for GenerationView {
         div()
             .id("generation-panel")
             .track_focus(&self.focus_handle.clone())
+            .on_key_down(cx.listener(Self::handle_key_down))
             .flex()
             .flex_col()
             .size_full()
