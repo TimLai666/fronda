@@ -334,6 +334,10 @@ impl TimelineView {
             "backspace" => {
                 text.pop();
             }
+            // key_char is None for space on Windows — insert it explicitly.
+            "space" => {
+                text.push(' ');
+            }
             _ => {
                 let mods = &event.keystroke.modifiers;
                 if !mods.control && !mods.platform && !mods.function {
