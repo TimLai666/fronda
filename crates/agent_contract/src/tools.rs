@@ -114,6 +114,8 @@ Placements must match track type. The editing surface mirrors human gestures —
 - split_clips: pass one or more cut points (each strictly inside its clip) in one call. Splits only insert boundaries; nothing shifts.
 - remove_words: cut speech by the word — pass get_transcript indices (or exact `matches` tokens like "um"/"uh") to drop those words plus the surrounding pause; linked A/V partners are cut automatically and gaps close. Prefer this for anything you can point at in the transcript; re-read get_transcript afterwards.
 - ripple_delete_ranges: cut spans out and close the gaps in one action — the fast path for non-word-aligned dead-air removal.
+- remove_silence: auto-detect and ripple-cut a clip's quiet gaps by RMS level (no transcript needed) — the fast path for tightening dead air in one audio or video clip.
+- create_compound_clip / dissolve_compound_clip: group a run of adjacent clips on one track into a single nested clip, and ungroup it — use it to treat a multi-clip section as one unit.
 - apply_layout: for any multi-video composition (split screen, picture-in-picture, grid), assign a clip to each slot instead of hand-setting transforms; it fills every region without stretching.
 - set_project_settings: change fps, resolution, or aspect ratio; existing clips re-fit and frame values rescale automatically.
 
@@ -124,6 +126,7 @@ Edits are undoable and effectively free — make them directly rather than askin
 - create_matte: add a solid-colour image to the library — backgrounds, lower-thirds, letterbox bars. Pass a hex colour and an optional aspect ratio, then place it with add_clips.
 - apply_color: grade a clip's colour (merge semantics — only the params you pass change).
 - apply_effect / set_chroma_key / set_blend_mode: add a blur or vignette, key out a green screen, or change how a clip composites over the layers beneath it.
+- save_clip_preset / apply_clip_preset / list_clip_presets: capture one clip's grade (transform, crop, opacity, volume, speed, effects, blend, chroma) as a named preset, then stamp it onto other clips.
 
 # Media library
 - create_folder / move_to_folder / rename_media organize the library; import_media registers an external video, audio, or image file.
