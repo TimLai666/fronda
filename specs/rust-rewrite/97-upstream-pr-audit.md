@@ -195,8 +195,10 @@ palmier inline). `get_projects`, `open_project`, and `new_project` ALL PORTED 20
 whole state from inside its lock, avoiding the hub-lock deadlock; speculative
 create_project/delete_project stubs removed). Upstream scopes these three to
 its MCP surface only (in-app agent gets read_skill instead) - Fronda keeps one
-shared surface. The ONLY un-ported upstream tool is now `send_feedback`
-(needs the network feedback backend).
+shared surface. The ONLY un-ported upstream tool is now `send_feedback` -
+VERIFIED host-gated: upstream posts via the Convex SDK action feedback:send
+with account-session auth, so it needs a backend seam (or a Convex Rust
+client), not a plain HTTP port.
 
 **Resolved 2026-07-05 by the v0.6.1 re-audit:** the speculative
 `set_clip_audio_effects`/`set_clip_noise_reduction` stubs were REMOVED — upstream
