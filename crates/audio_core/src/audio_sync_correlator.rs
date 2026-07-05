@@ -134,6 +134,27 @@ impl AudioSyncCorrelator {
         frame_size: usize,
         project_fps: f64,
     ) -> Option<SyncOffset> {
+        Self::find_sync_offset_windowed(
+            reference_samples,
+            target_samples,
+            sample_rate,
+            frame_size,
+            project_fps,
+            None,
+        )
+    }
+
+    /// [`AudioSyncCorrelator::find_sync_offset`] restricted to lags within
+    /// ±`max_offset_seconds` (Swift `sync_audio`'s `searchWindowSeconds`).
+    /// `None` searches all lags.
+    pub fn find_sync_offset_windowed(
+        reference_samples: &[f64],
+        target_samples: &[f64],
+        sample_rate: f64,
+        frame_size: usize,
+        project_fps: f64,
+        max_offset_seconds: Option<f64>,
+    ) -> Option<SyncOffset> {
         if reference_samples.len() < frame_size || target_samples.len() < frame_size {
             return None;
         }
@@ -146,8 +167,13 @@ impl AudioSyncCorrelator {
             return None;
         }
 
-        // 2. Cross-correlate
-        let correlation = Self::cross_correlate(&ref_rms, &tgt_rms);
+        // 2. Cross-correlate, keeping only lags inside the search window
+        let mut correlation = Self::cross_correlate(&ref_rms, &tgt_rms);
+        if let Some(max_secs) = max_offset_seconds {
+            let seconds_per_rms_frame = frame_size as f64 / sample_rate;
+            let max_lag = (max_secs / seconds_per_rms_frame).ceil() as i64;
+            correlation.retain(|(lag, _)| lag.abs() <= max_lag);
+        }
 
         // 3. Find peak
         let (peak_lag, _, confidence) = Self::find_peak(&correlation)?;

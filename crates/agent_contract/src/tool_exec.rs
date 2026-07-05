@@ -662,19 +662,13 @@ impl ToolExecutor {
             "dissolve_compound_clip" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_dissolve_compound_clip, args)
             }
-            "import_xml" => Err(
-                "Importing an XMEML/FCPXML timeline isn't implemented through the agent yet."
-                    .to_string(),
-            ),
             "save_clip_preset" => self.cmd_save_clip_preset(args),
             "apply_clip_preset" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_apply_clip_preset, args)
             }
             "list_clip_presets" => self.cmd_list_clip_presets(),
             "remove_silence" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_silence, args),
-            "sync_audio_clips" => {
-                self.exec_mut(tool_name, ToolExecutor::cmd_sync_audio_clips, args)
-            }
+            "sync_audio" => self.exec_mut(tool_name, ToolExecutor::cmd_sync_audio, args),
             "denoise_audio" => self.exec_mut(tool_name, ToolExecutor::cmd_denoise_audio, args),
 
             // ── Read-only tools ──────────────────────────────────────────
@@ -3491,32 +3485,39 @@ impl ToolExecutor {
     /// SYNC_AUDIO_CLIPS: align target clips to a reference by RMS cross-correlation
     /// and move each into sync (#119). Decoding is the `ClipAudioSource` host seam
     /// (shared with remove_silence); the correlation math is `audio_core`.
-    fn cmd_sync_audio_clips(&mut self, args: &Value) -> Result<Value, String> {
+    fn cmd_sync_audio(&mut self, args: &Value) -> Result<Value, String> {
         use audio_core::audio_sync_correlator::AudioSyncCorrelator;
 
         let ref_id = args
             .get("referenceClipId")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "sync_audio_clips requires 'referenceClipId'.".to_string())?
+            .ok_or_else(|| "sync_audio requires 'referenceClipId'.".to_string())?
             .to_string();
-        let target_ids: Vec<String> = args
+        let mut target_ids: Vec<String> = args
             .get("targetClipIds")
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
+        if let Some(single) = args.get("targetClipId").and_then(|v| v.as_str()) {
+            if !target_ids.iter().any(|t| t == single) {
+                target_ids.push(single.to_string());
+            }
+        }
         if target_ids.is_empty() {
-            return Err(
-                "sync_audio_clips requires 'targetClipIds' (a non-empty array of clip ids)."
-                    .to_string(),
-            );
+            return Err("sync_audio requires 'targetClipId' or 'targetClipIds'.".to_string());
         }
         let min_confidence = args
             .get("minConfidence")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.5);
+        let search_window_seconds = args
+            .get("searchWindowSeconds")
+            .and_then(|v| v.as_f64())
+            .filter(|s| *s > 0.0)
+            .unwrap_or(30.0);
 
         let audio = self.audio_source.clone().ok_or_else(|| {
-            "sync_audio_clips is unavailable: no audio decoder is connected (run it from the app)."
+            "sync_audio is unavailable: no audio decoder is connected (run it from the app)."
                 .to_string()
         })?;
         let sample_rate = 44_100u32;
@@ -3563,12 +3564,13 @@ impl ToolExecutor {
                 continue;
             };
             let tf64: Vec<f64> = tpcm.iter().map(|&s| s as f64).collect();
-            match AudioSyncCorrelator::find_sync_offset(
+            match AudioSyncCorrelator::find_sync_offset_windowed(
                 &ref_f64,
                 &tf64,
                 sample_rate as f64,
                 frame_size,
                 fps,
+                Some(search_window_seconds),
             ) {
                 Some(off) if off.confidence >= min_confidence => {
                     // A delayed target (positive offset) must move earlier; align the
@@ -8008,7 +8010,7 @@ mod tests {
 
         let res = exec
             .execute(
-                "sync_audio_clips",
+                "sync_audio",
                 &json!({"referenceClipId": ref_id, "targetClipIds": [tgt_id]}),
             )
             .unwrap();
@@ -8056,7 +8058,7 @@ mod tests {
         // An impossible threshold forces the match into `skipped`.
         let res = exec
             .execute(
-                "sync_audio_clips",
+                "sync_audio",
                 &json!({"referenceClipId": ref_id, "targetClipIds": [tgt_id], "minConfidence": 2.0}),
             )
             .unwrap();
@@ -8076,7 +8078,7 @@ mod tests {
         let ref_id = exec.timeline().tracks[0].clips[0].id.clone();
         let err = exec
             .execute(
-                "sync_audio_clips",
+                "sync_audio",
                 &json!({"referenceClipId": ref_id, "targetClipIds": ["x"]}),
             )
             .unwrap_err();

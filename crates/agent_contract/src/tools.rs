@@ -1,4 +1,4 @@
-//! All 62 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 61 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -9,6 +9,8 @@
 //! Upstream #251: replaced the speculative set_clip_noise_reduction/set_clip_audio_effects
 //! (never shipped upstream) with the real denoise_audio tool (60 → 59).
 //! Upstream #255: added create_timeline, set_active_timeline, duplicate_timeline (59 → 62).
+//! v0.6.1 surface alignment: sync_audio_clips renamed to upstream's sync_audio; the
+//! speculative import_xml (never shipped upstream) removed (62 → 61).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -24,7 +26,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 62 tools exposed to the agent.
+/// Returns all 61 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -37,7 +39,6 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         dissolve_compound_clip(),
         duplicate_timeline(),
         set_active_timeline(),
-        import_xml(),
         add_shapes(),
         add_texts(),
         apply_animation(),
@@ -72,7 +73,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         open_project(),
         remove_clips(),
         remove_silence(),
-        sync_audio_clips(),
+        sync_audio(),
         remove_tracks(),
         remove_words(),
         rename_folder(),
@@ -123,7 +124,7 @@ Placements must match track type. The editing surface mirrors human gestures —
 - remove_words: cut speech by the word — pass get_transcript indices (or exact `matches` tokens like "um"/"uh") to drop those words plus the surrounding pause; linked A/V partners are cut automatically and gaps close. Prefer this for anything you can point at in the transcript; re-read get_transcript afterwards.
 - ripple_delete_ranges: cut spans out and close the gaps in one action — the fast path for non-word-aligned dead-air removal.
 - remove_silence: auto-detect and ripple-cut a clip's quiet gaps by RMS level (no transcript needed) — the fast path for tightening dead air in one audio or video clip.
-- sync_audio_clips: align target clips to a reference by their waveforms (dual-system sound, multi-cam) — each target moves into sync; low-confidence matches are left in place and reported.
+- sync_audio: align target clips to a reference by their waveforms (dual-system sound, multi-cam) — each target moves into sync; low-confidence matches are left in place and reported.
 - create_compound_clip / dissolve_compound_clip: group a run of adjacent clips on one track into a single nested clip, and ungroup it — use it to treat a multi-clip section as one unit.
 - apply_layout: for any multi-video composition (split screen, picture-in-picture, grid), assign a clip to each slot instead of hand-setting transforms; it fills every region without stretching.
 - set_project_settings: change fps, resolution, or aspect ratio; existing clips re-fit and frame values rescale automatically.
@@ -1047,28 +1048,6 @@ fn denoise_audio() -> ToolDefinition {
     }
 }
 
-// ── Issue #154: XML import MCP tool ───────────────────────────────────────────
-
-fn import_xml() -> ToolDefinition {
-    ToolDefinition {
-        name: "import_xml",
-        description: "Import a timeline from an XML file (XMEML, FCPXML, Premiere Pro XML, \
-            or DaVinci Resolve XML). The imported timeline is merged into the current project. \
-            Issue #154.",
-        input_schema: object(&[
-            ("path", string("File system path to the XML file (.xml, .fcpxml)")),
-            (
-                "format",
-                string("XML format hint: 'xmeml', 'fcpxml', 'premiere', or 'davinci'. \
-                    Auto-detected from file extension and content if omitted."),
-            ),
-            (
-                "preserveProjectFps",
-                boolean("Keep the current project FPS rather than adopting the imported timeline's FPS. Default: false."),
-            ),
-        ]),
-    }
-}
 
 // ── Issue #155: compound clip MCP tools ───────────────────────────────────────
 
@@ -1121,18 +1100,21 @@ fn remove_silence() -> ToolDefinition {
 
 // ── Issue #119: multi-track audio sync MCP tool ──────────────────────────────
 
-fn sync_audio_clips() -> ToolDefinition {
+fn sync_audio() -> ToolDefinition {
     ToolDefinition {
-        name: "sync_audio_clips",
-        description: "Align audio clips to a reference by their waveforms (RMS cross-correlation) — \
-            for dual-system sound or multi-cam. Each target clip is moved so its audio lines up \
-            with the reference; low-confidence matches are left in place and reported. Issue #119.",
+        name: "sync_audio",
+        description: "Align one or more clips to a reference clip by cross-correlating audio and shifting targets on the timeline. referenceClipId stays put — use for dual-system sound (camera + external audio) or multicam. Returns offsetFrames and confidence (0–1) per target; refuses weak matches.",
         input_schema: object(&[
-            ("referenceClipId", string("Clip id to align the targets to")),
-            ("targetClipIds", array("Clip ids to move into sync with the reference")),
+            ("referenceClipId", string("Clip the others align to. Stays put.")),
+            ("targetClipId", string("Single clip to align. Use targetClipIds for several.")),
+            ("targetClipIds", array("Clips to align with the reference.")),
+            (
+                "searchWindowSeconds",
+                number("Max ± offset to search in seconds (default 30)."),
+            ),
             (
                 "minConfidence",
-                number("Minimum correlation confidence (0..1) to accept a match. Default: 0.5."),
+                number("Minimum correlation confidence 0–1 (default 0.5)."),
             ),
         ]),
     }
@@ -1237,8 +1219,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            62,
-            "TDEF-001: 62 tools (see the header history)"
+            61,
+            "TDEF-001: 61 tools (see the header history)"
         );
     }
 
@@ -1267,7 +1249,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 62, "all 62 tool names must be unique");
+        assert_eq!(names.len(), 61, "all 61 tool names must be unique");
     }
 
     #[test]
