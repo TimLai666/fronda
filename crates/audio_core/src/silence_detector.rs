@@ -56,6 +56,37 @@ impl SourceRange {
     }
 }
 
+/// Compute an RMS amplitude envelope from interleaved PCM.
+///
+/// Returns one linear RMS value (0.0–1.0) per window of `window_samples` frames
+/// (a frame is one sample per channel, channels averaged to mono first). The
+/// envelope's effective sample rate is `source_sample_rate / window_samples`,
+/// which is what [`detect_silence`] expects as `sample_rate_hz`.
+pub fn rms_envelope(pcm: &[f32], channels: usize, window_samples: usize) -> Vec<f64> {
+    if pcm.is_empty() || channels == 0 || window_samples == 0 {
+        return Vec::new();
+    }
+    let frames = pcm.len() / channels;
+    let mut env = Vec::with_capacity(frames / window_samples + 1);
+    let mut i = 0;
+    while i < frames {
+        let end = (i + window_samples).min(frames);
+        let mut sum_sq = 0.0f64;
+        for f in i..end {
+            let mut s = 0.0f64;
+            for c in 0..channels {
+                s += pcm[f * channels + c] as f64;
+            }
+            s /= channels as f64;
+            sum_sq += s * s;
+        }
+        let count = (end - i) as f64;
+        env.push((sum_sq / count).sqrt());
+        i = end;
+    }
+    env
+}
+
 /// Detect silence ranges in an RMS envelope.
 ///
 /// `samples` is a slice of linear RMS amplitudes (0.0–1.0), one per frame.
@@ -179,6 +210,24 @@ pub fn source_ranges_to_project_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rms_envelope_maps_loud_and_silent_windows() {
+        let pcm = vec![0.5f32, 0.5, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0];
+        let env = rms_envelope(&pcm, 1, 4);
+        assert_eq!(env.len(), 2);
+        assert!((env[0] - 0.5).abs() < 1e-6, "loud window rms");
+        assert!(env[1] < 1e-9, "silent window rms");
+    }
+
+    #[test]
+    fn rms_envelope_downmixes_channels() {
+        // Stereo L=0.4 R=0.6 → mono average 0.5 → rms 0.5.
+        let pcm = vec![0.4f32, 0.6, 0.4, 0.6];
+        let env = rms_envelope(&pcm, 2, 2);
+        assert_eq!(env.len(), 1);
+        assert!((env[0] - 0.5).abs() < 1e-6, "env={env:?}");
+    }
 
     #[test]
     fn detect_silence_no_samples() {

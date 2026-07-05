@@ -31,6 +31,20 @@ pub trait MatteWriter: Send + Sync {
     ) -> Result<MediaSource, String>;
 }
 
+/// Host seam for `remove_silence` (#174): decode a media source's audio to
+/// interleaved f32 PCM at the requested `sample_rate`/`channels`. The pure
+/// executor stays codec-free — the app shell decodes via ffmpeg; the
+/// MCP/headless path leaves it unset, so `remove_silence` reports it's
+/// unavailable. Returns `None` when the source has no decodable audio.
+pub trait ClipAudioSource: Send + Sync {
+    fn decode_source_pcm(
+        &self,
+        source: &MediaSource,
+        sample_rate: u32,
+        channels: usize,
+    ) -> Option<Vec<f32>>;
+}
+
 const DEFAULT_CLIP_DURATION_FRAMES: i64 = 150;
 
 /// Resolved clip placement geometry from optional agent args + manifest entry.
@@ -387,6 +401,9 @@ pub struct ToolExecutor {
     /// Host writer for `create_matte` (#242): renders + persists the matte PNG into the project.
     /// `None` on the pure/MCP path, where `create_matte` reports it's unavailable.
     matte_writer: Option<Arc<dyn MatteWriter>>,
+    /// Host audio decoder for `remove_silence` (#174). `None` on the pure/MCP path,
+    /// where `remove_silence` reports it's unavailable.
+    audio_source: Option<Arc<dyn ClipAudioSource>>,
 }
 
 /// Read-only tools: successful execution does not bump the revision.
@@ -416,6 +433,7 @@ impl ToolExecutor {
             skills: Vec::new(),
             timeline_words: Vec::new(),
             matte_writer: None,
+            audio_source: None,
         }
     }
 
@@ -423,6 +441,13 @@ impl ToolExecutor {
     /// that encodes the solid-colour PNG and writes it into the open project package.
     pub fn set_matte_writer(&mut self, writer: Arc<dyn MatteWriter>) {
         self.matte_writer = Some(writer);
+    }
+
+    /// Install the host audio decoder for `remove_silence` (#174). The app shell
+    /// provides an ffmpeg-backed implementation; unset means the tool reports it's
+    /// unavailable.
+    pub fn set_audio_source(&mut self, source: Arc<dyn ClipAudioSource>) {
+        self.audio_source = Some(source);
     }
 
     /// Supply the timeline-mapped transcript words (upstream #160). The host runs
@@ -624,11 +649,7 @@ impl ToolExecutor {
                 self.exec_mut(tool_name, ToolExecutor::cmd_apply_clip_preset, args)
             }
             "list_clip_presets" => self.cmd_list_clip_presets(),
-            "remove_silence" => Err(
-                "Silence removal needs on-device audio analysis, which isn't available through the \
-                 agent yet."
-                    .to_string(),
-            ),
+            "remove_silence" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_silence, args),
             "set_clip_audio_effects" | "set_clip_noise_reduction" => Err(
                 "Audio effects and noise reduction aren't implemented through the agent yet."
                     .to_string(),
@@ -3193,6 +3214,110 @@ impl ToolExecutor {
                 "text": serde_json::to_string(&json!({
                     "presets": names,
                     "count": names.len(),
+                }))
+                .unwrap_or_default()
+            }]
+        }))
+    }
+
+    /// REMOVE_SILENCE: detect silent regions in a clip's audio via on-device RMS
+    /// and ripple-delete them (#174). Decoding is a host seam; the detector and
+    /// source→frame mapping are pure (`audio_core::silence_detector`).
+    fn cmd_remove_silence(&mut self, args: &Value) -> Result<Value, String> {
+        use audio_core::silence_detector::{
+            detect_silence, rms_envelope, source_ranges_to_project_frames, ClipPlacement,
+            SilenceDetectionConfig,
+        };
+
+        let clip_id = args
+            .get("clipId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "remove_silence requires 'clipId'.".to_string())?;
+        let threshold_db = args
+            .get("thresholdDb")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(-40.0);
+        let min_silence_seconds = args
+            .get("minSilenceSeconds")
+            .and_then(|v| v.as_f64())
+            .filter(|s| *s >= 0.0)
+            .unwrap_or(0.5);
+        let edge_padding_seconds = args
+            .get("edgePaddingSeconds")
+            .and_then(|v| v.as_f64())
+            .filter(|s| *s >= 0.0)
+            .unwrap_or(0.1);
+
+        let loc = timeline_core::find_clip(&self.timeline, clip_id)
+            .ok_or_else(|| format!("Clip '{clip_id}' was not found on the timeline."))?;
+        let clip = self.timeline.tracks[loc.track_index].clips[loc.clip_index].clone();
+        let source = self
+            .media_manifest
+            .entry_for(&clip.media_ref)
+            .map(|e| e.source.clone())
+            .ok_or_else(|| "The clip's media isn't in the library, so its audio can't be analysed.".to_string())?;
+
+        let audio = self.audio_source.clone().ok_or_else(|| {
+            "remove_silence is unavailable: no audio decoder is connected (run it from the app)."
+                .to_string()
+        })?;
+
+        let sample_rate = 44_100u32;
+        let channels = 1usize;
+        let pcm = audio
+            .decode_source_pcm(&source, sample_rate, channels)
+            .ok_or_else(|| "Could not decode the clip's audio.".to_string())?;
+
+        // ~10 ms RMS windows → envelope at `sample_rate / window` Hz.
+        let window = (sample_rate as usize / 100).max(1);
+        let envelope = rms_envelope(&pcm, channels, window);
+        let envelope_rate = sample_rate as f64 / window as f64;
+        let config = SilenceDetectionConfig {
+            threshold: SilenceDetectionConfig::from_db(threshold_db),
+            min_silence_seconds,
+            edge_padding_seconds,
+        };
+        let source_ranges = detect_silence(&envelope, envelope_rate, &config);
+
+        let fps = self.timeline.fps as f64;
+        let placement = ClipPlacement {
+            timeline_start_frame: clip.start_frame,
+            duration_frames: clip.duration_frames,
+            source_offset_seconds: clip.trim_start_frame as f64 / fps,
+            speed: clip.speed,
+            fps,
+        };
+        let frame_ranges = source_ranges_to_project_frames(&source_ranges, &placement);
+        if frame_ranges.is_empty() {
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string(&json!({
+                        "clipId": clip_id,
+                        "removedRanges": 0,
+                        "removedFrames": 0,
+                        "message": "No silent regions matched the threshold and minimum duration."
+                    }))
+                    .unwrap_or_default()
+                }]
+            }));
+        }
+
+        let ranges: Vec<timeline_core::FrameRange> = frame_ranges
+            .iter()
+            .map(|&(start, end)| timeline_core::FrameRange { start, end })
+            .collect();
+        let range_count = ranges.len();
+        let (removed_frames, _tracks) =
+            self.apply_ripple_delete_on_track(loc.track_index, ranges, Default::default())?;
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&json!({
+                    "clipId": clip_id,
+                    "removedRanges": range_count,
+                    "removedFrames": removed_frames,
                 }))
                 .unwrap_or_default()
             }]
@@ -7074,6 +7199,82 @@ mod tests {
             )
             .unwrap_err();
         assert!(e2.contains("No clip preset named"), "{e2}");
+    }
+
+    struct MockAudio;
+    impl ClipAudioSource for MockAudio {
+        fn decode_source_pcm(
+            &self,
+            _source: &core_model::MediaSource,
+            sample_rate: u32,
+            channels: usize,
+        ) -> Option<Vec<f32>> {
+            // 1s loud, 2s silent, 1s loud (mono at `sample_rate`).
+            let sr = sample_rate as usize * channels;
+            let mut pcm = Vec::new();
+            pcm.extend(std::iter::repeat(0.5f32).take(sr));
+            pcm.extend(std::iter::repeat(0.0f32).take(2 * sr));
+            pcm.extend(std::iter::repeat(0.5f32).take(sr));
+            Some(pcm)
+        }
+    }
+
+    fn audio_media(id: &str, duration: f64) -> core_model::MediaManifestEntry {
+        core_model::MediaManifestEntry {
+            id: id.into(),
+            name: format!("{id}.wav"),
+            r#type: ClipType::Audio,
+            source: core_model::MediaSource::External {
+                absolute_path: format!("/{id}.wav"),
+            },
+            duration,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: Some(true),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+            generation_status: None,
+        }
+    }
+
+    #[test]
+    fn remove_silence_cuts_the_silent_region() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("a1", 4.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockAudio));
+        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+
+        let res = exec
+            .execute("remove_silence", &json!({"clipId": clip_id}))
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"removedRanges\":1"), "one silent region: {text}");
+        assert!(!text.contains("\"removedFrames\":0"), "frames removed: {text}");
+    }
+
+    #[test]
+    fn remove_silence_unavailable_without_audio_source() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("a1", 4.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let err = exec
+            .execute("remove_silence", &json!({"clipId": clip_id}))
+            .unwrap_err();
+        assert!(!err.contains("Unknown tool"), "{err}");
+        assert!(err.contains("unavailable"), "{err}");
     }
 
     #[test]

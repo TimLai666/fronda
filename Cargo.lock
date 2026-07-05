@@ -1872,6 +1872,7 @@ name = "fronda-agent-contract"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "fronda-audio-core",
  "fronda-core-model",
  "fronda-timeline-core",
  "serde",
