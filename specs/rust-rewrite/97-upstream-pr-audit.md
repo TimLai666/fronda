@@ -191,8 +191,9 @@ changes deferred - needs render-layer text measurement, same as add_texts).
 `export_project` PORTED 2026-07-05 via the ExportHost seam (validated enums,
 timelineId incl. palmier refusal, Downloads default path, overwrite handling;
 video renders on a background thread returning status=started; xml/fcpxml/
-palmier inline). Remaining un-ported upstream tools: `send_feedback` (network
-backend) and `get_projects`/`new_project` (#238 app-nav) only.
+palmier inline). `get_projects` PORTED 2026-07-05 (read-only, ProjectLister seam over the
+recents registry). Remaining un-ported upstream tools: `send_feedback`
+(network backend) and `open_project`/`new_project` (#238 app-nav) only.
 
 **Resolved 2026-07-05 by the v0.6.1 re-audit:** the speculative
 `set_clip_audio_effects`/`set_clip_noise_reduction` stubs were REMOVED — upstream
