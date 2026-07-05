@@ -3492,7 +3492,10 @@ impl ToolExecutor {
         // level (RMS approximation of upstream's speech detection - honest in
         // the tool description). clipId + thresholdDb/minSilenceSeconds/
         // edgePaddingSeconds remain as a Rust clip-scoped extension.
-        let clip_id = args.get("clipId").and_then(|v| v.as_str());
+        let clip_id = args
+            .get("clipId")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let threshold_db = args.get("thresholdDb").and_then(|v| v.as_f64());
         let min_silence_seconds = args
             .get("minSilenceSeconds")
@@ -3504,107 +3507,62 @@ impl ToolExecutor {
             .and_then(|v| v.as_f64())
             .filter(|s| *s >= 0.0)
             .unwrap_or(0.1);
-
         let audio = self.audio_source.clone().ok_or_else(|| {
             "remove_silence is unavailable: no audio decoder is connected (run it from the app)."
                 .to_string()
         })?;
 
-        // Targets: one clip, or every audio-bearing clip on the timeline.
-        let targets: Vec<(usize, Clip)> = match clip_id {
+        // Which tracks to sweep. Clip mode pins one clip on its track.
+        let track_indices: Vec<usize> = match clip_id.as_deref() {
             Some(id) => {
                 let loc = timeline_core::find_clip(&self.timeline, id)
                     .ok_or_else(|| format!("Clip '{id}' was not found on the timeline."))?;
-                vec![(
-                    loc.track_index,
-                    self.timeline.tracks[loc.track_index].clips[loc.clip_index].clone(),
-                )]
+                vec![loc.track_index]
             }
-            None => self
-                .timeline
-                .tracks
-                .iter()
-                .enumerate()
-                .flat_map(|(ti, t)| t.clips.iter().map(move |c| (ti, c.clone())))
-                .filter(|(_, c)| {
-                    let entry = self.media_manifest.entry_for(&c.media_ref);
-                    match entry.map(|e| e.r#type) {
-                        Some(ClipType::Audio) => true,
-                        Some(ClipType::Video) => entry
-                            .and_then(|e| e.has_audio)
-                            .unwrap_or(false),
-                        _ => false,
-                    }
-                })
-                .collect(),
+            None => (0..self.timeline.tracks.len()).collect(),
         };
-        if targets.is_empty() {
+
+        // Per track: DETECT AGAINST THE CURRENT STATE, then ripple. An earlier
+        // track's ripple moves sync-locked followers, so ranges pre-computed for
+        // every track at once would be stale by the time later tracks apply
+        // (confirmed by adversarial review) - re-detecting per track keeps every
+        // cut aligned, and a span a follower already lost simply stops being
+        // detected on its own pass.
+        let mut sections = 0usize;
+        let mut removed_frames = 0i64;
+        let mut analysed_any = false;
+        let mut partial: Option<String> = None;
+        for ti in track_indices {
+            let ranges = self.detect_track_dead_air(
+                ti,
+                clip_id.as_deref(),
+                threshold_db,
+                min_silence_seconds,
+                edge_padding_seconds,
+                audio.as_ref(),
+                &mut analysed_any,
+            )?;
+            if ranges.is_empty() {
+                continue;
+            }
+            sections += ranges.len();
+            match self.apply_ripple_delete_on_track(ti, ranges, Default::default()) {
+                Ok((frames, _)) => removed_frames += frames,
+                Err(reason) => {
+                    partial = Some(format!(
+                        "A later track refused: {reason}. Earlier tracks were already edited."
+                    ));
+                    break;
+                }
+            }
+        }
+
+        if clip_id.is_none() && !analysed_any {
             return Err(
                 "No dead air on the timeline. The timeline has no audio-bearing clips to analyse."
                     .to_string(),
             );
         }
-
-        // Detect per clip; group frame ranges by track for the ripple pass.
-        let fps = self.timeline.fps as f64;
-        let sample_rate = 44_100u32;
-        let channels = 1usize;
-        let window = (sample_rate as usize / 100).max(1);
-        let mut ranges_by_track: std::collections::BTreeMap<usize, Vec<timeline_core::FrameRange>> =
-            Default::default();
-        let mut sections = 0usize;
-        for (ti, clip) in &targets {
-            let Some(source) = self
-                .media_manifest
-                .entry_for(&clip.media_ref)
-                .map(|e| e.source.clone())
-            else {
-                if clip_id.is_some() {
-                    return Err(
-                        "The clip's media isn't in the library, so its audio can't be analysed."
-                            .to_string(),
-                    );
-                }
-                continue;
-            };
-            let Some(pcm) = audio.decode_source_pcm(&source, sample_rate, channels) else {
-                if clip_id.is_some() {
-                    return Err("Could not decode the clip's audio.".to_string());
-                }
-                continue;
-            };
-            let envelope = audio_core::silence_detector::rms_envelope(&pcm, channels, window);
-            let envelope_rate = sample_rate as f64 / window as f64;
-            let threshold = match threshold_db {
-                Some(db) => audio_core::silence_detector::SilenceDetectionConfig::from_db(db),
-                None => audio_core::silence_detector::adaptive_silence_threshold(&envelope),
-            };
-            let config = audio_core::silence_detector::SilenceDetectionConfig {
-                threshold,
-                min_silence_seconds,
-                edge_padding_seconds,
-            };
-            let source_ranges =
-                audio_core::silence_detector::detect_silence(&envelope, envelope_rate, &config);
-            let placement = audio_core::silence_detector::ClipPlacement {
-                timeline_start_frame: clip.start_frame,
-                duration_frames: clip.duration_frames,
-                source_offset_seconds: clip.trim_start_frame as f64 / fps,
-                speed: clip.speed,
-                fps,
-            };
-            for (start, end) in audio_core::silence_detector::source_ranges_to_project_frames(
-                &source_ranges,
-                &placement,
-            ) {
-                ranges_by_track
-                    .entry(*ti)
-                    .or_default()
-                    .push(timeline_core::FrameRange { start, end });
-                sections += 1;
-            }
-        }
-
         if sections == 0 {
             if clip_id.is_some() {
                 return Ok(json!({
@@ -3625,26 +3583,10 @@ impl ToolExecutor {
             );
         }
 
-        // Ripple each track's ranges; a later track's refusal reports partial
-        // progress (upstream #261's payload shape).
-        let mut removed_frames = 0i64;
-        let mut partial: Option<String> = None;
-        for (ti, ranges) in ranges_by_track {
-            match self.apply_ripple_delete_on_track(ti, ranges, Default::default()) {
-                Ok((frames, _)) => removed_frames += frames,
-                Err(reason) => {
-                    partial = Some(format!(
-                        "A later track refused: {reason}. Earlier tracks were already edited."
-                    ));
-                    break;
-                }
-            }
-        }
-
         let mut payload = json!({
             "sectionsRemoved": sections,
             "removedFrames": removed_frames,
-            "note": "Removed dead air and closed the gaps. Frames have shifted — re-read get_timeline or get_transcript before further edits.",
+            "note": "Removed dead air and closed the gaps. Frames have shifted - re-read get_timeline or get_transcript before further edits.",
         });
         if let Some(p) = partial {
             payload["partial"] = json!(p);
@@ -3658,6 +3600,94 @@ impl ToolExecutor {
                 "text": serde_json::to_string(&payload).unwrap_or_default()
             }]
         }))
+    }
+
+    /// Detect dead-air frame ranges on ONE track against the CURRENT timeline
+    /// state. `only_clip` restricts to a single clip (the clip-scoped mode);
+    /// otherwise every audio-bearing clip on the track is analysed.
+    #[allow(clippy::too_many_arguments)]
+    fn detect_track_dead_air(
+        &self,
+        track_index: usize,
+        only_clip: Option<&str>,
+        threshold_db: Option<f64>,
+        min_silence_seconds: f64,
+        edge_padding_seconds: f64,
+        audio: &dyn ClipAudioSource,
+        analysed_any: &mut bool,
+    ) -> Result<Vec<timeline_core::FrameRange>, String> {
+        use audio_core::silence_detector as sd;
+
+        let Some(track) = self.timeline.tracks.get(track_index) else {
+            return Ok(Vec::new());
+        };
+        let fps = self.timeline.fps as f64;
+        let sample_rate = 44_100u32;
+        let channels = 1usize;
+        let window = (sample_rate as usize / 100).max(1);
+        let mut ranges = Vec::new();
+        for clip in &track.clips {
+            match only_clip {
+                Some(id) if clip.id != id => continue,
+                None => {
+                    let entry = self.media_manifest.entry_for(&clip.media_ref);
+                    let audio_bearing = match entry.map(|e| e.r#type) {
+                        Some(ClipType::Audio) => true,
+                        Some(ClipType::Video) => {
+                            entry.and_then(|e| e.has_audio).unwrap_or(false)
+                        }
+                        _ => false,
+                    };
+                    if !audio_bearing {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            let Some(source) = self
+                .media_manifest
+                .entry_for(&clip.media_ref)
+                .map(|e| e.source.clone())
+            else {
+                if only_clip.is_some() {
+                    return Err(
+                        "The clip's media isn't in the library, so its audio can't be analysed."
+                            .to_string(),
+                    );
+                }
+                continue;
+            };
+            let Some(pcm) = audio.decode_source_pcm(&source, sample_rate, channels) else {
+                if only_clip.is_some() {
+                    return Err("Could not decode the clip's audio.".to_string());
+                }
+                continue;
+            };
+            *analysed_any = true;
+            let envelope = sd::rms_envelope(&pcm, channels, window);
+            let envelope_rate = sample_rate as f64 / window as f64;
+            let threshold = match threshold_db {
+                Some(db) => sd::SilenceDetectionConfig::from_db(db),
+                None => sd::adaptive_silence_threshold(&envelope),
+            };
+            let config = sd::SilenceDetectionConfig {
+                threshold,
+                min_silence_seconds,
+                edge_padding_seconds,
+            };
+            let source_ranges = sd::detect_silence(&envelope, envelope_rate, &config);
+            let placement = sd::ClipPlacement {
+                timeline_start_frame: clip.start_frame,
+                duration_frames: clip.duration_frames,
+                source_offset_seconds: clip.trim_start_frame as f64 / fps,
+                speed: clip.speed,
+                fps,
+            };
+            for (start, end) in sd::source_ranges_to_project_frames(&source_ranges, &placement) {
+                ranges.push(timeline_core::FrameRange { start, end });
+            }
+        }
+        Ok(ranges)
     }
 
     fn cmd_sync_audio(&mut self, args: &Value) -> Result<Value, String> {
@@ -9088,6 +9118,43 @@ mod tests {
         exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
         let err = exec.execute("remove_silence", &json!({})).unwrap_err();
         assert!(err.contains("No dead air"), "{err}");
+    }
+
+    #[test]
+    fn remove_silence_multi_track_sync_locked_no_stale_cuts() {
+        // Adversarial-review regression: with two sync-locked audio tracks the
+        // first track's ripple also cuts+shifts the follower, so the follower's
+        // pass must re-detect against the CURRENT state — applying ranges
+        // pre-computed before any edit would cut the follower's shifted
+        // content at stale positions.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("a1", 4.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockAudio));
+        for ti in 0..2usize {
+            let _ = timeline_core::insert_track_at(exec.timeline_mut(), ti, ClipType::Audio);
+            exec.timeline_mut().tracks[ti].sync_locked = true;
+            let mut c = crate::test_helpers::make_clip(0, 120);
+            c.media_ref = "a1".into();
+            c.media_type = ClipType::Audio;
+            c.source_clip_type = ClipType::Audio;
+            let _ = timeline_core::place_clips(exec.timeline_mut(), ti, 0, &[c]);
+        }
+
+        let res = exec.execute("remove_silence", &json!({})).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        // ~2s of silence minus 0.1s edge padding each side ≈ 54 frames at
+        // 30fps, removed ONCE — the follower re-detects nothing after the
+        // synced cut (padding remnants are under minSilenceSeconds).
+        let removed = v["removedFrames"].as_i64().unwrap();
+        assert!((50..=58).contains(&removed), "{v}");
+        assert_eq!(v["sectionsRemoved"], 1, "no stale second pass: {v}");
+        let (s0, s1) = (track_spans(&exec, 0), track_spans(&exec, 1));
+        assert_eq!(s0, s1, "tracks stay in sync");
+        assert_eq!(s0.len(), 2, "head + slid tail: {s0:?}");
+        assert_eq!(s0[0].0, 0);
+        assert_eq!(s0[1].1, 120 - removed, "total shrank by exactly one cut");
     }
 
     #[test]
