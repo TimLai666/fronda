@@ -7263,6 +7263,41 @@ mod tests {
         assert!(!text.contains("\"removedFrames\":0"), "frames removed: {text}");
     }
 
+    struct MockLoudAudio;
+    impl ClipAudioSource for MockLoudAudio {
+        fn decode_source_pcm(
+            &self,
+            _source: &core_model::MediaSource,
+            sample_rate: u32,
+            channels: usize,
+        ) -> Option<Vec<f32>> {
+            // 4s of steady tone — no silent region.
+            Some(vec![0.5f32; sample_rate as usize * channels * 4])
+        }
+    }
+
+    #[test]
+    fn remove_silence_reports_zero_when_no_silence() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("a1", 4.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockLoudAudio));
+        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let before = exec.timeline().tracks[0].clips.len();
+
+        let res = exec
+            .execute("remove_silence", &json!({"clipId": clip_id}))
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"removedRanges\":0"), "no cut: {text}");
+        assert_eq!(
+            exec.timeline().tracks[0].clips.len(),
+            before,
+            "timeline unchanged when nothing is silent"
+        );
+    }
+
     #[test]
     fn remove_silence_unavailable_without_audio_source() {
         let mut manifest = MediaManifest::default();

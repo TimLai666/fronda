@@ -351,6 +351,24 @@ mod tests {
     }
 
     #[test]
+    fn create_and_dissolve_a_single_clip_round_trips() {
+        let mut tl = timeline_with(vec![clip("a", 10, 40), clip("b", 50, 30)]);
+        let cid = create_compound_clip(&mut tl, &["a".into()], None).unwrap();
+        // One-clip group: the compound spans exactly clip a; b is untouched.
+        assert_eq!(tl.tracks[0].clips.len(), 2);
+        let compound = tl.tracks[0].clips.iter().find(|c| c.id == cid).unwrap();
+        assert_eq!(compound.start_frame, 10);
+        assert_eq!(compound.duration_frames, 40);
+        assert!(tl.tracks[0].clips.iter().any(|c| c.id == "b"));
+
+        let restored = dissolve_compound_clip(&mut tl, &cid).unwrap();
+        assert_eq!(restored, vec!["a".to_string()]);
+        let a = tl.tracks[0].clips.iter().find(|c| c.id == "a").unwrap();
+        assert_eq!(a.start_frame, 10, "restored at original frame");
+        assert!(tl.compound_timelines.is_empty());
+    }
+
+    #[test]
     fn create_refuses_non_adjacent_clips() {
         let mut tl = timeline_with(vec![
             clip("a", 0, 30),
