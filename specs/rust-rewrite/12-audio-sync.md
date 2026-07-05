@@ -35,12 +35,33 @@ tool, a way to apply the offset, export alignment, undo, and UI.
 ### 1. Applying the offset — two options (DECISION REQUIRED)
 
 **Option A — bake into `start_frame` (recommended for v1).** `sync_audio_clips`
-moves the target clip: `target.start_frame += offset.offset_frames` (clamped ≥ 0),
-and its sync-linked video partner follows the same delta (reuse the existing
-linked-move logic). No model change, no render/export change, fully covered by
-undo via `exec_mut`. The computed offset is not retained as metadata — re-syncing
-just recomputes. This is the smallest correct version and matches how every other
-Fronda edit works (move gestures bake into `start_frame`).
+moves the target clip so its waveform lines up with the reference's, and its
+sync-linked video partner follows the same delta (reuse `move_clips`, which
+already shifts linked partners). No model change, no render/export change, fully
+covered by undo via `exec_mut`. The computed offset is not retained as metadata —
+re-syncing just recomputes.
+
+**Alignment formula (get this right — it's the whole feature).** `find_sync_offset`
+returns the lag between the two decoded sample arrays, each measured from its
+own **source sample 0**. A clip's source-sample-0 sits at timeline frame
+`anchor = start_frame - trim_start_frame` (at speed 1; the general speed case is
+out of v1 scope — refuse or warn on speed ≠ 1). So the move is NOT a bare
+`start_frame += offset_frames`; it is:
+
+```
+ref_anchor    = ref.start_frame    - ref.trim_start_frame
+tgt_anchor    = tgt.start_frame    - tgt.trim_start_frame
+desired_anchor = ref_anchor + offset_frames      // align tgt's content to ref's
+delta          = desired_anchor - tgt_anchor
+tgt.start_frame = max(0, tgt.start_frame + delta) // move_clips carries linked partners
+```
+
+`start_frame += offset_frames` is only the special case where both clips share
+`start_frame` and `trim_start_frame`. **Pin the sign and the formula with the
+padded-clip mock test** (below): a target that is the reference plus N leading
+silent frames must end up moved so the shared content coincides — that test is
+the oracle, since no Swift source is in-repo to diff against. If a later
+comparison against Swift #119 disagrees on sign, fix here and update the test.
 
 **Option B — store `sync_offset_frames: Option<i64>` on the clip (per specs
 `01`/`04`).** Keep `start_frame` as authored and record the offset as metadata; the
