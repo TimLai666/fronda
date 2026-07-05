@@ -5898,6 +5898,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips: vec![core_model::Clip {
                 id: "clip-vid".to_string(),
                 media_ref: "media-vid".to_string(),
@@ -6612,6 +6613,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips: vec![core_model::Clip {
                 id: "c".into(),
                 media_ref: "m".into(),
@@ -7574,6 +7576,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![tgt_clip],
             });
         }

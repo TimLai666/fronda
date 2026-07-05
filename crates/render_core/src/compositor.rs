@@ -871,6 +871,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
         }
     }
@@ -1035,6 +1036,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
         };
         let out = compose_frame(&timeline, &MediaManifest::default(), 0, 4, 4, |c| {

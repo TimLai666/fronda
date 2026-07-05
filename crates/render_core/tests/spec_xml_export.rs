@@ -196,6 +196,7 @@ fn comprehensive_timeline() -> Timeline {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
         tracks: vec![
             Track {
@@ -204,6 +205,7 @@ fn comprehensive_timeline() -> Timeline {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![v1],
             },
             Track {
@@ -212,6 +214,7 @@ fn comprehensive_timeline() -> Timeline {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![v2],
             },
             Track {
@@ -220,6 +223,7 @@ fn comprehensive_timeline() -> Timeline {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![txt1],
             },
             Track {
@@ -228,6 +232,7 @@ fn comprehensive_timeline() -> Timeline {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![a1, unresolved],
             },
         ],
@@ -523,6 +528,7 @@ fn xml_spec_position_keyframes_export_resolved_center() {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips: vec![clip],
         }],
         ..Timeline::default()

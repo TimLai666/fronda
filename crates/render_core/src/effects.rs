@@ -247,6 +247,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![clip],
             }],
             ..Timeline::default()
@@ -352,6 +353,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
+                    display_height: 50.0,
                     clips: vec![video_clip],
                 },
                 Track {
@@ -360,6 +362,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
+                    display_height: 50.0,
                     clips: vec![text_clip],
                 },
             ],

@@ -102,6 +102,9 @@ pub fn create_compound_clip(
         .collect();
 
     let nested = Timeline {
+        id: Uuid::new_v4().to_string(),
+        name: "Compound Clip".to_string(),
+        folder_id: None,
         fps: timeline.fps,
         width: timeline.width,
         height: timeline.height,
@@ -113,6 +116,7 @@ pub fn create_compound_clip(
             muted: false,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips: nested_clips,
         }],
         transcription_language: timeline.transcription_language.clone(),
@@ -388,6 +392,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips: vec![clip("b", 0, 30)],
         });
         let err = create_compound_clip(&mut tl, &["a".into(), "b".into()], None).unwrap_err();

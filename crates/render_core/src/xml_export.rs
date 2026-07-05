@@ -572,6 +572,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![Clip {
                     id: "clip1".into(),
                     media_ref: "asset-video.mp4".into(),
@@ -613,6 +614,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
         }
     }
@@ -673,6 +675,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
         }
     }
@@ -832,9 +835,11 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
+                display_height: 50.0,
                 clips: vec![c],
             }],
             transcription_language: None,
+            folder_id: None,
             compound_timelines: Default::default(),
         };
         let xml = XmlExport::export(&tl);
@@ -854,6 +859,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips: vec![Clip {
                 id: "clip2".into(),
                 media_ref: "asset2.mp4".into(),
@@ -919,6 +925,7 @@ mod tests {
             muted: true,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips: vec![],
         });
         let xml = XmlExport::export(&timeline);
@@ -970,6 +977,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips: vec![Clip {
                 id: "clip-audio".into(),
                 media_ref: "asset-audio.wav".into(),

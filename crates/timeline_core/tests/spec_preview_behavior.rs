@@ -61,6 +61,7 @@ fn timeline_with_tracks(tracks: Vec<Track>) -> Timeline {
         selected_clip_ids: std::collections::HashSet::new(),
         tracks,
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
     }
 }

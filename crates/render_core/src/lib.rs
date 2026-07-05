@@ -672,6 +672,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
             tracks: vec![
                 Track {
@@ -680,6 +681,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
+                    display_height: 50.0,
                     clips: vec![v1],
                 },
                 Track {
@@ -688,6 +690,7 @@ mod tests {
                     muted: false,
                     hidden: true,
                     sync_locked: true,
+                    display_height: 50.0,
                     clips: vec![a1],
                 },
             ],
@@ -920,6 +923,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
             tracks: vec![
                 Track {
@@ -928,6 +932,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
+                    display_height: 50.0,
                     clips: vec![video],
                 },
                 Track {
@@ -936,6 +941,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
+                    display_height: 50.0,
                     clips: vec![text],
                 },
             ],
@@ -1020,6 +1026,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "v".into(),
@@ -1027,6 +1034,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![v1, v2],
             }],
         };
@@ -1071,6 +1079,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "a".into(),
@@ -1078,6 +1087,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![a1, a2],
             }],
         };
@@ -1123,6 +1133,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "a".into(),
@@ -1130,6 +1141,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![a1, a2],
             }],
         };
@@ -1633,6 +1645,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "v-track".into(),
@@ -1640,6 +1653,7 @@ mod tests {
                 muted: false,
                 hidden: true,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![v1],
             }],
         };
@@ -1672,6 +1686,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
             tracks: vec![Track {
                 id: "a-track".into(),
@@ -1679,6 +1694,7 @@ mod tests {
                 muted: true,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![a1],
             }],
         };

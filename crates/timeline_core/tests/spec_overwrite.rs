@@ -63,6 +63,7 @@ fn timeline(clips: Vec<Clip>) -> Timeline {
             clips,
         }],
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
     }
 }
@@ -202,6 +203,7 @@ fn clp_006_clear_region_split_does_not_touch_linked_partner_track() {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
+                display_height: 50.0,
                 clips: vec![v],
             },
             Track {
@@ -210,10 +212,12 @@ fn clp_006_clear_region_split_does_not_touch_linked_partner_track() {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
+                display_height: 50.0,
                 clips: vec![a],
             },
         ],
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
     };
 

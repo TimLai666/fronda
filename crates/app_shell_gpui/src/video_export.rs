@@ -858,11 +858,13 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
+                display_height: 50.0,
                 clips: vec![clip],
             }],
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
         }
     }

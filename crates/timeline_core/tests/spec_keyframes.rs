@@ -542,6 +542,7 @@ fn stroke_progress_track_rescales_on_fps_change() {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips: vec![c],
         }],
         ..Timeline::default()

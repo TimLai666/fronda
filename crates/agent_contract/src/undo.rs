@@ -160,6 +160,7 @@ mod tests {
             selected_clip_ids: Default::default(),
             tracks: vec![],
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
         }
     }

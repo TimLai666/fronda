@@ -633,6 +633,7 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
                 muted: false,
                 hidden: true,
                 sync_locked: false,
+                display_height: 50.0,
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
                     media_ref: "media-1".to_string(),
@@ -846,6 +847,7 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
                 muted: true,
                 hidden: false,
                 sync_locked: true,
+                display_height: 50.0,
                 clips: vec![Clip {
                     id: "clip-audio-1".to_string(),
                     media_ref: "media-audio-1".to_string(),

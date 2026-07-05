@@ -118,11 +118,13 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
+                display_height: 50.0,
                 clips: vec![clip],
             }],
             settings_configured: true,
             selected_clip_ids: Default::default(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: Default::default(),
         }
     }
@@ -191,6 +193,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: Default::default(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: Default::default(),
         };
         render_frame_png(&timeline, &MediaManifest::default(), &dir, 0, &out).unwrap();

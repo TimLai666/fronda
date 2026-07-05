@@ -152,6 +152,7 @@ fn format_track(track: &Track, index: usize, options: &TimelineFormatOptions) ->
         ClipType::Image => "image",
         ClipType::Lottie => "lottie",
         ClipType::Shape => "shape",
+        ClipType::Sequence => "sequence",
     };
 
     let (visible_clips, total_count) = match options.window {
@@ -982,6 +983,10 @@ pub fn format_inspect_media(input: &InspectMediaInput) -> Result<Value, String> 
             // Shape annotations - basic metadata only
             result["shapeType"] = json!("annotation");
         }
+        ClipType::Sequence => {
+            // Mirrors Swift inspectMedia: sequences are timelines, not media.
+            result["note"] = json!("Sequences are timelines, not media assets. Use get_timeline.");
+        }
         ClipType::Text => {
             // Already rejected above, but handle as safety net
             return Err("Cannot inspect a text clip with inspect_media.".to_string());
@@ -1008,6 +1013,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: std::collections::HashMap::new(),
             tracks: vec![
                 Track {
@@ -1016,6 +1022,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
+                    display_height: 50.0,
                     clips: vec![
                         Clip {
                             id: "clip-001".into(),
@@ -1099,6 +1106,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
+                    display_height: 50.0,
                     clips: vec![Clip {
                         id: "clip-003".into(),
                         media_ref: "asset-audio-1".into(),

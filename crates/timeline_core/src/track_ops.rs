@@ -24,6 +24,7 @@ pub fn insert_track_at(
         muted: false,
         hidden: false,
         sync_locked: true,
+        display_height: 50.0,
         clips: Vec::new(),
     };
 
@@ -96,7 +97,12 @@ pub fn display_label_for_track(timeline: &Timeline, track_index: usize) -> Strin
     match track_type {
         ClipType::Audio => format!("A{count}"),
         ClipType::Text => format!("T{count}"),
-        ClipType::Video | ClipType::Image | ClipType::Lottie | ClipType::Shape => {
+        // Sequence carriers live on video tracks (Swift trackLabel "Video").
+        ClipType::Video
+        | ClipType::Image
+        | ClipType::Lottie
+        | ClipType::Shape
+        | ClipType::Sequence => {
             format!("V{count}")
         }
     }

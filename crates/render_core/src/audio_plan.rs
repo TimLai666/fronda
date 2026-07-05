@@ -188,6 +188,7 @@ mod tests {
             settings_configured: true,
             selected_clip_ids: Default::default(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: Default::default(),
         }
     }

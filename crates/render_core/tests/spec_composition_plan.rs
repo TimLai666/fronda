@@ -15,6 +15,7 @@ fn make_single_clip_timeline() -> Timeline {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
         tracks: vec![Track {
             id: "v1".into(),
@@ -22,6 +23,7 @@ fn make_single_clip_timeline() -> Timeline {
             muted: false,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips: vec![Clip {
                 id: "clip1".into(),
                 media_ref: "asset-video.mp4".into(),
@@ -303,6 +305,7 @@ fn rnd_010_non_overlapping_clips_produce_no_warnings() {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
         tracks: vec![Track {
             id: "v".into(),
@@ -310,6 +313,7 @@ fn rnd_010_non_overlapping_clips_produce_no_warnings() {
             muted: false,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips: vec![v1, v2],
         }],
     };
@@ -349,6 +353,7 @@ fn rnd_010_overlapping_visual_clips_produce_warnings() {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
         tracks: vec![Track {
             id: "v".into(),
@@ -356,6 +361,7 @@ fn rnd_010_overlapping_visual_clips_produce_warnings() {
             muted: false,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips: vec![v1, v2],
         }],
     };
@@ -471,6 +477,7 @@ fn make_image_timeline() -> Timeline {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
         tracks: vec![Track {
             id: "v1".into(),
@@ -478,6 +485,7 @@ fn make_image_timeline() -> Timeline {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips: vec![Clip {
                 id: "img-1".into(),
                 media_ref: "ref-img".into(),
@@ -524,6 +532,7 @@ fn make_lottie_timeline() -> Timeline {
         settings_configured: true,
         selected_clip_ids: std::collections::HashSet::new(),
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
         tracks: vec![Track {
             id: "v1".into(),
@@ -531,6 +540,7 @@ fn make_lottie_timeline() -> Timeline {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips: vec![Clip {
                 id: "lottie-1".into(),
                 media_ref: "ref-lottie".into(),

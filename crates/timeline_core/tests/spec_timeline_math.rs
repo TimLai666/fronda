@@ -66,6 +66,7 @@ fn tim_001_total_frames_is_max_clip_end_across_tracks() {
             track(ClipType::Audio, vec![clip(0, 400)]),
         ],
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
     };
 
@@ -116,6 +117,7 @@ fn tim_006_seek_clamps_into_zero_to_total_frames() {
         selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![track(ClipType::Video, vec![clip(100, 50)])],
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
     };
 
@@ -166,6 +168,7 @@ fn tim_008_half_open_invariant_after_split() {
         selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![track(ClipType::Video, vec![c1])],
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
     };
 
@@ -186,6 +189,7 @@ fn tim_008_half_open_invariant_after_clear_region() {
         selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![track(ClipType::Video, vec![c1, c2])],
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
     };
 
@@ -206,6 +210,7 @@ fn tim_008_half_open_invariant_after_split_then_speed() {
         selected_clip_ids: std::collections::HashSet::new(),
         tracks: vec![track(ClipType::Video, vec![c1])],
         transcription_language: None,
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
     };
 

@@ -425,6 +425,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
+                    display_height: 50.0,
                     clips: vec![video_clip("v1", 0, 3)],
                 },
                 Track {
@@ -433,12 +434,14 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
+                    display_height: 50.0,
                     clips: vec![audio_clip("a1", 0, 3)],
                 },
             ],
             settings_configured: true,
             selected_clip_ids: Default::default(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: Default::default(),
         };
 
@@ -487,11 +490,13 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
+                display_height: 50.0,
                 clips: vec![video_clip("v1", 0, 4)],
             }],
             settings_configured: true,
             selected_clip_ids: Default::default(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: Default::default(),
         };
         let out = dir.join("out30.mp4");
@@ -529,11 +534,13 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
+                display_height: 50.0,
                 clips: vec![audio_clip("m1", 0, 6)],
             }],
             settings_configured: true,
             selected_clip_ids: Default::default(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: Default::default(),
         };
         let mut manifest = MediaManifest::default();

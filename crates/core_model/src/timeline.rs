@@ -110,6 +110,9 @@ pub enum ClipType {
     Lottie,
     /// Shape annotations (rect, oval, arrow, etc.). Upstream PR #46.
     Shape,
+    /// A nested timeline placed as a single clip (upstream #255). The clip's
+    /// `media_ref` is the child timeline's id in `ProjectFile.timelines`.
+    Sequence,
 }
 
 impl ClipType {
@@ -154,15 +157,17 @@ impl ClipType {
             Self::Text => "text",
             Self::Lottie => "lottie",
             Self::Shape => "shape",
+            Self::Sequence => "sequence",
         }
     }
 
     /// Returns true for visual clip types (CORE-002).
-    /// Video, image, text, lottie, and shape are visual.
+    /// Video, image, text, lottie, shape, and sequence (a nested timeline placed
+    /// on a video track, upstream #255) are visual.
     pub fn is_visual(&self) -> bool {
         matches!(
             self,
-            Self::Video | Self::Image | Self::Text | Self::Lottie | Self::Shape
+            Self::Video | Self::Image | Self::Text | Self::Lottie | Self::Shape | Self::Sequence
         )
     }
 
@@ -802,13 +807,40 @@ pub struct Track {
     pub hidden: bool,
     #[serde(default = "default_true")]
     pub sync_locked: bool,
+    /// Persisted track height in points (upstream #255); Swift clamps to
+    /// `TrackSize.minHeight..maxHeight` (32..200) on decode, default 50.
+    #[serde(
+        default = "default_track_display_height",
+        deserialize_with = "de_display_height"
+    )]
+    pub display_height: f64,
     #[serde(default)]
     pub clips: Vec<Clip>,
+}
+
+fn default_track_display_height() -> f64 {
+    50.0
+}
+
+fn de_display_height<'de, D>(d: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<f64>::deserialize(d)?;
+    Ok(v.map(|h| h.clamp(32.0, 200.0))
+        .unwrap_or_else(default_track_display_height))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Timeline {
+    /// Per-timeline id (upstream #255) — the key `ProjectFile.activeTimelineId`,
+    /// `openTimelineIds`, `viewStates`, and sequence-clip `media_ref`s point at.
+    #[serde(default = "new_id")]
+    pub id: String,
+    /// Display name (upstream #255).
+    #[serde(default = "default_timeline_name")]
+    pub name: String,
     #[serde(default = "default_timeline_fps")]
     pub fps: i64,
     #[serde(default = "default_timeline_width")]
@@ -827,6 +859,9 @@ pub struct Timeline {
     /// Upstream PR #40.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcription_language: Option<String>,
+    /// Media-panel folder this timeline is filed under (upstream #255).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
     /// Nested timelines for compound clips (Issue #155).
     ///
     /// Maps `compound_timeline_id` → nested `Timeline`. When a clip has
@@ -849,9 +884,15 @@ impl Timeline {
     }
 }
 
+fn default_timeline_name() -> String {
+    "Timeline 1".to_string()
+}
+
 impl Default for Timeline {
     fn default() -> Self {
         Self {
+            id: new_id(),
+            name: default_timeline_name(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -859,6 +900,7 @@ impl Default for Timeline {
             selected_clip_ids: HashSet::new(),
             tracks: Vec::new(),
             transcription_language: None,
+            folder_id: None,
             compound_timelines: HashMap::new(),
         }
     }
@@ -978,6 +1020,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips: vec![],
         };
         assert!(audio_track.is_compatible_with(ClipType::Audio));
@@ -996,6 +1039,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips: vec![],
         };
         assert!(video_track.is_compatible_with(ClipType::Video));

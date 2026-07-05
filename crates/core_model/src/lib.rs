@@ -5,6 +5,7 @@ pub mod generation_log;
 pub mod library;
 pub mod matte;
 pub mod media_manifest;
+pub mod project_file;
 pub mod project_registry;
 pub mod shape_style;
 pub mod text_animation;
@@ -22,6 +23,7 @@ pub use matte::MatteAspect;
 pub use media_manifest::{
     GenerationInput, MediaFolder, MediaManifest, MediaManifestEntry, MediaSource,
 };
+pub use project_file::{ProjectFile, TimelineViewState};
 pub use project_registry::{ProjectEntry, ProjectRegistry};
 pub use shape_style::{
     Arrowhead, Endpoints, Fill, Point2d, Rgba, ShapeAnimationPreset, ShapeKind, ShapeStyle, Stroke,
