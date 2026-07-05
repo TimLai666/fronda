@@ -10,8 +10,8 @@ This spec captures Swift's exact output (verbatim-audited from upstream
 > **STATUS 2026-07-05: XMEML half IMPLEMENTED** (write_sequence recursion +
 > write_nest_clipitem inline-once/then-reference, frozen-carrier drop; the
 > cur_seq_width Scale% fix proved N/A — Rust's Scale uses the normalized
-> transform). Remaining: the FCPXML half below + carrier volume/motion filters
-> on XMEML nest clipitems + root sequence name → timeline.name.
+> transform). XMEML carrier filters + root
+> sequence name landed too. Remaining: the FCPXML half below only.
 
 Current Rust seams: `FcpxmlExport::export_with_target_and_timelines(timeline,
 manifest, target, timelines)` and
