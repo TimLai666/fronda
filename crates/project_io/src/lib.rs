@@ -1,9 +1,10 @@
 pub mod project_duplicate;
 
 use core_model::{
-    AnimPair, ChatSession, Crop, GenerationLog, KeyframeTrack, MediaManifest, Timeline,
-    CHAT_DIRECTORY_NAME, GENERATION_LOG_FILENAME, MANIFEST_FILENAME, MEDIA_DIRECTORY_NAME,
-    THUMBNAIL_FILENAME, TIMELINE_FILENAME, TRANSCRIPTS_DIRECTORY_NAME, VISUAL_INDEXES_DIRECTORY_NAME,
+    AnimPair, ChatSession, Crop, GenerationLog, KeyframeTrack, MediaManifest, ProjectFile,
+    Timeline, TimelineViewState, CHAT_DIRECTORY_NAME, GENERATION_LOG_FILENAME, MANIFEST_FILENAME,
+    MEDIA_DIRECTORY_NAME, THUMBNAIL_FILENAME, TIMELINE_FILENAME, TRANSCRIPTS_DIRECTORY_NAME,
+    VISUAL_INDEXES_DIRECTORY_NAME,
 };
 use search_core::search_index::VisualIndex;
 use search_core::transcript::Transcript;
@@ -69,10 +70,56 @@ pub enum BundleError {
     },
 }
 
+/// Multi-timeline project state carried alongside the active timeline
+/// (upstream #255). `siblings` are the project's OTHER timelines in file
+/// order; `active_index` is where the active timeline sits among all of them,
+/// so saving reassembles `ProjectFile.timelines` in the original order.
+#[derive(Debug, Clone, Default)]
+pub struct MultiTimelineState {
+    pub active_index: usize,
+    pub siblings: Vec<Timeline>,
+    pub open_timeline_ids: Option<Vec<String>>,
+    pub view_states: Option<HashMap<String, TimelineViewState>>,
+}
+
+impl MultiTimelineState {
+    /// Recompose the on-disk `ProjectFile` around the (possibly edited) active
+    /// timeline.
+    pub fn to_project_file(&self, active: &Timeline) -> ProjectFile {
+        let mut timelines = Vec::with_capacity(self.siblings.len() + 1);
+        timelines.extend(self.siblings.iter().cloned());
+        let at = self.active_index.min(timelines.len());
+        timelines.insert(at, active.clone());
+        ProjectFile {
+            timelines,
+            active_timeline_id: Some(active.id.clone()),
+            open_timeline_ids: self.open_timeline_ids.clone(),
+            view_states: self.view_states.clone(),
+        }
+    }
+
+    /// Split a decoded `ProjectFile` into (active timeline, everything else).
+    pub fn from_project_file(mut file: ProjectFile) -> (Timeline, Self) {
+        let active_index = file.active_index();
+        let active = file.timelines.remove(active_index);
+        (
+            active,
+            Self {
+                active_index,
+                siblings: file.timelines,
+                open_timeline_ids: file.open_timeline_ids,
+                view_states: file.view_states,
+            },
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProjectBundle {
     pub root: PathBuf,
     pub timeline: Timeline,
+    /// The project's other timelines + per-timeline UI state (upstream #255).
+    pub multi: MultiTimelineState,
     pub manifest: Option<MediaManifest>,
     pub generation_log: Option<GenerationLog>,
     pub chat_sessions: Vec<ChatSession>,
@@ -88,7 +135,8 @@ pub struct ProjectBundle {
 impl ProjectBundle {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, BundleError> {
         let root = path.as_ref().to_path_buf();
-        let timeline = read_required_json(&root.join(TIMELINE_FILENAME))?;
+        let project_file = read_project_file(&root.join(TIMELINE_FILENAME))?;
+        let (timeline, multi) = MultiTimelineState::from_project_file(project_file);
         // A corrupt media.json degrades to an empty manifest (media offline)
         // rather than failing the whole open. Upstream palmier-pro #224.
         let manifest =
@@ -117,6 +165,7 @@ impl ProjectBundle {
         Ok(Self {
             root,
             timeline,
+            multi,
             manifest,
             generation_log,
             chat_sessions,
@@ -138,7 +187,10 @@ impl ProjectBundle {
         let root = path.as_ref();
         ensure_directory(root)?;
 
-        write_timeline_json(&root.join(TIMELINE_FILENAME), &self.timeline)?;
+        write_project_file_json(
+            &root.join(TIMELINE_FILENAME),
+            &self.multi.to_project_file(&self.timeline),
+        )?;
         write_optional_json(&root.join(MANIFEST_FILENAME), self.manifest.as_ref())?;
         write_optional_json(
             &root.join(GENERATION_LOG_FILENAME),
@@ -167,15 +219,57 @@ impl ProjectBundle {
 /// Write only `project.json` and `media.json` under `root`, leaving every
 /// other file in the package untouched. The narrow save path for in-memory
 /// editor state that does not hold the full bundle.
+///
+/// Holds only the ACTIVE timeline, so it re-reads the existing project.json
+/// and swaps that timeline in place — a multi-timeline project's other
+/// timelines survive the save (upstream #255).
 pub fn save_project_state(
     root: &Path,
     timeline: &Timeline,
     manifest: &MediaManifest,
 ) -> Result<(), BundleError> {
     ensure_directory(root)?;
-    write_timeline_json(&root.join(TIMELINE_FILENAME), timeline)?;
+    let path = root.join(TIMELINE_FILENAME);
+    let mut file = match read_project_file(&path) {
+        Ok(existing) => existing,
+        Err(_) => ProjectFile::wrapping(timeline.clone()),
+    };
+    let at = file
+        .timelines
+        .iter()
+        .position(|t| t.id == timeline.id)
+        .or_else(|| {
+            // Legacy files decode with a fresh random id each read, so id match
+            // fails; a single-timeline file unambiguously means "replace it".
+            (file.timelines.len() == 1).then_some(0)
+        })
+        .unwrap_or_else(|| {
+            // Unknown id in a multi-timeline file: replace the active slot.
+            file.active_index()
+        });
+    file.timelines[at] = timeline.clone();
+    file.active_timeline_id = Some(timeline.id.clone());
+    write_project_file_json(&path, &file)?;
     write_json(&root.join(MANIFEST_FILENAME), manifest)?;
     Ok(())
+}
+
+/// Read `project.json` as a [`ProjectFile`], accepting the legacy bare-Timeline
+/// form via [`ProjectFile::decode`]'s fallback (upstream #255).
+fn read_project_file(path: &Path) -> Result<ProjectFile, BundleError> {
+    if !path.is_file() {
+        return Err(BundleError::MissingRequiredFile {
+            path: path.to_path_buf(),
+        });
+    }
+    let bytes = fs::read(path).map_err(|source| BundleError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    ProjectFile::decode(&bytes).map_err(|source| BundleError::DecodeJson {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn read_required_json<T>(path: &Path) -> Result<T, BundleError>
@@ -291,13 +385,16 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), BundleError> {
     })
 }
 
-/// Write `project.json`, sanitizing any non-finite (NaN/Infinity) f64 first.
-/// serde_json serializes a non-finite float as literal `null`, which then fails to
-/// deserialize into the non-`Option` f64 fields on reopen — making the whole project
-/// permanently unopenable. Sanitizing a save-time copy keeps the file re-openable.
-fn write_timeline_json(path: &Path, timeline: &Timeline) -> Result<(), BundleError> {
-    let mut sanitized = timeline.clone();
-    sanitize_non_finite(&mut sanitized);
+/// Write `project.json` in the #255 ProjectFile form, sanitizing any non-finite
+/// (NaN/Infinity) f64 in EVERY timeline first. serde_json serializes a non-finite
+/// float as literal `null`, which then fails to deserialize into the non-`Option`
+/// f64 fields on reopen — making the whole project permanently unopenable.
+/// Sanitizing a save-time copy keeps the file re-openable.
+fn write_project_file_json(path: &Path, file: &ProjectFile) -> Result<(), BundleError> {
+    let mut sanitized = file.clone();
+    for timeline in &mut sanitized.timelines {
+        sanitize_non_finite(timeline);
+    }
     write_json(path, &sanitized)
 }
 

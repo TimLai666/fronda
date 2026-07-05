@@ -442,3 +442,108 @@ fn non_finite_float_is_sanitized_on_save_so_project_reopens() {
     assert_eq!(clip.speed, 1.0);
     assert_eq!(clip.opacity, 1.0);
 }
+
+// ── Upstream #255: multi-timeline ProjectFile round-trip ────────────────────
+
+#[test]
+fn opens_swift_v061_multi_timeline_project_and_preserves_siblings() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("multi.palmier");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join(TIMELINE_FILENAME),
+        r#"{
+            "timelines": [
+                {"id": "tl-a", "name": "Main", "fps": 30, "width": 1920, "height": 1080,
+                 "settingsConfigured": true, "tracks": []},
+                {"id": "tl-b", "name": "Shorts cut", "fps": 30, "width": 1080, "height": 1920,
+                 "settingsConfigured": true, "tracks": []}
+            ],
+            "activeTimelineId": "tl-b",
+            "openTimelineIds": ["tl-a", "tl-b"],
+            "viewStates": {"tl-a": {"playheadFrame": 5, "zoomScale": 1.5, "scrollOffsetX": 10.0}}
+        }"#,
+    )
+    .unwrap();
+
+    let mut bundle = ProjectBundle::open(&root).unwrap();
+    assert_eq!(bundle.timeline.id, "tl-b", "activeTimelineId wins");
+    assert_eq!(bundle.timeline.name, "Shorts cut");
+    assert_eq!(bundle.multi.siblings.len(), 1);
+    assert_eq!(bundle.multi.siblings[0].id, "tl-a");
+    assert_eq!(bundle.multi.active_index, 1, "original array position kept");
+
+    // Edit the active timeline and save: the sibling + view state survive,
+    // and array order is preserved.
+    bundle.timeline.fps = 24;
+    bundle.save().unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(TIMELINE_FILENAME)).unwrap()).unwrap();
+    let timelines = json["timelines"].as_array().unwrap();
+    assert_eq!(timelines.len(), 2);
+    assert_eq!(timelines[0]["id"], "tl-a", "sibling kept at index 0");
+    assert_eq!(timelines[1]["id"], "tl-b");
+    assert_eq!(timelines[1]["fps"], 24, "active edit persisted");
+    assert_eq!(json["activeTimelineId"], "tl-b");
+    assert_eq!(json["viewStates"]["tl-a"]["playheadFrame"], 5);
+}
+
+#[test]
+fn opens_legacy_bare_timeline_and_saves_projectfile_form() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("legacy.palmier");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join(TIMELINE_FILENAME),
+        r#"{"fps": 24, "width": 1280, "height": 720, "settingsConfigured": true, "tracks": []}"#,
+    )
+    .unwrap();
+
+    let bundle = ProjectBundle::open(&root).unwrap();
+    assert_eq!(bundle.timeline.fps, 24);
+    assert!(bundle.multi.siblings.is_empty());
+
+    bundle.save().unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(TIMELINE_FILENAME)).unwrap()).unwrap();
+    assert!(json.get("timelines").is_some(), "saved in ProjectFile form");
+    assert_eq!(json["timelines"][0]["fps"], 24);
+
+    // The upgraded file reopens identically.
+    let reopened = ProjectBundle::open(&root).unwrap();
+    assert_eq!(reopened.timeline.fps, 24);
+    assert_eq!(reopened.timeline.id, bundle.timeline.id, "id now stable");
+}
+
+#[test]
+fn save_project_state_preserves_sibling_timelines() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("narrow.palmier");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join(TIMELINE_FILENAME),
+        r#"{
+            "timelines": [
+                {"id": "tl-a", "name": "Main", "fps": 30, "width": 1920, "height": 1080,
+                 "settingsConfigured": true, "tracks": []},
+                {"id": "tl-b", "name": "Alt", "fps": 30, "width": 1920, "height": 1080,
+                 "settingsConfigured": true, "tracks": []}
+            ],
+            "activeTimelineId": "tl-a"
+        }"#,
+    )
+    .unwrap();
+
+    // The narrow save holds only the active timeline; the sibling must survive.
+    let mut active = ProjectBundle::open(&root).unwrap().timeline;
+    assert_eq!(active.id, "tl-a");
+    active.width = 3840;
+    project_io::save_project_state(&root, &active, &core_model::MediaManifest::default()).unwrap();
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(TIMELINE_FILENAME)).unwrap()).unwrap();
+    let timelines = json["timelines"].as_array().unwrap();
+    assert_eq!(timelines.len(), 2, "sibling tl-b survived the narrow save");
+    assert_eq!(timelines[0]["width"], 3840, "active edit written");
+    assert_eq!(timelines[1]["id"], "tl-b");
+}
