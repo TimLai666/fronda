@@ -235,10 +235,12 @@ impl ChatView {
                 cx.notify();
             }
             "@" => {
-                self.model.toggle_mention_picker();
-                if self.model.show_mention_picker {
-                    self.mention_picker.open("");
-                }
+                // Picker-open keys never reach this arm (routed above), so
+                // this is always an OPEN — set both flags explicitly instead
+                // of leaning on toggle keeping them in sync.
+                self.model.show_mention_picker = true;
+                self.mention_picker.open("");
+                cx.stop_propagation();
                 cx.notify();
             }
             _ => {

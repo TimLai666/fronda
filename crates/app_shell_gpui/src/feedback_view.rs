@@ -100,6 +100,10 @@ impl FeedbackView {
     }
 
     fn render_form(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        // Signing in hides the email field; don't leave typing targeting it.
+        if self.is_signed_in && self.focused_field == FeedbackField::Email {
+            self.focused_field = FeedbackField::Message;
+        }
         let is_signed_in = self.is_signed_in;
         let has_screenshot = self.has_screenshot;
         let include_screenshot = self.model.include_screenshot;
