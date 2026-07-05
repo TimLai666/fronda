@@ -13,8 +13,8 @@ fn tdef_001_exactly_54_tools() {
     let tools = all_tools();
     assert_eq!(
         tools.len(),
-        62,
-        "TDEF-001: 62 tools (see the header history)"
+        63,
+        "TDEF-001: 63 tools (see the header history)"
     );
 }
 
@@ -45,7 +45,7 @@ fn tdef_002_all_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 62, "all 62 tool names must be unique");
+    assert_eq!(names.len(), 63, "all 63 tool names must be unique");
 }
 
 // ── TDEF-003: Each tool has a valid JSON schema ──────────────────────────────

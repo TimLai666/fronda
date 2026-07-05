@@ -45,6 +45,40 @@ pub trait ClipAudioSource: Send + Sync {
     ) -> Option<Vec<f32>>;
 }
 
+/// Host seam for `export_project`: the pure executor validates the request and
+/// the app shell performs the actual render/write (video encode, interchange
+/// file, or project package). Unset on the MCP/headless path, where the tool
+/// reports it's unavailable.
+pub struct ExportRequest {
+    /// "video" | "xml" | "fcpxml" | "palmier" (validated by the executor).
+    pub mode: String,
+    /// Video mode: "H.264" | "H.265" | "ProRes".
+    pub codec: String,
+    /// Video mode: "720p" | "1080p" | "2K" | "4K" | "Match Timeline".
+    pub resolution: String,
+    /// Absolute destination; None means "a unique project-named file in Downloads".
+    pub output_path: Option<String>,
+    pub overwrite: bool,
+    /// "resolve" | "fcp".
+    pub fcpxml_target: String,
+    pub timeline: Timeline,
+    pub sibling_timelines: Vec<Timeline>,
+    pub manifest: MediaManifest,
+}
+
+/// What the host did with an export request.
+#[derive(Debug)]
+pub enum ExportOutcome {
+    /// Video renders in the background; the file lands at `path` when done.
+    Started { path: String },
+    /// Interchange/package writes finish inline.
+    Completed { path: String },
+}
+
+pub trait ExportHost: Send + Sync {
+    fn export(&self, request: ExportRequest) -> Result<ExportOutcome, String>;
+}
+
 const DEFAULT_CLIP_DURATION_FRAMES: i64 = 150;
 
 /// Resolved clip placement geometry from optional agent args + manifest entry.
@@ -404,6 +438,8 @@ pub struct ToolExecutor {
     /// Host audio decoder for `remove_silence` (#174). `None` on the pure/MCP path,
     /// where `remove_silence` reports it's unavailable.
     audio_source: Option<Arc<dyn ClipAudioSource>>,
+    /// Host exporter for `export_project`. `None` on the pure/MCP path.
+    export_host: Option<Arc<dyn ExportHost>>,
     /// The project's OTHER timelines (upstream #255) — nest carriers resolve
     /// their children here by id. The active timeline stays in `timeline`.
     sibling_timelines: Vec<Timeline>,
@@ -437,6 +473,7 @@ impl ToolExecutor {
             timeline_words: Vec::new(),
             matte_writer: None,
             audio_source: None,
+            export_host: None,
             sibling_timelines: Vec::new(),
         }
     }
@@ -452,6 +489,11 @@ impl ToolExecutor {
     /// unavailable.
     pub fn set_audio_source(&mut self, source: Arc<dyn ClipAudioSource>) {
         self.audio_source = Some(source);
+    }
+
+    /// Install the host exporter for `export_project`.
+    pub fn set_export_host(&mut self, host: Arc<dyn ExportHost>) {
+        self.export_host = Some(host);
     }
 
     /// Replace the project's sibling timelines (upstream #255). The app shell
@@ -656,6 +698,7 @@ impl ToolExecutor {
             "create_compound_clip" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_create_compound_clip, args)
             }
+            "export_project" => self.cmd_export_project(args),
             "update_text" => self.exec_mut(tool_name, ToolExecutor::cmd_update_text, args),
             "create_timeline" => self.cmd_create_timeline(args),
             "set_active_timeline" => self.cmd_set_active_timeline(args),
@@ -4038,6 +4081,116 @@ impl ToolExecutor {
         Ok(json!({ "content": [{ "type": "text", "text": format!(
             "Updated {count} text {noun}."
         )}]}))
+    }
+
+    /// EXPORT_PROJECT: validate the request and hand it to the host exporter.
+    fn cmd_export_project(&mut self, args: &Value) -> Result<Value, String> {
+        let mode = args
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("video")
+            .to_string();
+        if !matches!(mode.as_str(), "video" | "xml" | "fcpxml" | "palmier") {
+            return Err(format!(
+                "export_project: unknown mode '{mode}'. Use video, xml, fcpxml, or palmier."
+            ));
+        }
+        let codec = args
+            .get("codec")
+            .and_then(|v| v.as_str())
+            .unwrap_or("H.264")
+            .to_string();
+        if !matches!(codec.as_str(), "H.264" | "H.265" | "ProRes") {
+            return Err(format!(
+                "export_project: unknown codec '{codec}'. Use H.264, H.265, or ProRes."
+            ));
+        }
+        let resolution = args
+            .get("resolution")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Match Timeline")
+            .to_string();
+        if !matches!(
+            resolution.as_str(),
+            "720p" | "1080p" | "2K" | "4K" | "Match Timeline"
+        ) {
+            return Err(format!(
+                "export_project: unknown resolution '{resolution}'. Use 720p, 1080p, 2K, 4K, or Match Timeline."
+            ));
+        }
+        let fcpxml_target = args
+            .get("fcpxmlTarget")
+            .and_then(|v| v.as_str())
+            .unwrap_or("resolve")
+            .to_string();
+        if !matches!(fcpxml_target.as_str(), "resolve" | "fcp") {
+            return Err(format!(
+                "export_project: unknown fcpxmlTarget '{fcpxml_target}'. Use resolve or fcp."
+            ));
+        }
+        let timeline = match args.get("timelineId").and_then(|v| v.as_str()) {
+            Some(id) => {
+                if mode == "palmier" {
+                    return Err(
+                        "export_project: timelineId doesn't apply to palmier mode — the package carries every timeline"
+                            .to_string(),
+                    );
+                }
+                if self.timeline.id == id {
+                    self.timeline.clone()
+                } else {
+                    self.sibling_timelines
+                        .iter()
+                        .find(|t| t.id == id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                                "export_project: no timeline with id '{id}'. get_timeline lists the project's timelines."
+                            )
+                        })?
+                }
+            }
+            None => self.timeline.clone(),
+        };
+
+        let host = self.export_host.clone().ok_or_else(|| {
+            "export_project is unavailable: no exporter is connected (run it from the app)."
+                .to_string()
+        })?;
+        let request = ExportRequest {
+            mode,
+            codec,
+            resolution,
+            output_path: args
+                .get("outputPath")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            overwrite: args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(true),
+            fcpxml_target,
+            timeline: timeline.clone(),
+            sibling_timelines: self.sibling_timelines.clone(),
+            manifest: self.media_manifest.clone(),
+        };
+        let fps = timeline.fps.max(1);
+        let total = timeline_core::TimelineMathExt::total_frames(&timeline);
+        let (status, path) = match host.export(request)? {
+            ExportOutcome::Started { path } => ("started", path),
+            ExportOutcome::Completed { path } => ("completed", path),
+        };
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&json!({
+                    "status": status,
+                    "path": path,
+                    "timeline": timeline.name,
+                    "durationFrames": total,
+                    "durationSeconds": total as f64 / fps as f64,
+                    "fps": fps,
+                }))
+                .unwrap_or_default()
+            }]
+        }))
     }
 
     fn cmd_import_folder(&mut self, args: &Value) -> Result<Value, String> {
@@ -8581,6 +8734,70 @@ mod tests {
             .execute("update_text", &json!({"captionGroupId": "nope"}))
             .unwrap_err();
         assert!(err.contains("No caption clips"), "{err}");
+    }
+
+    struct MockExportHost;
+    impl ExportHost for MockExportHost {
+        fn export(&self, request: ExportRequest) -> Result<ExportOutcome, String> {
+            Ok(ExportOutcome::Completed {
+                path: format!("/mock/{}.{}", request.timeline.name, request.mode),
+            })
+        }
+    }
+
+    #[test]
+    fn export_project_validates_and_delegates_to_the_host() {
+        let mut exec = make_executor();
+        // Unavailable without a host.
+        let err = exec.execute("export_project", &json!({})).unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
+
+        exec.set_export_host(std::sync::Arc::new(MockExportHost));
+        // Bad enum values reject.
+        for (k, v) in [
+            ("mode", "avi"),
+            ("codec", "VP9"),
+            ("resolution", "8K"),
+            ("fcpxmlTarget", "premiere"),
+        ] {
+            let err = exec.execute("export_project", &json!({ k: v })).unwrap_err();
+            assert!(err.contains("unknown"), "{k}: {err}");
+        }
+        // palmier + timelineId refuses (Swift parity).
+        let tl_id = exec.timeline().id.clone();
+        let err = exec
+            .execute(
+                "export_project",
+                &json!({"mode": "palmier", "timelineId": tl_id}),
+            )
+            .unwrap_err();
+        assert!(err.contains("palmier"), "{err}");
+
+        // Happy path reports the host's outcome + timeline stats.
+        let res = exec
+            .execute("export_project", &json!({"mode": "xml"}))
+            .unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["status"], "completed");
+        assert!(v["path"].as_str().unwrap().ends_with(".xml"));
+        assert!(v["timeline"].is_string());
+
+        // timelineId resolves a sibling.
+        exec.execute("create_timeline", &json!({"name": "Alt"})).unwrap();
+        let alt = exec.timeline().id.clone();
+        exec.execute("set_active_timeline", &json!({"timelineId": exec.sibling_timelines()[0].id.clone()}))
+            .unwrap();
+        let res = exec
+            .execute("export_project", &json!({"mode": "fcpxml", "timelineId": alt}))
+            .unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["timeline"], "Alt", "sibling exported by id");
+        let err = exec
+            .execute("export_project", &json!({"timelineId": "ghost"}))
+            .unwrap_err();
+        assert!(err.contains("no timeline"), "{err}");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! All 62 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 63 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -12,6 +12,7 @@
 //! v0.6.1 surface alignment: sync_audio_clips renamed to upstream's sync_audio; the
 //! speculative import_xml (never shipped upstream) removed (62 → 61).
 //! v0.6.1 gap port: added upstream's update_text (61 → 62).
+//! v0.6.1 gap port: added upstream's export_project via the ExportHost seam (62 → 63).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -27,7 +28,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 62 tools exposed to the agent.
+/// Returns all 63 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -59,6 +60,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         generate_image(),
         generate_music(),
         generate_video(),
+        export_project(),
         get_media(),
         get_timeline(),
         get_transcript(),
@@ -313,6 +315,37 @@ fn generate_image() -> ToolDefinition {
         name: "generate_image",
         description: "Generate an image using the configured model.",
         input_schema: object(&[("prompt", string("Description of the image to generate"))]),
+    }
+}
+
+fn export_project() -> ToolDefinition {
+    ToolDefinition {
+        name: "export_project",
+        description: "Exports from the current project using the same modes as the Export dialog. mode defaults to video. video renders H.264, H.265, or ProRes; xml writes XMEML timeline XML; fcpxml writes FCPXML; palmier writes a project package. For timeline interchange, pick the format by the target editor: Premiere Pro → xml; DaVinci Resolve or Final Cut Pro → fcpxml (fcpxml also carries text, transforms, crop, opacity, and keyframes that xml cannot). Omit outputPath to write a unique file to the user's Downloads folder. Existing direct outputPath files are overwritten by default to match the UI save flow; pass overwrite=false to refuse. video renders in the background and returns status=started with the destination path — check the file to confirm completion. xml, fcpxml, and palmier finish before returning and report their result inline.",
+        input_schema: object(&[
+            ("mode", string("Optional. video (default), xml, fcpxml, or palmier.")),
+            ("codec", string("Video mode only. Optional. H.264 (default), H.265, or ProRes.")),
+            (
+                "resolution",
+                string("Video mode only. Optional. 720p, 1080p, 2K, 4K, or Match Timeline (default)."),
+            ),
+            (
+                "outputPath",
+                string("Optional. Absolute destination path. If omitted, a unique project-named file is written to Downloads. If no extension is provided, the mode's extension is appended."),
+            ),
+            (
+                "overwrite",
+                boolean("Optional. Default true, matching the UI save flow. false refuses when outputPath already exists."),
+            ),
+            (
+                "fcpxmlTarget",
+                string("fcpxml mode only. Optional, default resolve. resolve or fcp — the two NLEs interpret crop and position values differently."),
+            ),
+            (
+                "timelineId",
+                string("Optional. Timeline to export (from get_timeline's timelines list). Defaults to the active timeline. Not valid for palmier mode, which packages every timeline."),
+            ),
+        ]),
     }
 }
 
@@ -1245,8 +1278,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            62,
-            "TDEF-001: 62 tools (see the header history)"
+            63,
+            "TDEF-001: 63 tools (see the header history)"
         );
     }
 
@@ -1275,7 +1308,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 62, "all 62 tool names must be unique");
+        assert_eq!(names.len(), 63, "all 63 tool names must be unique");
     }
 
     #[test]

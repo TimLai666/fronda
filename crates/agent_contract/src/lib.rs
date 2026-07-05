@@ -17,7 +17,10 @@ pub use agent_loop::{
     parse_response, run_agent_turn, AgentOutcome, LlmTransport, ParsedResponse, ToolCallRecord,
     ToolUse,
 };
-pub use tool_exec::{AgentSkill, ClipAudioSource, MatteWriter, ToolExecutor};
+pub use tool_exec::{
+    AgentSkill, ClipAudioSource, ExportHost, ExportOutcome, ExportRequest, MatteWriter,
+    ToolExecutor,
+};
 pub use tools::{skill_prompt_index, system_instruction_with_skills};
 pub use undo::{UndoCommand, UndoError, UndoStack};
 
