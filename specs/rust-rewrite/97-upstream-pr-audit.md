@@ -206,6 +206,28 @@ never shipped those names; the real feature landed as **#251 `denoise_audio`**
 (ported: denoise is an `audio.denoise` effect in the existing `effects` stack,
 no model change; the DeepFilterNet3 bake is host-deferred).
 
+## Upstream re-audit 2026-07-05b (771b63e → cdd63ff)
+
+One new commit: **#261 speech detection, dead-air removal, speaker
+identification** (1292 lines). Audited + contract pieces ported same day:
+- **ProjectFile.speakers** (per-project speaker registry: id/name/color/
+  centroid) PORTED as an opaque `serde_json::Value` passthrough threaded
+  through MultiTimelineState and the authoritative narrow save — Fronda
+  doesn't run speaker identification, but dropping the field on save would
+  erase Swift-computed registries.
+- **remove_silence contract realigned**: upstream's tool SHIPPED here with a
+  different contract than the speculative Issue #174 schema we had (no
+  arguments, whole-timeline, speech-detection-driven, sectionsRemoved/
+  removedFrames/note payload, error on no-dead-air). Rust now defaults to
+  that semantics with an ADAPTIVE RMS threshold (90th-percentile envelope
+  −25 dB, floor −60 dBFS) approximating the VAD gate — honestly described;
+  clipId/thresholdDb/min/pad remain a Rust clip-scoped extension.
+- Host-ML-gated (not ported): Silero VAD (SpeechVAD MLX package), speaker
+  embeddings/centroids, SpeechTab + waveform speech masks, per-file speaker
+  alignment in get_transcript (needs the VAD/embedding models). A future
+  `SpeechAnalysis` host seam (like ClipAudioSource) could feed real speech
+  spans into the same dead-air path.
+
 ## Upstream re-audit 2026-07-05 (9a3ae50 → 771b63e, v0.6.1)
 
 6 new commits. Substantive: **#251 Audio Enhancer/Denoise** (PORTED — see above)
