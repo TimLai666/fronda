@@ -79,6 +79,24 @@ pub trait ExportHost: Send + Sync {
     fn export(&self, request: ExportRequest) -> Result<ExportOutcome, String>;
 }
 
+/// A project known to the app (recents registry), for `get_projects`.
+#[derive(Debug, Clone)]
+pub struct KnownProject {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub is_open: bool,
+    pub is_active: bool,
+}
+
+/// Host seam for `get_projects`: the app shell reads its recents registry and
+/// reports the active project. Read-only. Unset on the pure/MCP path, where
+/// the tool reports it's unavailable.
+pub trait ProjectLister: Send + Sync {
+    /// (known projects, active (name, path) if a project is open)
+    fn list(&self) -> Result<(Vec<KnownProject>, Option<(String, String)>), String>;
+}
+
 const DEFAULT_CLIP_DURATION_FRAMES: i64 = 150;
 
 /// Resolved clip placement geometry from optional agent args + manifest entry.
@@ -440,6 +458,8 @@ pub struct ToolExecutor {
     audio_source: Option<Arc<dyn ClipAudioSource>>,
     /// Host exporter for `export_project`. `None` on the pure/MCP path.
     export_host: Option<Arc<dyn ExportHost>>,
+    /// Host recents-registry reader for `get_projects`. `None` on the pure/MCP path.
+    project_lister: Option<Arc<dyn ProjectLister>>,
     /// The project's OTHER timelines (upstream #255) — nest carriers resolve
     /// their children here by id. The active timeline stays in `timeline`.
     sibling_timelines: Vec<Timeline>,
@@ -458,6 +478,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "inspect_color",
     "read_skill",
     "list_clip_presets",
+    "get_projects",
 ];
 
 impl ToolExecutor {
@@ -474,6 +495,7 @@ impl ToolExecutor {
             matte_writer: None,
             audio_source: None,
             export_host: None,
+            project_lister: None,
             sibling_timelines: Vec::new(),
         }
     }
@@ -494,6 +516,11 @@ impl ToolExecutor {
     /// Install the host exporter for `export_project`.
     pub fn set_export_host(&mut self, host: Arc<dyn ExportHost>) {
         self.export_host = Some(host);
+    }
+
+    /// Install the host recents-registry reader for `get_projects`.
+    pub fn set_project_lister(&mut self, lister: Arc<dyn ProjectLister>) {
+        self.project_lister = Some(lister);
     }
 
     /// Replace the project's sibling timelines (upstream #255). The app shell
@@ -699,6 +726,7 @@ impl ToolExecutor {
                 self.exec_mut(tool_name, ToolExecutor::cmd_create_compound_clip, args)
             }
             "export_project" => self.cmd_export_project(args),
+            "get_projects" => self.cmd_get_projects(),
             "update_text" => self.exec_mut(tool_name, ToolExecutor::cmd_update_text, args),
             "create_timeline" => self.cmd_create_timeline(args),
             "set_active_timeline" => self.cmd_set_active_timeline(args),
@@ -4189,6 +4217,40 @@ impl ToolExecutor {
                     "fps": fps,
                 }))
                 .unwrap_or_default()
+            }]
+        }))
+    }
+
+    /// GET_PROJECTS: read-only recents list + the active project (upstream).
+    fn cmd_get_projects(&self) -> Result<Value, String> {
+        let lister = self.project_lister.clone().ok_or_else(|| {
+            "get_projects is unavailable: no project registry is connected (run it from the app)."
+                .to_string()
+        })?;
+        let (projects, active) = lister.list()?;
+        let list: Vec<Value> = projects
+            .iter()
+            .map(|p| {
+                let mut entry = json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "path": p.path,
+                    "isOpen": p.is_open,
+                });
+                if p.is_active {
+                    entry["isActive"] = json!(true);
+                }
+                entry
+            })
+            .collect();
+        let mut out = json!({ "projects": list });
+        if let Some((name, path)) = active {
+            out["active"] = json!({ "name": name, "path": path });
+        }
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string_pretty(&out).unwrap_or_default()
             }]
         }))
     }

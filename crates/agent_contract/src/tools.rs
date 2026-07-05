@@ -1,4 +1,4 @@
-//! All 63 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 64 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -13,6 +13,7 @@
 //! speculative import_xml (never shipped upstream) removed (62 → 61).
 //! v0.6.1 gap port: added upstream's update_text (61 → 62).
 //! v0.6.1 gap port: added upstream's export_project via the ExportHost seam (62 → 63).
+//! v0.6.1 gap port: added upstream's read-only get_projects via ProjectLister (63 → 64).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -28,7 +29,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 63 tools exposed to the agent.
+/// Returns all 64 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -62,6 +63,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         generate_video(),
         export_project(),
         get_media(),
+        get_projects(),
         get_timeline(),
         get_transcript(),
         import_folder(),
@@ -1239,6 +1241,14 @@ fn create_project() -> ToolDefinition {
     }
 }
 
+fn get_projects() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_projects",
+        description: "List the user's known projects, most recently opened first: each entry's id, name, path, whether it's currently open, and whether it's the active project (the one editing tools act on). Also returns a top-level `active` (name, path) for the current project, which may not appear in the list. Call this to discover what's available before open_project, or to find out which project is active. Takes no arguments.",
+        input_schema: object(&[]),
+    }
+}
+
 fn open_project() -> ToolDefinition {
     ToolDefinition {
         name: "open_project",
@@ -1278,8 +1288,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            63,
-            "TDEF-001: 63 tools (see the header history)"
+            64,
+            "TDEF-001: 64 tools (see the header history)"
         );
     }
 
@@ -1308,7 +1318,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 63, "all 63 tool names must be unique");
+        assert_eq!(names.len(), 64, "all 64 tool names must be unique");
     }
 
     #[test]

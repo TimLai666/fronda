@@ -13,6 +13,7 @@ pub mod assets;
 pub mod audio_export;
 pub mod audio_source;
 pub mod export_host;
+pub mod project_lister;
 #[cfg(feature = "desktop-app")]
 pub mod chat_history_view;
 #[cfg(feature = "desktop-app")]

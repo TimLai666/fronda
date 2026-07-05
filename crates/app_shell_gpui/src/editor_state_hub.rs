@@ -97,7 +97,13 @@ impl EditorStateHub {
                 crate::audio_source::ProjectAudioSource::new(root.clone()),
             ));
             exec.set_export_host(std::sync::Arc::new(
-                crate::export_host::AgentExportHost::new(root),
+                crate::export_host::AgentExportHost::new(root.clone()),
+            ));
+            exec.set_project_lister(std::sync::Arc::new(
+                crate::project_lister::AgentProjectLister::new(
+                    self.registry_path.clone(),
+                    Some(root),
+                ),
             ));
         }
     }
