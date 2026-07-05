@@ -439,7 +439,7 @@ fn write_fade_transition(xml: &mut String, clip: &Clip, fps: i64, is_left: bool,
 /// Volume, opacity, Basic Motion (transform/crop, keyframed), and the
 /// keyframed Opacity filter for one clipitem. Shared by media clipitems and
 /// nested-sequence carriers (Swift emits filters on nest clipitems too).
-fn write_clip_filters(xml: &mut String, clip: &Clip, fps: i64) {
+fn write_clip_filters(xml: &mut String, clip: &Clip, _fps: i64) {
     // XML-005: volume
     writeln!(xml, "              <volume>").ok();
     writeln!(xml, "                <value>{:.6}</value>", clip.volume).ok();
