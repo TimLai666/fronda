@@ -147,9 +147,14 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 
 ## Upstream PR management
 
-- Upstream PRs were re-audited on 2026-07-03 (upstream HEAD `9a3ae50`, v0.5.2),
-  covering the 86 new commits `b9b4ad9..9a3ae50` (PRs ~#148–#254). The prior
-  audit was 2026-06-25 at `b9b4ad9`. Full tiered results and the porting
+- Upstream PRs were re-audited on 2026-07-05 (upstream HEAD `771b63e`, v0.6.1),
+  covering the 6 new commits `9a3ae50..771b63e`: **#251 Audio Enhancer/Denoise**
+  (ported — `denoise_audio` tool; no model change, denoise is an `audio.denoise`
+  effect) and **#255 multiple timelines per project** (ProjectFile wrapper in
+  project.json — compat-critical, under audit), rest version bumps/docs. Upstream
+  also has non-main branches `feat/audio-suite` and `multicam` — not audited
+  (main-only rule). Prior audits: 2026-07-03 at `9a3ae50` (86 commits,
+  PRs ~#148–#254), 2026-06-25 at `b9b4ad9`. Full tiered results and the porting
   execution order are in `specs/rust-rewrite/97-upstream-pr-audit.md`.
 - Do NOT re-fetch upstream or re-audit PRs unless there are new commits on
   the upstream `main` branch. Check with `git fetch upstream && git --no-pager log upstream/main --oneline | head -5` first.
@@ -194,4 +199,6 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 | #225 | Text animation (data model + agent args) | PARTIAL     | core_model text_animation.rs (WordTiming/TextAnimation/11-preset enum) + Clip.text_animation/word_timings serde + timeline_core rescale_word_timings + agent add_texts animation/highlightColor args; renderer (TextAnimator/TextFrameRenderer) UI-deferred |
 | #74  | naturalTimeScale for clip inserts       | DEFERRED    | AVFoundation-specific                        |
 | #119 | Audio syncing multiple tracks           | DONE (v1)   | agent_contract sync_audio_clips (spec 12-audio-sync.md; correlator + #174 seam; offset baked into start_frame, newClipId reported; UI + sync_offset_frames metadata deferred) |
+| #251 | Audio Enhancer / Denoise                | DONE (contract) | agent_contract denoise_audio (mirrors Swift setDenoise merge semantics; denoise = `audio.denoise` effect in the existing stack, NO model change; replaced the never-shipped set_clip_noise_reduction/set_clip_audio_effects stubs). DeepFilterNet3 bake + preview/export substitution = host, deferred |
+| #255 | Multiple timelines per project          | AUDITING    | project.json now wraps timelines in a ProjectFile (compat-critical); nesting + timeline tools + exporter changes under audit 2026-07-05 |
 | #133 | Project thumbnail main-thread hang      | DEFERRED    | Swift-specific pattern                       |

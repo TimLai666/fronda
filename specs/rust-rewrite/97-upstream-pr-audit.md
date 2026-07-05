@@ -158,14 +158,29 @@ limitation message (or is now implemented); the test permanently guards the clas
   delete), and the ffmpeg-backed app decoder (`ProjectAudioSource`). Honest
   "unavailable" on the MCP/headless path.
 
-Remaining stubbed tools (6), by category:
-- **Host-gated (need model fields + DSP):** `set_clip_audio_effects` /
-  `set_clip_noise_reduction` — the Clip model has no audio-effect fields, and the
-  processing is real audio DSP.
+Remaining stubbed tools (4), by category:
 - **Substantial (needs a new parser):** `import_xml` — an XMEML/FCPXML→timeline
   parser (pure) + a file-read seam; render_core only has the export direction.
 - **App-nav / needs confirmation:** `create_project`/`open_project`/`delete_project`
   (#238 — switch the whole app's active project; `delete_project` is destructive).
+
+**Resolved 2026-07-05 by the v0.6.1 re-audit:** the speculative
+`set_clip_audio_effects`/`set_clip_noise_reduction` stubs were REMOVED — upstream
+never shipped those names; the real feature landed as **#251 `denoise_audio`**
+(ported: denoise is an `audio.denoise` effect in the existing `effects` stack,
+no model change; the DeepFilterNet3 bake is host-deferred).
+
+## Upstream re-audit 2026-07-05 (9a3ae50 → 771b63e, v0.6.1)
+
+6 new commits. Substantive: **#251 Audio Enhancer/Denoise** (PORTED — see above)
+and **#255 multiple timelines per project** (3978-line diff, AUDITING —
+`VideoProject.timeline: Timeline` became `projectFile: ProjectFile` with a
+`timelines` array + `ProjectFile.decode` legacy migration; adds nesting
+(EditorViewModel+Nesting), timeline-management agent tools, TimelineTabBar UI,
+and nested-sequence export in both exporters. Compat-critical for project.json;
+parallel audit of the ProjectFile contract / nesting model / tool+exporter deltas
+in progress). Remainder: version bumps + README fix (skipped). Upstream branches
+`feat/audio-suite` and `multicam` exist but are not on main — not audited.
 
 ## Recommended execution order
 
