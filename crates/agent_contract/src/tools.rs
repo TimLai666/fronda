@@ -261,8 +261,12 @@ fn delete_folder() -> ToolDefinition {
 fn delete_media() -> ToolDefinition {
     ToolDefinition {
         name: "delete_media",
-        description: "Delete imported media from the project.",
-        input_schema: object(&[("mediaId", string("Media id to delete"))]),
+        description: "Deletes a media asset or a timeline. mediaId accepts an asset id from \
+            get_media or a timelineId from get_timeline. Deleting a timeline leaves nest clips \
+            referencing it rendering black (remove those clips too, or don't delete a timeline \
+            that's still nested); deleting the active timeline switches to another first. The \
+            last remaining timeline can't be deleted.",
+        input_schema: object(&[("mediaId", string("Media asset id or timelineId to delete"))]),
     }
 }
 
@@ -537,9 +541,10 @@ fn rename_folder() -> ToolDefinition {
 fn rename_media() -> ToolDefinition {
     ToolDefinition {
         name: "rename_media",
-        description: "Rename a media asset.",
+        description: "Renames a media asset or a timeline. mediaId accepts either an asset id \
+            from get_media or a timelineId from get_timeline.",
         input_schema: object(&[
-            ("mediaId", string("Media asset id to rename")),
+            ("mediaId", string("Media asset id or timelineId to rename")),
             ("name", string("New display name")),
         ]),
     }

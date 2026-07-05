@@ -2937,20 +2937,39 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing name".to_string())?;
 
-        let entry = self
+        if let Some(entry) = self
             .media_manifest
             .entries
             .iter_mut()
             .find(|e| e.id == media_id)
-            .ok_or_else(|| format!("Media '{}' not found", media_id))?;
-        entry.name = name.to_string();
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Renamed media '{}' to '{}'", media_id, name)
-            }]
-        }))
+        {
+            entry.name = name.to_string();
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Renamed media '{}' to '{}'", media_id, name)
+                }]
+            }));
+        }
+        // #255: mediaRef may be a timelineId (active or sibling).
+        let renamed = if self.timeline.id == media_id {
+            self.timeline.name = name.to_string();
+            true
+        } else if let Some(t) = self.sibling_timelines.iter_mut().find(|t| t.id == media_id) {
+            t.name = name.to_string();
+            true
+        } else {
+            false
+        };
+        if renamed {
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Renamed timeline '{}' to '{}'", media_id, name)
+                }]
+            }));
+        }
+        Err(format!("Media '{}' not found", media_id))
     }
 
     fn cmd_delete_media(&mut self, args: &Value) -> Result<Value, String> {
@@ -2959,20 +2978,57 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing mediaId".to_string())?;
 
-        let pos = self
+        if let Some(pos) = self
             .media_manifest
             .entries
             .iter()
             .position(|e| e.id == media_id)
-            .ok_or_else(|| format!("Media '{}' not found", media_id))?;
-        self.media_manifest.entries.remove(pos);
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Deleted media '{}'", media_id)
-            }]
-        }))
+        {
+            self.media_manifest.entries.remove(pos);
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Deleted media '{}'", media_id)
+                }]
+            }));
+        }
+        // #255: a timelineId deletes that timeline. The last one can't be
+        // deleted; deleting the ACTIVE one switches to the first sibling first.
+        // Nest carriers referencing it are left in place (they render black),
+        // matching Swift's documented behaviour.
+        if self.timeline.id == media_id || self.sibling_timelines.iter().any(|t| t.id == media_id)
+        {
+            if self.timeline.id == media_id {
+                if self.sibling_timelines.is_empty() {
+                    return Err("The last remaining timeline can't be deleted.".to_string());
+                }
+                let replacement = self.sibling_timelines.remove(0);
+                let name = self.timeline.name.clone();
+                self.timeline = replacement;
+                return Ok(json!({
+                    "content": [{
+                        "type": "text",
+                        "text": format!(
+                            "Deleted timeline '{}' and switched to '{}'. Re-read get_timeline before editing.",
+                            name, self.timeline.name
+                        )
+                    }]
+                }));
+            }
+            let pos = self
+                .sibling_timelines
+                .iter()
+                .position(|t| t.id == media_id)
+                .expect("checked above");
+            let removed = self.sibling_timelines.remove(pos);
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Deleted timeline '{}'.", removed.name)
+                }]
+            }));
+        }
+        Err(format!("Media '{}' not found", media_id))
     }
 
     fn cmd_move_to_folder(&mut self, args: &Value) -> Result<Value, String> {
@@ -8259,6 +8315,42 @@ mod tests {
             root_clip_start_before + child_total,
             "existing clip rippled right by the carrier length"
         );
+    }
+
+    #[test]
+    fn rename_and_delete_media_accept_timeline_ids() {
+        let mut exec = make_executor();
+        let root_id = exec.timeline().id.clone();
+
+        // Rename the active timeline by its id.
+        exec.execute("rename_media", &json!({"mediaId": root_id, "name": "Main cut"}))
+            .unwrap();
+        assert_eq!(exec.timeline().name, "Main cut");
+
+        // Create a sibling, rename it while it is NOT active, then delete it.
+        exec.execute("create_timeline", &json!({"name": "Scrap"})).unwrap();
+        let scrap_id = exec.timeline().id.clone();
+        exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
+        exec.execute("rename_media", &json!({"mediaId": scrap_id, "name": "Scrap 2"}))
+            .unwrap();
+        assert_eq!(exec.sibling_timelines()[0].name, "Scrap 2");
+        exec.execute("delete_media", &json!({"mediaId": scrap_id})).unwrap();
+        assert!(exec.sibling_timelines().is_empty());
+
+        // The last remaining timeline can't be deleted.
+        let err = exec
+            .execute("delete_media", &json!({"mediaId": root_id}))
+            .unwrap_err();
+        assert!(err.contains("last remaining"), "{err}");
+
+        // Deleting the ACTIVE timeline switches to a sibling first.
+        exec.execute("create_timeline", &json!({"name": "Other"})).unwrap();
+        let other_id = exec.timeline().id.clone();
+        let res = exec.execute("delete_media", &json!({"mediaId": other_id})).unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("switched"), "{text}");
+        assert_eq!(exec.timeline().id, root_id);
+        assert!(exec.sibling_timelines().is_empty());
     }
 
     #[test]
