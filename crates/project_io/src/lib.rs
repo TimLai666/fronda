@@ -254,29 +254,68 @@ pub fn save_project_state(
     Ok(())
 }
 
-/// [`save_project_state`] that also upserts the editor's sibling timelines
-/// (upstream #255) — e.g. a child timeline created by nesting clips. Siblings
-/// are matched by id: existing entries update in place, new ones append. The
-/// editor can't delete siblings yet, so nothing is removed.
+/// [`save_project_state`] for a caller that holds the WHOLE timeline set
+/// (upstream #255): the editor's active timeline + siblings are authoritative,
+/// so the on-disk `timelines` becomes exactly that set — a timeline deleted in
+/// the editor stays deleted (a plain upsert would resurrect it on autosave).
+/// Disk array order is kept for surviving ids; new timelines append.
+/// `openTimelineIds`/`viewStates` are preserved from disk, pruned to survivors.
 pub fn save_project_state_with_siblings(
     root: &Path,
     timeline: &Timeline,
     siblings: &[Timeline],
     manifest: &MediaManifest,
 ) -> Result<(), BundleError> {
-    save_project_state(root, timeline, manifest)?;
-    if siblings.is_empty() {
-        return Ok(());
-    }
+    ensure_directory(root)?;
     let path = root.join(TIMELINE_FILENAME);
-    let mut file = read_project_file(&path)?;
-    for sib in siblings {
-        match file.timelines.iter_mut().find(|t| t.id == sib.id) {
-            Some(slot) => *slot = sib.clone(),
-            None => file.timelines.push(sib.clone()),
+    let (disk_order, open_ids, view_states) = match read_project_file(&path) {
+        Ok(f) => (
+            f.timelines.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
+            f.open_timeline_ids,
+            f.view_states,
+        ),
+        Err(_) => (Vec::new(), None, None),
+    };
+
+    let mut by_id: HashMap<&str, &Timeline> =
+        siblings.iter().map(|t| (t.id.as_str(), t)).collect();
+    by_id.insert(timeline.id.as_str(), timeline);
+
+    let mut timelines: Vec<Timeline> = Vec::with_capacity(by_id.len());
+    for id in &disk_order {
+        if let Some(t) = by_id.remove(id.as_str()) {
+            timelines.push(t.clone());
         }
     }
-    write_project_file_json(&path, &file)
+    // New timelines (created this session): active first, then siblings in order.
+    if by_id.remove(timeline.id.as_str()).is_some() {
+        timelines.push(timeline.clone());
+    }
+    for sib in siblings {
+        if by_id.remove(sib.id.as_str()).is_some() {
+            timelines.push(sib.clone());
+        }
+    }
+
+    let survivors: std::collections::HashSet<String> =
+        timelines.iter().map(|t| t.id.clone()).collect();
+    let file = ProjectFile {
+        timelines,
+        active_timeline_id: Some(timeline.id.clone()),
+        open_timeline_ids: open_ids
+            .map(|ids| ids.into_iter().filter(|i| survivors.contains(i)).collect())
+            .filter(|ids: &Vec<String>| !ids.is_empty()),
+        view_states: view_states
+            .map(|vs| {
+                vs.into_iter()
+                    .filter(|(k, _)| survivors.contains(k))
+                    .collect::<HashMap<_, _>>()
+            })
+            .filter(|vs| !vs.is_empty()),
+    };
+    write_project_file_json(&path, &file)?;
+    write_json(&root.join(MANIFEST_FILENAME), manifest)?;
+    Ok(())
 }
 
 /// Read `project.json` as a [`ProjectFile`], accepting the legacy bare-Timeline

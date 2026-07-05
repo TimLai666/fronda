@@ -3005,6 +3005,7 @@ impl ToolExecutor {
                 let replacement = self.sibling_timelines.remove(0);
                 let name = self.timeline.name.clone();
                 self.timeline = replacement;
+                self.undo_stack.clear();
                 return Ok(json!({
                     "content": [{
                         "type": "text",
@@ -3697,6 +3698,9 @@ impl ToolExecutor {
         let id = new_tl.id.clone();
         let prev = std::mem::replace(&mut self.timeline, new_tl);
         self.sibling_timelines.push(prev);
+        // Undo snapshots hold the PREVIOUS timeline's state; applying one to the
+        // new active timeline would overwrite it wholesale. Clear on switch.
+        self.undo_stack.clear();
         Ok(json!({ "content": [{ "type": "text", "text": format!(
             "Created and switched to timeline \"{name}\" (timelineId {id}). It is empty; all edit tools now target it."
         )}]}))
@@ -3723,6 +3727,7 @@ impl ToolExecutor {
         let target = self.sibling_timelines.remove(pos);
         let prev = std::mem::replace(&mut self.timeline, target);
         self.sibling_timelines.push(prev);
+        self.undo_stack.clear();
         let name = self.timeline.name.clone();
         let frames = timeline_core::TimelineMathExt::total_frames(&self.timeline);
         let fps = self.timeline.fps;
@@ -3783,6 +3788,7 @@ impl ToolExecutor {
         let new_name = copy.name.clone();
         let prev = std::mem::replace(&mut self.timeline, copy);
         self.sibling_timelines.push(prev);
+        self.undo_stack.clear();
         Ok(json!({ "content": [{ "type": "text", "text": format!(
             "Duplicated \"{source_name}\" as \"{new_name}\" (timelineId {new_id}) and switched to it. Clip and track ids in the copy are new — re-read get_timeline before editing."
         )}]}))
@@ -8351,6 +8357,26 @@ mod tests {
         assert!(text.contains("switched"), "{text}");
         assert_eq!(exec.timeline().id, root_id);
         assert!(exec.sibling_timelines().is_empty());
+    }
+
+    #[test]
+    fn timeline_switch_clears_undo_so_snapshots_never_cross_timelines() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute("add_clips", &json!({"mediaIds": ["m1"]})).unwrap();
+        assert!(!exec.undo_stack().is_empty(), "edit recorded");
+
+        // Switching timelines clears the stack: an undo here would otherwise
+        // overwrite the NEW active timeline with the OLD one's snapshot.
+        exec.execute("create_timeline", &json!({})).unwrap();
+        assert!(exec.undo_stack().is_empty(), "cleared on create+switch");
+        let err = exec.execute("undo", &json!({})).unwrap();
+        let text = err["content"][0]["text"].as_str().unwrap();
+        assert!(
+            exec.timeline().tracks.is_empty(),
+            "undo on the fresh timeline is a no-op, not a cross-timeline restore: {text}"
+        );
     }
 
     #[test]

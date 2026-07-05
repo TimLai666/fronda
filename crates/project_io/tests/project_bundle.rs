@@ -547,3 +547,79 @@ fn save_project_state_preserves_sibling_timelines() {
     assert_eq!(timelines[0]["width"], 3840, "active edit written");
     assert_eq!(timelines[1]["id"], "tl-b");
 }
+
+
+#[test]
+fn save_project_state_with_siblings_is_authoritative_deletions_stick() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("authoritative.palmier");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join(TIMELINE_FILENAME),
+        r#"{
+            "timelines": [
+                {"id": "tl-a", "name": "A", "fps": 30, "width": 1920, "height": 1080,
+                 "settingsConfigured": true, "tracks": []},
+                {"id": "tl-b", "name": "B", "fps": 30, "width": 1920, "height": 1080,
+                 "settingsConfigured": true, "tracks": []},
+                {"id": "tl-c", "name": "C", "fps": 30, "width": 1920, "height": 1080,
+                 "settingsConfigured": true, "tracks": []}
+            ],
+            "activeTimelineId": "tl-b",
+            "openTimelineIds": ["tl-a", "tl-b", "tl-c"],
+            "viewStates": {"tl-c": {"playheadFrame": 9, "zoomScale": 1.0, "scrollOffsetX": 0.0}}
+        }"#,
+    )
+    .unwrap();
+
+    // The editor deleted C: the save carries only active B + sibling A.
+    let bundle = ProjectBundle::open(&root).unwrap();
+    let active = bundle.timeline.clone();
+    let a = bundle
+        .multi
+        .siblings
+        .iter()
+        .find(|t| t.id == "tl-a")
+        .unwrap()
+        .clone();
+    project_io::save_project_state_with_siblings(
+        &root,
+        &active,
+        &[a],
+        &core_model::MediaManifest::default(),
+    )
+    .unwrap();
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(TIMELINE_FILENAME)).unwrap()).unwrap();
+    let ids: Vec<&str> = json["timelines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["tl-a", "tl-b"], "C stays deleted, order kept");
+    let open: Vec<&str> = json["openTimelineIds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(open, vec!["tl-a", "tl-b"], "open ids pruned of C");
+    assert!(
+        json.get("viewStates").is_none(),
+        "view state for the deleted timeline pruned (and empty map omitted)"
+    );
+
+    // A second save does not resurrect anything either.
+    project_io::save_project_state_with_siblings(
+        &root,
+        &active,
+        &[bundle.multi.siblings[0].clone()],
+        &core_model::MediaManifest::default(),
+    )
+    .unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(TIMELINE_FILENAME)).unwrap()).unwrap();
+    assert_eq!(json["timelines"].as_array().unwrap().len(), 2);
+}
