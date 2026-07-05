@@ -1,4 +1,4 @@
-//! All 61 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 62 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -11,6 +11,7 @@
 //! Upstream #255: added create_timeline, set_active_timeline, duplicate_timeline (59 → 62).
 //! v0.6.1 surface alignment: sync_audio_clips renamed to upstream's sync_audio; the
 //! speculative import_xml (never shipped upstream) removed (62 → 61).
+//! v0.6.1 gap port: added upstream's update_text (61 → 62).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -26,7 +27,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 61 tools exposed to the agent.
+/// Returns all 62 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -41,6 +42,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         set_active_timeline(),
         add_shapes(),
         add_texts(),
+        update_text(),
         apply_animation(),
         apply_clip_preset(),
         apply_color(),
@@ -133,6 +135,7 @@ Edits are undoable and effectively free — make them directly rather than askin
 
 # Compositing, text, and graphics
 - add_texts / add_shapes: overlay titles and captions (text), or rectangles, ovals, circles, arrows, and lines (shapes), on a video track.
+- update_text: change existing text clips (or a whole captionGroupId) in place — content, typography, color, animation, or text-box transform; only the fields you pass change.
 - create_matte: add a solid-colour image to the library — backgrounds, lower-thirds, letterbox bars. Pass a hex colour and an optional aspect ratio, then place it with add_clips.
 - apply_color: grade a clip's colour (merge semantics — only the params you pass change).
 - apply_effect / set_chroma_key / set_blend_mode: add a blur or vignette, key out a green screen, or change how a clip composites over the layers beneath it.
@@ -169,6 +172,29 @@ pub fn system_instruction_with_skills(skills: &[crate::tool_exec::AgentSkill]) -
 // ---------------------------------------------------------------------------
 // Tool factory functions
 // ---------------------------------------------------------------------------
+
+fn update_text() -> ToolDefinition {
+    ToolDefinition {
+        name: "update_text",
+        description: "Updates text clips or a captionGroupId. Use for content, typography, color, animation, or text-box transform. MERGES: only the fields you pass change; the rest keep their current values. Auto-fit-to-content on typography changes is not applied yet — pass transform to resize the box explicitly.",
+        input_schema: object(&[
+            ("clipIds", array("Text clip IDs. Optional if captionGroupId is given.")),
+            ("captionGroupId", string("Caption group id from get_timeline.")),
+            ("content", string("Replacement text. Supports \\n.")),
+            ("fontName", string("Font family name.")),
+            ("fontSize", number("Font size in points (1080-tall reference canvas).")),
+            ("fontWeight", number("Font weight 100-900.")),
+            ("color", string("Text color hex (#RGB, #RRGGBB, or #RRGGBBAA).")),
+            ("alignment", string("left, center, or right.")),
+            (
+                "transform",
+                object_any("Partial text-box transform {centerX, centerY, width, height, rotation}; omitted fields keep current values."),
+            ),
+            ("animation", string("Animation preset; 'off' clears.")),
+            ("highlightColor", string("Active-word hex for per-word presets.")),
+        ]),
+    }
+}
 
 fn add_captions() -> ToolDefinition {
     ToolDefinition {
@@ -1219,8 +1245,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            61,
-            "TDEF-001: 61 tools (see the header history)"
+            62,
+            "TDEF-001: 62 tools (see the header history)"
         );
     }
 
@@ -1249,7 +1275,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 61, "all 61 tool names must be unique");
+        assert_eq!(names.len(), 62, "all 62 tool names must be unique");
     }
 
     #[test]

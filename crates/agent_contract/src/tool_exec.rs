@@ -656,6 +656,7 @@ impl ToolExecutor {
             "create_compound_clip" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_create_compound_clip, args)
             }
+            "update_text" => self.exec_mut(tool_name, ToolExecutor::cmd_update_text, args),
             "create_timeline" => self.cmd_create_timeline(args),
             "set_active_timeline" => self.cmd_set_active_timeline(args),
             "duplicate_timeline" => self.cmd_duplicate_timeline(args),
@@ -3914,6 +3915,129 @@ impl ToolExecutor {
             depth += 1;
         }
         false
+    }
+
+    /// UPDATE_TEXT (upstream): merge content/typography/transform/animation
+    /// changes into existing text clips, addressed by clipIds or captionGroupId.
+    fn cmd_update_text(&mut self, args: &Value) -> Result<Value, String> {
+        let mut ids: Vec<String> = args
+            .get("clipIds")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if let Some(group) = args.get("captionGroupId").and_then(|v| v.as_str()) {
+            for track in &self.timeline.tracks {
+                for clip in &track.clips {
+                    if clip.caption_group_id.as_deref() == Some(group)
+                        && !ids.iter().any(|i| i == &clip.id)
+                    {
+                        ids.push(clip.id.clone());
+                    }
+                }
+            }
+            if ids.is_empty() {
+                return Err(format!("No caption clips found for captionGroupId '{group}'."));
+            }
+        }
+        if ids.is_empty() {
+            return Err("update_text requires 'clipIds' or 'captionGroupId'.".to_string());
+        }
+
+        // Validate all targets first: they must exist and be text clips.
+        for id in &ids {
+            let Some(loc) = timeline_core::find_clip(&self.timeline, id) else {
+                return Err(format!("Clip not found: {id}"));
+            };
+            let clip = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            if clip.media_type != ClipType::Text {
+                return Err(format!(
+                    "Clip {id} is a {:?} clip; update_text needs text clips.",
+                    clip.media_type
+                ));
+            }
+        }
+
+        // Parse shared updates once (invalid values reject before any mutation).
+        let content = args.get("content").and_then(|v| v.as_str());
+        let font_name = args.get("fontName").and_then(|v| v.as_str());
+        let font_size = args.get("fontSize").and_then(|v| v.as_f64());
+        let font_weight = args.get("fontWeight").and_then(|v| v.as_f64());
+        let color = match args.get("color").and_then(|v| v.as_str()) {
+            Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+                format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
+            })?),
+            None => None,
+        };
+        let alignment = match args.get("alignment").and_then(|v| v.as_str()) {
+            Some(a) => Some(core_model::TextAlignment::from_name(a).ok_or_else(|| {
+                format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
+            })?),
+            None => None,
+        };
+        let animation_raw = args.get("animation").and_then(|v| v.as_str());
+        let clear_animation = animation_raw == Some("off");
+        let animation = if clear_animation {
+            None
+        } else {
+            parse_text_animation(
+                animation_raw,
+                args.get("highlightColor").and_then(|v| v.as_str()),
+            )?
+        };
+        let partial_transform = args.get("transform").map(|t| timeline_core::PartialTransform {
+            center_x: t.get("centerX").and_then(|v| v.as_f64()),
+            center_y: t.get("centerY").and_then(|v| v.as_f64()),
+            width: t.get("width").and_then(|v| v.as_f64()),
+            height: t.get("height").and_then(|v| v.as_f64()),
+            rotation: t.get("rotation").and_then(|v| v.as_f64()),
+            flip_horizontal: None,
+            flip_vertical: None,
+        });
+
+        for id in &ids {
+            let loc = timeline_core::find_clip(&self.timeline, id).expect("validated above");
+            let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            if let Some(c) = content {
+                clip.text_content = Some(c.to_string());
+            }
+            if font_name.is_some()
+                || font_size.is_some()
+                || font_weight.is_some()
+                || color.is_some()
+                || alignment.is_some()
+            {
+                let style = clip.text_style.get_or_insert_with(TextStyle::default);
+                if let Some(f) = font_name {
+                    style.font_name = f.to_string();
+                }
+                if let Some(sz) = font_size {
+                    style.font_size = sz;
+                }
+                if let Some(w) = font_weight {
+                    style.font_weight = w;
+                }
+                if let Some(c) = color {
+                    style.color = c;
+                }
+                if let Some(a) = alignment {
+                    style.alignment = a;
+                }
+            }
+            if let Some(pt) = &partial_transform {
+                clip.transform = pt.merge_into(&clip.transform);
+            }
+            if clear_animation {
+                clip.text_animation = None;
+            } else if let Some(anim) = &animation {
+                clip.text_animation = Some(anim.clone());
+            }
+        }
+
+        let count = ids.len();
+        let noun = if count == 1 { "clip" } else { "clips" };
+        Ok(json!({ "content": [{ "type": "text", "text": format!(
+            "Updated {count} text {noun}."
+        )}]}))
     }
 
     fn cmd_import_folder(&mut self, args: &Value) -> Result<Value, String> {
@@ -8379,6 +8503,84 @@ mod tests {
             exec.timeline().tracks.is_empty(),
             "undo on the fresh timeline is a no-op, not a cross-timeline restore: {text}"
         );
+    }
+
+    #[test]
+    fn update_text_merges_fields_and_handles_caption_groups() {
+        let mut exec = make_executor();
+        exec.execute(
+            "add_texts",
+            &json!({"texts": [
+                {"content": "Hello", "startFrame": 0, "durationFrames": 60,
+                 "fontSize": 40.0, "animation": "popIn"},
+                {"content": "World", "startFrame": 60, "durationFrames": 60}
+            ]}),
+        )
+        .unwrap();
+        let ids: Vec<String> = exec
+            .timeline()
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter().map(|c| c.id.clone()))
+            .collect();
+        assert_eq!(ids.len(), 2);
+        // Tag the second clip as part of a caption group.
+        {
+            let loc = timeline_core::find_clip(exec.timeline(), &ids[1]).unwrap();
+            exec.timeline_mut().tracks[loc.track_index].clips[loc.clip_index]
+                .caption_group_id = Some("cg1".into());
+        }
+
+        // Merge semantics: change color + content on clip 0; fontSize stays.
+        exec.execute(
+            "update_text",
+            &json!({"clipIds": [ids[0]], "content": "Hi", "color": "#ff0000"}),
+        )
+        .unwrap();
+        let c0 = exec.timeline().tracks[0]
+            .clips
+            .iter()
+            .find(|c| c.id == ids[0])
+            .unwrap()
+            .clone();
+        assert_eq!(c0.text_content.as_deref(), Some("Hi"));
+        let style = c0.text_style.as_ref().unwrap();
+        assert!((style.font_size - 40.0).abs() < 1e-9, "unmentioned field kept");
+        assert!((style.color.r - 1.0).abs() < 1e-9, "color applied");
+
+        // 'off' clears the animation.
+        assert!(c0.text_animation.is_some());
+        exec.execute("update_text", &json!({"clipIds": [ids[0]], "animation": "off"}))
+            .unwrap();
+        let c0 = exec.timeline().tracks[0]
+            .clips
+            .iter()
+            .find(|c| c.id == ids[0])
+            .unwrap()
+            .clone();
+        assert!(c0.text_animation.is_none(), "animation cleared");
+
+        // captionGroupId addressing.
+        exec.execute(
+            "update_text",
+            &json!({"captionGroupId": "cg1", "fontName": "Anton"}),
+        )
+        .unwrap();
+        let c1 = exec.timeline().tracks[0]
+            .clips
+            .iter()
+            .find(|c| c.id == ids[1])
+            .unwrap()
+            .clone();
+        assert_eq!(c1.text_style.as_ref().unwrap().font_name, "Anton");
+
+        // Non-text targets refuse; missing addressing refuses.
+        let err = exec.execute("update_text", &json!({})).unwrap_err();
+        assert!(err.contains("clipIds"), "{err}");
+        let err = exec
+            .execute("update_text", &json!({"captionGroupId": "nope"}))
+            .unwrap_err();
+        assert!(err.contains("No caption clips"), "{err}");
     }
 
     #[test]

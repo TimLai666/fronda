@@ -767,8 +767,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            61,
-            "MCP-003: 61 tools (see agent_contract tools.rs header history)"
+            62,
+            "MCP-003: 62 tools (see agent_contract tools.rs header history)"
         );
     }
 
