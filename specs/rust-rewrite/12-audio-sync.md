@@ -1,9 +1,12 @@
 # 12 — Audio sync (upstream PR #119)
 
-Design spec for porting Palmier Pro's multi-track audio sync to Fronda. The
-upstream audit (`97-upstream-pr-audit.md`, row #119) marks this **"needs a design
-spec before porting"**; this is that spec. Nothing here is implemented yet except
-the pure correlation math (see [Done](#already-done)).
+Design spec for porting Palmier Pro's multi-track audio sync to Fronda.
+
+> **STATUS 2026-07-05: Option A IMPLEMENTED.** `sync_audio_clips` shipped in
+> `agent_contract` per this spec (anchor formula below, sign pinned by the
+> padded-clip oracle test; `newClipId` reported because `move_clips` re-ids).
+> Still open: Option B `sync_offset_frames` metadata, sync menu/toast UI,
+> speed≠1 targets.
 
 ## Goal
 
