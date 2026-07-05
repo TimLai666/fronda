@@ -81,23 +81,16 @@ impl XmlExport {
     }
 
     /// Like [`XmlExport::export_with_manifest`] but resolves nested-timeline
-    /// carriers (upstream #255) against the project's sibling timelines. v1
-    /// flattens nests into their constituents (content-correct); emitting real
-    /// nested `<sequence>` nodes like Swift is a follow-up.
+    /// carriers (upstream #255) against the project's sibling timelines,
+    /// emitting real nested `<sequence>` nodes like Swift: the first use of a
+    /// child inlines its full `<sequence id="sequence-N">`, later uses emit a
+    /// self-closing reference (the Premiere convention).
     pub fn export_with_manifest_and_timelines(
         timeline: &Timeline,
         manifest: &MediaManifest,
         timelines: &HashMap<String, Timeline>,
     ) -> String {
-        let flattened;
-        let timeline = if timelines.is_empty() {
-            timeline
-        } else {
-            flattened =
-                timeline_core::flatten_nests(timeline, &|id: &str| timelines.get(id).cloned());
-            &flattened
-        };
-        Self::export_with_timecodes(timeline, None, Some(manifest))
+        Self::export_with_timecodes_and_timelines(timeline, None, Some(manifest), timelines)
     }
 
     fn export_with_timecodes(
@@ -105,95 +98,261 @@ impl XmlExport {
         media_timecodes: Option<&HashMap<String, SourceTimecode>>,
         manifest: Option<&MediaManifest>,
     ) -> String {
+        Self::export_with_timecodes_and_timelines(
+            timeline,
+            media_timecodes,
+            manifest,
+            &HashMap::new(),
+        )
+    }
+
+    fn export_with_timecodes_and_timelines(
+        timeline: &Timeline,
+        media_timecodes: Option<&HashMap<String, SourceTimecode>>,
+        manifest: Option<&MediaManifest>,
+        timelines: &HashMap<String, Timeline>,
+    ) -> String {
         // XML-011 dedup: a full <file> is emitted once per (media_ref, is_audio);
         // later uses become self-closing <file id="…"/> references.
         let mut emitted: HashSet<String> = HashSet::new();
+        let mut nest = NestCtx {
+            timelines,
+            sequence_ids: HashMap::new(),
+            emitted_sequences: HashSet::new(),
+        };
         let mut xml = String::new();
         writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").ok();
         writeln!(xml, "<!DOCTYPE xmeml>").ok();
         writeln!(xml, "<xmeml version=\"4\">").ok();
-        writeln!(xml, "  <sequence>").ok();
-        writeln!(xml, "    <name>Timeline</name>").ok();
-        writeln!(
-            xml,
-            "    <duration>{}</duration>",
-            timeline_total_frames(timeline)
-        )
-        .ok();
-        writeln!(xml, "    <rate>").ok();
-        writeln!(xml, "      <timebase>{}</timebase>", timeline.fps).ok();
-        writeln!(xml, "      <ntsc>FALSE</ntsc>").ok();
-        writeln!(xml, "    </rate>").ok();
-        writeln!(xml, "    <media>").ok();
-
-        // Video tracks (XML-010: reversed order)
-        let video_tracks: Vec<&Track> = timeline
-            .tracks
-            .iter()
-            .filter(|t| t.r#type != ClipType::Audio)
-            .collect();
-        writeln!(xml, "      <video>").ok();
-        for (i, track) in video_tracks.iter().rev().enumerate() {
-            writeln!(xml, "        <track>").ok();
-            writeln!(xml, "          <trackindex>{}</trackindex>", i + 1).ok();
-            writeln!(xml, "          <videotrack>").ok();
-            writeln!(
-                xml,
-                "            <enabled>{}</enabled>",
-                if track.hidden { "FALSE" } else { "TRUE" }
-            )
-            .ok();
-            writeln!(xml, "            <locked>FALSE</locked>").ok();
-
-            for clip in &track.clips {
-                if clip.media_type == ClipType::Text || clip.media_type == ClipType::Shape {
-                    // XML-013: Text/shape overlays not preserved
-                    continue;
-                }
-                let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
-                write_fade_transition(&mut xml, clip, timeline.fps, true, false);
-                write_clip(&mut xml, clip, timeline.fps, tc, manifest, false, &mut emitted);
-                write_fade_transition(&mut xml, clip, timeline.fps, false, false);
-            }
-            writeln!(xml, "          </videotrack>").ok();
-            writeln!(xml, "        </track>").ok();
-        }
-        writeln!(xml, "      </video>").ok();
-
-        // Audio tracks
-        let audio_tracks: Vec<&Track> = timeline
-            .tracks
-            .iter()
-            .filter(|t| t.r#type == ClipType::Audio)
-            .collect();
-        writeln!(xml, "      <audio>").ok();
-        for (i, track) in audio_tracks.iter().enumerate() {
-            writeln!(xml, "        <track>").ok();
-            writeln!(xml, "          <trackindex>{}</trackindex>", i + 1).ok();
-            writeln!(xml, "          <audiotrack>").ok();
-            writeln!(
-                xml,
-                "            <enabled>{}</enabled>",
-                if track.muted { "FALSE" } else { "TRUE" }
-            )
-            .ok();
-            writeln!(xml, "            <locked>FALSE</locked>").ok();
-            for clip in &track.clips {
-                let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
-                write_fade_transition(&mut xml, clip, timeline.fps, true, true);
-                write_clip(&mut xml, clip, timeline.fps, tc, manifest, true, &mut emitted);
-                write_fade_transition(&mut xml, clip, timeline.fps, false, true);
-            }
-            writeln!(xml, "          </audiotrack>").ok();
-            writeln!(xml, "        </track>").ok();
-        }
-        writeln!(xml, "      </audio>").ok();
-
-        writeln!(xml, "    </media>").ok();
-        writeln!(xml, "  </sequence>").ok();
+        write_sequence(
+            &mut xml,
+            None,
+            "Timeline",
+            timeline,
+            media_timecodes,
+            manifest,
+            &mut emitted,
+            &mut nest,
+            0,
+        );
         writeln!(xml, "</xmeml>").ok();
         xml
     }
+}
+
+/// Nested-sequence emission state (upstream #255): child timeline id → XMEML
+/// sequence id, plus which children already emitted their full node.
+struct NestCtx<'a> {
+    timelines: &'a HashMap<String, Timeline>,
+    sequence_ids: HashMap<String, String>,
+    emitted_sequences: HashSet<String>,
+}
+
+/// One timeline as a `<sequence>`; used for the root and recursively for
+/// nested timelines (mirrors Swift `sequenceNode`).
+#[allow(clippy::too_many_arguments)]
+fn write_sequence(
+    xml: &mut String,
+    id_attr: Option<&str>,
+    name: &str,
+    timeline: &Timeline,
+    media_timecodes: Option<&HashMap<String, SourceTimecode>>,
+    manifest: Option<&MediaManifest>,
+    emitted: &mut HashSet<String>,
+    nest: &mut NestCtx,
+    depth: usize,
+) {
+    match id_attr {
+        Some(id) => writeln!(xml, "  <sequence id=\"{}\">", xml_escape(id)).ok(),
+        None => writeln!(xml, "  <sequence>").ok(),
+    };
+    writeln!(xml, "    <name>{}</name>", xml_escape(name)).ok();
+    writeln!(
+        xml,
+        "    <duration>{}</duration>",
+        timeline_total_frames(timeline)
+    )
+    .ok();
+    writeln!(xml, "    <rate>").ok();
+    writeln!(xml, "      <timebase>{}</timebase>", timeline.fps).ok();
+    writeln!(xml, "      <ntsc>FALSE</ntsc>").ok();
+    writeln!(xml, "    </rate>").ok();
+    writeln!(xml, "    <media>").ok();
+
+    // Video tracks (XML-010: reversed order)
+    let video_tracks: Vec<&Track> = timeline
+        .tracks
+        .iter()
+        .filter(|t| t.r#type != ClipType::Audio)
+        .collect();
+    writeln!(xml, "      <video>").ok();
+    for (i, track) in video_tracks.iter().rev().enumerate() {
+        writeln!(xml, "        <track>").ok();
+        writeln!(xml, "          <trackindex>{}</trackindex>", i + 1).ok();
+        writeln!(xml, "          <videotrack>").ok();
+        writeln!(
+            xml,
+            "            <enabled>{}</enabled>",
+            if track.hidden { "FALSE" } else { "TRUE" }
+        )
+        .ok();
+        writeln!(xml, "            <locked>FALSE</locked>").ok();
+
+        for clip in &track.clips {
+            if clip.media_type == ClipType::Text || clip.media_type == ClipType::Shape {
+                // XML-013: Text/shape overlays not preserved
+                continue;
+            }
+            if clip.source_clip_type == ClipType::Sequence {
+                write_fade_transition(xml, clip, timeline.fps, true, false);
+                write_nest_clipitem(
+                    xml,
+                    clip,
+                    false,
+                    timeline.fps,
+                    media_timecodes,
+                    manifest,
+                    emitted,
+                    nest,
+                    depth,
+                );
+                write_fade_transition(xml, clip, timeline.fps, false, false);
+                continue;
+            }
+            let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
+            write_fade_transition(xml, clip, timeline.fps, true, false);
+            write_clip(xml, clip, timeline.fps, tc, manifest, false, emitted);
+            write_fade_transition(xml, clip, timeline.fps, false, false);
+        }
+        writeln!(xml, "          </videotrack>").ok();
+        writeln!(xml, "        </track>").ok();
+    }
+    writeln!(xml, "      </video>").ok();
+
+    // Audio tracks
+    let audio_tracks: Vec<&Track> = timeline
+        .tracks
+        .iter()
+        .filter(|t| t.r#type == ClipType::Audio)
+        .collect();
+    writeln!(xml, "      <audio>").ok();
+    for (i, track) in audio_tracks.iter().enumerate() {
+        writeln!(xml, "        <track>").ok();
+        writeln!(xml, "          <trackindex>{}</trackindex>", i + 1).ok();
+        writeln!(xml, "          <audiotrack>").ok();
+        writeln!(
+            xml,
+            "            <enabled>{}</enabled>",
+            if track.muted { "FALSE" } else { "TRUE" }
+        )
+        .ok();
+        writeln!(xml, "            <locked>FALSE</locked>").ok();
+        for clip in &track.clips {
+            if clip.source_clip_type == ClipType::Sequence {
+                write_fade_transition(xml, clip, timeline.fps, true, true);
+                write_nest_clipitem(
+                    xml,
+                    clip,
+                    true,
+                    timeline.fps,
+                    media_timecodes,
+                    manifest,
+                    emitted,
+                    nest,
+                    depth,
+                );
+                write_fade_transition(xml, clip, timeline.fps, false, true);
+                continue;
+            }
+            let tc = media_timecodes.and_then(|m| m.get(&clip.media_ref).copied());
+            write_fade_transition(xml, clip, timeline.fps, true, true);
+            write_clip(xml, clip, timeline.fps, tc, manifest, true, emitted);
+            write_fade_transition(xml, clip, timeline.fps, false, true);
+        }
+        writeln!(xml, "          </audiotrack>").ok();
+        writeln!(xml, "        </track>").ok();
+    }
+    writeln!(xml, "      </audio>").ok();
+
+    writeln!(xml, "    </media>").ok();
+    writeln!(xml, "  </sequence>").ok();
+}
+
+/// A nest carrier as a `<clipitem>` embedding (or referencing) the child
+/// timeline's `<sequence>` (mirrors Swift `nestClipItemNode`): the full node on
+/// first use, a self-closing `<sequence id="…"/>` reference afterwards. A
+/// frozen carrier trimmed past the child's length is skipped (out < in).
+#[allow(clippy::too_many_arguments)]
+fn write_nest_clipitem(
+    xml: &mut String,
+    clip: &Clip,
+    // Carrier volume/motion filters (Swift emits them on nest clipitems too)
+    // are a follow-up; the carrier body is identical for video/audio today.
+    _is_audio: bool,
+    fps: i64,
+    media_timecodes: Option<&HashMap<String, SourceTimecode>>,
+    manifest: Option<&MediaManifest>,
+    emitted: &mut HashSet<String>,
+    nest: &mut NestCtx,
+    depth: usize,
+) {
+    if depth >= timeline_core::NEST_MAX_DEPTH {
+        return;
+    }
+    let Some(child) = nest.timelines.get(&clip.media_ref).cloned() else {
+        return; // missing child exports nothing
+    };
+    let child_total = timeline_total_frames(&child);
+    let in_point = clip.trim_start_frame;
+    let out_point = (in_point + clip.duration_frames).min(child_total);
+    if out_point <= in_point {
+        return; // frozen carrier trimmed past the child's current length
+    }
+
+    let seq_id = match nest.sequence_ids.get(&clip.media_ref) {
+        Some(id) => id.clone(),
+        None => {
+            let id = format!("sequence-{}", nest.sequence_ids.len() + 1);
+            nest.sequence_ids.insert(clip.media_ref.clone(), id.clone());
+            id
+        }
+    };
+
+    writeln!(xml, "            <clipitem id=\"{}\">", xml_escape(&clip.id)).ok();
+    writeln!(xml, "              <name>{}</name>", xml_escape(&child.name)).ok();
+    writeln!(xml, "              <enabled>TRUE</enabled>").ok();
+    writeln!(xml, "              <duration>{child_total}</duration>").ok();
+    writeln!(xml, "              <rate>").ok();
+    writeln!(xml, "                <timebase>{fps}</timebase>").ok();
+    writeln!(xml, "                <ntsc>FALSE</ntsc>").ok();
+    writeln!(xml, "              </rate>").ok();
+    writeln!(xml, "              <start>{}</start>", clip.start_frame).ok();
+    writeln!(
+        xml,
+        "              <end>{}</end>",
+        clip.start_frame + (out_point - in_point)
+    )
+    .ok();
+    writeln!(xml, "              <in>{in_point}</in>").ok();
+    writeln!(xml, "              <out>{out_point}</out>").ok();
+
+    if nest.emitted_sequences.insert(clip.media_ref.clone()) {
+        let child_name = child.name.clone();
+        write_sequence(
+            xml,
+            Some(&seq_id),
+            &child_name,
+            &child,
+            media_timecodes,
+            manifest,
+            emitted,
+            nest,
+            depth + 1,
+        );
+    } else {
+        writeln!(xml, "  <sequence id=\"{}\"/>", xml_escape(&seq_id)).ok();
+    }
+    writeln!(xml, "            </clipitem>").ok();
 }
 
 fn timeline_total_frames(timeline: &Timeline) -> i64 {
@@ -571,6 +730,117 @@ fn xml_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use core_model::Interpolation;
+
+    fn test_clip(id: &str, media_ref: &str, start: i64, dur: i64) -> Clip {
+        Clip {
+            id: id.into(),
+            media_ref: media_ref.into(),
+            media_type: ClipType::Video,
+            source_clip_type: ClipType::Video,
+            start_frame: start,
+            duration_frames: dur,
+            trim_start_frame: 0,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            opacity: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            transform: Default::default(),
+            crop: Default::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            text_animation: None,
+            word_timings: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+            effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
+            compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
+        }
+    }
+
+    #[test]
+    fn nested_sequences_emit_inline_then_reference() {
+        // Two carriers over the SAME child: the first inlines the full
+        // <sequence id="sequence-1">, the second emits a self-closing reference.
+        let mut child = Timeline {
+            name: "Insert Cut".into(),
+            ..Default::default()
+        };
+        child.id = "child-1".into();
+        child.tracks.push(Track {
+            id: "ct".into(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: true,
+            display_height: 50.0,
+            clips: vec![test_clip("inner", "m-child", 0, 40)],
+        });
+
+        let mut carrier_a = test_clip("carA", "child-1", 0, 40);
+        carrier_a.media_type = ClipType::Sequence;
+        carrier_a.source_clip_type = ClipType::Sequence;
+        let mut carrier_b = test_clip("carB", "child-1", 40, 40);
+        carrier_b.media_type = ClipType::Sequence;
+        carrier_b.source_clip_type = ClipType::Sequence;
+        // A frozen carrier trimmed past the child's length must be skipped.
+        let mut frozen = test_clip("carC", "child-1", 80, 10);
+        frozen.media_type = ClipType::Sequence;
+        frozen.source_clip_type = ClipType::Sequence;
+        frozen.trim_start_frame = 100;
+
+        let mut parent = Timeline::default();
+        parent.tracks.push(Track {
+            id: "pt".into(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: true,
+            display_height: 50.0,
+            clips: vec![carrier_a, carrier_b, frozen],
+        });
+        let timelines = HashMap::from([("child-1".to_string(), child)]);
+
+        let xml = XmlExport::export_with_manifest_and_timelines(
+            &parent,
+            &MediaManifest::default(),
+            &timelines,
+        );
+        assert_eq!(
+            xml.matches("<sequence id=\"sequence-1\">").count(),
+            1,
+            "full child sequence inlined exactly once: {xml}"
+        );
+        assert_eq!(
+            xml.matches("<sequence id=\"sequence-1\"/>").count(),
+            1,
+            "second use is a self-closing reference"
+        );
+        assert_eq!(
+            xml.matches("<name>Insert Cut</name>").count(),
+            3,
+            "both carrier clipitems + the nested sequence use the child's name"
+        );
+        assert!(
+            !xml.contains("carC"),
+            "frozen carrier past the child length is dropped"
+        );
+        // The nested sequence carries the child's clip.
+        assert!(xml.contains("clipitem id=\"inner\""), "{xml}");
+    }
 
     fn sample_timeline() -> Timeline {
         Timeline {
