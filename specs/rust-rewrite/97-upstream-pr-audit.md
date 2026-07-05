@@ -174,11 +174,19 @@ stub names don't exist upstream; realign when tackling #238; upstream has no
 delete tool at all). Also fixed in this pass: our #119 tool shipped as
 `sync_audio_clips` but upstream's name is `sync_audio` — renamed + schema
 aligned (targetClipId single form, searchWindowSeconds → windowed correlation).
-Rust-native extensions kept deliberately (not drift): compound-clip pair,
-clip presets, `set_color_grade`/`set_blend_mode`/`set_chroma_key`/`add_shapes`/
-`apply_animation`/`generate_music`/`import_folder` (verify these against the
-upstream diff when next re-auditing — some may have been renamed/merged
-upstream rather than never existing).
+Rust-native extensions kept deliberately (not drift; VERIFIED 2026-07-05 —
+none exist in current upstream ToolDefinitions, `git log -S add_shapes` shows
+no history either, so these agent-tool NAMES were always Rust-side; the
+underlying data-model fields are real ported PR contracts): compound-clip
+pair, clip presets, `add_shapes`, `apply_animation`, `set_blend_mode`,
+`import_folder`, `duplicate_project`. Upstream exposes three of the
+capabilities through consolidated tools instead — chroma keying via
+`apply_effect` (its description lists "key"), color grading via the rich
+`apply_color` (wheels/curves/hue-curves/LUT; our `set_color_grade` overlaps),
+music via `generate_audio` (text-to-music models). Converging on upstream's
+consolidated shapes would break our own MCP surface — a user decision, not
+drift cleanup. `update_text` (upstream's dedicated text-update tool with
+auto-fit box semantics) remains the largest un-ported tool.
 
 **Resolved 2026-07-05 by the v0.6.1 re-audit:** the speculative
 `set_clip_audio_effects`/`set_clip_noise_reduction` stubs were REMOVED — upstream
