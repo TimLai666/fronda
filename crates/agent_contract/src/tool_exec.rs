@@ -3128,13 +3128,13 @@ impl ToolExecutor {
             .ok_or_else(|| format!("Clip '{clip_id}' was not found on the timeline."))?;
         let clip = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
         let preset = ClipPreset {
-            transform: clip.transform.clone(),
-            crop: clip.crop.clone(),
+            transform: clip.transform,
+            crop: clip.crop,
             opacity: clip.opacity,
             volume: clip.volume,
             speed: clip.speed,
             effects: clip.effects.clone(),
-            blend_mode: clip.blend_mode.clone(),
+            blend_mode: clip.blend_mode,
             chroma_key: clip.chroma_key.clone(),
         };
         self.clip_presets.insert(name.to_string(), preset);
@@ -3183,12 +3183,12 @@ impl ToolExecutor {
                 continue;
             };
             let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
-            clip.transform = preset.transform.clone();
-            clip.crop = preset.crop.clone();
+            clip.transform = preset.transform;
+            clip.crop = preset.crop;
             clip.opacity = preset.opacity;
             clip.volume = preset.volume;
             clip.effects = preset.effects.clone();
-            clip.blend_mode = preset.blend_mode.clone();
+            clip.blend_mode = preset.blend_mode;
             clip.chroma_key = preset.chroma_key.clone();
             applied += 1;
         }
