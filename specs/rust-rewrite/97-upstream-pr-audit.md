@@ -134,20 +134,30 @@ model-config validate/discount).
 A definitive coverage test (`every_advertised_tool_is_dispatched`, agent_contract)
 found **12 of the 59 advertised tools had schemas but no executor dispatch** —
 they returned the misleading "Unknown tool". Schemas landed ahead of the logic
-across Issues #154/#155/#157/#158/#165/#172/#174. Each now returns an honest
-limitation message; the test permanently guards the class. Real implementations,
-by category:
+across Issues #154/#155/#157/#158/#165/#172/#174. Each returns an honest
+limitation message (or is now implemented); the test permanently guards the class.
+
+**#155 compound clips — now fully implemented (2026-07-05).** `create_compound_clip`
+/ `dissolve_compound_clip` are wired end-to-end: `timeline_core::compound`
+(create/dissolve/`flatten_compound_clips`, single-track), agent executor commands
+(via `exec_mut` so undo captures them), and flatten at every render/export
+chokepoint (`compose_frame`, `mix_timeline_audio`, XMEML + FCPXML export) so a
+compound clip renders/exports its nested content instead of an empty frame. The
+decode closures key on the manifest, so flattened constituents decode on demand
+with no export-path change. v1 is single-track; composing a transform/fades
+applied to the compound clip *itself* onto the group, and a persistent display
+name (needs a Clip/Timeline name field — `MediaSource` is file-only), are
+follow-ups.
+
+Remaining stubbed tools, by category:
 - **Host-gated (need a seam/DSP/model):** `remove_silence` (on-device audio RMS,
   like transcription), `set_clip_audio_effects`/`set_clip_noise_reduction` (need
   audio DSP + new Clip audio-effect fields), `import_xml` (an XMEML/FCPXML→timeline
   parser + FS read — render_core only has the export direction).
 - **App-nav / needs confirmation:** `create_project`/`open_project`/`delete_project`
   (#238 — switch the whole app's active project; `delete_project` is destructive).
-- **Pure but substantial (implementable in timeline_core/agent_contract):**
-  `create_compound_clip`/`dissolve_compound_clip` (the model already has
-  `compound_timeline_id` + `compound_timelines`; needs the group→nest→replace and
-  flatten logic); `apply/save/list_clip_presets` (needs a preset store — in-memory
-  is pure, persisted is app-layer).
+- **Pure but substantial:** `apply/save/list_clip_presets` (needs a preset store —
+  in-memory is pure, persisted is app-layer).
 
 ## Recommended execution order
 
