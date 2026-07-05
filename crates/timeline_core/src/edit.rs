@@ -418,6 +418,7 @@ pub fn link_audio_for_placed_clips(
         trim_start_frame: i64,
         trim_end_frame: i64,
         speed: f64,
+        source_clip_type: ClipType,
     }
 
     let mut video_info_list: Vec<VideoInfo> = Vec::new();
@@ -444,6 +445,7 @@ pub fn link_audio_for_placed_clips(
             trim_start_frame: video.trim_start_frame,
             trim_end_frame: video.trim_end_frame,
             speed: video.speed,
+            source_clip_type: video.source_clip_type,
         });
         total_duration += video.duration_frames;
     }
@@ -475,7 +477,13 @@ pub fn link_audio_for_placed_clips(
             id: info.audio_id.clone(),
             media_ref: info.media_ref.clone(),
             media_type: ClipType::Audio,
-            source_clip_type: ClipType::Audio,
+            // A nested-timeline carrier's audio partner keeps sourceClipType
+            // sequence (upstream #255) so it resolves against the child timeline.
+            source_clip_type: if info.source_clip_type == ClipType::Sequence {
+                ClipType::Sequence
+            } else {
+                ClipType::Audio
+            },
             start_frame: info.start_frame,
             duration_frames: info.duration_frames,
             trim_start_frame: info.trim_start_frame,

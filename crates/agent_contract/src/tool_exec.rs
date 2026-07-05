@@ -2246,6 +2246,25 @@ impl ToolExecutor {
         let mut clip_specs: Vec<timeline_core::RippleInsertClipSpec> =
             Vec::with_capacity(media_ids.len());
         for media_id in &media_ids {
+            // NESTING (#255): as in add_clips, mediaRef may be a sibling
+            // timeline's id — splice it in as a sequence carrier.
+            if self.media_manifest.entry_for(media_id).is_none() {
+                if let Some(child) = self
+                    .sibling_timelines
+                    .iter()
+                    .find(|t| t.id == *media_id)
+                    .cloned()
+                {
+                    let (trim_start, duration) = self.nest_window(&child, args)?;
+                    clip_specs.push(timeline_core::RippleInsertClipSpec {
+                        asset_id: media_id.clone(),
+                        duration_frames: duration,
+                        trim_start_frame: Some(trim_start),
+                        trim_end_frame: Some(0),
+                    });
+                    continue;
+                }
+            }
             let entry = self.media_manifest.entry_for(media_id);
             let placement = resolve_placement(entry, args, project_fps)?;
             if let Some(warning) = placement.fps_warning {
@@ -2269,7 +2288,13 @@ impl ToolExecutor {
                     .media_manifest
                     .entry_for(media_id)
                     .map(|e| e.r#type)
-                    .unwrap_or(ClipType::Video);
+                    .unwrap_or_else(|| {
+                        if self.sibling_timelines.iter().any(|t| t.id == *media_id) {
+                            ClipType::Sequence
+                        } else {
+                            ClipType::Video
+                        }
+                    });
                 if !track.is_compatible_with(media_type) {
                     return Err(format!(
                         "media type {media_type:?} is not compatible with track {track_index} ({:?})",
@@ -2288,9 +2313,18 @@ impl ToolExecutor {
         let has_linked_audio: Vec<bool> = media_ids
             .iter()
             .map(|mid| {
-                self.media_manifest
-                    .entry_for(mid)
-                    .map(|e| e.r#type == ClipType::Video && e.has_audio == Some(true))
+                if let Some(entry) = self.media_manifest.entry_for(mid) {
+                    return entry.r#type == ClipType::Video && entry.has_audio == Some(true);
+                }
+                // A nested timeline with audio clips gets a linked audio carrier.
+                self.sibling_timelines
+                    .iter()
+                    .find(|t| t.id == *mid)
+                    .map(|t| {
+                        t.tracks
+                            .iter()
+                            .any(|tr| tr.r#type == ClipType::Audio && !tr.clips.is_empty())
+                    })
                     .unwrap_or(false)
             })
             .collect();
@@ -2351,7 +2385,13 @@ impl ToolExecutor {
                             .media_manifest
                             .entry_for(&spec.asset_id)
                             .map(|e| e.r#type.clone())
-                            .unwrap_or(ClipType::Video);
+                            .unwrap_or_else(|| {
+                                if self.sibling_timelines.iter().any(|t| t.id == spec.asset_id) {
+                                    ClipType::Sequence
+                                } else {
+                                    ClipType::Video
+                                }
+                            });
                         Clip {
                         id: Uuid::new_v4().to_string(),
                         media_ref: spec.asset_id.clone(),
@@ -3696,30 +3736,7 @@ impl ToolExecutor {
     /// (upstream #255): a video sequence carrier, plus a linked audio carrier
     /// when the child has audio clips. Rejects empty children and cycles.
     fn nest_carrier_clips(&self, child: &Timeline, args: &Value) -> Result<Vec<Clip>, String> {
-        let child_total = timeline_core::TimelineMathExt::total_frames(child);
-        if child_total <= 0 {
-            return Err(format!(
-                "Timeline '{}' is empty — add clips to it before nesting it.",
-                child.name
-            ));
-        }
-        if self.timeline_reaches(child, &self.timeline.id) {
-            return Err(format!(
-                "Placing timeline '{}' here would create a cycle (it contains the active timeline).",
-                child.name
-            ));
-        }
-
-        let trim_start = args
-            .get("trimStartFrame")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0)
-            .clamp(0, (child_total - 1).max(0));
-        let duration = args
-            .get("durationFrames")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(child_total - trim_start)
-            .clamp(1, child_total - trim_start);
+        let (trim_start, duration) = self.nest_window(child, args)?;
 
         let has_audio = child
             .tracks
@@ -3772,6 +3789,35 @@ impl ToolExecutor {
             out.push(audio);
         }
         Ok(out)
+    }
+
+    /// Validate nesting `child` into the active timeline and compute the
+    /// carrier's (trim_start, duration) window from the args (upstream #255).
+    fn nest_window(&self, child: &Timeline, args: &Value) -> Result<(i64, i64), String> {
+        let child_total = timeline_core::TimelineMathExt::total_frames(child);
+        if child_total <= 0 {
+            return Err(format!(
+                "Timeline '{}' is empty — add clips to it before nesting it.",
+                child.name
+            ));
+        }
+        if self.timeline_reaches(child, &self.timeline.id) {
+            return Err(format!(
+                "Placing timeline '{}' here would create a cycle (it contains the active timeline).",
+                child.name
+            ));
+        }
+        let trim_start = args
+            .get("trimStartFrame")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            .clamp(0, (child_total - 1).max(0));
+        let duration = args
+            .get("durationFrames")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(child_total - trim_start)
+            .clamp(1, child_total - trim_start);
+        Ok((trim_start, duration))
     }
 
     /// True when `target_id` is reachable from `from` through sequence carriers
@@ -8156,6 +8202,63 @@ mod tests {
             .execute("add_clips", &json!({"mediaIds": [root_id]}))
             .unwrap_err();
         assert!(err.contains("cycle"), "{err}");
+    }
+
+    #[test]
+    fn insert_clips_nests_a_timeline_by_id() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
+        manifest.entries.push(audio_media("a1", 2.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+
+        // Root gets one video clip; the child gets video+audio.
+        let root_id = exec.timeline().id.clone();
+        exec.execute("add_clips", &json!({"mediaIds": ["m1"]})).unwrap();
+        let root_clip_start_before = exec.timeline().tracks[0].clips[0].start_frame;
+        exec.execute("create_timeline", &json!({"name": "Chunk"})).unwrap();
+        let child_id = exec.timeline().id.clone();
+        exec.execute("add_clips", &json!({"mediaIds": ["m1", "a1"]})).unwrap();
+        let child_total =
+            timeline_core::TimelineMathExt::total_frames(exec.timeline());
+        exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
+
+        // Splice the child in at frame 0 on the video track: the existing clip
+        // ripples right and a linked A/V carrier pair lands at 0.
+        exec.execute(
+            "insert_clips",
+            &json!({"mediaIds": [child_id], "trackIndex": 0, "frame": 0}),
+        )
+        .unwrap();
+        let all: Vec<Clip> = exec
+            .timeline()
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.clone())
+            .collect();
+        let video = all
+            .iter()
+            .find(|c| c.media_type == ClipType::Sequence)
+            .expect("video carrier placed");
+        assert_eq!(video.media_ref, child_id);
+        assert_eq!(video.start_frame, 0);
+        assert_eq!(video.duration_frames, child_total);
+        let audio = all
+            .iter()
+            .find(|c| c.media_type == ClipType::Audio && c.source_clip_type == ClipType::Sequence)
+            .expect("linked audio carrier placed with sequence source");
+        assert_eq!(audio.media_ref, child_id);
+        assert_eq!(video.link_group_id, audio.link_group_id);
+        assert!(video.link_group_id.is_some());
+        let pushed = exec.timeline().tracks[0]
+            .clips
+            .iter()
+            .find(|c| c.media_type == ClipType::Video)
+            .unwrap();
+        assert_eq!(
+            pushed.start_frame,
+            root_clip_start_before + child_total,
+            "existing clip rippled right by the carrier length"
+        );
     }
 
     #[test]

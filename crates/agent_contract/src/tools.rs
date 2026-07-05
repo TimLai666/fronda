@@ -342,7 +342,9 @@ fn insert_clips() -> ToolDefinition {
         name: "insert_clips",
         description: "Insert clips at a specific frame position, pushing existing \
             content later. Clip type and source length come from the media asset; \
-            project fps is authoritative and is not changed to match the source.",
+            project fps is authoritative and is not changed to match the source. \
+            As in add_clips, mediaRef may be a timelineId to splice in a nested \
+            timeline.",
         input_schema: object(&[
             ("mediaIds", array("Media asset ids to insert")),
             ("frame", integer("Insertion frame position")),
