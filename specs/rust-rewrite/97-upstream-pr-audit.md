@@ -216,7 +216,7 @@ Each Tier 3 subsystem gets its own spec file before implementation.
 
 | PR | Title | Scope | Action Needed |
 |----|-------|-------|---------------|
-| #119 | Syncing multiple audio tracks | Large feature. Audio DSP (AudioEnvelope, AudioSyncCorrelator, AudioTrackReader), new agent tool(s), sync menu and toast UI. ~600 LoC Swift. | Needs a design spec before porting. Involves: cross-correlation math, PCM decoding abstraction, new `sync_audio_clips` tool, timeline undo for sync operations, platform adapter for audio file I/O. |
+| #119 | Syncing multiple audio tracks | Large feature. Audio DSP (AudioEnvelope, AudioSyncCorrelator, AudioTrackReader), new agent tool(s), sync menu and toast UI. ~600 LoC Swift. | **DESIGN SPEC WRITTEN 2026-07-05** → `specs/rust-rewrite/12-audio-sync.md`. The DSP core (`audio_core::audio_sync_correlator`, 13 tests) is already done + the #174 `ClipAudioSource` PCM seam is reusable, so the remaining port is ~150–250 LoC (a `sync_audio_clips` tool + executor + tests). **Gating decision:** apply the offset by moving the target clip (no model change — recommended) vs storing `sync_offset_frames` (data-model change + render/export invariant, per specs 01/04). Spec details both; needs the user to pick before implementation. |
 
 ---
 
@@ -369,7 +369,7 @@ Source: `Tests/PalmierProTests/` directory listing.
    Swift TransformCropTests already mapped; low risk, high parity value.
 2. **Port `TimelineGeometryTests`** — timeline coordinate math.
 3. **Port `ClipKeyframeExtensionTests`** — clip-level keyframe helpers.
-4. **Write spec for PR #119 (audio sync)** — before any implementation work.
+4. ~~Write spec for PR #119 (audio sync)~~ — **DONE 2026-07-05** (`12-audio-sync.md`). Implementation is unblocked pending the offset-application decision (move clip vs `sync_offset_frames` field).
 5. **Port `CaptionBuilderTests` / `CaptionGenerationTests`** — full caption
    pipeline from transcript → captions.
 6. **Port `CompositionBuilderTests`** — verify CompositionPlan matches Swift.
