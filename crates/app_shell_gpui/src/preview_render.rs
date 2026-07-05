@@ -7,16 +7,19 @@
 
 use crate::video_export::{decode_frame_rgba, source_path, source_time_seconds};
 use core_model::{MediaManifest, Timeline};
-use render_core::compositor::compose_frame;
+use render_core::compositor::compose_frame_with_timelines;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Composite `frame` of `timeline` at its project dimensions and write it as a
 /// PNG to `out`. Sources resolve from `manifest` (project-relative against
 /// `project_root`); each clip's source frame is decoded at its mapped time.
+/// `timelines` holds the project's sibling timelines so nested-timeline
+/// carriers render (upstream #255).
 pub fn render_frame_png(
     timeline: &Timeline,
     manifest: &MediaManifest,
+    timelines: &HashMap<String, Timeline>,
     project_root: &Path,
     frame: i64,
     out: &Path,
@@ -31,10 +34,11 @@ pub fn render_frame_png(
         .filter_map(|e| source_path(e, project_root).map(|p| (e.id.as_str(), p)))
         .collect();
 
-    let img = compose_frame(timeline, manifest, frame, w, h, |clip| {
+    let mut fetch = |clip: &core_model::Clip, local_frame: i64| {
         let path = paths.get(clip.media_ref.as_str())?;
-        decode_frame_rgba(path, source_time_seconds(clip, frame, fps))
-    });
+        decode_frame_rgba(path, source_time_seconds(clip, local_frame, fps))
+    };
+    let img = compose_frame_with_timelines(timeline, manifest, timelines, frame, w, h, &mut fetch);
 
     let buf = image::RgbaImage::from_raw(w as u32, h as u32, img.pixels)
         .ok_or("composited frame buffer size mismatch")?;
@@ -173,7 +177,8 @@ mod tests {
 
         let dir = temp_dir("fixture");
         let out = dir.join("frame0.png");
-        render_frame_png(&timeline, &manifest, &dir, 0, &out).expect("fixture frame should render");
+        render_frame_png(&timeline, &manifest, &HashMap::new(), &dir, 0, &out)
+            .expect("fixture frame should render");
 
         let bytes = std::fs::read(&out).unwrap();
         assert!(!bytes.is_empty());
@@ -200,7 +205,7 @@ mod tests {
             folder_id: None,
             compound_timelines: Default::default(),
         };
-        render_frame_png(&timeline, &MediaManifest::default(), &dir, 0, &out).unwrap();
+        render_frame_png(&timeline, &MediaManifest::default(), &HashMap::new(), &dir, 0, &out).unwrap();
         let decoded = image::open(&out).unwrap();
         assert_eq!(decoded.width(), 16);
         assert_eq!(decoded.height(), 16);

@@ -676,6 +676,7 @@ impl Render for ExportView {
                                                     mode,
                                                     guard.timeline(),
                                                     guard.media_manifest(),
+                                                    &guard.sibling_timeline_map(),
                                                     &path,
                                                     fcpxml_target,
                                                 )
@@ -777,7 +778,7 @@ impl Render for ExportView {
                                             }
                                         })
                                         .detach();
-                                        let (timeline, manifest, root) = {
+                                        let (timeline, manifest, timelines, root) = {
                                             let hub =
                                                 crate::editor_state_hub::EditorStateHub::global();
                                             let exec = hub.executor();
@@ -788,6 +789,7 @@ impl Render for ExportView {
                                             (
                                                 guard.timeline().clone(),
                                                 guard.media_manifest().clone(),
+                                                guard.sibling_timeline_map(),
                                                 root,
                                             )
                                         };
@@ -800,8 +802,8 @@ impl Render for ExportView {
                                                 let w = size.width.max(2) as u32;
                                                 let h = size.height.max(2) as u32;
                                                 crate::audio_export::export_project_with_audio(
-                                                    &timeline, &manifest, &root, &out, w, h,
-                                                    video_codec, out_fps, &prog_enc,
+                                                    &timeline, &manifest, &timelines, &root, &out,
+                                                    w, h, video_codec, out_fps, &prog_enc,
                                                 )
                                                 .map(|()| out.clone())
                                             })

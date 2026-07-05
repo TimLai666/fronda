@@ -112,12 +112,13 @@ impl PreviewView {
                 .background_executor()
                 .spawn(async move {
                     let hub = crate::editor_state_hub::EditorStateHub::global();
-                    let (timeline, manifest, root) = {
+                    let (timeline, manifest, timelines, root) = {
                         let exec = hub.executor();
                         let guard = exec.lock().unwrap();
                         (
                             guard.timeline().clone(),
                             guard.media_manifest().clone(),
+                            guard.sibling_timeline_map(),
                             hub.project_root()
                                 .unwrap_or_else(|| std::env::temp_dir().join("fronda-preview")),
                         )
@@ -130,7 +131,7 @@ impl PreviewView {
                         return Some(out);
                     }
                     let result = crate::preview_render::render_frame_png(
-                        &timeline, &manifest, &root, frame, &out,
+                        &timeline, &manifest, &timelines, &root, frame, &out,
                     )
                     .ok()
                     .map(|()| out);

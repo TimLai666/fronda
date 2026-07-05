@@ -59,14 +59,18 @@ pub fn interchange_content(
     mode: ExportMode,
     timeline: &Timeline,
     manifest: &MediaManifest,
+    timelines: &std::collections::HashMap<String, Timeline>,
     fcpxml_target: FcpxmlTarget,
 ) -> Option<String> {
     match mode {
-        ExportMode::Xml => Some(XmlExport::export_with_manifest(timeline, manifest)),
-        ExportMode::Fcpxml => Some(FcpxmlExport::export_with_target(
+        ExportMode::Xml => Some(XmlExport::export_with_manifest_and_timelines(
+            timeline, manifest, timelines,
+        )),
+        ExportMode::Fcpxml => Some(FcpxmlExport::export_with_target_and_timelines(
             timeline,
             manifest,
             fcpxml_target,
+            timelines,
         )),
         ExportMode::Video | ExportMode::PalmierProject => None,
     }
@@ -78,10 +82,11 @@ pub fn write_interchange(
     mode: ExportMode,
     timeline: &Timeline,
     manifest: &MediaManifest,
+    timelines: &std::collections::HashMap<String, Timeline>,
     path: &std::path::Path,
     fcpxml_target: FcpxmlTarget,
 ) -> Result<(), String> {
-    let content = interchange_content(mode, timeline, manifest, fcpxml_target)
+    let content = interchange_content(mode, timeline, manifest, timelines, fcpxml_target)
         .ok_or_else(|| format!("{mode:?} is not a text interchange mode"))?;
     std::fs::write(path, content).map_err(|e| format!("Failed to write {}: {e}", path.display()))
 }
@@ -198,20 +203,20 @@ mod tests {
     fn interchange_content_matches_mode() {
         let tl = Timeline::default();
         let m = MediaManifest::default();
-        let xml = interchange_content(ExportMode::Xml, &tl, &m, FcpxmlTarget::Resolve).unwrap();
+        let xml = interchange_content(ExportMode::Xml, &tl, &m, &Default::default(), FcpxmlTarget::Resolve).unwrap();
         assert!(xml.contains("<xmeml"), "Xml mode produces XMEML");
         let fcp =
-            interchange_content(ExportMode::Fcpxml, &tl, &m, FcpxmlTarget::Resolve).unwrap();
+            interchange_content(ExportMode::Fcpxml, &tl, &m, &Default::default(), FcpxmlTarget::Resolve).unwrap();
         assert!(
             fcp.contains("<fcpxml version=\"1.10\">"),
             "Fcpxml mode produces FCPXML"
         );
         // The Fcp target is reachable through the model and produces a valid FCPXML too.
-        let fcp2 = interchange_content(ExportMode::Fcpxml, &tl, &m, FcpxmlTarget::Fcp).unwrap();
+        let fcp2 = interchange_content(ExportMode::Fcpxml, &tl, &m, &Default::default(), FcpxmlTarget::Fcp).unwrap();
         assert!(fcp2.contains("<fcpxml version=\"1.10\">"));
-        assert!(interchange_content(ExportMode::Video, &tl, &m, FcpxmlTarget::Resolve).is_none());
+        assert!(interchange_content(ExportMode::Video, &tl, &m, &Default::default(), FcpxmlTarget::Resolve).is_none());
         assert!(
-            interchange_content(ExportMode::PalmierProject, &tl, &m, FcpxmlTarget::Resolve)
+            interchange_content(ExportMode::PalmierProject, &tl, &m, &Default::default(), FcpxmlTarget::Resolve)
                 .is_none()
         );
     }
@@ -243,6 +248,7 @@ mod tests {
             ExportMode::Fcpxml,
             &Timeline::default(),
             &MediaManifest::default(),
+            &Default::default(),
             &path,
             FcpxmlTarget::Resolve,
         )
@@ -286,6 +292,7 @@ mod tests {
             ExportMode::Video,
             &Timeline::default(),
             &MediaManifest::default(),
+            &Default::default(),
             &path,
             FcpxmlTarget::Resolve,
         )

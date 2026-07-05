@@ -138,9 +138,11 @@ pub fn clip_waveform_peaks(source: &Path, buckets: usize) -> Option<Vec<f32>> {
 /// muxes an AAC stream when there is any non-silent audio (otherwise video-only).
 /// Both streams start at PTS 0, so they stay in sync.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn export_project_with_audio(
     timeline: &Timeline,
     manifest: &MediaManifest,
+    timelines: &HashMap<String, Timeline>,
     project_root: &Path,
     output: &Path,
     width: u32,
@@ -150,7 +152,7 @@ pub fn export_project_with_audio(
     progress: &std::sync::atomic::AtomicU64,
 ) -> Result<(), String> {
     use crate::video_export::{source_time_seconds, Mp4Encoder, SourceDecoder};
-    use render_core::compositor::compose_frame;
+    use render_core::compositor::compose_frame_with_timelines;
     use std::sync::atomic::Ordering;
     use timeline_core::TimelineMathExt;
 
@@ -172,10 +174,16 @@ pub fn export_project_with_audio(
         .filter_map(|e| source_path(e, project_root).map(|p| (e.id.clone(), p)))
         .collect();
 
-    let mixed = mix_timeline_audio(timeline, arate, ach as usize, |clip: &Clip| {
-        let path = paths.get(clip.media_ref.as_str())?;
-        decode_audio_pcm(path, arate, ach)
-    });
+    let mixed = render_core::audio_plan::mix_timeline_audio_with_timelines(
+        timeline,
+        timelines,
+        arate,
+        ach as usize,
+        |clip: &Clip| {
+            let path = paths.get(clip.media_ref.as_str())?;
+            decode_audio_pcm(path, arate, ach)
+        },
+    );
     let has_audio = mixed.iter().any(|&s| s != 0.0);
 
     let audio_params = has_audio.then_some((arate, ach));
@@ -188,14 +196,16 @@ pub fn export_project_with_audio(
     for out_frame in 0..total {
         // Map this output frame back to a timeline frame (frame-rate conversion).
         let tframe = out_frame * fps / out_fps;
-        let img = compose_frame(timeline, manifest, tframe, ew, eh, |clip| {
+        let mut fetch = |clip: &Clip, local_frame: i64| {
             let path = paths.get(clip.media_ref.as_str())?;
             decoders
                 .entry(clip.media_ref.clone())
                 .or_insert_with(|| SourceDecoder::open(path))
                 .as_mut()?
-                .frame_at_seconds(source_time_seconds(clip, tframe, fps))
-        });
+                .frame_at_seconds(source_time_seconds(clip, local_frame, fps))
+        };
+        let img =
+            compose_frame_with_timelines(timeline, manifest, timelines, tframe, ew, eh, &mut fetch);
         enc.write_frame(&img)?;
         // Report video progress as 0..=95%; the trailing 5% covers audio + mux.
         progress.store(
@@ -452,6 +462,7 @@ mod tests {
         export_project_with_audio(
             &timeline,
             &manifest,
+            &HashMap::new(),
             &dir,
             &out,
             64,
@@ -509,6 +520,7 @@ mod tests {
         export_project_with_audio(
             &timeline,
             &manifest,
+            &HashMap::new(),
             &dir,
             &out,
             64,

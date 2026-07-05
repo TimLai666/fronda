@@ -681,6 +681,7 @@ pub fn compose_frame(
     height: usize,
     mut fetch_source: impl FnMut(&Clip) -> Option<RgbaImage>,
 ) -> RgbaImage {
+    let mut fetch = |clip: &Clip, _frame: i64| fetch_source(clip);
     compose_frame_with_timelines(
         timeline,
         manifest,
@@ -688,7 +689,7 @@ pub fn compose_frame(
         frame,
         width,
         height,
-        &mut fetch_source,
+        &mut fetch,
     )
 }
 
@@ -697,6 +698,10 @@ pub fn compose_frame(
 /// composes recursively at the carrier's mapped frame, then blits through the
 /// carrier's transform/crop/opacity/effects — the group scales as a unit
 /// (Swift `NestRenderTests.nestTransformScalesGroupAsUnit`).
+///
+/// `fetch_source(clip, local_frame)` receives the frame ON THE CLIP'S OWN
+/// TIMELINE — for a clip inside a nested timeline that is the child-timeline
+/// frame, not the root frame — so source seek times stay correct.
 #[allow(clippy::too_many_arguments)]
 pub fn compose_frame_with_timelines(
     timeline: &Timeline,
@@ -705,7 +710,7 @@ pub fn compose_frame_with_timelines(
     frame: i64,
     width: usize,
     height: usize,
-    fetch_source: &mut dyn FnMut(&Clip) -> Option<RgbaImage>,
+    fetch_source: &mut dyn FnMut(&Clip, i64) -> Option<RgbaImage>,
 ) -> RgbaImage {
     compose_frame_inner(timeline, manifest, timelines, frame, width, height, fetch_source, 0)
 }
@@ -718,7 +723,7 @@ fn compose_frame_inner(
     frame: i64,
     width: usize,
     height: usize,
-    fetch_source: &mut dyn FnMut(&Clip) -> Option<RgbaImage>,
+    fetch_source: &mut dyn FnMut(&Clip, i64) -> Option<RgbaImage>,
     depth: usize,
 ) -> RgbaImage {
     let mut canvas = RgbaImage::new(width, height);
@@ -797,7 +802,7 @@ fn compose_frame_inner(
             );
             (src, region)
         } else {
-            let Some(mut src) = fetch_source(clip) else {
+            let Some(mut src) = fetch_source(clip, frame) else {
                 continue;
             };
             if t.flip_horizontal || t.flip_vertical {
@@ -1069,7 +1074,7 @@ mod tests {
         let timeline = tl(vec![carrier]);
         let timelines = std::collections::HashMap::from([("n1".to_string(), nested)]);
 
-        let mut fetch = |c: &Clip| {
+        let mut fetch = |c: &Clip, _f: i64| {
             // The carrier's own ref ("n1") must never be fetched — only the
             // child constituent's ("vid").
             if c.media_ref == "vid" {
@@ -1105,7 +1110,7 @@ mod tests {
         let timeline = tl(vec![carrier]);
         let timelines = std::collections::HashMap::from([("n1".to_string(), nested)]);
 
-        let mut fetch = |c: &Clip| {
+        let mut fetch = |c: &Clip, _f: i64| {
             (c.media_ref == "vid").then(|| RgbaImage::solid(4, 4, [0, 255, 0, 255]))
         };
         let out = compose_frame_with_timelines(
