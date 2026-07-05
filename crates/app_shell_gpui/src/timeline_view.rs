@@ -8,8 +8,8 @@ use crate::theme::{
 use crate::timeline_model::{TimelineState, TrackKind, TrimEdge, RULER_HEIGHT, TRACK_HEADER_WIDTH};
 use gpui::{
     canvas, div, prelude::*, px, svg, App, Context, DragMoveEvent, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render, Styled,
-    Window,
+    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement,
+    Render, Styled, Window,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -42,6 +42,8 @@ pub struct TimelineView {
     content_origin_x: Arc<AtomicU32>,
     /// True while the transport ticker task loop is alive.
     ticker_running: bool,
+    /// Timeline tab being renamed inline: (timeline id, text in progress).
+    tab_editing: Option<(String, String)>,
 }
 
 impl TimelineView {
@@ -52,6 +54,7 @@ impl TimelineView {
             state_revision: u64::MAX,
             content_origin_x: Arc::new(AtomicU32::new(0f32.to_bits())),
             ticker_running: false,
+            tab_editing: None,
         };
         view.sync_from_shared_state();
         view
@@ -303,6 +306,49 @@ impl TimelineView {
         .detach();
     }
 
+    /// Inline tab rename keystrokes; inert unless a rename is in progress.
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((id, text)) = self.tab_editing.as_mut() else {
+            return;
+        };
+        match event.keystroke.key.as_str() {
+            "enter" => {
+                let trimmed = text.trim().to_string();
+                let id = id.clone();
+                self.tab_editing = None;
+                if !trimmed.is_empty() {
+                    Self::run_shared_tool(
+                        "rename_media",
+                        serde_json::json!({ "mediaId": id, "name": trimmed }),
+                    );
+                }
+            }
+            "escape" => {
+                self.tab_editing = None;
+            }
+            "backspace" => {
+                text.pop();
+            }
+            _ => {
+                let mods = &event.keystroke.modifiers;
+                if !mods.control && !mods.platform && !mods.function {
+                    if let Some(ch) = event.keystroke.key_char.as_deref() {
+                        if !ch.chars().any(char::is_control) {
+                            text.push_str(ch);
+                        }
+                    }
+                }
+            }
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
     pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
         self.state.zoom_in();
         cx.notify();
@@ -354,6 +400,13 @@ impl Render for TimelineView {
                 Err(_) => (String::new(), Vec::new()),
             }
         };
+        // Drop a rename whose tab vanished (agent delete / project switch).
+        if let Some((editing_id, _)) = &self.tab_editing {
+            if !tab_list.iter().any(|(id, _)| id == editing_id) {
+                self.tab_editing = None;
+            }
+        }
+        let tab_editing = self.tab_editing.clone();
         let tab_count = tab_list.len();
         let tracks = self.state.tracks.clone();
         let clips = self.state.clips.clone();
@@ -380,6 +433,8 @@ impl Render for TimelineView {
 
         div()
             .id("timeline")
+            .track_focus(&self.focus_handle.clone())
+            .on_key_down(cx.listener(Self::handle_key_down))
             .relative()
             .flex()
             .flex_col()
@@ -401,8 +456,15 @@ impl Render for TimelineView {
                     .border_color(BorderColors::PRIMARY)
                     .children(tab_list.into_iter().enumerate().map(|(i, (id, name))| {
                         let active = id == tab_active_id;
+                        let editing = tab_editing
+                            .as_ref()
+                            .filter(|(eid, _)| *eid == id)
+                            .map(|(_, t)| t.clone());
                         let switch_id = id.clone();
+                        let rename_id = id.clone();
+                        let rename_seed = name.clone();
                         let close_id = id.clone();
+                        let is_editing = editing.is_some();
                         let mut tab = div()
                             .id(gpui::SharedString::from(format!("tl-tab-{i}")))
                             .flex()
@@ -414,8 +476,16 @@ impl Render for TimelineView {
                             .rounded(px(Radius::SM))
                             .text_size(px(FontSize::XS))
                             .cursor_pointer()
-                            .child(name);
-                        tab = if active {
+                            .child(match editing {
+                                Some(text) => format!("{text}\u{258f}"),
+                                None => name,
+                            });
+                        tab = if is_editing {
+                            tab.bg(Background::SURFACE)
+                                .text_color(Text::PRIMARY)
+                                .border_1()
+                                .border_color(Accent::PRIMARY)
+                        } else if active {
                             tab.bg(Background::SURFACE).text_color(Text::PRIMARY)
                         } else {
                             tab.text_color(Text::SECONDARY)
@@ -428,8 +498,20 @@ impl Render for TimelineView {
                                 );
                                 cx.notify();
                             }));
+                        } else if !is_editing {
+                            // Double-click the active tab to rename it inline.
+                            tab = tab.on_click(cx.listener(
+                                move |this, e: &gpui::ClickEvent, window, cx| {
+                                    if e.click_count() == 2 {
+                                        this.tab_editing =
+                                            Some((rename_id.clone(), rename_seed.clone()));
+                                        window.focus(&this.focus_handle, cx);
+                                        cx.notify();
+                                    }
+                                },
+                            ));
                         }
-                        if tab_count > 1 {
+                        if tab_count > 1 && !is_editing {
                             tab = tab.child(
                                 div()
                                     .id(gpui::SharedString::from(format!("tl-tab-close-{i}")))
