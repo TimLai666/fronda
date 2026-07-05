@@ -24,7 +24,7 @@ pub fn insert_track_at(
         muted: false,
         hidden: false,
         sync_locked: true,
-        display_height: 50.0,
+       display_height: 50.0,
         clips: Vec::new(),
     };
 

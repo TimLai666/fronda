@@ -219,6 +219,7 @@ fn single_track(clips: Vec<Clip>) -> Track {
         muted: false,
         hidden: false,
         sync_locked: true,
+        display_height: 50.0,
         clips,
     }
 }

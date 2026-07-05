@@ -404,6 +404,9 @@ pub struct ToolExecutor {
     /// Host audio decoder for `remove_silence` (#174). `None` on the pure/MCP path,
     /// where `remove_silence` reports it's unavailable.
     audio_source: Option<Arc<dyn ClipAudioSource>>,
+    /// The project's OTHER timelines (upstream #255) — nest carriers resolve
+    /// their children here by id. The active timeline stays in `timeline`.
+    sibling_timelines: Vec<Timeline>,
 }
 
 /// Read-only tools: successful execution does not bump the revision.
@@ -434,6 +437,7 @@ impl ToolExecutor {
             timeline_words: Vec::new(),
             matte_writer: None,
             audio_source: None,
+            sibling_timelines: Vec::new(),
         }
     }
 
@@ -448,6 +452,21 @@ impl ToolExecutor {
     /// unavailable.
     pub fn set_audio_source(&mut self, source: Arc<dyn ClipAudioSource>) {
         self.audio_source = Some(source);
+    }
+
+    /// Replace the project's sibling timelines (upstream #255). The app shell
+    /// supplies these from the opened ProjectFile.
+    pub fn set_sibling_timelines(&mut self, timelines: Vec<Timeline>) {
+        self.sibling_timelines = timelines;
+    }
+
+    pub fn sibling_timelines(&self) -> &[Timeline] {
+        &self.sibling_timelines
+    }
+
+    /// id → timeline map over the siblings, for render/export resolvers.
+    pub fn sibling_timeline_map(&self) -> std::collections::HashMap<String, Timeline> {
+        timeline_core::timeline_resolver(&self.sibling_timelines)
     }
 
     /// Supply the timeline-mapped transcript words (upstream #160). The host runs
@@ -3077,14 +3096,20 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty());
-        let compound_id =
-            timeline_core::create_compound_clip(&mut self.timeline, &clip_ids, name)?;
+        // Swift #255 representation: the group becomes a NEW sibling timeline and
+        // a sequence-carrier clip referencing it. (Undo restores the parent
+        // timeline; an orphaned child timeline is inert and harmless.)
+        let nest = timeline_core::nest_clips(&mut self.timeline, &clip_ids, name)?;
+        let child_id = nest.child.id.clone();
+        let child_name = nest.child.name.clone();
+        self.sibling_timelines.push(nest.child);
         Ok(json!({
             "content": [{
                 "type": "text",
                 "text": serde_json::to_string(&json!({
-                    "compoundClipId": compound_id,
-                    "name": name.unwrap_or("Compound Clip"),
+                    "compoundClipId": nest.carrier_id,
+                    "childTimelineId": child_id,
+                    "name": child_name,
                     "groupedClipCount": clip_ids.len(),
                 }))
                 .unwrap_or_default()
@@ -3099,7 +3124,20 @@ impl ToolExecutor {
             .get("clipId")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "dissolve_compound_clip requires 'clipId'.".to_string())?;
-        let restored = timeline_core::dissolve_compound_clip(&mut self.timeline, clip_id)?;
+        let child = {
+            let loc = timeline_core::find_clip(&self.timeline, clip_id)
+                .ok_or_else(|| format!("Clip '{clip_id}' was not found on the timeline."))?;
+            let carrier = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            if carrier.source_clip_type != ClipType::Sequence {
+                return Err("That clip isn't a compound clip.".to_string());
+            }
+            self.sibling_timelines
+                .iter()
+                .find(|t| t.id == carrier.media_ref)
+                .cloned()
+                .ok_or_else(|| "The compound clip's nested timeline is missing.".to_string())?
+        };
+        let restored = timeline_core::decompose_nest(&mut self.timeline, clip_id, &child)?;
         Ok(json!({
             "content": [{
                 "type": "text",
@@ -5898,7 +5936,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![core_model::Clip {
                 id: "clip-vid".to_string(),
                 media_ref: "media-vid".to_string(),
@@ -6613,7 +6651,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![core_model::Clip {
                 id: "c".into(),
                 media_ref: "m".into(),
@@ -7291,20 +7329,32 @@ mod tests {
             .unwrap();
         let text = res["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("compoundClipId"), "res={text}");
-        assert_eq!(exec.timeline().tracks[0].clips.len(), 1, "one compound clip");
-        let compound_id = exec.timeline().tracks[0].clips[0].id.clone();
-        assert!(exec.timeline().tracks[0].clips[0]
-            .compound_timeline_id
-            .is_some());
-        assert_eq!(exec.timeline().compound_timelines.len(), 1);
+        assert_eq!(exec.timeline().tracks[0].clips.len(), 1, "one carrier clip");
+        // Swift #255 representation: a sequence carrier + a sibling timeline.
+        let carrier = exec.timeline().tracks[0].clips[0].clone();
+        assert_eq!(carrier.source_clip_type, ClipType::Sequence);
+        assert_eq!(carrier.media_type, ClipType::Sequence);
+        assert!(carrier.compound_timeline_id.is_none(), "no legacy field");
+        assert_eq!(exec.sibling_timelines().len(), 1);
+        assert_eq!(
+            exec.sibling_timelines()[0].id, carrier.media_ref,
+            "carrier points at the sibling child timeline"
+        );
+        assert_eq!(exec.sibling_timelines()[0].name, "Scene");
 
         let res2 = exec
-            .execute("dissolve_compound_clip", &json!({"clipId": compound_id}))
+            .execute("dissolve_compound_clip", &json!({"clipId": carrier.id}))
             .unwrap();
         let text2 = res2["content"][0]["text"].as_str().unwrap();
         assert!(text2.contains("restoredClipIds"), "res={text2}");
         assert_eq!(exec.timeline().tracks[0].clips.len(), 2, "clips restored");
-        assert!(exec.timeline().compound_timelines.is_empty());
+        assert!(
+            exec.timeline().tracks[0]
+                .clips
+                .iter()
+                .all(|c| c.source_clip_type != ClipType::Sequence),
+            "no carrier left"
+        );
     }
 
     #[test]
@@ -7576,7 +7626,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![tgt_clip],
             });
         }
@@ -7952,6 +8002,8 @@ mod tests {
             .unwrap();
         let before = exec.revision();
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 60,
             ..Default::default()
         };

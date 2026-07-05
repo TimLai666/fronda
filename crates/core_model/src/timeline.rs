@@ -1020,7 +1020,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![],
         };
         assert!(audio_track.is_compatible_with(ClipType::Audio));
@@ -1039,7 +1039,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![],
         };
         assert!(video_track.is_compatible_with(ClipType::Video));
@@ -1053,6 +1053,8 @@ mod tests {
     #[test]
     fn core_005_seconds_to_frames() {
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             ..Default::default()
         };
@@ -1065,6 +1067,8 @@ mod tests {
     #[test]
     fn core_005_frames_to_seconds() {
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             ..Default::default()
         };
@@ -1076,6 +1080,8 @@ mod tests {
     #[test]
     fn core_005_custom_fps() {
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 60,
             ..Default::default()
         };
@@ -1135,6 +1141,8 @@ mod tests {
     fn issue_155_compound_timelines_roundtrip() {
         let mut t = Timeline::default();
         let nested = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 24,
             ..Default::default()
         };

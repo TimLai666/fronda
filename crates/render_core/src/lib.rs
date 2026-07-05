@@ -666,6 +666,8 @@ mod tests {
             word_timings: None,
         };
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -681,7 +683,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                    display_height: 50.0,
+                   display_height: 50.0,
                     clips: vec![v1],
                 },
                 Track {
@@ -690,7 +692,7 @@ mod tests {
                     muted: false,
                     hidden: true,
                     sync_locked: true,
-                    display_height: 50.0,
+                   display_height: 50.0,
                     clips: vec![a1],
                 },
             ],
@@ -917,6 +919,8 @@ mod tests {
             ..make_base_clip()
         };
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -932,7 +936,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                    display_height: 50.0,
+                   display_height: 50.0,
                     clips: vec![video],
                 },
                 Track {
@@ -941,7 +945,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                    display_height: 50.0,
+                   display_height: 50.0,
                     clips: vec![text],
                 },
             ],
@@ -1020,6 +1024,8 @@ mod tests {
             ..v1.clone()
         };
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1034,7 +1040,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![v1, v2],
             }],
         };
@@ -1073,6 +1079,8 @@ mod tests {
             ..make_base_clip()
         };
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1087,7 +1095,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![a1, a2],
             }],
         };
@@ -1127,6 +1135,8 @@ mod tests {
             ..make_base_clip()
         };
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1141,7 +1151,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![a1, a2],
             }],
         };
@@ -1639,6 +1649,8 @@ mod tests {
             ..make_base_clip()
         };
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1653,7 +1665,7 @@ mod tests {
                 muted: false,
                 hidden: true,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![v1],
             }],
         };
@@ -1680,6 +1692,8 @@ mod tests {
             ..make_base_clip()
         };
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1694,7 +1708,7 @@ mod tests {
                 muted: true,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![a1],
             }],
         };

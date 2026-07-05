@@ -94,6 +94,7 @@ fn video_track(clips: Vec<Clip>) -> Track {
         muted: false,
         hidden: false,
         sync_locked: true,
+        display_height: 50.0,
         clips,
     }
 }
@@ -105,6 +106,7 @@ fn audio_track(clips: Vec<Clip>) -> Track {
         muted: false,
         hidden: false,
         sync_locked: true,
+        display_height: 50.0,
         clips,
     }
 }
@@ -116,12 +118,15 @@ fn unsynced_track(clips: Vec<Clip>) -> Track {
         muted: false,
         hidden: false,
         sync_locked: false,
+        display_height: 50.0,
         clips,
     }
 }
 
 fn timeline(tracks: Vec<Track>) -> Timeline {
     Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,

@@ -254,6 +254,31 @@ pub fn save_project_state(
     Ok(())
 }
 
+/// [`save_project_state`] that also upserts the editor's sibling timelines
+/// (upstream #255) — e.g. a child timeline created by nesting clips. Siblings
+/// are matched by id: existing entries update in place, new ones append. The
+/// editor can't delete siblings yet, so nothing is removed.
+pub fn save_project_state_with_siblings(
+    root: &Path,
+    timeline: &Timeline,
+    siblings: &[Timeline],
+    manifest: &MediaManifest,
+) -> Result<(), BundleError> {
+    save_project_state(root, timeline, manifest)?;
+    if siblings.is_empty() {
+        return Ok(());
+    }
+    let path = root.join(TIMELINE_FILENAME);
+    let mut file = read_project_file(&path)?;
+    for sib in siblings {
+        match file.timelines.iter_mut().find(|t| t.id == sib.id) {
+            Some(slot) => *slot = sib.clone(),
+            None => file.timelines.push(sib.clone()),
+        }
+    }
+    write_project_file_json(&path, &file)
+}
+
 /// Read `project.json` as a [`ProjectFile`], accepting the legacy bare-Timeline
 /// form via [`ProjectFile::decode`]'s fallback (upstream #255).
 fn read_project_file(path: &Path) -> Result<ProjectFile, BundleError> {
@@ -270,19 +295,6 @@ fn read_project_file(path: &Path) -> Result<ProjectFile, BundleError> {
         path: path.to_path_buf(),
         source,
     })
-}
-
-fn read_required_json<T>(path: &Path) -> Result<T, BundleError>
-where
-    T: DeserializeOwned,
-{
-    if !path.is_file() {
-        return Err(BundleError::MissingRequiredFile {
-            path: path.to_path_buf(),
-        });
-    }
-
-    read_json(path)
 }
 
 fn read_optional_json_ignoring_decode_errors<T>(path: &Path) -> Result<Option<T>, BundleError>

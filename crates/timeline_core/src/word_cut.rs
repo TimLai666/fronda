@@ -436,6 +436,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips,
         }
     }

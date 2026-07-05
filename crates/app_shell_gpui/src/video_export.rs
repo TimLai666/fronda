@@ -849,6 +849,8 @@ mod tests {
 
     fn single_video_timeline(clip: Clip) -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 15,
             width: 64,
             height: 48,
@@ -858,7 +860,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![clip],
             }],
             settings_configured: true,

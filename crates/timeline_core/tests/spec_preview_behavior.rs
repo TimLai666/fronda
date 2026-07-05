@@ -48,12 +48,15 @@ fn track(kind: ClipType, clips: Vec<Clip>) -> Track {
         muted: false,
         hidden: false,
         sync_locked: true,
+        display_height: 50.0,
         clips,
     }
 }
 
 fn timeline_with_tracks(tracks: Vec<Track>) -> Timeline {
     Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,

@@ -80,20 +80,31 @@ impl XmlExport {
         Self::export_with_timecodes(timeline, None, Some(manifest))
     }
 
+    /// Like [`XmlExport::export_with_manifest`] but resolves nested-timeline
+    /// carriers (upstream #255) against the project's sibling timelines. v1
+    /// flattens nests into their constituents (content-correct); emitting real
+    /// nested `<sequence>` nodes like Swift is a follow-up.
+    pub fn export_with_manifest_and_timelines(
+        timeline: &Timeline,
+        manifest: &MediaManifest,
+        timelines: &HashMap<String, Timeline>,
+    ) -> String {
+        let flattened;
+        let timeline = if timelines.is_empty() {
+            timeline
+        } else {
+            flattened =
+                timeline_core::flatten_nests(timeline, &|id: &str| timelines.get(id).cloned());
+            &flattened
+        };
+        Self::export_with_timecodes(timeline, None, Some(manifest))
+    }
+
     fn export_with_timecodes(
         timeline: &Timeline,
         media_timecodes: Option<&HashMap<String, SourceTimecode>>,
         manifest: Option<&MediaManifest>,
     ) -> String {
-        // Expand compound clips so their nested content exports (Issue #155).
-        let flattened;
-        let timeline: &Timeline = if timeline.compound_timelines.is_empty() {
-            timeline
-        } else {
-            flattened = timeline_core::flatten_compound_clips(timeline);
-            &flattened
-        };
-
         // XML-011 dedup: a full <file> is emitted once per (media_ref, is_audio);
         // later uses become self-closing <file id="…"/> references.
         let mut emitted: HashSet<String> = HashSet::new();
@@ -563,6 +574,8 @@ mod tests {
 
     fn sample_timeline() -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -572,7 +585,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![Clip {
                     id: "clip1".into(),
                     media_ref: "asset-video.mp4".into(),
@@ -661,6 +674,8 @@ mod tests {
 
     fn tl_with(clips: Vec<Clip>) -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -670,6 +685,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
+                display_height: 50.0,
                 clips,
             }],
             settings_configured: true,
@@ -824,6 +840,8 @@ mod tests {
         let mut c = mk_clip("a1", "voice.wav", ClipType::Audio, 0);
         c.fade_in_frames = 4;
         let tl = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -835,7 +853,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![c],
             }],
             transcription_language: None,
@@ -859,7 +877,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![Clip {
                 id: "clip2".into(),
                 media_ref: "asset2.mp4".into(),
@@ -925,7 +943,7 @@ mod tests {
             muted: true,
             hidden: false,
             sync_locked: true,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![],
         });
         let xml = XmlExport::export(&timeline);
@@ -977,7 +995,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![Clip {
                 id: "clip-audio".into(),
                 media_ref: "asset-audio.wav".into(),

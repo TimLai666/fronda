@@ -153,6 +153,8 @@ mod tests {
 
     fn test_timeline(fps: i64, width: i64, height: i64) -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps,
             width,
             height,

@@ -75,6 +75,7 @@ impl EditorStateHub {
         let bundle = ProjectBundle::open(path).map_err(|e| e.to_string())?;
         if let Ok(mut exec) = self.executor.lock() {
             exec.load_project(bundle.timeline, bundle.manifest.unwrap_or_default());
+            exec.set_sibling_timelines(bundle.multi.siblings.clone());
         }
         self.record_in_registry(&bundle.root);
         self.install_matte_writer(bundle.root.clone());
@@ -103,13 +104,17 @@ impl EditorStateHub {
         self.project_root.lock().ok().and_then(|r| r.clone())
     }
 
-    /// Snapshot the shared timeline and manifest under the lock.
-    fn snapshot(&self) -> Result<(Timeline, MediaManifest), String> {
+    /// Snapshot the shared timeline, siblings, and manifest under the lock.
+    fn snapshot(&self) -> Result<(Timeline, Vec<Timeline>, MediaManifest), String> {
         let exec = self
             .executor
             .lock()
             .map_err(|_| "Editor state lock poisoned".to_string())?;
-        Ok((exec.timeline().clone(), exec.media_manifest().clone()))
+        Ok((
+            exec.timeline().clone(),
+            exec.sibling_timelines().to_vec(),
+            exec.media_manifest().clone(),
+        ))
     }
 
     /// Write the shared timeline and manifest back to the open project.
@@ -118,15 +123,17 @@ impl EditorStateHub {
         let Some(root) = self.project_root() else {
             return Err("No project open: nothing to save".into());
         };
-        let (timeline, manifest) = self.snapshot()?;
-        project_io::save_project_state(&root, &timeline, &manifest).map_err(|e| e.to_string())
+        let (timeline, siblings, manifest) = self.snapshot()?;
+        project_io::save_project_state_with_siblings(&root, &timeline, &siblings, &manifest)
+            .map_err(|e| e.to_string())
     }
 
     /// Write the current state to a new directory and make it the
     /// project root. On write failure the root is left unchanged.
     pub fn save_as(&self, root: &Path) -> Result<(), String> {
-        let (timeline, manifest) = self.snapshot()?;
-        project_io::save_project_state(root, &timeline, &manifest).map_err(|e| e.to_string())?;
+        let (timeline, siblings, manifest) = self.snapshot()?;
+        project_io::save_project_state_with_siblings(root, &timeline, &siblings, &manifest)
+            .map_err(|e| e.to_string())?;
         self.record_in_registry(root);
         self.install_matte_writer(root.to_path_buf());
         if let Ok(mut current) = self.project_root.lock() {
@@ -159,6 +166,8 @@ mod tests {
         assert_eq!(before, 1);
 
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 60,
             ..Default::default()
         };

@@ -49,6 +49,8 @@ fn clip(
 
 fn timeline(clips: Vec<Clip>) -> Timeline {
     Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -60,6 +62,7 @@ fn timeline(clips: Vec<Clip>) -> Timeline {
             muted: false,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips,
         }],
         transcription_language: None,
@@ -191,6 +194,8 @@ fn clp_006_clear_region_split_does_not_touch_linked_partner_track() {
     a.link_group_id = Some("g1".to_string());
 
     let mut tl = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -203,7 +208,7 @@ fn clp_006_clear_region_split_does_not_touch_linked_partner_track() {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![v],
             },
             Track {
@@ -212,7 +217,7 @@ fn clp_006_clear_region_split_does_not_touch_linked_partner_track() {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![a],
             },
         ],

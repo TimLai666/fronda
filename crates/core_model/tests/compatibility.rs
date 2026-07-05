@@ -188,6 +188,7 @@ fn upstream_040_timeline_round_trips_language() {
     // PR #40: Setting transcription_language persists through encode/decode.
     let timeline = Timeline {
         transcription_language: Some("fr-FR".to_string()),
+        folder_id: None,
         ..Default::default()
     };
     let json = serde_json::to_value(&timeline).unwrap();
@@ -621,6 +622,8 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
     selected.insert("clip-1".to_string());
 
     let timeline = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -901,6 +904,7 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
             },
         ],
         transcription_language: Some("en-US".to_string()),
+        folder_id: None,
         compound_timelines: std::collections::HashMap::new(),
     };
 

@@ -9,6 +9,8 @@ use render_core::{CompositionPlan, DetailedCompositionPlan, RenderResolution};
 /// Build a simple timeline with a single video clip.
 fn make_single_clip_timeline() -> Timeline {
     Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -23,7 +25,7 @@ fn make_single_clip_timeline() -> Timeline {
             muted: false,
             hidden: false,
             sync_locked: true,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![Clip {
                 id: "clip1".into(),
                 media_ref: "asset-video.mp4".into(),
@@ -299,6 +301,8 @@ fn rnd_010_non_overlapping_clips_produce_no_warnings() {
         ..make_base_clip()
     };
     let timeline = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -313,7 +317,7 @@ fn rnd_010_non_overlapping_clips_produce_no_warnings() {
             muted: false,
             hidden: false,
             sync_locked: true,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![v1, v2],
         }],
     };
@@ -347,6 +351,8 @@ fn rnd_010_overlapping_visual_clips_produce_warnings() {
         ..v1.clone()
     };
     let timeline = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -361,7 +367,7 @@ fn rnd_010_overlapping_visual_clips_produce_warnings() {
             muted: false,
             hidden: false,
             sync_locked: true,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![v1, v2],
         }],
     };
@@ -471,6 +477,8 @@ fn rnd_013_full_opacity_stays_one() {
 // ---------------------------------------------------------------------------
 fn make_image_timeline() -> Timeline {
     Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -485,7 +493,7 @@ fn make_image_timeline() -> Timeline {
             muted: false,
             hidden: false,
             sync_locked: false,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![Clip {
                 id: "img-1".into(),
                 media_ref: "ref-img".into(),
@@ -526,6 +534,8 @@ fn prv_012_video_clip_not_in_image_clips() {
 // ---------------------------------------------------------------------------
 fn make_lottie_timeline() -> Timeline {
     Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -540,7 +550,7 @@ fn make_lottie_timeline() -> Timeline {
             muted: false,
             hidden: false,
             sync_locked: false,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![Clip {
                 id: "lottie-1".into(),
                 media_ref: "ref-lottie".into(),

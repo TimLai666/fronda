@@ -190,6 +190,8 @@ fn comprehensive_timeline() -> Timeline {
     };
 
     Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -205,7 +207,7 @@ fn comprehensive_timeline() -> Timeline {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![v1],
             },
             Track {
@@ -214,7 +216,7 @@ fn comprehensive_timeline() -> Timeline {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![v2],
             },
             Track {
@@ -223,7 +225,7 @@ fn comprehensive_timeline() -> Timeline {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![txt1],
             },
             Track {
@@ -232,7 +234,7 @@ fn comprehensive_timeline() -> Timeline {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![a1, unresolved],
             },
         ],
@@ -528,7 +530,7 @@ fn xml_spec_position_keyframes_export_resolved_center() {
             muted: false,
             hidden: false,
             sync_locked: false,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![clip],
         }],
         ..Timeline::default()

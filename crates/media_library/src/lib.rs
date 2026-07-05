@@ -1282,6 +1282,8 @@ mod tests {
     /// Helper: create a minimal Timeline with one track containing one clip.
     fn timeline_with_clip(clip_id: &str, media_ref: &str) -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1293,7 +1295,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![make_clip(clip_id, media_ref, 0, 30)],
             }],
             ..Default::default()
@@ -1377,6 +1379,8 @@ mod tests {
             .push(entry("asset-keep", ClipType::Video, "vid.mp4", None));
 
         let mut timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1388,7 +1392,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![
                     make_clip("clip-del", "asset-del", 0, 30),
                     make_clip("clip-keep", "asset-keep", 30, 30),
@@ -1417,6 +1421,8 @@ mod tests {
         ));
 
         let mut timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1429,7 +1435,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                    display_height: 50.0,
+                   display_height: 50.0,
                     clips: vec![make_clip("clip-1", "asset-1", 0, 30)],
                 },
                 Track {
@@ -1438,7 +1444,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                    display_height: 50.0,
+                   display_height: 50.0,
                     clips: vec![make_clip("clip-2", "asset-2", 0, 60)],
                 },
             ],
@@ -1492,6 +1498,8 @@ mod tests {
             .push(entry("asset-b", ClipType::Image, "b.png", Some(&folder_id)));
 
         let mut timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1539,7 +1547,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![make_clip("clip-root", "asset-root", 30, 30)],
         });
 

@@ -45,12 +45,31 @@ impl FcpxmlExport {
         manifest: &MediaManifest,
         target: FcpxmlTarget,
     ) -> String {
-        // Expand compound clips so their nested content exports (Issue #155).
+        Self::export_with_target_and_timelines(
+            timeline,
+            manifest,
+            target,
+            &std::collections::HashMap::new(),
+        )
+    }
+
+    /// Like [`FcpxmlExport::export_with_target`] but resolves nested-timeline
+    /// carriers (upstream #255) against the project's sibling timelines. v1
+    /// flattens nests into their constituents (content-correct); emitting
+    /// `<media><sequence>` compound resources + `<ref-clip>`s like Swift is a
+    /// follow-up.
+    pub fn export_with_target_and_timelines(
+        timeline: &Timeline,
+        manifest: &MediaManifest,
+        target: FcpxmlTarget,
+        timelines: &std::collections::HashMap<String, Timeline>,
+    ) -> String {
         let flattened;
-        let timeline: &Timeline = if timeline.compound_timelines.is_empty() {
+        let timeline = if timelines.is_empty() {
             timeline
         } else {
-            flattened = timeline_core::flatten_compound_clips(timeline);
+            flattened =
+                timeline_core::flatten_nests(timeline, &|id: &str| timelines.get(id).cloned());
             &flattened
         };
 
@@ -1101,12 +1120,15 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips,
         }
     }
 
     fn timeline(tracks: Vec<Track>) -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -1136,23 +1158,27 @@ mod tests {
 
     #[test]
     fn fcpxml_export_flattens_compound_clip_to_nested_asset() {
-        // A compound clip wrapping a v1 clip must export v1's asset, not the
-        // empty compound ref (Issue #155 flatten in export).
+        // A nest carrier (Swift #255) must export its child's assets, not an
+        // empty ref. v1 flattens; native <ref-clip> emission is a follow-up.
         let inner = clip("inner", "v1", ClipType::Video, 0, 30);
-        let nested = timeline(vec![track(ClipType::Video, vec![inner])]);
-        let mut compound = clip("compound", "n1", ClipType::Video, 0, 30);
-        compound.compound_timeline_id = Some("n1".into());
-        let mut tl = timeline(vec![track(ClipType::Video, vec![compound])]);
-        tl.compound_timelines.insert("n1".into(), Box::new(nested));
+        let mut nested = timeline(vec![track(ClipType::Video, vec![inner])]);
+        nested.id = "n1".into();
+        let mut carrier = clip("carrier", "n1", ClipType::Sequence, 0, 30);
+        carrier.source_clip_type = ClipType::Sequence;
+        let tl = timeline(vec![track(ClipType::Video, vec![carrier])]);
+        let timelines = std::collections::HashMap::from([("n1".to_string(), nested)]);
 
         let mut manifest = MediaManifest::default();
         manifest
             .entries
             .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
 
-        let xml = FcpxmlExport::export(&tl, &manifest);
-        // Without flatten the nested v1 asset would never appear (the exporter
-        // never descends into compound_timelines).
+        let xml = FcpxmlExport::export_with_target_and_timelines(
+            &tl,
+            &manifest,
+            FcpxmlTarget::Resolve,
+            &timelines,
+        );
         assert!(xml.contains("shot.mp4"), "nested asset exported: {xml}");
     }
 

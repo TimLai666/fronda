@@ -90,14 +90,37 @@ pub fn mix_timeline_audio(
     timeline: &Timeline,
     sample_rate: u32,
     channels: usize,
+    fetch_pcm: impl FnMut(&Clip) -> Option<Vec<f32>>,
+) -> Vec<f32> {
+    mix_timeline_audio_with_timelines(
+        timeline,
+        &std::collections::HashMap::new(),
+        sample_rate,
+        channels,
+        fetch_pcm,
+    )
+}
+
+/// [`mix_timeline_audio`] with the project's sibling timelines so nested-timeline
+/// carriers (upstream #255) mix their child audio in.
+pub fn mix_timeline_audio_with_timelines(
+    timeline: &Timeline,
+    timelines: &std::collections::HashMap<String, Timeline>,
+    sample_rate: u32,
+    channels: usize,
     mut fetch_pcm: impl FnMut(&Clip) -> Option<Vec<f32>>,
 ) -> Vec<f32> {
-    // Expand compound clips so their nested audio mixes in (Issue #155).
+    let has_nests = timeline
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .any(|c| c.source_clip_type == core_model::ClipType::Sequence);
     let flattened;
-    let timeline: &Timeline = if timeline.compound_timelines.is_empty() {
+    let timeline: &Timeline = if !has_nests {
         timeline
     } else {
-        flattened = timeline_core::flatten_compound_clips(timeline);
+        flattened =
+            timeline_core::flatten_nests(timeline, &|id: &str| timelines.get(id).cloned());
         &flattened
     };
 
@@ -181,6 +204,8 @@ mod tests {
 
     fn timeline_with(tracks: Vec<Track>) -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -200,6 +225,7 @@ mod tests {
             muted,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips,
         }
     }

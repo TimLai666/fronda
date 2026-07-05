@@ -675,22 +675,52 @@ fn visible_clips(timeline: &Timeline, frame: i64) -> Vec<&Clip> {
 /// transform, cropped, faded by opacity, and blended over the layers below.
 pub fn compose_frame(
     timeline: &Timeline,
-    _manifest: &MediaManifest,
+    manifest: &MediaManifest,
     frame: i64,
     width: usize,
     height: usize,
     mut fetch_source: impl FnMut(&Clip) -> Option<RgbaImage>,
 ) -> RgbaImage {
-    // Expand compound clips into their constituents so they render their nested
-    // content (Issue #155). Zero-cost when the project has no compound clips.
-    let flattened;
-    let timeline: &Timeline = if timeline.compound_timelines.is_empty() {
-        timeline
-    } else {
-        flattened = timeline_core::flatten_compound_clips(timeline);
-        &flattened
-    };
+    compose_frame_with_timelines(
+        timeline,
+        manifest,
+        &std::collections::HashMap::new(),
+        frame,
+        width,
+        height,
+        &mut fetch_source,
+    )
+}
 
+/// [`compose_frame`] with the project's sibling timelines, so nested-timeline
+/// carriers (`source_clip_type == Sequence`, upstream #255) render: the child
+/// composes recursively at the carrier's mapped frame, then blits through the
+/// carrier's transform/crop/opacity/effects — the group scales as a unit
+/// (Swift `NestRenderTests.nestTransformScalesGroupAsUnit`).
+#[allow(clippy::too_many_arguments)]
+pub fn compose_frame_with_timelines(
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+    timelines: &std::collections::HashMap<String, Timeline>,
+    frame: i64,
+    width: usize,
+    height: usize,
+    fetch_source: &mut dyn FnMut(&Clip) -> Option<RgbaImage>,
+) -> RgbaImage {
+    compose_frame_inner(timeline, manifest, timelines, frame, width, height, fetch_source, 0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compose_frame_inner(
+    timeline: &Timeline,
+    _manifest: &MediaManifest,
+    timelines: &std::collections::HashMap<String, Timeline>,
+    frame: i64,
+    width: usize,
+    height: usize,
+    fetch_source: &mut dyn FnMut(&Clip) -> Option<RgbaImage>,
+    depth: usize,
+) -> RgbaImage {
     let mut canvas = RgbaImage::new(width, height);
     let (cw, ch) = (width as f64, height as f64);
 
@@ -732,6 +762,40 @@ pub fn compose_frame(
             let sw = (dw.round() as usize).clamp(1, 4096);
             let sh = (dh.round() as usize).clamp(1, 4096);
             (rasterize_shape(shape, sw, sh), (0.0, 0.0, 1.0, 1.0))
+        } else if clip.source_clip_type == ClipType::Sequence {
+            // Nested timeline carrier (upstream #255): compose the child at the
+            // carrier's window-mapped frame, sized to the blit destination, then
+            // run it through the normal transform/crop path like a media frame.
+            if depth >= timeline_core::NEST_MAX_DEPTH {
+                continue;
+            }
+            let Some(child) = timelines.get(&clip.media_ref) else {
+                continue; // missing/empty child renders nothing (Swift parity)
+            };
+            let child_frame = clip.trim_start_frame + rel;
+            let sw = (dw.round() as usize).clamp(1, 4096);
+            let sh = (dh.round() as usize).clamp(1, 4096);
+            let mut src = compose_frame_inner(
+                child,
+                _manifest,
+                timelines,
+                child_frame,
+                sw,
+                sh,
+                fetch_source,
+                depth + 1,
+            );
+            if t.flip_horizontal || t.flip_vertical {
+                src = flip_image(&src, t.flip_horizontal, t.flip_vertical);
+            }
+            let c = timeline_core::resolved_crop_at(clip, rel);
+            let region = (
+                c.left,
+                c.top,
+                (1.0 - c.left - c.right).max(0.0),
+                (1.0 - c.top - c.bottom).max(0.0),
+            );
+            (src, region)
         } else {
             let Some(mut src) = fetch_source(clip) else {
                 continue;
@@ -857,6 +921,8 @@ mod tests {
 
     fn tl(clips: Vec<Clip>) -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 4,
             height: 4,
@@ -866,6 +932,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
+                display_height: 50.0,
                 clips,
             }],
             settings_configured: true,
@@ -991,27 +1058,79 @@ mod tests {
 
     #[test]
     fn compose_renders_compound_clip_nested_content() {
-        // A compound clip wrapping one full-frame clip must render the nested
-        // clip, not an empty frame (Issue #155 flatten inside compose_frame).
+        // A sequence carrier (Swift #255 nesting) must render its child
+        // timeline's content, not an empty frame.
         let inner = clip("inner", "vid", 0, 30);
-        let nested = tl(vec![inner]);
-        let mut compound = clip("compound", "n1", 0, 30);
-        compound.compound_timeline_id = Some("n1".into());
-        let mut timeline = tl(vec![compound]);
-        timeline
-            .compound_timelines
-            .insert("n1".into(), Box::new(nested));
+        let mut nested = tl(vec![inner]);
+        nested.id = "n1".into();
+        let mut carrier = clip("carrier", "n1", 0, 30);
+        carrier.media_type = ClipType::Sequence;
+        carrier.source_clip_type = ClipType::Sequence;
+        let timeline = tl(vec![carrier]);
+        let timelines = std::collections::HashMap::from([("n1".to_string(), nested)]);
 
-        let out = compose_frame(&timeline, &MediaManifest::default(), 5, 4, 4, |c| {
-            // The compound clip's own ref ("n1") must never be fetched — only the
-            // flattened constituent's ("vid").
+        let mut fetch = |c: &Clip| {
+            // The carrier's own ref ("n1") must never be fetched — only the
+            // child constituent's ("vid").
             if c.media_ref == "vid" {
                 Some(RgbaImage::solid(4, 4, [0, 0, 255, 255]))
             } else {
                 None
             }
-        });
+        };
+        let out = compose_frame_with_timelines(
+            &timeline,
+            &MediaManifest::default(),
+            &timelines,
+            5,
+            4,
+            4,
+            &mut fetch,
+        );
         assert_eq!(px(&out, 2, 2), [0, 0, 255, 255], "nested clip rendered");
+    }
+
+    #[test]
+    fn compose_nest_carrier_transform_scales_group_as_unit() {
+        // Swift NestRenderTests.nestTransformScalesGroupAsUnit: the carrier's
+        // transform applies to the composed child as one unit.
+        let inner = clip("inner", "vid", 0, 30); // full-frame in the child
+        let mut nested = tl(vec![inner]);
+        nested.id = "n1".into();
+        let mut carrier = clip("carrier", "n1", 0, 30);
+        carrier.media_type = ClipType::Sequence;
+        carrier.source_clip_type = ClipType::Sequence;
+        // Top-left quarter of the parent canvas.
+        carrier.transform = Transform::from_top_left(0.0, 0.0, 0.5, 0.5);
+        let timeline = tl(vec![carrier]);
+        let timelines = std::collections::HashMap::from([("n1".to_string(), nested)]);
+
+        let mut fetch = |c: &Clip| {
+            (c.media_ref == "vid").then(|| RgbaImage::solid(4, 4, [0, 255, 0, 255]))
+        };
+        let out = compose_frame_with_timelines(
+            &timeline,
+            &MediaManifest::default(),
+            &timelines,
+            0,
+            4,
+            4,
+            &mut fetch,
+        );
+        assert_eq!(px(&out, 0, 0), [0, 255, 0, 255], "group in the top-left");
+        assert_eq!(px(&out, 3, 3), [0, 0, 0, 0], "rest of the canvas empty");
+    }
+
+    #[test]
+    fn compose_missing_nest_child_renders_nothing() {
+        let mut carrier = clip("carrier", "ghost", 0, 30);
+        carrier.media_type = ClipType::Sequence;
+        carrier.source_clip_type = ClipType::Sequence;
+        let timeline = tl(vec![carrier]);
+        let out = compose_frame(&timeline, &MediaManifest::default(), 0, 4, 4, |_| {
+            panic!("nothing should be fetched for a missing child")
+        });
+        assert_eq!(px(&out, 2, 2), [0, 0, 0, 0]);
     }
 
     #[test]
@@ -1026,9 +1145,12 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
+            display_height: 50.0,
             clips,
         };
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 4,
             height: 4,

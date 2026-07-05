@@ -275,6 +275,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
+        display_height: 50.0,
         }
     }
 
@@ -286,6 +287,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
+        display_height: 50.0,
         }
     }
 
@@ -344,6 +346,8 @@ mod tests {
 
     fn timeline_with_two_tracks() -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,

@@ -415,6 +415,8 @@ mod tests {
         manifest.entries.push(external_entry_audio("a1", &wav));
 
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 15,
             width: 64,
             height: 48,
@@ -425,7 +427,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
-                    display_height: 50.0,
+                   display_height: 50.0,
                     clips: vec![video_clip("v1", 0, 3)],
                 },
                 Track {
@@ -434,7 +436,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
-                    display_height: 50.0,
+                   display_height: 50.0,
                     clips: vec![audio_clip("a1", 0, 3)],
                 },
             ],
@@ -481,6 +483,8 @@ mod tests {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(external_entry_video("v1", &video_fixture));
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 15,
             width: 64,
             height: 48,
@@ -490,7 +494,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![video_clip("v1", 0, 4)],
             }],
             settings_configured: true,
@@ -525,6 +529,8 @@ mod tests {
         make_wav(&src, 48_000, 2, 9600); // 0.2s stereo
 
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 1920,
             height: 1080,
@@ -534,7 +540,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![audio_clip("m1", 0, 6)],
             }],
             settings_configured: true,

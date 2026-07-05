@@ -9,12 +9,15 @@ use core_model::Timeline;
 
 fn test_timeline(fps: i64, width: i64, height: i64) -> Timeline {
     Timeline {
+        id: String::new(),
+        name: String::new(),
         fps,
         width,
         height,
         settings_configured: false,
         selected_clip_ids: Default::default(),
         transcription_language: None,
+        folder_id: None,
         tracks: vec![],
         compound_timelines: std::collections::HashMap::new(),
     }

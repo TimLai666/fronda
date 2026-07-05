@@ -49,6 +49,7 @@ fn track(kind: ClipType, clips: Vec<Clip>) -> Track {
         muted: false,
         hidden: false,
         sync_locked: true,
+        display_height: 50.0,
         clips,
     }
 }
@@ -56,6 +57,8 @@ fn track(kind: ClipType, clips: Vec<Clip>) -> Track {
 #[test]
 fn tim_001_total_frames_is_max_clip_end_across_tracks() {
     let timeline = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -110,6 +113,8 @@ fn tim_005_source_duration_includes_both_trims() {
 #[test]
 fn tim_006_seek_clamps_into_zero_to_total_frames() {
     let timeline = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -161,6 +166,8 @@ fn tim_008_half_open_invariant_after_split() {
     use timeline_core::split_clip;
     let c1 = clip(0, 100);
     let mut timeline = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -182,6 +189,8 @@ fn tim_008_half_open_invariant_after_clear_region() {
     let c1 = clip(20, 60);
     let c2 = clip(100, 40);
     let mut timeline = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,
@@ -203,6 +212,8 @@ fn tim_008_half_open_invariant_after_split_then_speed() {
     use timeline_core::{apply_clip_speed, split_clip};
     let c1 = clip(0, 100);
     let mut timeline = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         width: 1920,
         height: 1080,

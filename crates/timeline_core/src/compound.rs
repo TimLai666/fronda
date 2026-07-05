@@ -1,35 +1,44 @@
-//! Compound clips (nested sequences) — Issue #155.
+//! Nested timelines ("compound clips") — Swift #255 representation.
 //!
-//! `create_compound_clip` groups a contiguous run of clips on a single track
-//! into one compound clip whose constituents move into a nested `Timeline`
-//! stored in the project's `compound_timelines` map. `dissolve_compound_clip`
-//! flattens it back onto the track. Rendering and export call
-//! `flatten_compound_clips` first so a compound clip renders its nested content
-//! rather than an empty frame.
+//! A nest is a clip with `source_clip_type == Sequence` whose `media_ref` is a
+//! SIBLING timeline's id (`ProjectFile.timelines`); nothing is embedded in the
+//! parent. `nest_clips` groups clips into a new child timeline + carrier clip;
+//! `decompose_nest` expands a carrier back; `flatten_nests` resolves carriers
+//! into constituent clips for audio/export (video composes recursively in the
+//! compositor so the carrier's transform applies to the group as a unit).
 //!
-//! v1 scope: single-track grouping only (all selected clips must be on the same
-//! track and adjacent). Multi-track grouping and composing a transform applied
-//! to the compound clip itself onto the group are follow-ups; a freshly created
-//! compound clip has identity transform/opacity/fades, so create→flatten
-//! reproduces the pre-group placement exactly.
+//! v1 scope mirrors the previous compound implementation: single-track
+//! grouping. Mirrors Swift `NestFlattener` windowing exactly: window =
+//! `trim_start..trim_start+duration`, shift = `start - trim_start`, flattened
+//! ids are `"{carrier_id}/{clip_id}"`. Sequence carriers don't retime
+//! (Swift `supportsRetiming == false`).
 
 use crate::edit::find_clip;
 use core_model::{Clip, ClipType, Timeline};
+use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Group `clip_ids` (all on one track, adjacent) into a compound clip.
+/// Swift `NestFlattener.maxDepth`.
+pub const NEST_MAX_DEPTH: usize = 8;
+
+/// Result of grouping clips into a nest: the NEW child timeline (the caller
+/// must add it to the project's sibling timelines) and the carrier clip's id.
+#[derive(Debug, Clone)]
+pub struct NestResult {
+    pub child: Timeline,
+    pub carrier_id: String,
+}
+
+/// Group `clip_ids` (all on one track, adjacent) into a nested timeline.
 ///
-/// The grouped clips move into a new nested timeline (re-based so the earliest
-/// starts at frame 0); a single compound clip replaces them on the track,
-/// spanning `[min_start, max_end)`. Returns the new compound clip's id.
-///
-/// The compound clip's `media_ref` is set to the nested-timeline id so a caller
-/// that owns the media manifest can register a display name for it.
-pub fn create_compound_clip(
+/// The grouped clips move into a new child `Timeline` (re-based to 0); a
+/// single sequence-carrier clip replaces them, spanning `[min_start, max_end)`.
+/// The child is RETURNED — the caller stores it as a project sibling.
+pub fn nest_clips(
     timeline: &mut Timeline,
     clip_ids: &[String],
-    _name: Option<&str>,
-) -> Result<String, String> {
+    name: Option<&str>,
+) -> Result<NestResult, String> {
     let mut unique: Vec<String> = Vec::new();
     for id in clip_ids {
         if !unique.contains(id) {
@@ -37,7 +46,7 @@ pub fn create_compound_clip(
         }
     }
     if unique.is_empty() {
-        return Err("Select at least one clip to group into a compound clip.".to_string());
+        return Err("Select at least one clip to nest.".to_string());
     }
 
     let mut locations = Vec::with_capacity(unique.len());
@@ -51,8 +60,8 @@ pub fn create_compound_clip(
     let track_index = locations[0].track_index;
     if locations.iter().any(|l| l.track_index != track_index) {
         return Err(
-            "All clips must be on the same track to group into a compound clip. \
-             Multi-track grouping isn't supported yet."
+            "All clips must be on the same track to nest. Multi-track nesting isn't \
+             supported yet."
                 .to_string(),
         );
     }
@@ -63,8 +72,7 @@ pub fn create_compound_clip(
     let max_idx = clip_indices[clip_indices.len() - 1];
     if max_idx - min_idx + 1 != clip_indices.len() {
         return Err(
-            "The selected clips must be adjacent (no other clip between them) to group \
-             into a compound clip."
+            "The selected clips must be adjacent (no other clip between them) to nest."
                 .to_string(),
         );
     }
@@ -81,17 +89,6 @@ pub fn create_compound_clip(
         .unwrap_or(min_start);
     let span = (max_end - min_start).max(1);
 
-    // Carry any nested timelines owned by grouped compound clips into the new
-    // nested timeline so nesting-in-nesting survives the move.
-    let mut nested_compounds = std::collections::HashMap::new();
-    for clip in &grouped {
-        if let Some(cid) = &clip.compound_timeline_id {
-            if let Some(inner) = timeline.compound_timelines.remove(cid) {
-                nested_compounds.insert(cid.clone(), inner);
-            }
-        }
-    }
-
     let nested_clips: Vec<Clip> = grouped
         .iter()
         .map(|c| {
@@ -101,15 +98,9 @@ pub fn create_compound_clip(
         })
         .collect();
 
-    let nested = Timeline {
+    let child = Timeline {
         id: Uuid::new_v4().to_string(),
-        name: "Compound Clip".to_string(),
-        folder_id: None,
-        fps: timeline.fps,
-        width: timeline.width,
-        height: timeline.height,
-        settings_configured: timeline.settings_configured,
-        selected_clip_ids: Default::default(),
+        name: name.unwrap_or("Nested Timeline").to_string(),
         tracks: vec![core_model::Track {
             id: Uuid::new_v4().to_string(),
             r#type: track_type,
@@ -119,21 +110,26 @@ pub fn create_compound_clip(
             display_height: 50.0,
             clips: nested_clips,
         }],
+        fps: timeline.fps,
+        width: timeline.width,
+        height: timeline.height,
+        settings_configured: timeline.settings_configured,
         transcription_language: timeline.transcription_language.clone(),
-        compound_timelines: nested_compounds,
+        ..Default::default()
     };
 
-    let nested_id = Uuid::new_v4().to_string();
-    let compound_type = if track_type == ClipType::Audio {
-        ClipType::Audio
+    // Carrier types mirror Swift: a video-track nest is a `.sequence` clip; an
+    // audio-track nest keeps mediaType audio with sourceClipType sequence.
+    let (media_type, source_type) = if track_type == ClipType::Audio {
+        (ClipType::Audio, ClipType::Sequence)
     } else {
-        ClipType::Video
+        (ClipType::Sequence, ClipType::Sequence)
     };
-    let compound = Clip {
+    let carrier = Clip {
         id: Uuid::new_v4().to_string(),
-        media_ref: nested_id.clone(),
-        media_type: compound_type,
-        source_clip_type: compound_type,
+        media_ref: child.id.clone(),
+        media_type,
+        source_clip_type: source_type,
         start_frame: min_start,
         duration_frames: span,
         trim_start_frame: 0,
@@ -162,63 +158,55 @@ pub fn create_compound_clip(
         effects: None,
         shape_style: None,
         stroke_progress_track: None,
-        compound_timeline_id: Some(nested_id.clone()),
+        compound_timeline_id: None,
         blend_mode: Default::default(),
         chroma_key: None,
     };
-    let compound_id = compound.id.clone();
+    let carrier_id = carrier.id.clone();
 
     let track = &mut timeline.tracks[track_index];
     track.clips.retain(|c| !unique.contains(&c.id));
     let insert_at = min_idx.min(track.clips.len());
-    track.clips.insert(insert_at, compound);
-
-    timeline
-        .compound_timelines
-        .insert(nested_id, Box::new(nested));
+    track.clips.insert(insert_at, carrier);
 
     timeline.selected_clip_ids.clear();
-    timeline.selected_clip_ids.insert(compound_id.clone());
+    timeline.selected_clip_ids.insert(carrier_id.clone());
 
-    Ok(compound_id)
+    Ok(NestResult { child, carrier_id })
 }
 
-/// Flatten a compound clip back into its constituent clips on its own track.
-/// Returns the restored clip ids (their original ids). Errors if `clip_id` is
-/// not a compound clip or its nested timeline is missing.
-pub fn dissolve_compound_clip(
+/// Expand a nest carrier back into its constituent clips on its own track.
+/// `child` is the carrier's timeline (resolved by the caller from the project's
+/// siblings). Only the carrier's visible window is restored, shifted so child
+/// frame `trim_start` lands at the carrier's `start_frame` (NestFlattener
+/// windowing). Returns the restored clip ids.
+pub fn decompose_nest(
     timeline: &mut Timeline,
-    clip_id: &str,
+    carrier_id: &str,
+    child: &Timeline,
 ) -> Result<Vec<String>, String> {
-    let Some(loc) = find_clip(timeline, clip_id) else {
-        return Err(format!("Clip '{clip_id}' was not found on the timeline."));
+    let Some(loc) = find_clip(timeline, carrier_id) else {
+        return Err(format!("Clip '{carrier_id}' was not found on the timeline."));
     };
-    let compound = timeline.tracks[loc.track_index].clips[loc.clip_index].clone();
-    let Some(nested_id) = compound.compound_timeline_id.clone() else {
-        return Err("That clip isn't a compound clip.".to_string());
-    };
-    let Some(nested) = timeline.compound_timelines.remove(&nested_id) else {
-        return Err("The compound clip's nested timeline is missing.".to_string());
-    };
+    let carrier = timeline.tracks[loc.track_index].clips[loc.clip_index].clone();
+    if carrier.source_clip_type != ClipType::Sequence {
+        return Err("That clip isn't a nested timeline.".to_string());
+    }
 
-    // Re-base constituents back to absolute frames. Any inner nested timelines
-    // this compound owned return to the parent's compound map.
-    let offset = compound.start_frame;
     let mut restored_ids = Vec::new();
     let mut restored_clips = Vec::new();
-    for track in nested.tracks {
-        for mut clip in track.clips {
-            clip.start_frame += offset;
-            restored_ids.push(clip.id.clone());
-            restored_clips.push(clip);
+    for track in &child.tracks {
+        for clip in &track.clips {
+            if let Some(mut c) = remap_into_window(clip, &carrier) {
+                c.id = Uuid::new_v4().to_string();
+                restored_ids.push(c.id.clone());
+                restored_clips.push(c);
+            }
         }
-    }
-    for (cid, inner) in nested.compound_timelines {
-        timeline.compound_timelines.insert(cid, inner);
     }
 
     let track = &mut timeline.tracks[loc.track_index];
-    track.clips.retain(|c| c.id != clip_id);
+    track.clips.retain(|c| c.id != carrier_id);
     track.clips.extend(restored_clips);
     track.clips.sort_by_key(|c| c.start_frame);
 
@@ -230,43 +218,116 @@ pub fn dissolve_compound_clip(
     Ok(restored_ids)
 }
 
-/// Return a copy of `timeline` with every compound clip expanded into its
-/// constituent clips at their absolute positions (recursively). Used by the
-/// compositor and exporters so compound clips render/export their content.
+/// NestFlattener window remap: trim `clip` to the carrier's visible window and
+/// shift it onto the parent's frame axis. Returns None when fully outside.
+fn remap_into_window(clip: &Clip, carrier: &Clip) -> Option<Clip> {
+    let win_start = carrier.trim_start_frame;
+    let win_end = carrier.trim_start_frame + carrier.duration_frames;
+    let shift = carrier.start_frame - carrier.trim_start_frame;
+
+    let clip_start = clip.start_frame;
+    let clip_end = clip.start_frame + clip.duration_frames;
+    let start = clip_start.max(win_start);
+    let end = clip_end.min(win_end);
+    if end <= start {
+        return None;
+    }
+
+    let head_cut = start - clip_start;
+    let tail_cut = clip_end - end;
+    let mut c = if head_cut > 0 {
+        // Same conventions as split_single_clip's right half: keyframes shift,
+        // the cut becomes source trim, and the fade on the cut edge clears.
+        let (_, mut right) = crate::keyframes::split_all_clip_keyframe_tracks(clip, head_cut);
+        right.trim_start_frame = clip.trim_start_frame + (head_cut as f64 * clip.speed).round() as i64;
+        right.fade_in_frames = 0;
+        right
+    } else {
+        clip.clone()
+    };
+    c.start_frame = start + shift;
+    c.duration_frames = end - start;
+    if tail_cut > 0 {
+        c.trim_end_frame = clip.trim_end_frame + (tail_cut as f64 * clip.speed).round() as i64;
+        c.fade_out_frames = 0;
+    }
+    crate::keyframes::clamp_clip_keyframes_to_duration(&mut c);
+    crate::keyframes::clamp_clip_fades_to_duration(&mut c);
+    Some(c)
+}
+
+/// Resolve every nest carrier in `timeline` into its constituent clips at
+/// their parent positions (recursively, cycle-safe, depth-capped at
+/// [`NEST_MAX_DEPTH`]). Used by AUDIO mixing and the XML/FCPXML exporters —
+/// video composes carriers recursively in the compositor instead so the
+/// carrier's transform applies to the group as a unit.
 ///
-/// The compound clip's own static opacity is multiplied onto each constituent
-/// (exact for single-track nesting, where constituents never overlap). A
-/// transform or fades applied to the compound clip itself are not yet composed
-/// onto the group — a follow-up. The result has an empty `compound_timelines`.
-pub fn flatten_compound_clips(timeline: &Timeline) -> Timeline {
+/// The carrier's static opacity/volume multiply onto constituents; flattened
+/// clip ids become `"{carrier_id}/{clip_id}"` (Swift NestFlattener).
+pub fn flatten_nests(
+    timeline: &Timeline,
+    resolve: &dyn Fn(&str) -> Option<Timeline>,
+) -> Timeline {
+    flatten_nests_inner(timeline, resolve, 0, &mut Vec::new())
+}
+
+fn flatten_nests_inner(
+    timeline: &Timeline,
+    resolve: &dyn Fn(&str) -> Option<Timeline>,
+    depth: usize,
+    visiting: &mut Vec<String>,
+) -> Timeline {
     let mut out = timeline.clone();
+    if depth >= NEST_MAX_DEPTH {
+        return out;
+    }
     for track in &mut out.tracks {
         let mut flat: Vec<Clip> = Vec::with_capacity(track.clips.len());
         for clip in track.clips.drain(..) {
-            match &clip.compound_timeline_id {
-                Some(nested_id) => match timeline.compound_timelines.get(nested_id) {
-                    Some(nested) => {
-                        let nested_flat = flatten_compound_clips(nested);
-                        let offset = clip.start_frame;
-                        let group_opacity = clip.opacity;
-                        for ntrack in nested_flat.tracks {
-                            for mut nc in ntrack.clips {
-                                nc.start_frame += offset;
-                                nc.opacity *= group_opacity;
-                                flat.push(nc);
-                            }
-                        }
+            if clip.source_clip_type != ClipType::Sequence {
+                flat.push(clip);
+                continue;
+            }
+            if visiting.iter().any(|v| v == &clip.media_ref) {
+                continue; // cycle — drop the carrier
+            }
+            let Some(child) = resolve(&clip.media_ref) else {
+                continue; // missing child renders/exports nothing
+            };
+            visiting.push(clip.media_ref.clone());
+            let child_flat = flatten_nests_inner(&child, resolve, depth + 1, visiting);
+            visiting.pop();
+            for ntrack in child_flat.tracks {
+                // An audio carrier pulls the child's audio; a video carrier its video.
+                let want_audio = clip.media_type == ClipType::Audio;
+                if want_audio != (ntrack.r#type == ClipType::Audio) {
+                    continue;
+                }
+                if want_audio && ntrack.muted {
+                    continue;
+                }
+                if !want_audio && ntrack.hidden {
+                    continue;
+                }
+                for nc in ntrack.clips {
+                    if let Some(mut c) = remap_into_window(&nc, &clip) {
+                        c.id = format!("{}/{}", clip.id, c.id);
+                        c.opacity *= clip.opacity;
+                        c.volume *= clip.volume;
+                        flat.push(c);
                     }
-                    None => flat.push(clip),
-                },
-                None => flat.push(clip),
+                }
             }
         }
         track.clips = flat;
         track.clips.sort_by_key(|c| c.start_frame);
     }
-    out.compound_timelines.clear();
     out
+}
+
+/// Build a resolver over a project's sibling timelines (id → clone).
+pub fn timeline_resolver(siblings: &[Timeline]) -> HashMap<String, Timeline> {
+    siblings.iter().map(|t| (t.id.clone(), t.clone())).collect()
 }
 
 #[cfg(test)]
@@ -322,195 +383,211 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
+               display_height: 50.0,
                 clips,
             }],
             ..Default::default()
         }
     }
 
+    fn resolver_of(children: Vec<Timeline>) -> impl Fn(&str) -> Option<Timeline> {
+        move |id: &str| children.iter().find(|t| t.id == id).cloned()
+    }
+
     #[test]
-    fn create_groups_contiguous_clips_into_one_compound() {
+    fn nest_groups_contiguous_clips_into_a_sequence_carrier() {
         let mut tl = timeline_with(vec![
             clip("a", 0, 30),
             clip("b", 30, 30),
             clip("c", 60, 30),
         ]);
-        let cid =
-            create_compound_clip(&mut tl, &["a".into(), "b".into()], Some("Group")).unwrap();
+        let nest = nest_clips(&mut tl, &["a".into(), "b".into()], Some("Scene 1")).unwrap();
 
-        // a+b replaced by one compound spanning [0,60); c untouched.
         assert_eq!(tl.tracks[0].clips.len(), 2);
-        let compound = tl.tracks[0].clips.iter().find(|c| c.id == cid).unwrap();
-        assert_eq!(compound.start_frame, 0);
-        assert_eq!(compound.duration_frames, 60);
-        assert!(compound.compound_timeline_id.is_some());
-        assert!(tl.tracks[0].clips.iter().any(|c| c.id == "c"));
-        assert!(!tl.tracks[0].clips.iter().any(|c| c.id == "a"));
+        let carrier = tl.tracks[0]
+            .clips
+            .iter()
+            .find(|c| c.id == nest.carrier_id)
+            .unwrap();
+        assert_eq!(carrier.media_type, ClipType::Sequence);
+        assert_eq!(carrier.source_clip_type, ClipType::Sequence);
+        assert_eq!(carrier.media_ref, nest.child.id, "carrier points at the child");
+        assert_eq!(carrier.start_frame, 0);
+        assert_eq!(carrier.duration_frames, 60);
+        assert!(carrier.compound_timeline_id.is_none(), "no legacy field");
 
-        // Nested timeline holds a+b re-based to 0.
-        let nested = &tl.compound_timelines[compound.compound_timeline_id.as_ref().unwrap()];
-        assert_eq!(nested.tracks[0].clips.len(), 2);
-        assert_eq!(nested.tracks[0].clips[0].start_frame, 0);
-        assert_eq!(nested.tracks[0].clips[1].start_frame, 30);
+        assert_eq!(nest.child.name, "Scene 1");
+        assert_eq!(nest.child.tracks[0].clips.len(), 2);
+        assert_eq!(nest.child.tracks[0].clips[0].start_frame, 0);
+        assert_eq!(nest.child.tracks[0].clips[1].start_frame, 30);
     }
 
     #[test]
-    fn create_and_dissolve_a_single_clip_round_trips() {
-        let mut tl = timeline_with(vec![clip("a", 10, 40), clip("b", 50, 30)]);
-        let cid = create_compound_clip(&mut tl, &["a".into()], None).unwrap();
-        // One-clip group: the compound spans exactly clip a; b is untouched.
-        assert_eq!(tl.tracks[0].clips.len(), 2);
-        let compound = tl.tracks[0].clips.iter().find(|c| c.id == cid).unwrap();
-        assert_eq!(compound.start_frame, 10);
-        assert_eq!(compound.duration_frames, 40);
-        assert!(tl.tracks[0].clips.iter().any(|c| c.id == "b"));
-
-        let restored = dissolve_compound_clip(&mut tl, &cid).unwrap();
-        assert_eq!(restored, vec!["a".to_string()]);
-        let a = tl.tracks[0].clips.iter().find(|c| c.id == "a").unwrap();
-        assert_eq!(a.start_frame, 10, "restored at original frame");
-        assert!(tl.compound_timelines.is_empty());
-    }
-
-    #[test]
-    fn create_refuses_non_adjacent_clips() {
+    fn nest_refusals() {
         let mut tl = timeline_with(vec![
             clip("a", 0, 30),
             clip("b", 30, 30),
             clip("c", 60, 30),
         ]);
-        let err = create_compound_clip(&mut tl, &["a".into(), "c".into()], None).unwrap_err();
-        assert!(err.contains("adjacent"), "err={err}");
-    }
-
-    #[test]
-    fn create_refuses_multi_track() {
-        let mut tl = timeline_with(vec![clip("a", 0, 30)]);
+        let err = nest_clips(&mut tl, &["a".into(), "c".into()], None).unwrap_err();
+        assert!(err.contains("adjacent"), "{err}");
+        let err = nest_clips(&mut tl, &["ghost".into()], None).unwrap_err();
+        assert!(err.contains("not found"), "{err}");
         tl.tracks.push(Track {
-            id: "t1".to_string(),
+            id: "t1".into(),
             r#type: ClipType::Video,
             muted: false,
             hidden: false,
             sync_locked: true,
-            display_height: 50.0,
-            clips: vec![clip("b", 0, 30)],
+           display_height: 50.0,
+            clips: vec![clip("d", 0, 30)],
         });
-        let err = create_compound_clip(&mut tl, &["a".into(), "b".into()], None).unwrap_err();
-        assert!(err.contains("same track"), "err={err}");
+        let err = nest_clips(&mut tl, &["a".into(), "d".into()], None).unwrap_err();
+        assert!(err.contains("same track"), "{err}");
     }
 
     #[test]
-    fn create_refuses_unknown_clip() {
-        let mut tl = timeline_with(vec![clip("a", 0, 30)]);
-        let err = create_compound_clip(&mut tl, &["a".into(), "ghost".into()], None).unwrap_err();
-        assert!(err.contains("not found"), "err={err}");
-    }
-
-    #[test]
-    fn dissolve_restores_original_clips() {
-        let mut tl = timeline_with(vec![
-            clip("a", 0, 30),
-            clip("b", 30, 30),
-            clip("c", 60, 30),
-        ]);
-        let cid =
-            create_compound_clip(&mut tl, &["a".into(), "b".into()], Some("G")).unwrap();
-        let restored = dissolve_compound_clip(&mut tl, &cid).unwrap();
+    fn decompose_restores_placement() {
+        let mut tl = timeline_with(vec![clip("a", 10, 30), clip("b", 40, 20)]);
+        let nest = nest_clips(&mut tl, &["a".into(), "b".into()], None).unwrap();
+        let restored = decompose_nest(&mut tl, &nest.carrier_id, &nest.child).unwrap();
 
         assert_eq!(restored.len(), 2);
-        assert!(tl.compound_timelines.is_empty());
-        assert_eq!(tl.tracks[0].clips.len(), 3);
-        let a = tl.tracks[0].clips.iter().find(|c| c.id == "a").unwrap();
-        assert_eq!(a.start_frame, 0);
-        let b = tl.tracks[0].clips.iter().find(|c| c.id == "b").unwrap();
-        assert_eq!(b.start_frame, 30);
+        assert_eq!(tl.tracks[0].clips.len(), 2);
+        assert_eq!(tl.tracks[0].clips[0].start_frame, 10);
+        assert_eq!(tl.tracks[0].clips[0].duration_frames, 30);
+        assert_eq!(tl.tracks[0].clips[1].start_frame, 40);
     }
 
     #[test]
-    fn dissolve_refuses_non_compound() {
-        let mut tl = timeline_with(vec![clip("a", 0, 30)]);
-        let err = dissolve_compound_clip(&mut tl, "a").unwrap_err();
-        assert!(err.contains("isn't a compound clip"), "err={err}");
-    }
-
-    #[test]
-    fn create_then_flatten_reproduces_original_placement() {
-        let original = timeline_with(vec![
-            clip("a", 0, 30),
-            clip("b", 30, 45),
-            clip("c", 75, 30),
-        ]);
-        let mut tl = original.clone();
-        create_compound_clip(&mut tl, &["a".into(), "b".into(), "c".into()], None).unwrap();
-
-        let flat = flatten_compound_clips(&tl);
-        assert!(flat.compound_timelines.is_empty());
-        assert_eq!(flat.tracks[0].clips.len(), 3);
-        for want in &original.tracks[0].clips {
-            let got = flat.tracks[0].clips.iter().find(|c| c.id == want.id).unwrap();
-            assert_eq!(got.start_frame, want.start_frame, "clip {}", want.id);
-            assert_eq!(got.duration_frames, want.duration_frames);
-        }
-    }
-
-    #[test]
-    fn flatten_multiplies_group_opacity_onto_constituents() {
+    fn decompose_respects_trim_window() {
         let mut tl = timeline_with(vec![clip("a", 0, 30), clip("b", 30, 30)]);
-        let cid = create_compound_clip(&mut tl, &["a".into(), "b".into()], None).unwrap();
-        // Apply half opacity to the whole compound.
-        let loc = find_clip(&tl, &cid).unwrap();
-        tl.tracks[loc.track_index].clips[loc.clip_index].opacity = 0.5;
-
-        let flat = flatten_compound_clips(&tl);
-        for c in &flat.tracks[0].clips {
-            assert!((c.opacity - 0.5).abs() < 1e-9, "opacity={}", c.opacity);
-        }
-    }
-
-    #[test]
-    fn flatten_leaves_plain_timeline_untouched() {
-        let tl = timeline_with(vec![clip("a", 0, 30), clip("b", 30, 30)]);
-        let flat = flatten_compound_clips(&tl);
-        assert_eq!(flat.tracks[0].clips.len(), 2);
-        assert_eq!(flat.tracks[0].clips[0].id, "a");
-    }
-
-    #[test]
-    fn nested_compound_survives_grouping_and_dissolves_back() {
-        // Group a+b, then group the compound with c, then dissolve twice.
-        let mut tl = timeline_with(vec![
-            clip("a", 0, 30),
-            clip("b", 30, 30),
-            clip("c", 60, 30),
-        ]);
-        let inner = create_compound_clip(&mut tl, &["a".into(), "b".into()], None).unwrap();
-        let outer = create_compound_clip(&mut tl, &[inner.clone(), "c".into()], None).unwrap();
-        assert_eq!(tl.tracks[0].clips.len(), 1);
-        // The inner nested timeline moved inside the outer one, so only the outer
-        // lives at the top level (proper hierarchical nesting).
-        assert_eq!(tl.compound_timelines.len(), 1);
-
-        // Flatten collapses both levels to a,b,c at absolute frames.
-        let flat = flatten_compound_clips(&tl);
-        assert_eq!(flat.tracks[0].clips.len(), 3);
-        let ids: Vec<&str> = flat.tracks[0].clips.iter().map(|c| c.id.as_str()).collect();
-        assert!(ids.contains(&"a") && ids.contains(&"b") && ids.contains(&"c"));
-        let c = flat.tracks[0].clips.iter().find(|c| c.id == "c").unwrap();
-        assert_eq!(c.start_frame, 60);
-
-        // Dissolving the outer compound restores the inner compound + c.
-        let restored = dissolve_compound_clip(&mut tl, &outer).unwrap();
-        assert!(restored.contains(&inner));
-        assert!(tl.tracks[0].clips.iter().any(|c| c.id == inner));
-        assert!(tl.compound_timelines.contains_key(
-            tl.tracks[0]
+        let nest = nest_clips(&mut tl, &["a".into(), "b".into()], None).unwrap();
+        // Trim the carrier to child frames 20..50 and move it to frame 100.
+        {
+            let c = tl.tracks[0]
                 .clips
-                .iter()
-                .find(|c| c.id == inner)
-                .unwrap()
-                .compound_timeline_id
-                .as_ref()
-                .unwrap()
-        ));
+                .iter_mut()
+                .find(|c| c.id == nest.carrier_id)
+                .unwrap();
+            c.trim_start_frame = 20;
+            c.duration_frames = 30;
+            c.start_frame = 100;
+        }
+        decompose_nest(&mut tl, &nest.carrier_id, &nest.child).unwrap();
+        // a's tail (child 20..30) → parent 100..110; b's head (child 30..50) → 110..130.
+        assert_eq!(tl.tracks[0].clips.len(), 2);
+        assert_eq!(tl.tracks[0].clips[0].start_frame, 100);
+        assert_eq!(tl.tracks[0].clips[0].duration_frames, 10);
+        assert_eq!(
+            tl.tracks[0].clips[0].trim_start_frame, 20,
+            "head cut becomes source trim"
+        );
+        assert_eq!(tl.tracks[0].clips[1].start_frame, 110);
+        assert_eq!(tl.tracks[0].clips[1].duration_frames, 20);
+    }
+
+    #[test]
+    fn flatten_resolves_carrier_to_constituents() {
+        let mut tl = timeline_with(vec![clip("a", 0, 30), clip("b", 30, 30)]);
+        let nest = nest_clips(&mut tl, &["a".into(), "b".into()], None).unwrap();
+        let resolve = resolver_of(vec![nest.child.clone()]);
+        let flat = flatten_nests(&tl, &resolve);
+
+        assert_eq!(flat.tracks[0].clips.len(), 2);
+        assert_eq!(flat.tracks[0].clips[0].start_frame, 0);
+        assert!(
+            flat.tracks[0].clips[0].id.starts_with(&nest.carrier_id),
+            "flattened ids are carrier-scoped: {}",
+            flat.tracks[0].clips[0].id
+        );
+    }
+
+    #[test]
+    fn flatten_multiplies_carrier_opacity() {
+        let mut tl = timeline_with(vec![clip("a", 0, 30)]);
+        let nest = nest_clips(&mut tl, &["a".into()], None).unwrap();
+        tl.tracks[0].clips[0].opacity = 0.5;
+        let resolve = resolver_of(vec![nest.child.clone()]);
+        let flat = flatten_nests(&tl, &resolve);
+        assert!((flat.tracks[0].clips[0].opacity - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn flatten_drops_missing_child_and_survives_cycles() {
+        let mut tl = timeline_with(vec![clip("a", 0, 30)]);
+        let nest = nest_clips(&mut tl, &["a".into()], None).unwrap();
+        // Missing child: carrier drops, no panic.
+        let none = |_: &str| None;
+        let flat = flatten_nests(&tl, &none);
+        assert!(flat.tracks[0].clips.is_empty());
+
+        // Cycle: child contains a carrier pointing back at itself.
+        let mut cyclic = nest.child.clone();
+        let mut back = clip("back", 0, 30);
+        back.media_type = ClipType::Sequence;
+        back.source_clip_type = ClipType::Sequence;
+        back.media_ref = cyclic.id.clone();
+        cyclic.tracks[0].clips.push(back);
+        let resolve = resolver_of(vec![cyclic.clone()]);
+        let flat = flatten_nests(&tl, &resolve);
+        // The self-referencing carrier inside the child is dropped; a's remap survives.
+        assert!(flat.tracks[0].clips.iter().all(|c| c.media_ref != cyclic.id));
+    }
+
+    #[test]
+    fn nested_nests_flatten_recursively() {
+        // Group a, then nest the carrier with c at the parent level.
+        let mut tl = timeline_with(vec![clip("a", 0, 30), clip("c", 30, 30)]);
+        let inner = nest_clips(&mut tl, &["a".into()], None).unwrap();
+        let outer = nest_clips(&mut tl, &[inner.carrier_id.clone(), "c".into()], None).unwrap();
+        assert_eq!(tl.tracks[0].clips.len(), 1);
+
+        let resolve = resolver_of(vec![inner.child.clone(), outer.child.clone()]);
+        let flat = flatten_nests(&tl, &resolve);
+        assert_eq!(flat.tracks[0].clips.len(), 2, "both levels resolved");
+        let starts: Vec<i64> = flat.tracks[0].clips.iter().map(|c| c.start_frame).collect();
+        assert_eq!(starts, vec![0, 30]);
+    }
+
+    #[test]
+    fn audio_carrier_pulls_only_audio_tracks() {
+        let mut child = timeline_with(vec![clip("v", 0, 30)]);
+        child.tracks.push(Track {
+            id: "aud".into(),
+            r#type: ClipType::Audio,
+            muted: false,
+            hidden: false,
+            sync_locked: true,
+           display_height: 50.0,
+            clips: vec![{
+                let mut a = clip("asrc", 0, 30);
+                a.media_type = ClipType::Audio;
+                a.source_clip_type = ClipType::Audio;
+                a
+            }],
+        });
+        child.id = "child-av".into();
+
+        let mut carrier = clip("carrier", 0, 30);
+        carrier.media_type = ClipType::Audio;
+        carrier.source_clip_type = ClipType::Sequence;
+        carrier.media_ref = "child-av".into();
+        let mut parent = Timeline::default();
+        parent.tracks.push(Track {
+            id: "pa".into(),
+            r#type: ClipType::Audio,
+            muted: false,
+            hidden: false,
+            sync_locked: true,
+           display_height: 50.0,
+            clips: vec![carrier],
+        });
+
+        let resolve = resolver_of(vec![child]);
+        let flat = flatten_nests(&parent, &resolve);
+        assert_eq!(flat.tracks[0].clips.len(), 1);
+        assert_eq!(flat.tracks[0].clips[0].media_type, ClipType::Audio);
+        assert!(flat.tracks[0].clips[0].id.ends_with("/asrc"));
     }
 }

@@ -109,6 +109,8 @@ mod tests {
 
     fn timeline_with(clip: Clip) -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 15,
             width: 64,
             height: 48,
@@ -118,7 +120,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-                display_height: 50.0,
+               display_height: 50.0,
                 clips: vec![clip],
             }],
             settings_configured: true,
@@ -186,6 +188,8 @@ mod tests {
         let dir = temp_dir("empty");
         let out = dir.join("empty.png");
         let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
             fps: 30,
             width: 16,
             height: 16,

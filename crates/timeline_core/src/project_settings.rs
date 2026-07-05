@@ -232,6 +232,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
+            display_height: 50.0,
             clips,
         }
     }
@@ -244,6 +245,8 @@ mod tests {
         tracks: Vec<Track>,
     ) -> Timeline {
         Timeline {
+            id: String::new(),
+            name: String::new(),
             fps,
             width,
             height,

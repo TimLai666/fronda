@@ -535,6 +535,8 @@ fn stroke_progress_track_rescales_on_fps_change() {
         ],
     });
     let mut timeline = Timeline {
+        id: String::new(),
+        name: String::new(),
         fps: 30,
         tracks: vec![Track {
             id: "t".into(),
@@ -542,7 +544,7 @@ fn stroke_progress_track_rescales_on_fps_change() {
             muted: false,
             hidden: false,
             sync_locked: false,
-            display_height: 50.0,
+           display_height: 50.0,
             clips: vec![c],
         }],
         ..Timeline::default()
