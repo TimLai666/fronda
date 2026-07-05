@@ -2,7 +2,9 @@
 
 Design spec for porting Palmier Pro's multi-track audio sync to Fronda.
 
-> **STATUS 2026-07-05: Option A IMPLEMENTED.** `sync_audio_clips` shipped in
+> **STATUS 2026-07-05: Option A IMPLEMENTED** (tool later renamed to upstream's
+> real name `sync_audio` + schema aligned: targetClipId single form,
+> searchWindowSeconds windowed correlation). `sync_audio` shipped in
 > `agent_contract` per this spec (anchor formula below, sign pinned by the
 > padded-clip oracle test; `newClipId` reported because `move_clips` re-ids).
 > Still open: Option B `sync_offset_frames` metadata, sync menu/toast UI,
@@ -37,7 +39,7 @@ tool, a way to apply the offset, export alignment, undo, and UI.
 
 ### 1. Applying the offset — two options (DECISION REQUIRED)
 
-**Option A — bake into `start_frame` (recommended for v1).** `sync_audio_clips`
+**Option A — bake into `start_frame` (recommended for v1).** `sync_audio`
 moves the target clip so its waveform lines up with the reference's, and its
 sync-linked video partner follows the same delta (reuse `move_clips`, which
 already shifts linked partners). No model change, no render/export change, fully
@@ -94,10 +96,10 @@ f32 at a requested rate/channels, with `ProjectAudioSource` (ffmpeg) as the app
 impl. Reuse it verbatim — request **mono** at a fixed rate (44.1 kHz) for both
 clips so the envelopes are comparable. No new seam.
 
-### 3. Agent tool — `sync_audio_clips` (NEW tool → tool count 59 → 60)
+### 3. Agent tool — `sync_audio` (NEW tool → tool count 59 → 60)
 
 ```
-sync_audio_clips:
+sync_audio:
   referenceClipId: string   // the clip to align others to
   targetClipIds: string[]   // clips to move into sync
   minConfidence?: number    // default 0.5; below this, the target is left put and reported as low-confidence
@@ -127,7 +129,7 @@ knows sync couldn't be trusted, rather than silently mis-syncing.
 ### 5. UI (deferred — gpui, not required for the agent path)
 
 Swift ships a sync menu + toast (~part of the ~600 LoC). Fronda's agent path
-(`sync_audio_clips`) delivers the capability headlessly; a right-click "Sync to…"
+(`sync_audio`) delivers the capability headlessly; a right-click "Sync to…"
 menu + a result toast are a follow-up once the tool lands. Not blocking.
 
 ## Testing plan
@@ -135,7 +137,7 @@ menu + a result toast are a follow-up once the tool lands. Not blocking.
 1. **Pure (done):** correlator — 13 tests already cover envelope/correlation/peak.
 2. **Executor (mock seam):** a `MockAudioSource` returning the SAME tone in both
    clips but the target padded with N leading silent frames → assert
-   `sync_audio_clips` moves the target by ≈ the pad (Option A) with high
+   `sync_audio` moves the target by ≈ the pad (Option A) with high
    confidence; a low-confidence (unrelated noise) case → target unmoved, reported
    in `skipped`. Mirrors the `remove_silence` mock tests.
 3. **App seam:** `ProjectAudioSource` already covered by #174's WAV round-trip
@@ -148,7 +150,7 @@ menu + a result toast are a follow-up once the tool lands. Not blocking.
 1. **Option A vs B** — bake into `start_frame` (no model change) vs store
    `sync_offset_frames` (data-model change + render/export invariant). Spec
    currently sketches B; recommendation is A. **This is the gating decision.**
-2. Adding a **new agent tool** (`sync_audio_clips`) is a small surface expansion;
+2. Adding a **new agent tool** (`sync_audio`) is a small surface expansion;
    it's parity with Swift #119, so in-scope, but confirm the tool name/shape.
 3. Default `minConfidence` value (0.5 is a guess; Swift's threshold, if any,
    should be matched).

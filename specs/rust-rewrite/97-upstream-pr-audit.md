@@ -158,11 +158,27 @@ limitation message (or is now implemented); the test permanently guards the clas
   delete), and the ffmpeg-backed app decoder (`ProjectAudioSource`). Honest
   "unavailable" on the MCP/headless path.
 
-Remaining stubbed tools (4), by category:
-- **Substantial (needs a new parser):** `import_xml` — an XMEML/FCPXML→timeline
-  parser (pure) + a file-read seam; render_core only has the export direction.
-- **App-nav / needs confirmation:** `create_project`/`open_project`/`delete_project`
-  (#238 — switch the whole app's active project; `delete_project` is destructive).
+Remaining stubbed tools (3): `create_project`/`open_project`/`delete_project`
+(#238 — app-nav, `delete_project` destructive, needs confirmation).
+`import_xml` was REMOVED 2026-07-05 — the full upstream ToolDefinitions
+comparison showed it never shipped (speculative Issue #154 schema), same as the
+audio stubs.
+
+## Tool-surface drift vs upstream v0.6.1 (full name-list diff, 2026-07-05)
+
+Upstream tools we DON'T have (each needs its own port decision):
+`update_text`, `export_project` (agent-driven export incl. the #255 timelineId
+arg), `send_feedback`, `get_projects` + `new_project` (upstream's real
+project-nav pair — our `create_project`/`delete_project`/`duplicate_project`
+stub names don't exist upstream; realign when tackling #238; upstream has no
+delete tool at all). Also fixed in this pass: our #119 tool shipped as
+`sync_audio_clips` but upstream's name is `sync_audio` — renamed + schema
+aligned (targetClipId single form, searchWindowSeconds → windowed correlation).
+Rust-native extensions kept deliberately (not drift): compound-clip pair,
+clip presets, `set_color_grade`/`set_blend_mode`/`set_chroma_key`/`add_shapes`/
+`apply_animation`/`generate_music`/`import_folder` (verify these against the
+upstream diff when next re-auditing — some may have been renamed/merged
+upstream rather than never existing).
 
 **Resolved 2026-07-05 by the v0.6.1 re-audit:** the speculative
 `set_clip_audio_effects`/`set_clip_noise_reduction` stubs were REMOVED — upstream
