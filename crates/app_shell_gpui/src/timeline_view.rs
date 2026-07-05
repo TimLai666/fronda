@@ -325,6 +325,36 @@ impl Render for TimelineView {
         if self.sync_from_shared_state() {
             cx.notify();
         }
+        // Timeline tabs (#255): active first, then siblings. Read fresh each
+        // render; clicks run the shared timeline tools so every view refreshes
+        // through the revision bump.
+        let (tab_active_id, tab_list): (String, Vec<(String, String)>) = {
+            let exec = crate::editor_state_hub::EditorStateHub::global().executor();
+            let guard = exec.lock();
+            match guard {
+                Ok(ref g) => {
+                    let label = |t: &core_model::Timeline| {
+                        if t.name.is_empty() {
+                            "Timeline".to_string()
+                        } else {
+                            t.name.clone()
+                        }
+                    };
+                    (
+                        g.timeline().id.clone(),
+                        std::iter::once((g.timeline().id.clone(), label(g.timeline())))
+                            .chain(
+                                g.sibling_timelines()
+                                    .iter()
+                                    .map(|t| (t.id.clone(), label(t))),
+                            )
+                            .collect(),
+                    )
+                }
+                Err(_) => (String::new(), Vec::new()),
+            }
+        };
+        let tab_count = tab_list.len();
         let tracks = self.state.tracks.clone();
         let clips = self.state.clips.clone();
         let selected_ids = self.state.selected_clip_ids.clone();
@@ -355,6 +385,88 @@ impl Render for TimelineView {
             .flex_col()
             .size_full()
             .bg(Background::SURFACE)
+            // ── Timeline tabs (#255 TimelineTabBar) ──
+            .child(
+                div()
+                    .id("timeline-tabs")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .h(px(28.0))
+                    .w_full()
+                    .px(px(Spacing::SM))
+                    .gap(px(Spacing::XS))
+                    .bg(Background::RAISED)
+                    .border_b_1()
+                    .border_color(BorderColors::PRIMARY)
+                    .children(tab_list.into_iter().enumerate().map(|(i, (id, name))| {
+                        let active = id == tab_active_id;
+                        let switch_id = id.clone();
+                        let close_id = id.clone();
+                        let mut tab = div()
+                            .id(gpui::SharedString::from(format!("tl-tab-{i}")))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Spacing::XS))
+                            .px(px(Spacing::SM))
+                            .py(px(2.0))
+                            .rounded(px(Radius::SM))
+                            .text_size(px(FontSize::XS))
+                            .cursor_pointer()
+                            .child(name);
+                        tab = if active {
+                            tab.bg(Background::SURFACE).text_color(Text::PRIMARY)
+                        } else {
+                            tab.text_color(Text::SECONDARY)
+                        };
+                        if !active {
+                            tab = tab.on_click(cx.listener(move |_, _, _, cx| {
+                                Self::run_shared_tool(
+                                    "set_active_timeline",
+                                    serde_json::json!({ "timelineId": switch_id }),
+                                );
+                                cx.notify();
+                            }));
+                        }
+                        if tab_count > 1 {
+                            tab = tab.child(
+                                div()
+                                    .id(gpui::SharedString::from(format!("tl-tab-close-{i}")))
+                                    .text_size(px(FontSize::XS))
+                                    .text_color(Text::SECONDARY)
+                                    .cursor_pointer()
+                                    .child("×")
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        Self::run_shared_tool(
+                                            "delete_media",
+                                            serde_json::json!({ "mediaId": close_id }),
+                                        );
+                                        cx.notify();
+                                    })),
+                            );
+                        }
+                        tab
+                    }))
+                    .child(
+                        div()
+                            .id("tl-tab-new")
+                            .px(px(Spacing::SM))
+                            .py(px(2.0))
+                            .rounded(px(Radius::SM))
+                            .text_size(px(FontSize::XS))
+                            .text_color(Text::SECONDARY)
+                            .cursor_pointer()
+                            .child("+")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                Self::run_shared_tool(
+                                    "create_timeline",
+                                    serde_json::json!({}),
+                                );
+                                cx.notify();
+                            })),
+                    ),
+            )
             // ── Ruler row ──
             .child(
                 div()
