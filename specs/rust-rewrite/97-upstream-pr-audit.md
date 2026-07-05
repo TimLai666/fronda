@@ -184,10 +184,12 @@ timelines — recursive compositor render with group-as-unit carrier transform,
 `flatten_nests` for audio/export, executor sibling store, full app wiring);
 `create_timeline`/`set_active_timeline`/`duplicate_timeline` tools (59→62) +
 `get_timeline` timelines list + prompt paragraph; `add_clips` timelineId
-nesting (linked A/V carriers, empty + cycle rejection). Pending: insert_clips
-nesting, rename/delete_media timeline ids, export timelineId arg, native
-nested-sequence XML/FCPXML emission (v1 flattens, content-correct), timeline
-tab UI. Remainder of the range: version bumps + README fix (skipped). Upstream
+nesting (linked A/V carriers, empty + cycle rejection); `insert_clips`
+timelineId nesting (ripple splice, linked audio carrier keeps sequence
+source); `rename_media`/`delete_media` accept timelineIds (last-timeline
+guard, deleting the active switches to a sibling). Pending: export timelineId
+arg (no Rust export_project tool yet), native nested-sequence XML/FCPXML
+emission (v1 flattens, content-correct), timeline tab UI. Remainder of the range: version bumps + README fix (skipped). Upstream
 branches `feat/audio-suite` and `multicam` exist but are not on main — not
 audited.
 
