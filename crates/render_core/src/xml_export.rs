@@ -124,10 +124,15 @@ impl XmlExport {
         writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").ok();
         writeln!(xml, "<!DOCTYPE xmeml>").ok();
         writeln!(xml, "<xmeml version=\"4\">").ok();
+        let name = if timeline.name.is_empty() {
+            "Timeline"
+        } else {
+            timeline.name.as_str()
+        };
         write_sequence(
             &mut xml,
             None,
-            "Timeline",
+            name,
             timeline,
             media_timecodes,
             manifest,
@@ -336,6 +341,13 @@ fn write_nest_clipitem(
     writeln!(xml, "              <in>{in_point}</in>").ok();
     writeln!(xml, "              <out>{out_point}</out>").ok();
 
+    write_clip_filters(xml, clip, fps);
+    if let Some(ref link_id) = clip.link_group_id {
+        writeln!(xml, "              <link>").ok();
+        writeln!(xml, "                <linkclipref>{link_id}</linkclipref>").ok();
+        writeln!(xml, "                <medialink>true</medialink>").ok();
+        writeln!(xml, "              </link>").ok();
+    }
     if nest.emitted_sequences.insert(clip.media_ref.clone()) {
         let child_name = child.name.clone();
         write_sequence(
@@ -424,76 +436,10 @@ fn write_fade_transition(xml: &mut String, clip: &Clip, fps: i64, is_left: bool,
 /// per entry (`when` = clip-relative frame); otherwise the single static value.
 /// XML-012 (keyframed params). NLE round-trip is not machine-verified here; the
 /// tests assert the emitted XMEML structure faithfully mirrors the track.
-fn write_motion_param(xml: &mut String, id: &str, static_value: String, keyframes: &[(i64, String)]) {
-    writeln!(xml, "                  <parameter>").ok();
-    writeln!(xml, "                    <parameterid>{id}</parameterid>").ok();
-    if keyframes.is_empty() {
-        writeln!(xml, "                    <value>{static_value}</value>").ok();
-    } else {
-        for (when, value) in keyframes {
-            writeln!(
-                xml,
-                "                    <keyframe><when>{when}</when><value>{value}</value></keyframe>"
-            )
-            .ok();
-        }
-    }
-    writeln!(xml, "                  </parameter>").ok();
-}
-
-/// XML-002~008: preserves clip placement, trims, speed, volume, opacity, transform, crop, fades.
-/// XML-011: a full `<file>` is emitted once per (media_ref, is_audio); repeats
-///          become self-closing `<file id="…"/>` references. When `manifest`
-///          resolves the media, the pathurl is the real `file://localhost//…` path.
-/// XML-012: clips without media_ref are skipped.
-/// `timecode` is the optional SourceTimecode from the tmcd track. Upstream PR #136.
-fn write_clip(
-    xml: &mut String,
-    clip: &Clip,
-    fps: i64,
-    timecode: Option<SourceTimecode>,
-    manifest: Option<&MediaManifest>,
-    is_audio: bool,
-    emitted: &mut HashSet<String>,
-) {
-    if clip.media_ref.is_empty() {
-        // XML-012: skip unresolved media
-        return;
-    }
-
-    // Human-readable clip/file name (Premiere shows this in the timeline) — the resolved asset
-    // name, not the raw media_ref id. Mirrors Swift `resolver.displayName(for:)`.
-    let display_name = manifest
-        .and_then(|m| m.entry_for(&clip.media_ref))
-        .map(|e| e.name.clone())
-        .unwrap_or_else(|| clip.media_ref.clone());
-
-    writeln!(xml, "            <clipitem id=\"{}\">", xml_escape(&clip.id)).ok();
-    writeln!(xml, "              <name>{}</name>", xml_escape(&display_name)).ok();
-    writeln!(
-        xml,
-        "              <duration>{}</duration>",
-        clip.duration_frames
-    )
-    .ok();
-    writeln!(xml, "              <rate>").ok();
-    writeln!(xml, "                <timebase>{}</timebase>", fps).ok();
-    writeln!(xml, "                <ntsc>FALSE</ntsc>").ok();
-    writeln!(xml, "              </rate>").ok();
-
-    // XML-002: clip placement
-    writeln!(xml, "              <start>{}</start>", clip.start_frame).ok();
-    // XML-003: source trims
-    writeln!(xml, "              <in>{}</in>", clip.trim_start_frame).ok();
-    writeln!(xml, "              <out>{}</out>", clip.trim_end_frame).ok();
-    // XML-004: speed changes
-    if (clip.speed - 1.0).abs() > f64::EPSILON {
-        writeln!(xml, "              <speed>").ok();
-        writeln!(xml, "                <value>{:.3}</value>", clip.speed).ok();
-        writeln!(xml, "                <timebase>{}</timebase>", fps).ok();
-        writeln!(xml, "                <ntsc>FALSE</ntsc>").ok();
-        writeln!(xml, "              </speed>").ok();
-    }
+/// Volume, opacity, Basic Motion (transform/crop, keyframed), and the
+/// keyframed Opacity filter for one clipitem. Shared by media clipitems and
+/// nested-sequence carriers (Swift emits filters on nest clipitems too).
+fn write_clip_filters(xml: &mut String, clip: &Clip, fps: i64) {
     // XML-005: volume
     writeln!(xml, "              <volume>").ok();
     writeln!(xml, "                <value>{:.6}</value>", clip.volume).ok();
@@ -635,6 +581,80 @@ fn write_clip(
             writeln!(xml, "              </filter>").ok();
         }
     }
+
+}
+
+fn write_motion_param(xml: &mut String, id: &str, static_value: String, keyframes: &[(i64, String)]) {
+    writeln!(xml, "                  <parameter>").ok();
+    writeln!(xml, "                    <parameterid>{id}</parameterid>").ok();
+    if keyframes.is_empty() {
+        writeln!(xml, "                    <value>{static_value}</value>").ok();
+    } else {
+        for (when, value) in keyframes {
+            writeln!(
+                xml,
+                "                    <keyframe><when>{when}</when><value>{value}</value></keyframe>"
+            )
+            .ok();
+        }
+    }
+    writeln!(xml, "                  </parameter>").ok();
+}
+
+/// XML-002~008: preserves clip placement, trims, speed, volume, opacity, transform, crop, fades.
+/// XML-011: a full `<file>` is emitted once per (media_ref, is_audio); repeats
+///          become self-closing `<file id="…"/>` references. When `manifest`
+///          resolves the media, the pathurl is the real `file://localhost//…` path.
+/// XML-012: clips without media_ref are skipped.
+/// `timecode` is the optional SourceTimecode from the tmcd track. Upstream PR #136.
+fn write_clip(
+    xml: &mut String,
+    clip: &Clip,
+    fps: i64,
+    timecode: Option<SourceTimecode>,
+    manifest: Option<&MediaManifest>,
+    is_audio: bool,
+    emitted: &mut HashSet<String>,
+) {
+    if clip.media_ref.is_empty() {
+        // XML-012: skip unresolved media
+        return;
+    }
+
+    // Human-readable clip/file name (Premiere shows this in the timeline) — the resolved asset
+    // name, not the raw media_ref id. Mirrors Swift `resolver.displayName(for:)`.
+    let display_name = manifest
+        .and_then(|m| m.entry_for(&clip.media_ref))
+        .map(|e| e.name.clone())
+        .unwrap_or_else(|| clip.media_ref.clone());
+
+    writeln!(xml, "            <clipitem id=\"{}\">", xml_escape(&clip.id)).ok();
+    writeln!(xml, "              <name>{}</name>", xml_escape(&display_name)).ok();
+    writeln!(
+        xml,
+        "              <duration>{}</duration>",
+        clip.duration_frames
+    )
+    .ok();
+    writeln!(xml, "              <rate>").ok();
+    writeln!(xml, "                <timebase>{}</timebase>", fps).ok();
+    writeln!(xml, "                <ntsc>FALSE</ntsc>").ok();
+    writeln!(xml, "              </rate>").ok();
+
+    // XML-002: clip placement
+    writeln!(xml, "              <start>{}</start>", clip.start_frame).ok();
+    // XML-003: source trims
+    writeln!(xml, "              <in>{}</in>", clip.trim_start_frame).ok();
+    writeln!(xml, "              <out>{}</out>", clip.trim_end_frame).ok();
+    // XML-004: speed changes
+    if (clip.speed - 1.0).abs() > f64::EPSILON {
+        writeln!(xml, "              <speed>").ok();
+        writeln!(xml, "                <value>{:.3}</value>", clip.speed).ok();
+        writeln!(xml, "                <timebase>{}</timebase>", fps).ok();
+        writeln!(xml, "                <ntsc>FALSE</ntsc>").ok();
+        writeln!(xml, "              </speed>").ok();
+    }
+    write_clip_filters(xml, clip, fps);
 
     // XML-008: linked clip relationships
     if let Some(ref link_id) = clip.link_group_id {
