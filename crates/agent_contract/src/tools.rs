@@ -1,10 +1,11 @@
-//! All 59 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 60 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
 //! Issue #165/#158: added set_clip_noise_reduction, set_clip_audio_effects (49 → 51).
 //! Issue #155: added create_compound_clip, dissolve_compound_clip (51 → 53).
 //! Issue #154: added import_xml (53 → 54).
+//! Issue #119: added sync_audio_clips (59 → 60).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -20,7 +21,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 59 tools exposed to the agent.
+/// Returns all 60 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -65,6 +66,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         open_project(),
         remove_clips(),
         remove_silence(),
+        sync_audio_clips(),
         remove_tracks(),
         remove_words(),
         rename_folder(),
@@ -115,6 +117,7 @@ Placements must match track type. The editing surface mirrors human gestures —
 - remove_words: cut speech by the word — pass get_transcript indices (or exact `matches` tokens like "um"/"uh") to drop those words plus the surrounding pause; linked A/V partners are cut automatically and gaps close. Prefer this for anything you can point at in the transcript; re-read get_transcript afterwards.
 - ripple_delete_ranges: cut spans out and close the gaps in one action — the fast path for non-word-aligned dead-air removal.
 - remove_silence: auto-detect and ripple-cut a clip's quiet gaps by RMS level (no transcript needed) — the fast path for tightening dead air in one audio or video clip.
+- sync_audio_clips: align target clips to a reference by their waveforms (dual-system sound, multi-cam) — each target moves into sync; low-confidence matches are left in place and reported.
 - create_compound_clip / dissolve_compound_clip: group a run of adjacent clips on one track into a single nested clip, and ungroup it — use it to treat a multi-clip section as one unit.
 - apply_layout: for any multi-video composition (split screen, picture-in-picture, grid), assign a clip to each slot instead of hand-setting transforms; it fills every region without stretching.
 - set_project_settings: change fps, resolution, or aspect ratio; existing clips re-fit and frame values rescale automatically.
@@ -1089,6 +1092,25 @@ fn remove_silence() -> ToolDefinition {
     }
 }
 
+// ── Issue #119: multi-track audio sync MCP tool ──────────────────────────────
+
+fn sync_audio_clips() -> ToolDefinition {
+    ToolDefinition {
+        name: "sync_audio_clips",
+        description: "Align audio clips to a reference by their waveforms (RMS cross-correlation) — \
+            for dual-system sound or multi-cam. Each target clip is moved so its audio lines up \
+            with the reference; low-confidence matches are left in place and reported. Issue #119.",
+        input_schema: object(&[
+            ("referenceClipId", string("Clip id to align the targets to")),
+            ("targetClipIds", array("Clip ids to move into sync with the reference")),
+            (
+                "minConfidence",
+                number("Minimum correlation confidence (0..1) to accept a match. Default: 0.5."),
+            ),
+        ]),
+    }
+}
+
 // ── Issue #157: named clip preset MCP tools ────────────────────────────────
 
 fn save_clip_preset() -> ToolDefinition {
@@ -1188,8 +1210,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            59,
-            "TDEF-001: 59 tools (58 + create_matte, upstream #242)"
+            60,
+            "TDEF-001: 60 tools (59 + sync_audio_clips, #119)"
         );
     }
 
@@ -1218,7 +1240,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 59, "all 59 tool names must be unique");
+        assert_eq!(names.len(), 60, "all 60 tool names must be unique");
     }
 
     #[test]

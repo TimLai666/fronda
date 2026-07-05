@@ -650,6 +650,9 @@ impl ToolExecutor {
             }
             "list_clip_presets" => self.cmd_list_clip_presets(),
             "remove_silence" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_silence, args),
+            "sync_audio_clips" => {
+                self.exec_mut(tool_name, ToolExecutor::cmd_sync_audio_clips, args)
+            }
             "set_clip_audio_effects" | "set_clip_noise_reduction" => Err(
                 "Audio effects and noise reduction aren't implemented through the agent yet."
                     .to_string(),
@@ -3320,6 +3323,127 @@ impl ToolExecutor {
                     "removedFrames": removed_frames,
                 }))
                 .unwrap_or_default()
+            }]
+        }))
+    }
+
+    /// SYNC_AUDIO_CLIPS: align target clips to a reference by RMS cross-correlation
+    /// and move each into sync (#119). Decoding is the `ClipAudioSource` host seam
+    /// (shared with remove_silence); the correlation math is `audio_core`.
+    fn cmd_sync_audio_clips(&mut self, args: &Value) -> Result<Value, String> {
+        use audio_core::audio_sync_correlator::AudioSyncCorrelator;
+
+        let ref_id = args
+            .get("referenceClipId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "sync_audio_clips requires 'referenceClipId'.".to_string())?
+            .to_string();
+        let target_ids: Vec<String> = args
+            .get("targetClipIds")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if target_ids.is_empty() {
+            return Err(
+                "sync_audio_clips requires 'targetClipIds' (a non-empty array of clip ids)."
+                    .to_string(),
+            );
+        }
+        let min_confidence = args
+            .get("minConfidence")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.5);
+
+        let audio = self.audio_source.clone().ok_or_else(|| {
+            "sync_audio_clips is unavailable: no audio decoder is connected (run it from the app)."
+                .to_string()
+        })?;
+        let sample_rate = 44_100u32;
+        let channels = 1usize;
+        let frame_size = 1024usize;
+
+        let ref_loc = timeline_core::find_clip(&self.timeline, &ref_id)
+            .ok_or_else(|| format!("Reference clip '{ref_id}' was not found on the timeline."))?;
+        let ref_clip =
+            self.timeline.tracks[ref_loc.track_index].clips[ref_loc.clip_index].clone();
+        let ref_source = self
+            .media_manifest
+            .entry_for(&ref_clip.media_ref)
+            .map(|e| e.source.clone())
+            .ok_or_else(|| "The reference clip's media isn't in the library.".to_string())?;
+        let ref_pcm = audio
+            .decode_source_pcm(&ref_source, sample_rate, channels)
+            .ok_or_else(|| "Could not decode the reference clip's audio.".to_string())?;
+        let ref_f64: Vec<f64> = ref_pcm.iter().map(|&s| s as f64).collect();
+        let ref_anchor = ref_clip.start_frame - ref_clip.trim_start_frame;
+
+        let fps = self.timeline.fps as f64;
+        let mut synced: Vec<Value> = Vec::new();
+        let mut skipped: Vec<Value> = Vec::new();
+        for tid in &target_ids {
+            if *tid == ref_id {
+                continue;
+            }
+            let Some(tloc) = timeline_core::find_clip(&self.timeline, tid) else {
+                skipped.push(json!({"clipId": tid, "reason": "not found"}));
+                continue;
+            };
+            let tclip = self.timeline.tracks[tloc.track_index].clips[tloc.clip_index].clone();
+            let Some(tsource) = self
+                .media_manifest
+                .entry_for(&tclip.media_ref)
+                .map(|e| e.source.clone())
+            else {
+                skipped.push(json!({"clipId": tid, "reason": "media not in library"}));
+                continue;
+            };
+            let Some(tpcm) = audio.decode_source_pcm(&tsource, sample_rate, channels) else {
+                skipped.push(json!({"clipId": tid, "reason": "could not decode audio"}));
+                continue;
+            };
+            let tf64: Vec<f64> = tpcm.iter().map(|&s| s as f64).collect();
+            match AudioSyncCorrelator::find_sync_offset(
+                &ref_f64,
+                &tf64,
+                sample_rate as f64,
+                frame_size,
+                fps,
+            ) {
+                Some(off) if off.confidence >= min_confidence => {
+                    // A delayed target (positive offset) must move earlier; align the
+                    // clips' source-sample-0 anchors (start_frame - trim_start_frame).
+                    let tgt_anchor = tclip.start_frame - tclip.trim_start_frame;
+                    let delta = ref_anchor - tgt_anchor - off.offset_frames;
+                    let new_start = (tclip.start_frame + delta).max(0);
+                    // move_clips re-inserts moved clips under NEW ids — report the
+                    // new id or the agent is left holding a dead reference.
+                    let placed = timeline_core::move_clips(
+                        &mut self.timeline,
+                        &[tid.clone()],
+                        tloc.track_index,
+                        new_start,
+                    );
+                    let new_id = placed.first().cloned().unwrap_or_else(|| tid.clone());
+                    synced.push(json!({
+                        "clipId": tid,
+                        "newClipId": new_id,
+                        "offsetFrames": off.offset_frames,
+                        "movedToFrame": new_start,
+                        "confidence": off.confidence,
+                    }));
+                }
+                Some(off) => skipped.push(json!({
+                    "clipId": tid, "reason": "low confidence", "confidence": off.confidence
+                })),
+                None => skipped.push(json!({"clipId": tid, "reason": "no match found"})),
+            }
+        }
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&json!({ "synced": synced, "skipped": skipped }))
+                    .unwrap_or_default()
             }]
         }))
     }
@@ -7307,6 +7431,173 @@ mod tests {
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
         let err = exec
             .execute("remove_silence", &json!({"clipId": clip_id}))
+            .unwrap_err();
+        assert!(!err.contains("Unknown tool"), "{err}");
+        assert!(err.contains("unavailable"), "{err}");
+    }
+
+    fn sync_noise(n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| {
+                let x = i as f64 * 0.137;
+                ((x * std::f64::consts::TAU).sin()
+                    + (x * 2.71 * std::f64::consts::PI).cos()
+                    + (x * 0.37 * std::f64::consts::TAU).sin()) as f32
+                    * 0.3
+            })
+            .collect()
+    }
+
+    struct MockSyncAudio;
+    impl ClipAudioSource for MockSyncAudio {
+        fn decode_source_pcm(
+            &self,
+            source: &core_model::MediaSource,
+            sample_rate: u32,
+            _channels: usize,
+        ) -> Option<Vec<f32>> {
+            let n = sample_rate as usize; // 1s
+            let base = sync_noise(n);
+            let path = match source {
+                core_model::MediaSource::External { absolute_path } => absolute_path.clone(),
+                core_model::MediaSource::Project { relative_path } => relative_path.clone(),
+            };
+            if path.contains("tgt") {
+                // 4096 leading silent samples (4 RMS frames) → the target's content
+                // is delayed relative to the reference.
+                let pad = 4096;
+                let mut v = vec![0.0f32; pad];
+                v.extend_from_slice(&base[..n - pad]);
+                Some(v)
+            } else {
+                Some(base)
+            }
+        }
+    }
+
+    #[test]
+    fn sync_audio_moves_delayed_target_earlier() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("ref", 1.0));
+        manifest.entries.push(audio_media("tgt", 1.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockSyncAudio));
+        exec.execute("add_clips", &json!({"mediaIds": ["ref", "tgt"]}))
+            .unwrap();
+        // Dual-system layout: ref and tgt each on their own audio track, both
+        // anchored at frame 100 so delta == -offset (clean sign check). Moving
+        // them to one shared track/frame would be an overlapping (invalid) state
+        // that move_clips' overwrite semantics would clear.
+        {
+            let tl = exec.timeline_mut();
+            let mut tgt_clip = None;
+            for t in tl.tracks.iter_mut() {
+                if let Some(pos) = t.clips.iter().position(|c| c.media_ref == "tgt") {
+                    tgt_clip = Some(t.clips.remove(pos));
+                }
+            }
+            let mut tgt_clip = tgt_clip.expect("tgt placed by add_clips");
+            tgt_clip.start_frame = 100;
+            for t in tl.tracks.iter_mut() {
+                for c in t.clips.iter_mut() {
+                    c.start_frame = 100;
+                }
+            }
+            tl.tracks.push(core_model::Track {
+                id: "sync-tgt-track".into(),
+                r#type: ClipType::Audio,
+                muted: false,
+                hidden: false,
+                sync_locked: true,
+                clips: vec![tgt_clip],
+            });
+        }
+        let clip_id_by_ref = |exec: &ToolExecutor, r: &str| {
+            exec.timeline()
+                .tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .find(|c| c.media_ref == r)
+                .unwrap()
+                .id
+                .clone()
+        };
+        let ref_id = clip_id_by_ref(&exec, "ref");
+        let tgt_id = clip_id_by_ref(&exec, "tgt");
+
+        let res = exec
+            .execute(
+                "sync_audio_clips",
+                &json!({"referenceClipId": ref_id, "targetClipIds": [tgt_id]}),
+            )
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        let v: serde_json::Value = serde_json::from_str(text).unwrap();
+        let synced = v["synced"].as_array().unwrap();
+        assert_eq!(synced.len(), 1, "target synced: {text}");
+        let off = synced[0]["offsetFrames"].as_i64().unwrap();
+        let moved = synced[0]["movedToFrame"].as_i64().unwrap();
+        assert!(off > 0, "delayed target → positive offset: {text}");
+        assert_eq!(moved, 100 - off, "moved earlier by the offset");
+        assert!(moved < 100, "delayed target moves earlier, not later");
+        // move_clips re-inserts under a NEW id; the tool reports it as newClipId.
+        let new_id = synced[0]["newClipId"].as_str().unwrap();
+        assert_ne!(new_id, tgt_id, "moved clip gets a fresh id");
+        let tgt = exec
+            .timeline()
+            .tracks
+            .iter()
+            .flat_map(|t| &t.clips)
+            .find(|c| c.id == new_id)
+            .unwrap();
+        assert_eq!(tgt.start_frame, moved, "clip actually moved");
+    }
+
+    #[test]
+    fn sync_audio_skips_below_min_confidence() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("ref", 1.0));
+        manifest.entries.push(audio_media("tgt", 1.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockSyncAudio));
+        exec.execute("add_clips", &json!({"mediaIds": ["ref", "tgt"]}))
+            .unwrap();
+        let find_by_ref = |exec: &ToolExecutor, r: &str| {
+            exec.timeline().tracks.iter().flat_map(|t| &t.clips).find(|c| c.media_ref == r).unwrap().id.clone()
+        };
+        let start_of = |exec: &ToolExecutor, id: &str| {
+            exec.timeline().tracks.iter().flat_map(|t| &t.clips).find(|c| c.id == id).unwrap().start_frame
+        };
+        let ref_id = find_by_ref(&exec, "ref");
+        let tgt_id = find_by_ref(&exec, "tgt");
+        let before = start_of(&exec, &tgt_id);
+
+        // An impossible threshold forces the match into `skipped`.
+        let res = exec
+            .execute(
+                "sync_audio_clips",
+                &json!({"referenceClipId": ref_id, "targetClipIds": [tgt_id], "minConfidence": 2.0}),
+            )
+            .unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["synced"].as_array().unwrap().len(), 0);
+        assert_eq!(v["skipped"].as_array().unwrap().len(), 1);
+        assert_eq!(before, start_of(&exec, &tgt_id), "low-confidence target is left in place");
+    }
+
+    #[test]
+    fn sync_audio_unavailable_without_audio_source() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("ref", 1.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute("add_clips", &json!({"mediaIds": ["ref"]})).unwrap();
+        let ref_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let err = exec
+            .execute(
+                "sync_audio_clips",
+                &json!({"referenceClipId": ref_id, "targetClipIds": ["x"]}),
+            )
             .unwrap_err();
         assert!(!err.contains("Unknown tool"), "{err}");
         assert!(err.contains("unavailable"), "{err}");

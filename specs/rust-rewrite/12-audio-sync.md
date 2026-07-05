@@ -49,19 +49,23 @@ out of v1 scope — refuse or warn on speed ≠ 1). So the move is NOT a bare
 `start_frame += offset_frames`; it is:
 
 ```
-ref_anchor    = ref.start_frame    - ref.trim_start_frame
-tgt_anchor    = tgt.start_frame    - tgt.trim_start_frame
-desired_anchor = ref_anchor + offset_frames      // align tgt's content to ref's
-delta          = desired_anchor - tgt_anchor
-tgt.start_frame = max(0, tgt.start_frame + delta) // move_clips carries linked partners
+ref_anchor = ref.start_frame - ref.trim_start_frame
+tgt_anchor = tgt.start_frame - tgt.trim_start_frame
+delta      = ref_anchor - tgt_anchor - offset_frames   // NOTE the MINUS on offset
+tgt.start_frame = max(0, tgt.start_frame + delta)       // move_clips carries linked partners
 ```
 
-`start_frame += offset_frames` is only the special case where both clips share
-`start_frame` and `trim_start_frame`. **Pin the sign and the formula with the
-padded-clip mock test** (below): a target that is the reference plus N leading
-silent frames must end up moved so the shared content coincides — that test is
-the oracle, since no Swift source is in-repo to diff against. If a later
-comparison against Swift #119 disagrees on sign, fix here and update the test.
+**Sign, verified against the correlator's own test.** `find_sync_offset(ref, tgt)`
+returns POSITIVE `offset_frames` when the target is *delayed* — its content sits
+that many frames later than the reference's (`find_sync_offset_shifted_signals`
+feeds `tgt = 5120 silent samples + ref` and asserts `offset_frames == 3`). A
+delayed target must move **earlier** to line up, so `offset_frames` is
+**subtracted**. Worked example: ref and tgt both at `start_frame = 100`, trim 0;
+`offset_frames = 3` → `delta = 100 - 100 - 3 = -3` → tgt moves to 97, and its
+content (3 frames into the clip) lands back at frame 100 beside the reference. ✓
+`start_frame += offset_frames` (the earlier draft) is wrong twice over — wrong
+sign and ignores trim/anchor. **Pin it with the padded-clip mock test** (below);
+that test is the oracle since no Swift source is in-repo to diff against.
 
 **Option B — store `sync_offset_frames: Option<i64>` on the clip (per specs
 `01`/`04`).** Keep `start_frame` as authored and record the offset as metadata; the
