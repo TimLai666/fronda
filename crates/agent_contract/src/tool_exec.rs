@@ -352,10 +352,27 @@ fn resolve_layout_anchor(entry: &Value) -> Result<(f64, f64), String> {
 }
 
 /// Runtime state for executing agent timeline tools.
+/// A captured per-clip "look" — the reusable visual/audio grade behind the
+/// clip-preset tools (Issue #157). Session-scoped for now (held on the
+/// executor); persisting these to the project is a follow-up.
+#[derive(Debug, Clone)]
+struct ClipPreset {
+    transform: core_model::Transform,
+    crop: Crop,
+    opacity: f64,
+    volume: f64,
+    speed: f64,
+    effects: Option<Vec<Effect>>,
+    blend_mode: core_model::BlendMode,
+    chroma_key: Option<core_model::ChromaKey>,
+}
+
 pub struct ToolExecutor {
     timeline: Timeline,
     media_manifest: MediaManifest,
     undo_stack: UndoStack,
+    /// Named clip presets captured this session (Issue #157). Not yet persisted.
+    clip_presets: std::collections::HashMap<String, ClipPreset>,
     /// READ-026: Status reporting for visual indexing.
     /// Set by the caller (app shell) to reflect search model state.
     search_status: String,
@@ -384,6 +401,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "get_transcript",
     "inspect_color",
     "read_skill",
+    "list_clip_presets",
 ];
 
 impl ToolExecutor {
@@ -392,6 +410,7 @@ impl ToolExecutor {
             timeline,
             media_manifest,
             undo_stack: UndoStack::new(),
+            clip_presets: std::collections::HashMap::new(),
             search_status: String::new(),
             revision: 0,
             skills: Vec::new(),
@@ -600,9 +619,11 @@ impl ToolExecutor {
                 "Importing an XMEML/FCPXML timeline isn't implemented through the agent yet."
                     .to_string(),
             ),
-            "apply_clip_preset" | "save_clip_preset" | "list_clip_presets" => {
-                Err("Clip presets aren't implemented through the agent yet.".to_string())
+            "save_clip_preset" => self.cmd_save_clip_preset(args),
+            "apply_clip_preset" => {
+                self.exec_mut(tool_name, ToolExecutor::cmd_apply_clip_preset, args)
             }
+            "list_clip_presets" => self.cmd_list_clip_presets(),
             "remove_silence" => Err(
                 "Silence removal needs on-device audio analysis, which isn't available through the \
                  agent yet."
@@ -3064,6 +3085,114 @@ impl ToolExecutor {
                 "text": serde_json::to_string(&json!({
                     "restoredClipIds": restored,
                     "count": restored.len(),
+                }))
+                .unwrap_or_default()
+            }]
+        }))
+    }
+
+    /// SAVE_CLIP_PRESET: capture a clip's look/grade as a named session preset (#157).
+    fn cmd_save_clip_preset(&mut self, args: &Value) -> Result<Value, String> {
+        let clip_id = args
+            .get("clipId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "save_clip_preset requires 'clipId'.".to_string())?;
+        let name = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "save_clip_preset requires a non-empty 'name'.".to_string())?;
+        let loc = timeline_core::find_clip(&self.timeline, clip_id)
+            .ok_or_else(|| format!("Clip '{clip_id}' was not found on the timeline."))?;
+        let clip = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+        let preset = ClipPreset {
+            transform: clip.transform.clone(),
+            crop: clip.crop.clone(),
+            opacity: clip.opacity,
+            volume: clip.volume,
+            speed: clip.speed,
+            effects: clip.effects.clone(),
+            blend_mode: clip.blend_mode.clone(),
+            chroma_key: clip.chroma_key.clone(),
+        };
+        self.clip_presets.insert(name.to_string(), preset);
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&json!({
+                    "presetName": name,
+                    "capturedFrom": clip_id,
+                    "presetCount": self.clip_presets.len(),
+                }))
+                .unwrap_or_default()
+            }]
+        }))
+    }
+
+    /// APPLY_CLIP_PRESET: apply a saved preset's grade to one or more clips (#157).
+    /// Speed goes through `apply_clip_speed` so duration/keyframes stay correct;
+    /// the remaining static properties overwrite the clip's own.
+    fn cmd_apply_clip_preset(&mut self, args: &Value) -> Result<Value, String> {
+        let preset_name = args
+            .get("presetName")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "apply_clip_preset requires 'presetName'.".to_string())?;
+        let clip_ids: Vec<String> = args
+            .get("clipIds")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if clip_ids.is_empty() {
+            return Err("apply_clip_preset requires 'clipIds' (a non-empty array of clip ids).".to_string());
+        }
+        let preset = self.clip_presets.get(preset_name).cloned().ok_or_else(|| {
+            format!("No clip preset named '{preset_name}'. Save one first with save_clip_preset.")
+        })?;
+        let mut applied = 0;
+        for clip_id in &clip_ids {
+            let Some(loc) = timeline_core::find_clip(&self.timeline, clip_id) else {
+                continue;
+            };
+            let current_speed = self.timeline.tracks[loc.track_index].clips[loc.clip_index].speed;
+            if (current_speed - preset.speed).abs() > f64::EPSILON {
+                timeline_core::apply_clip_speed(&mut self.timeline, clip_id, preset.speed);
+            }
+            let Some(loc) = timeline_core::find_clip(&self.timeline, clip_id) else {
+                continue;
+            };
+            let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            clip.transform = preset.transform.clone();
+            clip.crop = preset.crop.clone();
+            clip.opacity = preset.opacity;
+            clip.volume = preset.volume;
+            clip.effects = preset.effects.clone();
+            clip.blend_mode = preset.blend_mode.clone();
+            clip.chroma_key = preset.chroma_key.clone();
+            applied += 1;
+        }
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&json!({
+                    "presetName": preset_name,
+                    "applied": applied,
+                }))
+                .unwrap_or_default()
+            }]
+        }))
+    }
+
+    /// LIST_CLIP_PRESETS: names of the session's saved clip presets (#157).
+    fn cmd_list_clip_presets(&self) -> Result<Value, String> {
+        let mut names: Vec<&str> = self.clip_presets.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&json!({
+                    "presets": names,
+                    "count": names.len(),
                 }))
                 .unwrap_or_default()
             }]
@@ -6874,6 +7003,77 @@ mod tests {
             .execute("dissolve_compound_clip", &json!({"clipId": "ghost"}))
             .unwrap_err();
         assert!(err2.contains("not found"), "{err2}");
+    }
+
+    #[test]
+    fn clip_preset_save_list_apply_round_trip() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
+        manifest.entries.push(video_media("m2", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute("add_clips", &json!({"mediaIds": ["m1", "m2"]}))
+            .unwrap();
+        let ids: Vec<String> = exec
+            .timeline()
+            .tracks[0]
+            .clips
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+
+        {
+            let src = &mut exec.timeline_mut().tracks[0].clips[0];
+            src.opacity = 0.5;
+            src.transform.rotation = 45.0;
+            src.volume = 0.25;
+        }
+
+        let res = exec
+            .execute("save_clip_preset", &json!({"clipId": ids[0], "name": "Look A"}))
+            .unwrap();
+        assert!(res["content"][0]["text"].as_str().unwrap().contains("Look A"));
+
+        let list = exec.execute("list_clip_presets", &json!({})).unwrap();
+        assert!(list["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Look A"));
+
+        let ap = exec
+            .execute(
+                "apply_clip_preset",
+                &json!({"presetName": "Look A", "clipIds": [ids[1]]}),
+            )
+            .unwrap();
+        assert!(ap["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("\"applied\":1"));
+
+        let dst = &exec.timeline().tracks[0].clips[1];
+        assert!((dst.opacity - 0.5).abs() < 1e-9, "opacity applied");
+        assert!(
+            (dst.transform.rotation - 45.0).abs() < 1e-9,
+            "rotation applied"
+        );
+        assert!((dst.volume - 0.25).abs() < 1e-9, "volume applied");
+    }
+
+    #[test]
+    fn clip_preset_errors_are_honest_not_unknown_tool() {
+        let mut exec = make_executor();
+        let e1 = exec
+            .execute("save_clip_preset", &json!({"clipId": "ghost", "name": "X"}))
+            .unwrap_err();
+        assert!(!e1.contains("Unknown tool"), "{e1}");
+        assert!(e1.contains("not found"), "{e1}");
+        let e2 = exec
+            .execute(
+                "apply_clip_preset",
+                &json!({"presetName": "nope", "clipIds": ["a"]}),
+            )
+            .unwrap_err();
+        assert!(e2.contains("No clip preset named"), "{e2}");
     }
 
     #[test]
