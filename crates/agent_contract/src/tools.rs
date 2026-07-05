@@ -189,7 +189,11 @@ fn add_clips() -> ToolDefinition {
             full source length are taken from the media asset; project fps is \
             authoritative and is not changed to match the source. A video-with-audio \
             asset placed on a video track also gets a linked audio clip on an audio \
-            track (created if needed).",
+            track (created if needed). NESTING: mediaRef may also be a timelineId — \
+            the timeline is placed as a single live nested clip (mediaType 'sequence'), \
+            with a linked audio clip when the child has audio. Duration defaults to \
+            the child's full length; trims and durationFrames work as for video. \
+            Cycles (a timeline containing itself) and empty timelines are rejected.",
         input_schema: object(&[
             ("mediaIds", array("Media asset ids to add")),
             (

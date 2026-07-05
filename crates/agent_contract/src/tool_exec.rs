@@ -2054,6 +2054,20 @@ impl ToolExecutor {
         let mut warnings: Vec<String> = Vec::new();
         let mut clips: Vec<Clip> = Vec::with_capacity(media_ids.len());
         for media_id in &media_ids {
+            // NESTING (#255): a mediaRef that is a sibling timeline's id places a
+            // live nested clip (sequence carrier) + a linked audio carrier when
+            // the child has audio. Cycles and empty timelines are rejected.
+            if self.media_manifest.entry_for(media_id).is_none() {
+                if let Some(child) = self
+                    .sibling_timelines
+                    .iter()
+                    .find(|t| t.id == *media_id)
+                    .cloned()
+                {
+                    clips.extend(self.nest_carrier_clips(&child, args)?);
+                    continue;
+                }
+            }
             let entry = self.media_manifest.entry_for(media_id);
             let placement = resolve_placement(entry, args, project_fps)?;
             if let Some(warning) = placement.fps_warning {
@@ -3676,6 +3690,120 @@ impl ToolExecutor {
         Ok(json!({ "content": [{ "type": "text", "text": format!(
             "Duplicated \"{source_name}\" as \"{new_name}\" (timelineId {new_id}) and switched to it. Clip and track ids in the copy are new — re-read get_timeline before editing."
         )}]}))
+    }
+
+    /// Build the carrier clip(s) that place `child` as a nested timeline
+    /// (upstream #255): a video sequence carrier, plus a linked audio carrier
+    /// when the child has audio clips. Rejects empty children and cycles.
+    fn nest_carrier_clips(&self, child: &Timeline, args: &Value) -> Result<Vec<Clip>, String> {
+        let child_total = timeline_core::TimelineMathExt::total_frames(child);
+        if child_total <= 0 {
+            return Err(format!(
+                "Timeline '{}' is empty — add clips to it before nesting it.",
+                child.name
+            ));
+        }
+        if self.timeline_reaches(child, &self.timeline.id) {
+            return Err(format!(
+                "Placing timeline '{}' here would create a cycle (it contains the active timeline).",
+                child.name
+            ));
+        }
+
+        let trim_start = args
+            .get("trimStartFrame")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            .clamp(0, (child_total - 1).max(0));
+        let duration = args
+            .get("durationFrames")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(child_total - trim_start)
+            .clamp(1, child_total - trim_start);
+
+        let has_audio = child
+            .tracks
+            .iter()
+            .any(|t| t.r#type == ClipType::Audio && !t.clips.is_empty());
+        let link_group = has_audio.then(|| Uuid::new_v4().to_string());
+
+        let base = Clip {
+            id: Uuid::new_v4().to_string(),
+            media_ref: child.id.clone(),
+            media_type: ClipType::Sequence,
+            source_clip_type: ClipType::Sequence,
+            start_frame: 0,
+            duration_frames: duration,
+            trim_start_frame: trim_start,
+            trim_end_frame: 0,
+            speed: 1.0,
+            volume: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            opacity: 1.0,
+            transform: Transform::default(),
+            crop: core_model::Crop::default(),
+            link_group_id: link_group.clone(),
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            text_animation: None,
+            word_timings: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+            effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
+            compound_timeline_id: None,
+            blend_mode: Default::default(),
+            chroma_key: None,
+        };
+        let mut out = vec![base.clone()];
+        if has_audio {
+            let mut audio = base;
+            audio.id = Uuid::new_v4().to_string();
+            audio.media_type = ClipType::Audio;
+            out.push(audio);
+        }
+        Ok(out)
+    }
+
+    /// True when `target_id` is reachable from `from` through sequence carriers
+    /// (via the sibling map), depth-capped like NestFlattener.
+    fn timeline_reaches(&self, from: &Timeline, target_id: &str) -> bool {
+        let mut queue: Vec<&Timeline> = vec![from];
+        let mut visited: std::collections::HashSet<&str> = Default::default();
+        let mut depth = 0;
+        while !queue.is_empty() && depth < timeline_core::NEST_MAX_DEPTH {
+            let mut next = Vec::new();
+            for t in queue {
+                if !visited.insert(t.id.as_str()) {
+                    continue;
+                }
+                for clip in t.tracks.iter().flat_map(|tr| &tr.clips) {
+                    if clip.source_clip_type != ClipType::Sequence {
+                        continue;
+                    }
+                    if clip.media_ref == target_id {
+                        return true;
+                    }
+                    if let Some(c) =
+                        self.sibling_timelines.iter().find(|s| s.id == clip.media_ref)
+                    {
+                        next.push(c);
+                    }
+                }
+            }
+            queue = next;
+            depth += 1;
+        }
+        false
     }
 
     fn cmd_import_folder(&mut self, args: &Value) -> Result<Value, String> {
@@ -7979,6 +8107,55 @@ mod tests {
             "clip ids are new in the copy"
         );
         assert_eq!(exec.sibling_timelines().len(), 2);
+    }
+
+    #[test]
+    fn add_clips_nests_a_timeline_by_id() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
+        manifest.entries.push(audio_media("a1", 2.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+
+        // Build a child timeline with video+audio, then switch back.
+        let root_id = exec.timeline().id.clone();
+        exec.execute("create_timeline", &json!({"name": "Insert"})).unwrap();
+        let child_id = exec.timeline().id.clone();
+        exec.execute("add_clips", &json!({"mediaIds": ["m1", "a1"]})).unwrap();
+        exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
+
+        // Nest it by mediaRef = timelineId: a sequence carrier + linked audio carrier.
+        exec.execute("add_clips", &json!({"mediaIds": [child_id]})).unwrap();
+        let all: Vec<Clip> = exec
+            .timeline()
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.clone())
+            .collect();
+        assert_eq!(all.len(), 2, "video carrier + linked audio carrier");
+        let video = all.iter().find(|c| c.media_type == ClipType::Sequence).unwrap();
+        let audio = all.iter().find(|c| c.media_type == ClipType::Audio).unwrap();
+        assert_eq!(video.media_ref, child_id);
+        assert_eq!(audio.source_clip_type, ClipType::Sequence);
+        assert_eq!(video.link_group_id, audio.link_group_id);
+        assert!(video.link_group_id.is_some(), "A/V carriers linked");
+        assert!(video.duration_frames > 0, "defaults to the child's length");
+
+        // An empty timeline is rejected.
+        exec.execute("create_timeline", &json!({"name": "Empty"})).unwrap();
+        let empty_id = exec.timeline().id.clone();
+        exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
+        let err = exec
+            .execute("add_clips", &json!({"mediaIds": [empty_id]}))
+            .unwrap_err();
+        assert!(err.contains("empty"), "{err}");
+
+        // Cycle rejection: the root now carries the child, so nesting the ROOT
+        // inside the child (root reaches child... child would reach root) refuses.
+        exec.execute("set_active_timeline", &json!({"timelineId": child_id})).unwrap();
+        let err = exec
+            .execute("add_clips", &json!({"mediaIds": [root_id]}))
+            .unwrap_err();
+        assert!(err.contains("cycle"), "{err}");
     }
 
     #[test]
