@@ -95,13 +95,8 @@ impl ExportHost for AgentExportHost {
                 })
             }
             "palmier" => {
+                // resolve_output already enforced overwrite=false on an existing path.
                 let path = self.resolve_output(&request, "palmier")?;
-                if !request.overwrite && path.exists() {
-                    return Err(format!(
-                        "export_project: '{}' already exists and overwrite=false.",
-                        path.display()
-                    ));
-                }
                 project_io::save_project_state_with_siblings(
                     &path,
                     &request.timeline,

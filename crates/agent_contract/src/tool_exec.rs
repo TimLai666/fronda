@@ -4302,6 +4302,7 @@ impl ToolExecutor {
         self.sibling_timelines = sibling_timelines;
         self.timeline_words = Vec::new();
         self.clip_presets.clear();
+        self.search_status = String::new();
         self.matte_writer = Some(seams.matte_writer);
         self.audio_source = Some(seams.audio_source);
         self.export_host = Some(seams.export_host);
@@ -8948,6 +8949,47 @@ mod tests {
             .execute("export_project", &json!({"timelineId": "ghost"}))
             .unwrap_err();
         assert!(err.contains("no timeline"), "{err}");
+    }
+
+    #[test]
+    fn dispatched_tools_are_advertised_or_documented_internal() {
+        // Inverse of every_advertised_tool_is_dispatched: scan the dispatch
+        // match's string arms so a tool can't quietly exist without being
+        // advertised. `redo` and `move_clips_linked` are deliberate UI-internal
+        // tools (app_root's history buttons / linked-move gesture) and are NOT
+        // part of the agent/MCP surface.
+        const INTERNAL: &[&str] = &["redo", "move_clips_linked"];
+        let source = include_str!("tool_exec.rs");
+        let advertised: std::collections::HashSet<&str> =
+            crate::all_tools().iter().map(|t| t.name).collect();
+        let mut unknown = Vec::new();
+        for line in source.lines() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed.strip_prefix('"') else {
+                continue;
+            };
+            let Some(end) = rest.find('"') else { continue };
+            let name = &rest[..end];
+            let after = rest[end + 1..].trim_start();
+            // Only tool-dispatch arms (`"name" => self.cmd_..` / `=> self.exec_mut(..)`).
+            // Heuristic: requires `=> self.` on the same line, so non-tool string
+            // matches ("opacity", "audio", ...) are skipped; a future MULTI-LINE
+            // unadvertised arm would evade this - keep new arms single-line.
+            if !after.starts_with("=> self.") {
+                continue;
+            }
+            if name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                && !advertised.contains(name)
+                && !INTERNAL.contains(&name)
+                && !unknown.contains(&name.to_string())
+            {
+                unknown.push(name.to_string());
+            }
+        }
+        assert!(
+            unknown.is_empty(),
+            "dispatched but neither advertised nor documented internal: {unknown:?}"
+        );
     }
 
     #[test]

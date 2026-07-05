@@ -18,6 +18,15 @@ impl AgentProjectLister {
     }
 }
 
+/// Same-path check tolerant of Windows case/separator differences: compare
+/// canonical forms when both resolve, else fall back to direct equality.
+fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
+    }
+}
+
 fn project_name(path: &std::path::Path) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())
@@ -32,7 +41,10 @@ impl ProjectLister for AgentProjectLister {
             .sorted_entries()
             .into_iter()
             .map(|e| {
-                let is_active = self.active_root.as_deref() == Some(e.url.as_path());
+                let is_active = self
+                    .active_root
+                    .as_deref()
+                    .is_some_and(|root| same_path(root, &e.url));
                 KnownProject {
                     id: e.id.clone(),
                     name: project_name(&e.url),
