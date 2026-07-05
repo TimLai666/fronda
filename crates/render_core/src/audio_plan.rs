@@ -92,6 +92,15 @@ pub fn mix_timeline_audio(
     channels: usize,
     mut fetch_pcm: impl FnMut(&Clip) -> Option<Vec<f32>>,
 ) -> Vec<f32> {
+    // Expand compound clips so their nested audio mixes in (Issue #155).
+    let flattened;
+    let timeline: &Timeline = if timeline.compound_timelines.is_empty() {
+        timeline
+    } else {
+        flattened = timeline_core::flatten_compound_clips(timeline);
+        &flattened
+    };
+
     let fps = timeline.fps;
     let spf = samples_per_frame(sample_rate, fps);
     let mut placements: Vec<AudioPlacement> = Vec::new();

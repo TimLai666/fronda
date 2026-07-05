@@ -45,6 +45,15 @@ impl FcpxmlExport {
         manifest: &MediaManifest,
         target: FcpxmlTarget,
     ) -> String {
+        // Expand compound clips so their nested content exports (Issue #155).
+        let flattened;
+        let timeline: &Timeline = if timeline.compound_timelines.is_empty() {
+            timeline
+        } else {
+            flattened = timeline_core::flatten_compound_clips(timeline);
+            &flattened
+        };
+
         let fps = timeline.fps.max(1);
         let total = timeline_total_frames(timeline).max(1);
 
@@ -1122,6 +1131,28 @@ mod tests {
             track(ClipType::Audio, vec![clip("c2", "a1", ClipType::Audio, 0, 120)]),
         ]);
         (tl, manifest)
+    }
+
+    #[test]
+    fn fcpxml_export_flattens_compound_clip_to_nested_asset() {
+        // A compound clip wrapping a v1 clip must export v1's asset, not the
+        // empty compound ref (Issue #155 flatten in export).
+        let inner = clip("inner", "v1", ClipType::Video, 0, 30);
+        let nested = timeline(vec![track(ClipType::Video, vec![inner])]);
+        let mut compound = clip("compound", "n1", ClipType::Video, 0, 30);
+        compound.compound_timeline_id = Some("n1".into());
+        let mut tl = timeline(vec![track(ClipType::Video, vec![compound])]);
+        tl.compound_timelines.insert("n1".into(), Box::new(nested));
+
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        // Without flatten the nested v1 asset would never appear (the exporter
+        // never descends into compound_timelines).
+        assert!(xml.contains("shot.mp4"), "nested asset exported: {xml}");
     }
 
     #[test]

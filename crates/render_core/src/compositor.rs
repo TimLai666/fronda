@@ -681,6 +681,16 @@ pub fn compose_frame(
     height: usize,
     mut fetch_source: impl FnMut(&Clip) -> Option<RgbaImage>,
 ) -> RgbaImage {
+    // Expand compound clips into their constituents so they render their nested
+    // content (Issue #155). Zero-cost when the project has no compound clips.
+    let flattened;
+    let timeline: &Timeline = if timeline.compound_timelines.is_empty() {
+        timeline
+    } else {
+        flattened = timeline_core::flatten_compound_clips(timeline);
+        &flattened
+    };
+
     let mut canvas = RgbaImage::new(width, height);
     let (cw, ch) = (width as f64, height as f64);
 
@@ -976,6 +986,31 @@ mod tests {
         });
         assert_eq!(px(&out, 0, 0), [0, 255, 0, 255], "top-left is the green overlay");
         assert_eq!(px(&out, 3, 3), [255, 0, 0, 255], "elsewhere is the red bg");
+    }
+
+    #[test]
+    fn compose_renders_compound_clip_nested_content() {
+        // A compound clip wrapping one full-frame clip must render the nested
+        // clip, not an empty frame (Issue #155 flatten inside compose_frame).
+        let inner = clip("inner", "vid", 0, 30);
+        let nested = tl(vec![inner]);
+        let mut compound = clip("compound", "n1", 0, 30);
+        compound.compound_timeline_id = Some("n1".into());
+        let mut timeline = tl(vec![compound]);
+        timeline
+            .compound_timelines
+            .insert("n1".into(), Box::new(nested));
+
+        let out = compose_frame(&timeline, &MediaManifest::default(), 5, 4, 4, |c| {
+            // The compound clip's own ref ("n1") must never be fetched — only the
+            // flattened constituent's ("vid").
+            if c.media_ref == "vid" {
+                Some(RgbaImage::solid(4, 4, [0, 0, 255, 255]))
+            } else {
+                None
+            }
+        });
+        assert_eq!(px(&out, 2, 2), [0, 0, 255, 255], "nested clip rendered");
     }
 
     #[test]

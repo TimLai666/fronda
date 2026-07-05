@@ -85,6 +85,15 @@ impl XmlExport {
         media_timecodes: Option<&HashMap<String, SourceTimecode>>,
         manifest: Option<&MediaManifest>,
     ) -> String {
+        // Expand compound clips so their nested content exports (Issue #155).
+        let flattened;
+        let timeline: &Timeline = if timeline.compound_timelines.is_empty() {
+            timeline
+        } else {
+            flattened = timeline_core::flatten_compound_clips(timeline);
+            &flattened
+        };
+
         // XML-011 dedup: a full <file> is emitted once per (media_ref, is_audio);
         // later uses become self-closing <file id="…"/> references.
         let mut emitted: HashSet<String> = HashSet::new();
