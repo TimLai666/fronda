@@ -653,10 +653,7 @@ impl ToolExecutor {
             "sync_audio_clips" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_sync_audio_clips, args)
             }
-            "set_clip_audio_effects" | "set_clip_noise_reduction" => Err(
-                "Audio effects and noise reduction aren't implemented through the agent yet."
-                    .to_string(),
-            ),
+            "denoise_audio" => self.exec_mut(tool_name, ToolExecutor::cmd_denoise_audio, args),
 
             // ── Read-only tools ──────────────────────────────────────────
             "get_media" => self.cmd_get_media(args),
@@ -3446,6 +3443,74 @@ impl ToolExecutor {
                     .unwrap_or_default()
             }]
         }))
+    }
+
+    /// DENOISE_AUDIO (upstream #251): toggle the `audio.denoise` effect on audio
+    /// clips, mirroring Swift `EditorViewModel.setDenoise` merge semantics exactly:
+    /// re-enabling without a strength keeps each clip's existing amount; only
+    /// clips with no denoise get the 0.6 default. The DeepFilterNet3 bake itself
+    /// is a host concern — the setting round-trips with Palmier Pro.
+    fn cmd_denoise_audio(&mut self, args: &Value) -> Result<Value, String> {
+        const DENOISE_TYPE: &str = "audio.denoise";
+        const DEFAULT_AMOUNT: f64 = 0.6;
+
+        let clip_ids: Vec<String> = args
+            .get("clipIds")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if clip_ids.is_empty() {
+            return Err("clipIds is empty.".to_string());
+        }
+        let strength = args.get("strength").and_then(|v| v.as_f64());
+        if let Some(s) = strength {
+            if !(0.0..=100.0).contains(&s) {
+                return Err(format!("strength must be 0–100 (got {s})"));
+            }
+        }
+        let enabled = args.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+
+        // Validate every clip up-front (Swift does) so one bad id mutates nothing.
+        for id in &clip_ids {
+            let Some(loc) = timeline_core::find_clip(&self.timeline, id) else {
+                return Err(format!("Clip not found: {id}"));
+            };
+            let clip = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            if clip.media_type != ClipType::Audio {
+                return Err(format!(
+                    "Clip {id} is a {:?} clip; denoise_audio needs an audio clip.",
+                    clip.media_type
+                ));
+            }
+        }
+
+        let clamped = strength.map(|s| (s / 100.0).clamp(0.0, 1.0));
+        for id in &clip_ids {
+            let loc = timeline_core::find_clip(&self.timeline, id).expect("validated above");
+            let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            let mut stack = clip.effects.take().unwrap_or_default();
+            let current_amount = stack
+                .iter()
+                .find(|e| e.r#type == DENOISE_TYPE)
+                .and_then(|e| e.params.get("amount"))
+                .and_then(|p| p.value);
+            stack.retain(|e| e.r#type != DENOISE_TYPE);
+            if enabled {
+                let value = clamped.or(current_amount).unwrap_or(DEFAULT_AMOUNT);
+                stack.push(Effect::new(DENOISE_TYPE, vec![("amount", value)]));
+            }
+            clip.effects = if stack.is_empty() { None } else { Some(stack) };
+        }
+
+        let count = clip_ids.len();
+        let noun = if count == 1 { "clip" } else { "clips" };
+        let text = if enabled {
+            let pct = (clamped.unwrap_or(DEFAULT_AMOUNT) * 100.0).round() as i64;
+            format!("Denoise enabled at {pct}% on {count} {noun}.")
+        } else {
+            format!("Disabled denoise on {count} {noun}.")
+        };
+        Ok(json!({ "content": [{ "type": "text", "text": text }] }))
     }
 
     fn cmd_import_folder(&mut self, args: &Value) -> Result<Value, String> {
@@ -7601,6 +7666,79 @@ mod tests {
             .unwrap_err();
         assert!(!err.contains("Unknown tool"), "{err}");
         assert!(err.contains("unavailable"), "{err}");
+    }
+
+    fn denoise_exec() -> (ToolExecutor, String) {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("a1", 4.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        let id = exec.timeline().tracks[0].clips[0].id.clone();
+        (exec, id)
+    }
+
+    fn denoise_amount_of(exec: &ToolExecutor, id: &str) -> Option<f64> {
+        exec.timeline()
+            .tracks
+            .iter()
+            .flat_map(|t| &t.clips)
+            .find(|c| c.id == id)
+            .and_then(|c| c.effects.as_ref())
+            .and_then(|es| es.iter().find(|e| e.r#type == "audio.denoise"))
+            .and_then(|e| e.params.get("amount"))
+            .and_then(|p| p.value)
+    }
+
+    #[test]
+    fn denoise_audio_sets_effect_with_strength() {
+        let (mut exec, id) = denoise_exec();
+        let res = exec
+            .execute("denoise_audio", &json!({"clipIds": [id], "strength": 80}))
+            .unwrap();
+        assert!(res["content"][0]["text"].as_str().unwrap().contains("80%"));
+        assert_eq!(denoise_amount_of(&exec, &id), Some(0.8));
+    }
+
+    #[test]
+    fn denoise_audio_reenable_without_strength_keeps_custom_amount() {
+        // The #251 merge fix: enabling on a clip that already has a custom
+        // strength must NOT clobber it with the default.
+        let (mut exec, id) = denoise_exec();
+        exec.execute("denoise_audio", &json!({"clipIds": [id], "strength": 25}))
+            .unwrap();
+        exec.execute("denoise_audio", &json!({"clipIds": [id]})).unwrap();
+        assert_eq!(denoise_amount_of(&exec, &id), Some(0.25), "custom amount kept");
+    }
+
+    #[test]
+    fn denoise_audio_disable_removes_effect() {
+        let (mut exec, id) = denoise_exec();
+        exec.execute("denoise_audio", &json!({"clipIds": [id]})).unwrap();
+        assert_eq!(denoise_amount_of(&exec, &id), Some(0.6), "default 60%");
+        exec.execute("denoise_audio", &json!({"clipIds": [id], "enabled": false}))
+            .unwrap();
+        assert_eq!(denoise_amount_of(&exec, &id), None);
+        let clip = exec.timeline().tracks[0].clips.iter().find(|c| c.id == id).unwrap();
+        assert!(clip.effects.is_none(), "empty stack collapses to None (Swift parity)");
+    }
+
+    #[test]
+    fn denoise_audio_rejects_non_audio_and_bad_strength() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("v1", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute("add_clips", &json!({"mediaIds": ["v1"]})).unwrap();
+        let vid = exec.timeline().tracks[0].clips[0].id.clone();
+        let err = exec
+            .execute("denoise_audio", &json!({"clipIds": [vid]}))
+            .unwrap_err();
+        assert!(err.contains("needs an audio clip"), "{err}");
+        let err2 = exec
+            .execute("denoise_audio", &json!({"clipIds": [vid], "strength": 150}))
+            .unwrap_err();
+        assert!(err2.contains("0–100"), "{err2}");
+        let err3 = exec.execute("denoise_audio", &json!({"clipIds": []})).unwrap_err();
+        assert!(err3.contains("empty"), "{err3}");
     }
 
     #[test]

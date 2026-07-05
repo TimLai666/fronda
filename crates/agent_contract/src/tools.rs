@@ -1,4 +1,4 @@
-//! All 60 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 59 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -6,6 +6,8 @@
 //! Issue #155: added create_compound_clip, dissolve_compound_clip (51 → 53).
 //! Issue #154: added import_xml (53 → 54).
 //! Issue #119: added sync_audio_clips (59 → 60).
+//! Upstream #251: replaced the speculative set_clip_noise_reduction/set_clip_audio_effects
+//! (never shipped upstream) with the real denoise_audio tool (60 → 59).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -21,7 +23,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 60 tools exposed to the agent.
+/// Returns all 59 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -80,9 +82,8 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         set_keyframes(),
         set_project_settings(),
         read_skill(),
+        denoise_audio(),
         save_clip_preset(),
-        set_clip_audio_effects(),
-        set_clip_noise_reduction(),
         split_clips(),
         undo(),
         upscale_media(),
@@ -963,58 +964,26 @@ fn object_any(description: &str) -> Value {
     Value::Object(map)
 }
 
-// ── Issues #165/#158: audio effect MCP tools ─────────────────────────────────
+// ── Upstream #251: audio denoise MCP tool ────────────────────────────────────
 
-fn set_clip_noise_reduction() -> ToolDefinition {
+fn denoise_audio() -> ToolDefinition {
     ToolDefinition {
-        name: "set_clip_noise_reduction",
-        description: "Apply noise reduction to a clip's audio. \
-            Uses on-device audio processing (VoiceProcessingIO / AVAudioUnitEQ). \
-            No AI dependency. Issue #165.",
+        name: "denoise_audio",
+        description: "Remove background noise from audio clips using an on-device \
+            speech-enhancement model (DeepFilterNet3). strength is a dry/wet percentage: \
+            0 leaves the audio untouched, 100 is fully denoised. Full strength can sound \
+            thin or over-gated on real-world recordings, so the default is 60. The bake \
+            runs in the background — the timeline updates automatically when it finishes; \
+            no need to poll. Pass enabled:false to turn denoise off. Undoable.",
         input_schema: object(&[
-            ("clipId", string("Clip id (must have an audio track)")),
+            ("clipIds", array("Audio clip ids from get_timeline.")),
             (
-                "amount",
-                number("Reduction strength 0.0 (off) to 1.0 (maximum). Default: 0.5."),
-            ),
-            (
-                "sensitivity",
-                number("Noise floor sensitivity 0.0 to 1.0. Default: 0.5."),
-            ),
-            (
-                "smoothing",
-                string("Temporal smoothing: 'low', 'medium', or 'high'. Default: 'medium'."),
+                "strength",
+                number("Dry/wet mix as a percentage, 0–100 (default 60). Lower it if voices sound thin or over-compressed."),
             ),
             (
                 "enabled",
-                boolean("Enable or disable the effect. Default: true."),
-            ),
-        ]),
-    }
-}
-
-fn set_clip_audio_effects() -> ToolDefinition {
-    ToolDefinition {
-        name: "set_clip_audio_effects",
-        description: "Apply audio shaping effects (EQ, compressor, pitch, reverb) to a clip. \
-            Issue #158.",
-        input_schema: object(&[
-            ("clipId", string("Clip id (must have an audio track)")),
-            (
-                "eq",
-                object_any("Optional EQ settings: {lowGain, midGain, highGain} in dB (-12 to 12)"),
-            ),
-            (
-                "compressor",
-                object_any("Optional compressor: {threshold_db, ratio, attack_ms, release_ms}"),
-            ),
-            (
-                "pitchShift",
-                number("Pitch shift in semitones (-12 to 12). Default: 0."),
-            ),
-            (
-                "reverb",
-                object_any("Optional reverb: {roomSize 0-1, wetDry 0-1}"),
+                boolean("Default true. false removes the denoise effect from the clips."),
             ),
         ]),
     }
@@ -1210,8 +1179,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            60,
-            "TDEF-001: 60 tools (59 + sync_audio_clips, #119)"
+            59,
+            "TDEF-001: 59 tools (see the header history; denoise_audio replaced the two speculative audio stubs)"
         );
     }
 
@@ -1240,7 +1209,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 60, "all 60 tool names must be unique");
+        assert_eq!(names.len(), 59, "all 59 tool names must be unique");
     }
 
     #[test]

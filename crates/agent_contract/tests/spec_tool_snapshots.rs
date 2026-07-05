@@ -13,8 +13,8 @@ fn tdef_001_exactly_54_tools() {
     let tools = all_tools();
     assert_eq!(
         tools.len(),
-        60,
-        "TDEF-001: 60 tools (59 + sync_audio_clips, #119)"
+        59,
+        "TDEF-001: 59 tools (see the header history; denoise_audio replaced the two speculative audio stubs)"
     );
 }
 
@@ -45,7 +45,7 @@ fn tdef_002_all_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 60, "all 60 tool names must be unique");
+    assert_eq!(names.len(), 59, "all 59 tool names must be unique");
 }
 
 // ── TDEF-003: Each tool has a valid JSON schema ──────────────────────────────

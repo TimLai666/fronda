@@ -767,8 +767,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            60,
-            "MCP-003: 60 tools (59 + sync_audio_clips #119)"
+            59,
+            "MCP-003: 59 tools (denoise_audio replaced the two speculative audio stubs)"
         );
     }
 
