@@ -331,22 +331,8 @@ impl TimelineView {
             "escape" => {
                 self.tab_editing = None;
             }
-            "backspace" => {
-                text.pop();
-            }
-            // key_char is None for space on Windows — insert it explicitly.
-            "space" => {
-                text.push(' ');
-            }
             _ => {
-                let mods = &event.keystroke.modifiers;
-                if !mods.control && !mods.platform && !mods.function {
-                    if let Some(ch) = event.keystroke.key_char.as_deref() {
-                        if !ch.chars().any(char::is_control) {
-                            text.push_str(ch);
-                        }
-                    }
-                }
+                crate::text_input::apply_editing_keystroke(text, &event.keystroke);
             }
         }
         cx.stop_propagation();

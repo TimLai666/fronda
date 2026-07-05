@@ -36,7 +36,6 @@ pub struct ChatView {
     model: ChatPanelModel,
     session_mgr: SessionManager,
     mention_picker: MentionPickerState,
-    shift_held: bool,
     /// Index into AVAILABLE_MODELS (Swift: editor.agentService.selectedModel).
     selected_model_idx: usize,
     /// Whether the model picker dropdown is visible.
@@ -94,7 +93,6 @@ impl ChatView {
             model: ChatPanelModel::default(),
             session_mgr: SessionManager::new(),
             mention_picker: MentionPickerState::new(mention_candidates),
-            shift_held: false,
             selected_model_idx: 1, // claude-sonnet-5 as default
             model_picker_open: false,
             history_open: false,
@@ -176,7 +174,10 @@ impl ChatView {
     ) {
         match event.keystroke.key.as_str() {
             "enter" => {
-                if let Some(agent_text) = self.model.handle_send_action(self.shift_held) {
+                if let Some(agent_text) = self
+                    .model
+                    .handle_send_action(event.keystroke.modifiers.shift)
+                {
                     self.session_mgr.increment_message_count();
                     if self
                         .session_mgr
@@ -211,7 +212,26 @@ impl ChatView {
                     cx.notify();
                 }
             }
-            _ => {}
+            _ => {
+                // Composer typing (backspace/space/printable). While the
+                // mention picker is open, keys are left to the picker UI.
+                if self.model.show_mention_picker {
+                    return;
+                }
+                let edited = crate::text_input::apply_editing_keystroke(
+                    &mut self.model.input.text,
+                    &event.keystroke,
+                );
+                // Consumed keys must not bubble to app_root's global
+                // shortcuts (space=play, q/w=trim, j/k/l=shuttle). Swallow
+                // backspace even on empty text — bubbling would hit the
+                // global Delete and remove selected clips.
+                if edited || event.keystroke.key.as_str() == "backspace" {
+                    self.model.input.cursor_position = self.model.input.text.len();
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }
         }
     }
 

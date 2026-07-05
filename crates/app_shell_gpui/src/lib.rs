@@ -67,6 +67,8 @@ pub mod settings_mismatch_view;
 pub mod settings_view;
 pub mod skill_store;
 #[cfg(feature = "desktop-app")]
+pub mod text_input;
+#[cfg(feature = "desktop-app")]
 pub mod theme;
 pub mod timeline_model;
 #[cfg(feature = "desktop-app")]
