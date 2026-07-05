@@ -185,8 +185,12 @@ capabilities through consolidated tools instead — chroma keying via
 `apply_color` (wheels/curves/hue-curves/LUT; our `set_color_grade` overlaps),
 music via `generate_audio` (text-to-music models). Converging on upstream's
 consolidated shapes would break our own MCP surface — a user decision, not
-drift cleanup. `update_text` (upstream's dedicated text-update tool with
-auto-fit box semantics) remains the largest un-ported tool.
+drift cleanup. `update_text` PORTED 2026-07-05 (merge semantics, clipIds +
+captionGroupId addressing, 'off' clears animation; auto-fit box on typography
+changes deferred - needs render-layer text measurement, same as add_texts).
+Remaining un-ported upstream tools: `export_project` (needs an export host
+seam), `send_feedback` (network backend), `get_projects`/`new_project` (#238
+app-nav).
 
 **Resolved 2026-07-05 by the v0.6.1 re-audit:** the speculative
 `set_clip_audio_effects`/`set_clip_noise_reduction` stubs were REMOVED — upstream
