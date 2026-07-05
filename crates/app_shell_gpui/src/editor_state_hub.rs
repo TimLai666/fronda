@@ -84,12 +84,16 @@ impl EditorStateHub {
         Ok(())
     }
 
-    /// Point `create_matte` (#242) at the given project package so it writes mattes into its
-    /// `media/` directory. Called whenever the project root changes.
+    /// Point the project-scoped host seams at the given project package: `create_matte`
+    /// (#242) writes mattes into its `media/` directory, and `remove_silence` (#174)
+    /// decodes clip audio from it. Called whenever the project root changes.
     fn install_matte_writer(&self, root: PathBuf) {
         if let Ok(mut exec) = self.executor.lock() {
             exec.set_matte_writer(std::sync::Arc::new(
-                crate::matte_writer::ProjectMatteWriter::new(root),
+                crate::matte_writer::ProjectMatteWriter::new(root.clone()),
+            ));
+            exec.set_audio_source(std::sync::Arc::new(
+                crate::audio_source::ProjectAudioSource::new(root),
             ));
         }
     }

@@ -11,6 +11,7 @@ pub mod app_root;
 #[cfg(feature = "desktop-app")]
 pub mod assets;
 pub mod audio_export;
+pub mod audio_source;
 #[cfg(feature = "desktop-app")]
 pub mod chat_history_view;
 #[cfg(feature = "desktop-app")]
