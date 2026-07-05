@@ -64,15 +64,6 @@ impl FcpxmlExport {
         target: FcpxmlTarget,
         timelines: &std::collections::HashMap<String, Timeline>,
     ) -> String {
-        let flattened;
-        let timeline = if timelines.is_empty() {
-            timeline
-        } else {
-            flattened =
-                timeline_core::flatten_nests(timeline, &|id: &str| timelines.get(id).cloned());
-            &flattened
-        };
-
         let fps = timeline.fps.max(1);
         let total = timeline_total_frames(timeline).max(1);
 
@@ -108,11 +99,50 @@ impl FcpxmlExport {
         // (media_ref, asset_id, format_id) in resource order.
         let mut resources: Vec<(String, String, Option<String>)> = Vec::new();
         let mut counter = 2usize;
-        for track in &timeline.tracks {
+        // Nested timelines become <media><sequence> compound resources (#255):
+        // BFS over sequence carriers collects reachable, NON-EMPTY children in
+        // discovery order (nest1, nest2, ...) and every reachable timeline
+        // contributes its media assets to the resource pool.
+        let mut nests: Vec<(String, Timeline)> = Vec::new();
+        let mut nest_index: BTreeMap<String, String> = BTreeMap::new();
+        let mut walk: Vec<&Timeline> = vec![timeline];
+        let mut visited: std::collections::HashSet<String> = Default::default();
+        let mut depth = 0;
+        while !walk.is_empty() && depth <= timeline_core::NEST_MAX_DEPTH {
+            let mut next: Vec<&Timeline> = Vec::new();
+            for t in walk {
+                if !visited.insert(t.id.clone()) {
+                    continue;
+                }
+                for clip in t.tracks.iter().flat_map(|tr| &tr.clips) {
+                    if clip.source_clip_type != ClipType::Sequence {
+                        continue;
+                    }
+                    if let Some(child) = timelines.get(&clip.media_ref) {
+                        if timeline_total_frames(child) > 0
+                            && !nest_index.contains_key(&child.id)
+                        {
+                            let media_id = format!("nest{}", nests.len() + 1);
+                            nest_index.insert(child.id.clone(), media_id.clone());
+                            nests.push((media_id, child.clone()));
+                            next.push(child);
+                        }
+                    }
+                }
+            }
+            walk = next;
+            depth += 1;
+        }
+        let all_timelines: Vec<&Timeline> = std::iter::once(timeline)
+            .chain(nests.iter().map(|(_, t)| t))
+            .collect();
+        for t in &all_timelines {
+            for track in &t.tracks {
             for clip in &track.clips {
                 if clip.media_ref.is_empty()
                     || clip.media_type == ClipType::Text
                     || clip.media_type == ClipType::Shape
+                    || clip.source_clip_type == ClipType::Sequence
                 {
                     continue;
                 }
@@ -137,6 +167,7 @@ impl FcpxmlExport {
                 counter += 1;
                 asset_ids.insert(clip.media_ref.clone(), asset_id.clone());
                 resources.push((clip.media_ref.clone(), asset_id, format_id));
+            }
             }
         }
 
@@ -183,10 +214,13 @@ impl FcpxmlExport {
             write_asset(&mut xml, asset_id, format_id.as_deref(), media_ref, manifest, fps);
         }
         // Title generator effect, emitted once when the timeline has any text overlay (#254).
-        let has_titles = timeline.tracks.iter().flat_map(|t| &t.clips).any(|c| {
-            c.media_type == ClipType::Text
-                && c.text_content.as_ref().is_some_and(|s| !s.is_empty())
-        });
+        let has_titles = all_timelines
+            .iter()
+            .flat_map(|t| t.tracks.iter().flat_map(|tr| &tr.clips))
+            .any(|c| {
+                c.media_type == ClipType::Text
+                    && c.text_content.as_ref().is_some_and(|s| !s.is_empty())
+            });
         if has_titles {
             writeln!(
                 xml,
@@ -194,11 +228,82 @@ impl FcpxmlExport {
             )
             .ok();
         }
+        // Nested-timeline compound resources: per-nest format (only when the
+        // child canvas differs from the parent; frameDuration stays on the
+        // PARENT project fps) + <media><sequence><spine><gap> wrapping the
+        // child's story nodes (recursively - a child may hold deeper ref-clips).
+        let mut title_style_id = 0usize;
+        for (media_id, child) in &nests {
+            let nest_format_id = if child.width == seq_w && child.height == seq_h {
+                "r1".to_string()
+            } else {
+                format!("fmt-{media_id}")
+            };
+            if nest_format_id != "r1" {
+                writeln!(
+                    xml,
+                    "    <format id=\"{nest_format_id}\" name=\"{}\" frameDuration=\"{}\" width=\"{}\" height=\"{}\" colorSpace=\"1-1-1 (Rec. 709)\"/>",
+                    sequence_format_name(child.width.max(1), child.height.max(1), fps as f64),
+                    frame_duration_str(fps as f64),
+                    child.width.max(1),
+                    child.height.max(1),
+                )
+                .ok();
+            }
+            let child_total = timeline_total_frames(child).max(1);
+            writeln!(
+                xml,
+                "    <media id=\"{media_id}\" name=\"{}\">",
+                xml_escape(&child.name)
+            )
+            .ok();
+            writeln!(
+                xml,
+                "      <sequence format=\"{nest_format_id}\" duration=\"{}\" tcStart=\"0s\" tcFormat=\"NDF\" audioLayout=\"stereo\" audioRate=\"48k\">",
+                time_str(child_total, fps)
+            )
+            .ok();
+            writeln!(xml, "        <spine>").ok();
+            writeln!(
+                xml,
+                "          <gap name=\"Timeline\" offset=\"0s\" start=\"0s\" duration=\"{}\">",
+                time_str(child_total, fps)
+            )
+            .ok();
+            write_story_clips(
+                &mut xml,
+                child,
+                manifest,
+                &asset_ids,
+                &format_by_ref,
+                &nest_index,
+                &nests_names(&nests),
+                seq_w,
+                seq_h,
+                fps,
+                target,
+                &mut title_style_id,
+            );
+            writeln!(xml, "          </gap>").ok();
+            writeln!(xml, "        </spine>").ok();
+            writeln!(xml, "      </sequence>").ok();
+            writeln!(xml, "    </media>").ok();
+        }
         writeln!(xml, "  </resources>").ok();
 
         writeln!(xml, "  <library>").ok();
         writeln!(xml, "    <event name=\"Fronda\">").ok();
-        writeln!(xml, "      <project name=\"Timeline\">").ok();
+        let project_name = if timeline.name.is_empty() {
+            "Timeline"
+        } else {
+            timeline.name.as_str()
+        };
+        writeln!(
+            xml,
+            "      <project name=\"{}\">",
+            xml_escape(project_name)
+        )
+        .ok();
         writeln!(
             xml,
             "        <sequence format=\"r1\" duration=\"{}\" tcStart=\"0s\" tcFormat=\"NDF\">",
@@ -213,13 +318,72 @@ impl FcpxmlExport {
         )
         .ok();
 
+        write_story_clips(
+            &mut xml,
+            timeline,
+            manifest,
+            &asset_ids,
+            &format_by_ref,
+            &nest_index,
+            &nests_names(&nests),
+            seq_w,
+            seq_h,
+            fps,
+            target,
+            &mut title_style_id,
+        );
+        writeln!(xml, "            </gap>").ok();
+        writeln!(xml, "          </spine>").ok();
+        writeln!(xml, "        </sequence>").ok();
+        writeln!(xml, "      </project>").ok();
+        writeln!(xml, "    </event>").ok();
+        writeln!(xml, "  </library>").ok();
+        writeln!(xml, "</fcpxml>").ok();
+        xml
+    }
+}
+
+/// Story-node emission for ONE timeline's tracks (asset-clips, titles, and
+/// nested-timeline <ref-clip> carriers). Used for the root spine and
+/// recursively inside each nest's <media><sequence> gap (#255).
+#[allow(clippy::too_many_arguments)]
+fn write_story_clips(
+    xml: &mut String,
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+    asset_ids: &BTreeMap<String, String>,
+    format_by_ref: &BTreeMap<String, Option<String>>,
+    nest_index: &BTreeMap<String, String>,
+    nest_names: &BTreeMap<String, String>,
+    seq_w: i64,
+    seq_h: i64,
+    fps: i64,
+    target: FcpxmlTarget,
+    title_style_id: &mut usize,
+) {
+    let num_video = timeline
+        .tracks
+        .iter()
+        .filter(|t| t.r#type != ClipType::Audio)
+        .count() as i64;
+    let mut video_seen = 0i64;
+    let mut audio_seen = 0i64;
+    let mut lane_of_track: Vec<i64> = Vec::with_capacity(timeline.tracks.len());
+    for track in &timeline.tracks {
+        if track.r#type == ClipType::Audio {
+            audio_seen += 1;
+            lane_of_track.push(-audio_seen);
+        } else {
+            video_seen += 1;
+            lane_of_track.push(num_video - video_seen + 1);
+        }
+    }
         // A synced A/V pair (same source, timing, trim, speed) collapses into the
         // single video asset-clip — the asset already carries audio — so the audio
         // partner is dropped (upstream #206/#254).
         let (redundant_audio, collapsed_audio_vol) = redundant_audio_clip_ids(timeline);
 
-        let mut title_style_id = 0usize;
-        for (ti, track) in timeline.tracks.iter().enumerate() {
+                for (ti, track) in timeline.tracks.iter().enumerate() {
             let lane = lane_of_track[ti];
             // A hidden video track / muted audio track exports its clips disabled.
             let track_disabled = if track.r#type == ClipType::Audio {
@@ -232,7 +396,7 @@ impl FcpxmlExport {
                 if clip.media_type == ClipType::Text {
                     if let Some(content) = clip.text_content.as_ref().filter(|c| !c.is_empty()) {
                         write_title(
-                            &mut xml,
+                            xml,
                             clip,
                             content,
                             lane,
@@ -240,9 +404,30 @@ impl FcpxmlExport {
                             seq_w,
                             seq_h,
                             track_disabled,
-                            &mut title_style_id,
+                            title_style_id,
                         );
                     }
+                    continue;
+                }
+                // Nested-timeline carrier -> <ref-clip> over its compound resource.
+                if clip.source_clip_type == ClipType::Sequence {
+                    if redundant_audio.contains(&clip.id) {
+                        continue;
+                    }
+                    write_ref_clip(
+                        xml,
+                        clip,
+                        lane,
+                        fps,
+                        seq_w,
+                        seq_h,
+                        manifest,
+                        nest_index,
+                        nest_names,
+                        track_disabled,
+                        collapsed_audio_vol.get(&clip.id).copied(),
+                        target,
+                    );
                     continue;
                 }
                 if clip.media_ref.is_empty()
@@ -322,14 +507,77 @@ impl FcpxmlExport {
             }
         }
 
-        writeln!(xml, "            </gap>").ok();
-        writeln!(xml, "          </spine>").ok();
-        writeln!(xml, "        </sequence>").ok();
-        writeln!(xml, "      </project>").ok();
-        writeln!(xml, "    </event>").ok();
-        writeln!(xml, "  </library>").ok();
-        writeln!(xml, "</fcpxml>").ok();
-        xml
+}
+
+/// child timeline id -> child display name, for ref-clip naming.
+fn nests_names(nests: &[(String, Timeline)]) -> BTreeMap<String, String> {
+    nests
+        .iter()
+        .map(|(_, t)| (t.id.clone(), t.name.clone()))
+        .collect()
+}
+
+/// A sequence carrier as a `<ref-clip>` over its nest's compound resource
+/// (mirrors Swift's assetClipNode sequence branch): duration clamps a frozen
+/// carrier to the child's current length; an AUDIO carrier restricts to
+/// srcEnable="audio" with only a volume child; a VIDEO carrier without a
+/// linked audio partner restricts to srcEnable="video".
+#[allow(clippy::too_many_arguments)]
+fn write_ref_clip(
+    xml: &mut String,
+    clip: &Clip,
+    lane: i64,
+    fps: i64,
+    seq_w: i64,
+    seq_h: i64,
+    manifest: &MediaManifest,
+    nest_index: &BTreeMap<String, String>,
+    nest_names: &BTreeMap<String, String>,
+    track_disabled: bool,
+    collapsed_audio_volume: Option<f64>,
+    target: FcpxmlTarget,
+) {
+    let Some(media_id) = nest_index.get(&clip.media_ref) else {
+        return; // unresolved/empty child exports nothing
+    };
+    let name = nest_names
+        .get(&clip.media_ref)
+        .cloned()
+        .unwrap_or_default();
+    let is_audio = clip.media_type == ClipType::Audio;
+    let enabled_attr = if track_disabled { " enabled=\"0\"" } else { "" };
+    // srcEnable: audio carriers take only the child's audio; a video carrier
+    // WITH a collapsed linked-audio partner takes both (no attribute).
+    let src_enable = if is_audio {
+        " srcEnable=\"audio\""
+    } else if collapsed_audio_volume.is_none() {
+        " srcEnable=\"video\""
+    } else {
+        ""
+    };
+    let open = format!(
+        "              <ref-clip ref=\"{media_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{}\"{src_enable}{enabled_attr}",
+        time_str(clip.start_frame, fps),
+        xml_escape(&name),
+        time_str(clip.duration_frames.max(1), fps),
+        time_str(clip.trim_start_frame.max(0), fps),
+    );
+    let children = clip_adjustments(
+        clip,
+        manifest,
+        is_audio,
+        seq_w,
+        seq_h,
+        fps,
+        collapsed_audio_volume,
+        target,
+    );
+    if children.is_empty() {
+        writeln!(xml, "{open}/>").ok();
+    } else {
+        writeln!(xml, "{open}>").ok();
+        xml.push_str(&children);
+        writeln!(xml, "              </ref-clip>").ok();
     }
 }
 
@@ -363,7 +611,9 @@ fn redundant_audio_clip_ids(
             };
             let bucket = by_group.entry(group).or_default();
             match clip.media_type {
-                ClipType::Video | ClipType::Image => bucket.0.push((clip, !track.hidden)),
+                ClipType::Video | ClipType::Image | ClipType::Sequence => {
+                    bucket.0.push((clip, !track.hidden))
+                }
                 ClipType::Audio => bucket.1.push((clip, !track.muted)),
                 _ => {}
             }
@@ -1157,15 +1407,18 @@ mod tests {
     }
 
     #[test]
-    fn fcpxml_export_flattens_compound_clip_to_nested_asset() {
-        // A nest carrier (Swift #255) must export its child's assets, not an
-        // empty ref. v1 flattens; native <ref-clip> emission is a follow-up.
+    fn fcpxml_export_emits_native_nested_media_and_ref_clips() {
+        // Nest carriers (Swift #255) export as <media><sequence> compound
+        // resources + <ref-clip> carriers, with the child's asset in resources.
         let inner = clip("inner", "v1", ClipType::Video, 0, 30);
         let mut nested = timeline(vec![track(ClipType::Video, vec![inner])]);
         nested.id = "n1".into();
+        nested.name = "Scene A".into();
         let mut carrier = clip("carrier", "n1", ClipType::Sequence, 0, 30);
         carrier.source_clip_type = ClipType::Sequence;
-        let tl = timeline(vec![track(ClipType::Video, vec![carrier])]);
+        let mut carrier2 = clip("carrier2", "n1", ClipType::Sequence, 30, 30);
+        carrier2.source_clip_type = ClipType::Sequence;
+        let tl = timeline(vec![track(ClipType::Video, vec![carrier, carrier2])]);
         let timelines = std::collections::HashMap::from([("n1".to_string(), nested)]);
 
         let mut manifest = MediaManifest::default();
@@ -1179,7 +1432,64 @@ mod tests {
             FcpxmlTarget::Resolve,
             &timelines,
         );
-        assert!(xml.contains("shot.mp4"), "nested asset exported: {xml}");
+        assert!(xml.contains("shot.mp4"), "nested asset in resources: {xml}");
+        assert_eq!(
+            xml.matches("<media id=\"nest1\" name=\"Scene A\">").count(),
+            1,
+            "one compound resource: {xml}"
+        );
+        assert_eq!(
+            xml.matches("<ref-clip ref=\"nest1\"").count(),
+            2,
+            "both carriers reference it"
+        );
+        assert!(
+            xml.contains("srcEnable=\"video\""),
+            "video carrier without linked audio restricts to video"
+        );
+        // The compound's sequence wraps the child's story in a gap.
+        assert!(xml.contains("<gap name=\"Timeline\""), "{xml}");
+    }
+
+    #[test]
+    fn fcpxml_audio_ref_clip_and_two_level_nests() {
+        // grandchild <- middle <- root; the audio carrier gets srcEnable="audio".
+        let inner = clip("inner", "v1", ClipType::Video, 0, 30);
+        let mut grandchild = timeline(vec![track(ClipType::Video, vec![inner])]);
+        grandchild.id = "gc".into();
+        grandchild.name = "Grandchild".into();
+
+        let mut mid_carrier = clip("midc", "gc", ClipType::Sequence, 0, 30);
+        mid_carrier.source_clip_type = ClipType::Sequence;
+        let mut middle = timeline(vec![track(ClipType::Video, vec![mid_carrier])]);
+        middle.id = "mid".into();
+        middle.name = "Middle".into();
+
+        let mut vid_carrier = clip("rv", "mid", ClipType::Sequence, 0, 30);
+        vid_carrier.source_clip_type = ClipType::Sequence;
+        let mut aud_carrier = clip("ra", "mid", ClipType::Audio, 0, 30);
+        aud_carrier.source_clip_type = ClipType::Sequence;
+        let root = timeline(vec![
+            track(ClipType::Video, vec![vid_carrier]),
+            track(ClipType::Audio, vec![aud_carrier]),
+        ]);
+        let timelines = std::collections::HashMap::from([
+            ("gc".to_string(), grandchild),
+            ("mid".to_string(), middle),
+        ]);
+
+        let xml = FcpxmlExport::export_with_target_and_timelines(
+            &root,
+            &MediaManifest::default(),
+            FcpxmlTarget::Resolve,
+            &timelines,
+        );
+        assert!(xml.contains("<media id=\"nest1\""), "middle nest: {xml}");
+        assert!(xml.contains("<media id=\"nest2\""), "grandchild nest via recursion");
+        assert!(
+            xml.contains("srcEnable=\"audio\""),
+            "audio carrier restricts to audio: {xml}"
+        );
     }
 
     #[test]
