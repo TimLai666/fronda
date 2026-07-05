@@ -173,14 +173,23 @@ no model change; the DeepFilterNet3 bake is host-deferred).
 ## Upstream re-audit 2026-07-05 (9a3ae50 → 771b63e, v0.6.1)
 
 6 new commits. Substantive: **#251 Audio Enhancer/Denoise** (PORTED — see above)
-and **#255 multiple timelines per project** (3978-line diff, AUDITING —
-`VideoProject.timeline: Timeline` became `projectFile: ProjectFile` with a
-`timelines` array + `ProjectFile.decode` legacy migration; adds nesting
-(EditorViewModel+Nesting), timeline-management agent tools, TimelineTabBar UI,
-and nested-sequence export in both exporters. Compat-critical for project.json;
-parallel audit of the ProjectFile contract / nesting model / tool+exporter deltas
-in progress). Remainder: version bumps + README fix (skipped). Upstream branches
-`feat/audio-suite` and `multicam` exist but are not on main — not audited.
+and **#255 multiple timelines per project** (3978-line diff, PORTED IN LARGE
+PART 2026-07-05; three parallel auditors extracted the exact contracts first).
+Ported: the `ProjectFile` project.json root (legacy fallback mirroring Swift,
+`Timeline.id/name/folderId`, `Track.displayHeight` clamped 32..200, viewStates
+round-trip, sibling-preserving saves incl. the narrow autosave path);
+**nesting realigned** from the speculative #155 `compound_timelines` map to
+Swift's shipped representation (sequence carriers referencing sibling
+timelines — recursive compositor render with group-as-unit carrier transform,
+`flatten_nests` for audio/export, executor sibling store, full app wiring);
+`create_timeline`/`set_active_timeline`/`duplicate_timeline` tools (59→62) +
+`get_timeline` timelines list + prompt paragraph; `add_clips` timelineId
+nesting (linked A/V carriers, empty + cycle rejection). Pending: insert_clips
+nesting, rename/delete_media timeline ids, export timelineId arg, native
+nested-sequence XML/FCPXML emission (v1 flattens, content-correct), timeline
+tab UI. Remainder of the range: version bumps + README fix (skipped). Upstream
+branches `feat/audio-suite` and `multicam` exist but are not on main — not
+audited.
 
 ## Recommended execution order
 
