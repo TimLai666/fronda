@@ -14,7 +14,7 @@ use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, App, AvailableSpace, Bounds,
     ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, SharedString, Style, TextRun, TextStyle, UTF16Selection, UnderlineStyle,
     Window, WrappedLine,
 };

@@ -139,7 +139,26 @@ pub trait ProjectNavigator: Send + Sync {
     fn create(&self, name: Option<&str>) -> Result<OpenedProject, String>;
 }
 
+/// Diagnostics-bearing feedback submission (upstream #152). Built by the executor,
+/// delivered by the host.
+#[derive(Debug, Clone)]
+pub struct FeedbackPayload {
+    pub message: String,
+    pub app_version: String,
+    pub timeline_summary: String,
+}
+
+/// Host seam for `send_feedback`: upstream posts via its account-authenticated
+/// backend, so delivery is host-gated. Unset on the pure/MCP path, where the
+/// tool reports it's unavailable.
+pub trait FeedbackSender: Send + Sync {
+    fn send(&self, payload: &FeedbackPayload) -> Result<(), String>;
+}
+
 const DEFAULT_CLIP_DURATION_FRAMES: i64 = 150;
+
+/// Upstream #152: at most this many feedback sends per session.
+const FEEDBACK_SESSION_CAP: usize = 8;
 
 /// Resolved clip placement geometry from optional agent args + manifest entry.
 struct ResolvedPlacement {
@@ -506,6 +525,13 @@ pub struct ToolExecutor {
     project_lister: Option<Arc<dyn ProjectLister>>,
     /// Host navigator for open_project/new_project. `None` on the pure path.
     project_navigator: Option<Arc<dyn ProjectNavigator>>,
+    /// Host feedback backend for `send_feedback` (#152). `None` on the pure/MCP path,
+    /// where the tool reports it's unavailable.
+    feedback_sender: Option<Arc<dyn FeedbackSender>>,
+    /// Messages already sent this session (#152 dedup).
+    feedback_sent_messages: std::collections::HashSet<String>,
+    /// Successful sends this session (#152 cap).
+    feedback_sent_count: usize,
     /// The project's OTHER timelines (upstream #255) — nest carriers resolve
     /// their children here by id. The active timeline stays in `timeline`.
     sibling_timelines: Vec<Timeline>,
@@ -544,6 +570,9 @@ impl ToolExecutor {
             export_host: None,
             project_lister: None,
             project_navigator: None,
+            feedback_sender: None,
+            feedback_sent_messages: std::collections::HashSet::new(),
+            feedback_sent_count: 0,
             sibling_timelines: Vec::new(),
         }
     }
@@ -580,6 +609,11 @@ impl ToolExecutor {
     /// Install the host navigator for open_project/new_project.
     pub fn set_project_navigator(&mut self, nav: Arc<dyn ProjectNavigator>) {
         self.project_navigator = Some(nav);
+    }
+
+    /// Install the host feedback backend for `send_feedback` (#152).
+    pub fn set_feedback_sender(&mut self, sender: Arc<dyn FeedbackSender>) {
+        self.feedback_sender = Some(sender);
     }
 
     /// Replace the project's sibling timelines (upstream #255). The app shell
@@ -783,6 +817,7 @@ impl ToolExecutor {
             }
             "export_project" => self.cmd_export_project(args),
             "get_projects" => self.cmd_get_projects(),
+            "send_feedback" => self.cmd_send_feedback(args),
             "update_text" => self.exec_mut(tool_name, ToolExecutor::cmd_update_text, args),
             "create_timeline" => self.cmd_create_timeline(args),
             "set_active_timeline" => self.cmd_set_active_timeline(args),
@@ -4439,6 +4474,53 @@ impl ToolExecutor {
                 "text": serde_json::to_string_pretty(&out).unwrap_or_default()
             }]
         }))
+    }
+
+    /// SEND_FEEDBACK: submit product feedback with diagnostics (upstream #152).
+    /// Session dedup + cap count successful sends only, so a failed send stays retryable.
+    fn cmd_send_feedback(&mut self, args: &Value) -> Result<Value, String> {
+        let message = args
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .ok_or_else(|| "send_feedback requires a non-empty 'message'.".to_string())?;
+        if self.feedback_sent_messages.contains(message) {
+            return Err(
+                "Duplicate feedback: this exact message was already sent this session.".to_string(),
+            );
+        }
+        if self.feedback_sent_count >= FEEDBACK_SESSION_CAP {
+            return Err(format!(
+                "Feedback limit reached: at most {FEEDBACK_SESSION_CAP} messages per session."
+            ));
+        }
+        let sender = self.feedback_sender.clone().ok_or_else(|| {
+            "send_feedback is unavailable: no feedback backend is connected (run it from the app)."
+                .to_string()
+        })?;
+        let clips: usize = self.timeline.tracks.iter().map(|t| t.clips.len()).sum();
+        let payload = FeedbackPayload {
+            message: message.to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            timeline_summary: format!(
+                "{} — {}x{} @ {}fps, {} tracks, {} clips, {} frames",
+                self.timeline.name,
+                self.timeline.width,
+                self.timeline.height,
+                self.timeline.fps,
+                self.timeline.tracks.len(),
+                clips,
+                timeline_core::TimelineMathExt::total_frames(&self.timeline)
+            ),
+        };
+        sender.send(&payload)?;
+        self.feedback_sent_messages.insert(message.to_string());
+        self.feedback_sent_count += 1;
+        Ok(json!({ "content": [{ "type": "text", "text": format!(
+            "Feedback sent ({} of {FEEDBACK_SESSION_CAP} this session).",
+            self.feedback_sent_count
+        )}]}))
     }
 
     /// Swap this executor to a navigator-provided project.
@@ -9494,5 +9576,119 @@ mod tests {
         assert_eq!(exec.timeline().fps, 60);
         assert!(exec.media_manifest().folders.is_empty());
         assert!(exec.undo_stack().is_empty());
+    }
+
+    // ── send_feedback (#152: seam + session dedup + cap) ───────────────
+
+    #[derive(Default)]
+    struct MockFeedbackSender {
+        sent: std::sync::Mutex<Vec<FeedbackPayload>>,
+    }
+
+    impl FeedbackSender for MockFeedbackSender {
+        fn send(&self, payload: &FeedbackPayload) -> Result<(), String> {
+            self.sent.lock().unwrap().push(payload.clone());
+            Ok(())
+        }
+    }
+
+    struct FailingFeedbackSender;
+    impl FeedbackSender for FailingFeedbackSender {
+        fn send(&self, _: &FeedbackPayload) -> Result<(), String> {
+            Err("backend offline".into())
+        }
+    }
+
+    #[test]
+    fn send_feedback_unavailable_without_sender() {
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        let err = exec
+            .execute("send_feedback", &json!({"message": "The preview flickers"}))
+            .unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
+        assert!(err.contains("feedback"), "{err}");
+    }
+
+    #[test]
+    fn send_feedback_requires_a_message() {
+        let sender = std::sync::Arc::new(MockFeedbackSender::default());
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        exec.set_feedback_sender(sender.clone());
+        assert!(exec.execute("send_feedback", &json!({})).is_err());
+        assert!(exec
+            .execute("send_feedback", &json!({"message": "   "}))
+            .is_err());
+        assert!(sender.sent.lock().unwrap().is_empty(), "sender never invoked");
+    }
+
+    #[test]
+    fn send_feedback_delivers_payload_with_diagnostics() {
+        let sender = std::sync::Arc::new(MockFeedbackSender::default());
+        let timeline = Timeline {
+            name: "Cut A".into(),
+            fps: 30,
+            ..Default::default()
+        };
+        let mut exec = ToolExecutor::new(timeline, MediaManifest::default());
+        exec.set_feedback_sender(sender.clone());
+        let res = exec
+            .execute("send_feedback", &json!({"message": "Export dialog loses focus"}))
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Feedback sent"), "{text}");
+        let sent = sender.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].message, "Export dialog loses focus");
+        assert!(!sent[0].app_version.is_empty());
+        assert!(sent[0].timeline_summary.contains("Cut A"), "{}", sent[0].timeline_summary);
+        assert!(sent[0].timeline_summary.contains("30fps"), "{}", sent[0].timeline_summary);
+    }
+
+    #[test]
+    fn send_feedback_rejects_duplicate_message() {
+        let sender = std::sync::Arc::new(MockFeedbackSender::default());
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        exec.set_feedback_sender(sender.clone());
+        exec.execute("send_feedback", &json!({"message": "same words"}))
+            .unwrap();
+        let err = exec
+            .execute("send_feedback", &json!({"message": "same words"}))
+            .unwrap_err();
+        assert!(err.contains("already"), "{err}");
+        assert_eq!(sender.sent.lock().unwrap().len(), 1, "sender not invoked again");
+    }
+
+    #[test]
+    fn send_feedback_caps_at_eight_successful_sends() {
+        let sender = std::sync::Arc::new(MockFeedbackSender::default());
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        exec.set_feedback_sender(sender.clone());
+        exec.execute("send_feedback", &json!({"message": "note 0"}))
+            .unwrap();
+        // A rejected duplicate must not consume the session budget.
+        exec.execute("send_feedback", &json!({"message": "note 0"}))
+            .unwrap_err();
+        for i in 1..8 {
+            exec.execute("send_feedback", &json!({"message": format!("note {i}")}))
+                .unwrap();
+        }
+        let err = exec
+            .execute("send_feedback", &json!({"message": "note 8"}))
+            .unwrap_err();
+        assert!(err.contains("8"), "{err}");
+        assert_eq!(sender.sent.lock().unwrap().len(), 8, "sender not invoked past the cap");
+    }
+
+    #[test]
+    fn send_feedback_failed_send_not_recorded() {
+        // Cap and dedup count successful sends only — a failed send stays retryable.
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        exec.set_feedback_sender(std::sync::Arc::new(FailingFeedbackSender));
+        assert!(exec
+            .execute("send_feedback", &json!({"message": "retry me"}))
+            .is_err());
+        exec.set_feedback_sender(std::sync::Arc::new(MockFeedbackSender::default()));
+        exec.execute("send_feedback", &json!({"message": "retry me"}))
+            .unwrap();
     }
 }
