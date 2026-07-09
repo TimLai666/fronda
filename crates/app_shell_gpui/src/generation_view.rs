@@ -3,13 +3,14 @@
 //! Covers the Swift GenerationView: type picker, reference tiles, prompt, generate button.
 //! Uses GenerationPanel theme constants for all sizing.
 
+use crate::text_area::{TextArea, TextAreaEvent};
 use crate::theme::{
     Accent, Background, BorderColors, FontSize, GenerationPanel, Opacity, Radius, Spacing, Text,
     TrackColor,
 };
 use gpui::{
-    div, prelude::*, px, svg, App, ClickEvent, Context, FocusHandle, Focusable, Hsla,
-    InteractiveElement, KeyDownEvent, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, svg, App, ClickEvent, Context, Entity, FocusHandle, Focusable, Hsla,
+    InteractiveElement, ParentElement, Render, Styled, Window,
 };
 
 /// AI generation type (matches Swift GenerationType).
@@ -87,38 +88,28 @@ impl Default for GenerationState {
 pub struct GenerationView {
     pub state: GenerationState,
     focus_handle: FocusHandle,
+    /// Multiline prompt editor (IME-capable); `state.prompt` mirrors it.
+    prompt_area: Entity<TextArea>,
 }
 
 impl GenerationView {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let prompt_area = cx.new(|cx| {
+            TextArea::new(cx, "Describe what to generate…")
+                .with_min_lines(3)
+                .with_max_lines(8)
+        });
+        cx.subscribe(&prompt_area, |this, area, event, cx| {
+            if matches!(event, TextAreaEvent::Edited) {
+                this.state.prompt = area.read(cx).text().to_string();
+                cx.notify();
+            }
+        })
+        .detach();
         Self {
             state: GenerationState::default(),
             focus_handle: cx.focus_handle(),
-        }
-    }
-
-    /// Prompt typing (Swift TextEditor: Enter is a newline, not submit).
-    fn handle_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let edited = match event.keystroke.key.as_str() {
-            "enter" => {
-                self.state.prompt.push('\n');
-                true
-            }
-            _ => crate::text_input::apply_editing_keystroke(
-                &mut self.state.prompt,
-                &event.keystroke,
-            ),
-        };
-        // Swallow backspace even on empty text — bubbling would hit the
-        // global Delete shortcut.
-        if edited || event.keystroke.key.as_str() == "backspace" {
-            cx.stop_propagation();
-            cx.notify();
+            prompt_area,
         }
     }
 }
@@ -169,12 +160,6 @@ impl Render for GenerationView {
         let selected = self.state.selected_type;
         let use_first_last = self.state.use_first_last;
         let show_model_picker = self.state.show_model_picker;
-        let prompt_text = if self.state.prompt.is_empty() {
-            "Describe what to generate…".to_string()
-        } else {
-            self.state.prompt.clone()
-        };
-        let is_placeholder = self.state.prompt.is_empty();
         let is_generating = self.state.is_generating;
         let credits = self.state.credits_remaining;
 
@@ -189,7 +174,6 @@ impl Render for GenerationView {
         div()
             .id("generation-panel")
             .track_focus(&self.focus_handle.clone())
-            .on_key_down(cx.listener(Self::handle_key_down))
             .flex()
             .flex_col()
             .size_full()
@@ -455,17 +439,19 @@ impl Render for GenerationView {
                     .min_h(px(GenerationPanel::PROMPT_MIN_HEIGHT))
                     .child(
                         div()
+                            .id("gen-prompt-input")
                             .flex_1()
                             .px(px(Spacing::SM_MD))
                             .pt(px(Spacing::SM_MD))
                             .pb(px(Spacing::XS))
                             .text_size(px(FontSize::SM))
-                            .text_color(if is_placeholder {
-                                Text::MUTED
-                            } else {
-                                Text::PRIMARY
-                            })
-                            .child(prompt_text),
+                            .text_color(Text::PRIMARY)
+                            .cursor_text()
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                window.focus(&this.prompt_area.focus_handle(cx), cx);
+                                cx.notify();
+                            }))
+                            .child(self.prompt_area.clone()),
                     )
                     // Footer row: gear + model picker + generate button
                     .child(
