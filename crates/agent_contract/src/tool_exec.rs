@@ -13,6 +13,7 @@ use core_model::{
     LayoutFit, MatteAspect, MediaManifest, MediaManifestEntry, MediaSource, TextRgba, TextStyle,
     Timeline, Transform, VideoLayout,
 };
+use generation_core::model_catalog;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -29,6 +30,15 @@ pub trait MatteWriter: Send + Sync {
         height: i64,
         base_name: &str,
     ) -> Result<MediaSource, String>;
+}
+
+/// Host seam for model gating (upstream #249): whether the signed-in account
+/// is on a paid plan. The pure executor stays account-free — the app shell
+/// provides the implementation backed by its account service; the MCP/headless
+/// path leaves it unset, which is treated as free tier (paid-only models are
+/// listed as upgrade-required and rejected by the generate tools).
+pub trait AccountState: Send + Sync {
+    fn is_paid(&self) -> bool;
 }
 
 /// Host seam for `remove_silence` (#174): decode a media source's audio to
@@ -490,6 +500,8 @@ pub struct ToolExecutor {
     project_lister: Option<Arc<dyn ProjectLister>>,
     /// Host navigator for open_project/new_project. `None` on the pure path.
     project_navigator: Option<Arc<dyn ProjectNavigator>>,
+    /// Host account state for model gating (#249). `None` = free tier.
+    account_state: Option<Arc<dyn AccountState>>,
     /// The project's OTHER timelines (upstream #255) — nest carriers resolve
     /// their children here by id. The active timeline stays in `timeline`.
     sibling_timelines: Vec<Timeline>,
@@ -527,6 +539,7 @@ impl ToolExecutor {
             export_host: None,
             project_lister: None,
             project_navigator: None,
+            account_state: None,
             sibling_timelines: Vec::new(),
         }
     }
@@ -557,6 +570,16 @@ impl ToolExecutor {
     /// Install the host navigator for open_project/new_project.
     pub fn set_project_navigator(&mut self, nav: Arc<dyn ProjectNavigator>) {
         self.project_navigator = Some(nav);
+    }
+
+    /// Install the host account state for model gating (#249). Unset = free tier.
+    pub fn set_account_state(&mut self, account: Arc<dyn AccountState>) {
+        self.account_state = Some(account);
+    }
+
+    /// Whether the account can use paid-only models. Free tier when no seam is set.
+    pub fn is_paid_account(&self) -> bool {
+        self.account_state.as_ref().is_some_and(|a| a.is_paid())
     }
 
     /// Replace the project's sibling timelines (upstream #255). The app shell
@@ -780,7 +803,7 @@ impl ToolExecutor {
             "get_media" => self.cmd_get_media(args),
             "search_media" => self.cmd_search_media(args),
             "list_folders" => self.cmd_list_folders(),
-            "list_models" => self.cmd_list_models(),
+            "list_models" => self.cmd_list_models(args),
             "inspect_media" => self.cmd_inspect_media(args),
             "inspect_timeline" => self.cmd_inspect_timeline(),
             "get_transcript" => self.cmd_get_transcript(args),
@@ -2765,27 +2788,157 @@ impl ToolExecutor {
         }))
     }
 
-    fn cmd_list_models(&self) -> Result<Value, String> {
+    fn cmd_list_models(&self, args: &Value) -> Result<Value, String> {
+        let filter = args.get("type").and_then(|v| v.as_str());
+        let is_paid = self.is_paid_account();
+        let models: Vec<Value> = model_catalog::catalog()
+            .iter()
+            .filter(|m| filter.is_none() || filter == Some(m.kind_str()))
+            .map(|m| Self::model_entry_json(m, is_paid))
+            .collect();
+        let body = json!({ "models": models, "loaded": true });
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": serde_json::to_string_pretty(&json!({
-                    "video": [
-                        {"id": "gen-3", "name": "Gen-3 Alpha", "status": "available"},
-                        {"id": "kling", "name": "Kling 1.6", "status": "available"}
-                    ],
-                    "image": [
-                        {"id": "sd3", "name": "Stable Diffusion 3", "status": "available"},
-                        {"id": "dalle", "name": "DALL-E 3", "status": "available"}
-                    ],
-                    "audio": [
-                        {"id": "elevenlabs", "name": "ElevenLabs", "status": "available"},
-                        {"id": "music-gen", "name": "MusicGen", "status": "available"}
-                    ]
-                }))
-                .unwrap_or_default()
+                "text": serde_json::to_string_pretty(&body).unwrap_or_default()
             }]
         }))
+    }
+
+    /// One list_models entry (mirrors Swift's videoModelInfo/imageModelInfo/
+    /// audioModelInfo fields), plus #249 gating: paid-only models on a free plan
+    /// are marked unavailable with an upgrade hint rather than hidden.
+    fn model_entry_json(m: &model_catalog::ModelConfig, is_paid: bool) -> Value {
+        let mut info = json!({
+            "id": m.id,
+            "displayName": m.display_name,
+            "type": m.kind_str(),
+        });
+        let obj = info.as_object_mut().unwrap();
+        match &m.caps {
+            model_catalog::ModelCaps::Video(c) => {
+                obj.insert("durations".into(), json!(c.durations));
+                obj.insert("aspectRatios".into(), json!(c.aspect_ratios));
+                obj.insert("supportsFirstFrame".into(), json!(c.supports_first_frame));
+                obj.insert("supportsLastFrame".into(), json!(c.supports_last_frame));
+                obj.insert("supportsReferences".into(), json!(c.supports_references()));
+                if let Some(r) = &c.resolutions {
+                    obj.insert("resolutions".into(), json!(r));
+                }
+                if c.supports_references() {
+                    if c.max_reference_images > 0 {
+                        obj.insert("maxReferenceImages".into(), json!(c.max_reference_images));
+                    }
+                    if c.max_reference_videos > 0 {
+                        obj.insert("maxReferenceVideos".into(), json!(c.max_reference_videos));
+                    }
+                    if c.max_reference_audios > 0 {
+                        obj.insert("maxReferenceAudios".into(), json!(c.max_reference_audios));
+                    }
+                    if let Some(total) = c.max_total_references {
+                        obj.insert("maxTotalReferences".into(), json!(total));
+                    }
+                    if let Some(s) = c.max_combined_video_ref_seconds {
+                        obj.insert("maxCombinedVideoRefSeconds".into(), json!(s as i64));
+                    }
+                    if let Some(s) = c.max_combined_audio_ref_seconds {
+                        obj.insert("maxCombinedAudioRefSeconds".into(), json!(s as i64));
+                    }
+                    if c.frames_and_references_exclusive {
+                        obj.insert("framesAndReferencesExclusive".into(), json!(true));
+                    }
+                    obj.insert("referenceTagNoun".into(), json!(c.reference_tag_noun));
+                }
+                if c.requires_source_video {
+                    obj.insert("requiresSourceVideo".into(), json!(true));
+                }
+            }
+            model_catalog::ModelCaps::Image(c) => {
+                obj.insert("aspectRatios".into(), json!(c.aspect_ratios));
+                obj.insert(
+                    "supportsImageReference".into(),
+                    json!(c.supports_image_reference),
+                );
+                if let Some(r) = &c.resolutions {
+                    obj.insert("resolutions".into(), json!(r));
+                }
+                if let Some(q) = &c.qualities {
+                    obj.insert("qualities".into(), json!(q));
+                }
+            }
+            model_catalog::ModelCaps::Audio(c) => {
+                obj.insert("category".into(), json!(c.category.as_str()));
+                obj.insert("minPromptLength".into(), json!(c.min_prompt_length));
+                obj.insert("supportsLyrics".into(), json!(c.supports_lyrics));
+                obj.insert(
+                    "supportsInstrumental".into(),
+                    json!(c.supports_instrumental),
+                );
+                obj.insert(
+                    "supportsStyleInstructions".into(),
+                    json!(c.supports_style_instructions),
+                );
+                if let Some(voices) = &c.voices {
+                    let sample: Vec<&str> = voices.iter().take(3).copied().collect();
+                    obj.insert("voicesSample".into(), json!(sample));
+                    obj.insert("voiceCount".into(), json!(voices.len()));
+                }
+                if let Some(v) = c.default_voice {
+                    obj.insert("defaultVoice".into(), json!(v));
+                }
+                if let Some(d) = &c.durations {
+                    obj.insert("durations".into(), json!(d));
+                }
+            }
+        }
+        let available = model_catalog::model_available(is_paid, m.paid_only);
+        obj.insert("available".into(), json!(available));
+        if m.paid_only {
+            obj.insert("paidOnly".into(), json!(true));
+        }
+        if !available {
+            obj.insert(
+                "upgrade".into(),
+                json!("Requires a paid plan. Tell the user to subscribe."),
+            );
+        }
+        info
+    }
+
+    /// Resolve a generate-tool model: named id (must exist in `kind`) or the
+    /// first plan-available model, then apply #249 gating.
+    fn resolve_generation_model(
+        &self,
+        kind: generation_core::ModelKind,
+        requested: Option<&str>,
+    ) -> Result<&'static model_catalog::ModelConfig, String> {
+        let model = match requested {
+            Some(id) => {
+                let same_kind = || {
+                    model_catalog::catalog()
+                        .iter()
+                        .filter(|m| m.kind() == kind)
+                        .map(|m| m.id)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                model_catalog::model_by_id(id)
+                    .filter(|m| m.kind() == kind)
+                    .ok_or_else(|| format!("Unknown model '{}'. Available: {}", id, same_kind()))?
+            }
+            None => model_catalog::default_model(kind, self.is_paid_account())?,
+        };
+        self.gate_model(model)?;
+        Ok(model)
+    }
+
+    /// #249: reject paid-only models on a free plan with the require-plan message.
+    fn gate_model(&self, m: &model_catalog::ModelConfig) -> Result<(), String> {
+        if model_catalog::model_available(self.is_paid_account(), m.paid_only) {
+            Ok(())
+        } else {
+            Err(model_catalog::require_plan_message(m.id))
+        }
     }
 
     fn cmd_inspect_media(&self, args: &Value) -> Result<Value, String> {
@@ -5285,10 +5438,12 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing prompt".to_string())?;
         let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0);
-        let model = args
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("gen-3");
+        let model = self
+            .resolve_generation_model(
+                generation_core::ModelKind::Video,
+                args.get("model").and_then(|v| v.as_str()),
+            )?
+            .id;
 
         let entry_id = Uuid::new_v4().to_string();
         let entry = core_model::MediaManifestEntry {
@@ -5359,7 +5514,12 @@ impl ToolExecutor {
             .get("prompt")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing prompt".to_string())?;
-        let model = args.get("model").and_then(|v| v.as_str()).unwrap_or("sd3");
+        let model = self
+            .resolve_generation_model(
+                generation_core::ModelKind::Image,
+                args.get("model").and_then(|v| v.as_str()),
+            )?
+            .id;
 
         let entry_id = Uuid::new_v4().to_string();
         let entry = core_model::MediaManifestEntry {
@@ -5434,6 +5594,9 @@ impl ToolExecutor {
             .get("duration")
             .and_then(|v| v.as_f64())
             .unwrap_or(10.0);
+        if let Some(id) = args.get("model").and_then(|v| v.as_str()) {
+            self.resolve_generation_model(generation_core::ModelKind::Audio, Some(id))?;
+        }
 
         let entry_id = Uuid::new_v4().to_string();
         let entry = core_model::MediaManifestEntry {
@@ -5484,6 +5647,24 @@ impl ToolExecutor {
             .and_then(|v| v.as_f64())
             .unwrap_or(30.0);
         let style = args.get("style").and_then(|v| v.as_str());
+        let model = match args.get("model").and_then(|v| v.as_str()) {
+            Some(id) => {
+                self.resolve_generation_model(generation_core::ModelKind::Audio, Some(id))?
+            }
+            None => {
+                let m = model_catalog::catalog()
+                    .iter()
+                    .filter(|m| {
+                        matches!(&m.caps, model_catalog::ModelCaps::Audio(c)
+                            if c.category == model_catalog::AudioCategory::Music)
+                    })
+                    .find(|m| {
+                        model_catalog::model_available(self.is_paid_account(), m.paid_only)
+                    })
+                    .ok_or_else(|| model_catalog::no_available_model_message("music"))?;
+                m
+            }
+        };
 
         let entry_id = Uuid::new_v4().to_string();
         let entry = core_model::MediaManifestEntry {
@@ -5496,7 +5677,7 @@ impl ToolExecutor {
             duration,
             generation_input: Some(GenerationInput {
                 prompt: prompt.to_string(),
-                model: String::new(),
+                model: model.id.to_string(),
                 duration: (duration * 30.0) as i64,
                 aspect_ratio: String::new(),
                 resolution: None,
@@ -5541,8 +5722,8 @@ impl ToolExecutor {
             "content": [{
                 "type": "text",
                 "text": format!(
-                    "Music generation queued ({:.1}s, style: {:?}, prompt: '{}'). Media id: {}. Actual generation requires a remote API.",
-                    duration, style, prompt, entry_id
+                    "Music generation queued (model: {}, {:.1}s, style: {:?}, prompt: '{}'). Media id: {}. Actual generation requires a remote API.",
+                    model.id, duration, style, prompt, entry_id
                 )
             }],
             "isError": true,
@@ -6731,12 +6912,213 @@ mod tests {
 
     #[test]
     fn exec_018_list_models() {
+        // Real catalog (generation_core), not the old hardcoded placeholders.
         let mut exec = make_executor();
         let result = exec.execute("list_models", &json!({})).unwrap();
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("video"));
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["loaded"], json!(true));
+        let models = body["models"].as_array().unwrap();
+        assert_eq!(models.len(), 19, "10 video + 5 image + 4 audio");
+        let ids: Vec<&str> = models.iter().map(|m| m["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"seedance-2"));
+        assert!(ids.contains(&"nano-banana-pro"));
+        assert!(ids.contains(&"elevenlabs-tts-v3"));
+        assert!(!ids.contains(&"gen-3"), "placeholder list removed");
+        // No account seam installed → free tier; all shipped models are free.
+        assert!(models.iter().all(|m| m["available"] == json!(true)));
+    }
+
+    #[test]
+    fn exec_018_list_models_video_filter_exact() {
+        // Spec: video filter returns exactly the catalog's video entries, in order.
+        let mut exec = make_executor();
+        let result = exec
+            .execute("list_models", &json!({"type": "video"}))
+            .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let models = body["models"].as_array().unwrap();
+        let ids: Vec<&str> = models.iter().map(|m| m["id"].as_str().unwrap()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "seedance-2",
+                "seedance-2-fast",
+                "kling-o3",
+                "kling-v3",
+                "veo3.1-fast",
+                "veo3.1",
+                "veo3.1-lite",
+                "grok-imagine-video",
+                "kling-o3-edit",
+                "kling-v3-motion-control",
+            ]
+        );
+        assert_eq!(models[0]["displayName"], json!("Seedance 2"));
+        assert_eq!(models[0]["type"], json!("video"));
+        assert_eq!(models[0]["durations"].as_array().unwrap().len(), 12);
+        assert_eq!(models[0]["referenceTagNoun"], json!("Image"));
+        assert_eq!(models[2]["displayName"], json!("Kling O3"));
+        assert_eq!(models[2]["maxReferenceImages"], json!(7));
+    }
+
+    #[test]
+    fn exec_018_list_models_audio_filter() {
+        let mut exec = make_executor();
+        let result = exec
+            .execute("list_models", &json!({"type": "audio"}))
+            .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let models = body["models"].as_array().unwrap();
+        let ids: Vec<&str> = models.iter().map(|m| m["id"].as_str().unwrap()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "elevenlabs-tts-v3",
+                "gemini-3.1-flash-tts",
+                "minimax-music-v2.6",
+                "elevenlabs-music",
+            ]
+        );
+        assert_eq!(models[0]["voiceCount"], json!(21));
+        assert_eq!(models[0]["defaultVoice"], json!("Rachel"));
+        assert_eq!(models[0]["voicesSample"].as_array().unwrap().len(), 3);
+        assert_eq!(models[3]["durations"], json!([15, 30, 60, 90, 120, 180]));
+    }
+
+    struct MockAccount {
+        paid: bool,
+    }
+    impl AccountState for MockAccount {
+        fn is_paid(&self) -> bool {
+            self.paid
+        }
+    }
+
+    #[test]
+    fn model_gating_free_tier_defaults_without_seam() {
+        let exec = make_executor();
+        assert!(!exec.is_paid_account(), "no seam installed → free tier");
+    }
+
+    #[test]
+    fn model_gating_seam_reports_paid() {
+        let mut exec = make_executor();
+        exec.set_account_state(Arc::new(MockAccount { paid: true }));
+        assert!(exec.is_paid_account());
+        exec.set_account_state(Arc::new(MockAccount { paid: false }));
+        assert!(!exec.is_paid_account());
+    }
+
+    #[test]
+    fn model_gating_paid_only_entry_marked_not_hidden() {
+        // Spec: a paid_only model on free tier is marked unavailable/upgrade-required
+        // rather than hidden. The shipped catalog has no paid_only entries (the
+        // in-repo source predates #249), so exercise the marking with a synthetic one.
+        let gated = generation_core::model_catalog::ModelConfig {
+            id: "paid-model",
+            display_name: "Paid Model",
+            paid_only: true,
+            caps: generation_core::model_catalog::ModelCaps::Image(
+                generation_core::model_catalog::ImageCaps {
+                    supports_image_reference: false,
+                    max_images: 1,
+                    ..Default::default()
+                },
+            ),
+        };
+        let free = ToolExecutor::model_entry_json(&gated, false);
+        assert_eq!(free["available"], json!(false));
+        assert_eq!(free["paidOnly"], json!(true));
+        assert!(free["upgrade"].as_str().unwrap().contains("paid plan"));
+
+        let paid = ToolExecutor::model_entry_json(&gated, true);
+        assert_eq!(paid["available"], json!(true));
+        assert_eq!(paid["paidOnly"], json!(true));
+        assert!(paid.get("upgrade").is_none());
+    }
+
+    #[test]
+    fn model_gating_generate_rejects_gated_model() {
+        // Spec: generate with a gated model returns an explicit gating error.
+        let gated = generation_core::model_catalog::ModelConfig {
+            id: "paid-model",
+            display_name: "Paid Model",
+            paid_only: true,
+            caps: generation_core::model_catalog::ModelCaps::Video(Default::default()),
+        };
+        let exec = make_executor();
+        let err = exec.gate_model(&gated).unwrap_err();
+        assert!(err.contains("requires a paid plan"), "got: {err}");
+        assert!(err.contains("paid-model"));
+
+        let mut exec = make_executor();
+        exec.set_account_state(Arc::new(MockAccount { paid: true }));
+        assert!(exec.gate_model(&gated).is_ok(), "paid account passes");
+    }
+
+    #[test]
+    fn model_gating_generate_unknown_model_errors() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute(
+                "generate_video",
+                &json!({"prompt": "a fox", "model": "gen-3"}),
+            )
+            .unwrap_err();
+        assert!(err.contains("Unknown model 'gen-3'"), "got: {err}");
+        assert!(err.contains("seedance-2"), "lists available ids: {err}");
+    }
+
+    #[test]
+    fn model_gating_generate_defaults_to_catalog_model() {
+        let mut exec = make_executor();
+        let result = exec
+            .execute("generate_video", &json!({"prompt": "a fox"}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("seedance-2"), "default is first available");
+        assert!(!text.contains("gen-3"));
+        let entry = exec.media_manifest().entries.last().unwrap();
+        assert_eq!(
+            entry.generation_input.as_ref().unwrap().model,
+            "seedance-2"
+        );
+    }
+
+    #[test]
+    fn model_gating_generate_image_real_model_accepted() {
+        let mut exec = make_executor();
+        let result = exec
+            .execute(
+                "generate_image",
+                &json!({"prompt": "a fox", "model": "nano-banana-2"}),
+            )
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("nano-banana-2"));
+        let entry = exec.media_manifest().entries.last().unwrap();
+        assert_eq!(
+            entry.generation_input.as_ref().unwrap().model,
+            "nano-banana-2"
+        );
+    }
+
+    #[test]
+    fn model_gating_generate_music_defaults_to_music_model() {
+        let mut exec = make_executor();
+        let result = exec
+            .execute("generate_music", &json!({"prompt": "calm piano"}))
+            .unwrap();
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("minimax-music-v2.6"), "got: {text}");
+        let entry = exec.media_manifest().entries.last().unwrap();
+        assert_eq!(
+            entry.generation_input.as_ref().unwrap().model,
+            "minimax-music-v2.6"
+        );
     }
 
     #[test]

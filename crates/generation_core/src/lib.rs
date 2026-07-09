@@ -10,6 +10,7 @@ pub mod backend_config;
 pub mod export_panel;
 pub mod generation_payload;
 pub mod llm_config;
+pub mod model_catalog;
 
 use core_model::GenerationInput;
 use std::collections::HashMap;
