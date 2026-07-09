@@ -137,7 +137,7 @@ impl AppRoot {
     pub fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let modifiers = menu::Modifiers {
@@ -147,12 +147,30 @@ impl AppRoot {
             control: event.keystroke.modifiers.control,
         };
 
+        // Typing-conflicting chords are dispatched by the binding system
+        // (global_shortcuts, "!input" predicate); re-routing them here would
+        // fire them while a text input has focus.
+        if menu::is_text_conflicting(&modifiers) {
+            return;
+        }
+
         let Some(action) = menu::route_shortcut(&event.keystroke.key, &modifiers) else {
             return;
         };
 
         cx.stop_propagation();
+        self.perform_menu_action(action, window, cx);
+    }
 
+    /// Single dispatch point for shortcut actions (chorded shortcuts via
+    /// handle_key_down, modifier-free ones via the global_shortcuts
+    /// bindings).
+    pub fn perform_menu_action(
+        &mut self,
+        action: menu::MenuAction,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match action {
             menu::MenuAction::NewProject => {
                 // Fresh shared state so the UI and MCP observe the same new project.
@@ -971,6 +989,79 @@ impl Render for AppRoot {
             .id("fronda-root")
             .track_focus(&self.focus_handle.clone())
             .on_key_down(cx.listener(Self::handle_key_down))
+            .on_action(cx.listener(|this, _: &crate::global_shortcuts::PlayPause, w, cx| {
+                this.perform_menu_action(menu::MenuAction::PlayPause, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::global_shortcuts::PlayBackward, w, cx| {
+                this.perform_menu_action(menu::MenuAction::PlayBackward, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::global_shortcuts::PauseJkl, w, cx| {
+                this.perform_menu_action(menu::MenuAction::PauseJkl, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::global_shortcuts::PlayForward, w, cx| {
+                this.perform_menu_action(menu::MenuAction::PlayForward, w, cx)
+            }))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::StepFrameBackward, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::StepFrameBackward, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::StepFrameForward, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::StepFrameForward, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::SkipFramesBackward, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::SkipFramesBackward, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::SkipFramesForward, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::SkipFramesForward, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::TrimStartToPlayhead, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::TrimStartToPlayhead, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::TrimEndToPlayhead, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::TrimEndToPlayhead, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::DeleteSelection, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::Delete, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::MaximizeFocusedPane, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::MaximizeFocusedPane, w, cx)
+                },
+            ))
+            .on_action(cx.listener(|this, _: &crate::global_shortcuts::MarkIn, w, cx| {
+                this.perform_menu_action(menu::MenuAction::MarkIn, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::global_shortcuts::MarkOut, w, cx| {
+                this.perform_menu_action(menu::MenuAction::MarkOut, w, cx)
+            }))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::TimelineZoomIn, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::TimelineZoomIn, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::TimelineZoomOut, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::TimelineZoomOut, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::TimelineFitToWindow, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::TimelineFitToWindow, w, cx)
+                },
+            ))
             .flex()
             .flex_col()
             .size_full()

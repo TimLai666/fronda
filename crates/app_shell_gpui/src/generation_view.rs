@@ -101,9 +101,12 @@ impl GenerationView {
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.focus_handle.is_focused(window) {
+            return;
+        }
         let edited = match event.keystroke.key.as_str() {
             "enter" => {
                 self.state.prompt.push('\n');
@@ -188,6 +191,7 @@ impl Render for GenerationView {
 
         div()
             .id("generation-panel")
+            .key_context("input")
             .track_focus(&self.focus_handle.clone())
             .on_key_down(cx.listener(Self::handle_key_down))
             .flex()

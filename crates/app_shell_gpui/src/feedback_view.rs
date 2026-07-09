@@ -56,6 +56,11 @@ impl FeedbackView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Message typing requires this view itself to be focused; when the
+        // email TextField has focus, its bubbled keys must not leak in here.
+        if !self.focus_handle.is_focused(window) {
+            return;
+        }
         let edited = match event.keystroke.key.as_str() {
             "tab" => {
                 if !self.is_signed_in {
@@ -505,6 +510,7 @@ impl Render for FeedbackView {
 
         div()
             .id("fronda-feedback")
+            .key_context("input")
             .track_focus(&self.focus_handle.clone())
             .on_key_down(cx.listener(Self::handle_key_down))
             .flex()

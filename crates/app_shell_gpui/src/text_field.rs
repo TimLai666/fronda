@@ -13,7 +13,7 @@ use crate::theme::{Accent, Text as ThemeText};
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, App, Bounds, ClipboardItem,
     Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, GlobalElementId, KeyBinding, KeyDownEvent, LayoutId, MouseButton,
+    FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
     SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
 };
@@ -199,32 +199,11 @@ impl TextField {
         cx.emit(TextFieldEvent::Submitted);
     }
 
-    /// Keys with no action binding and no chord: the character arrives via
-    /// the platform text-input path, so swallow the raw key event here to
-    /// keep it from bubbling into the app's modifier-free global shortcuts
-    /// (space=play, q/w=trim…). Escape and Tab are left to the host view
-    /// (cancel / field navigation).
-    fn handle_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let mods = &event.keystroke.modifiers;
-        if mods.control || mods.platform || mods.function {
-            return;
-        }
-        // "enter" only reaches here with a modifier held (the bare key is
-        // consumed by the Submit binding) — hosts handle e.g. shift+enter.
-        // up/down are meaningless in a single-line field; hosts use them for
-        // list navigation (mention picker).
-        if !matches!(
-            event.keystroke.key.as_str(),
-            "escape" | "tab" | "enter" | "up" | "down"
-        ) {
-            cx.stop_propagation();
-        }
-    }
+    // No raw key_down swallowing: the `input` marker in this element's key
+    // context keeps `!input`-predicated global shortcut bindings inert while
+    // the field is focused, and characters arrive via the platform
+    // text-input path. Unhandled keys (escape/tab/shift+enter/up/down)
+    // bubble to the host view.
 
     // ── Mouse ──
 
@@ -669,7 +648,9 @@ impl Render for TextField {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
-            .key_context("FrondaTextField")
+            // "input" gates the "!input" global-shortcut bindings off while
+            // any text input is focused.
+            .key_context("FrondaTextField input")
             .track_focus(&self.focus_handle)
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
@@ -685,7 +666,6 @@ impl Render for TextField {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::submit))
-            .on_key_down(cx.listener(Self::handle_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))

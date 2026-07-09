@@ -271,9 +271,14 @@ impl ChatView {
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Picker navigation and shift+enter are bubbled composer keys; keys
+        // arriving while the composer isn't focused are not ours.
+        if !self.composer_field.focus_handle(cx).is_focused(window) {
+            return;
+        }
         if self.model.show_mention_picker {
             match event.keystroke.key.as_str() {
                 "escape" => self.close_mention_picker(),

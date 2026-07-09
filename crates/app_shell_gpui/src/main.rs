@@ -13,6 +13,7 @@ fn main() {
         .with_assets(FrondaAssets)
         .run(move |cx: &mut App| {
             app_shell_gpui::text_field::bind_text_field_keys(cx);
+            app_shell_gpui::global_shortcuts::bind_global_shortcut_keys(cx);
             open_main_window(cx);
         });
 }

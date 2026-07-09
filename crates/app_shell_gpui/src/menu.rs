@@ -330,6 +330,14 @@ pub fn route_shortcut(key: &str, modifiers: &Modifiers) -> Option<MenuAction> {
         .map(|s| s.action)
 }
 
+/// True when a chord could also be typing (no command/option/control —
+/// shift alone still types). These shortcuts are dispatched through gpui
+/// key bindings with a `!input` context predicate, never via raw key_down
+/// listeners, so text inputs win over them.
+pub fn is_text_conflicting(modifiers: &Modifiers) -> bool {
+    !modifiers.command && !modifiers.option && !modifiers.control
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
