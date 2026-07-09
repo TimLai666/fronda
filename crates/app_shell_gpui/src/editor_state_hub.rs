@@ -112,6 +112,10 @@ impl EditorStateHub {
                 ),
             ));
         }
+        // Seam availability changed — tell live MCP sessions (#250).
+        if let Ok(service) = crate::mcp_service::McpService::global().lock() {
+            service.notify_tools_changed();
+        }
     }
 
     /// Root directory of the currently loaded project, if any.

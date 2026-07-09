@@ -136,6 +136,14 @@ impl McpService {
         }
     }
 
+    /// Broadcast `notifications/tools/list_changed` to live sessions (#250).
+    /// No-op while the server is stopped.
+    pub fn notify_tools_changed(&self) {
+        if let Some(handle) = &self.handle {
+            handle.notify_tools_changed();
+        }
+    }
+
     /// Stop the server. Idempotent.
     pub fn stop(&mut self) {
         if let Some(handle) = self.handle.take() {

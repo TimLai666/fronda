@@ -101,6 +101,13 @@ impl<T> SessionStore<T> {
         self.entries.remove(id).map(|e| e.value)
     }
 
+    /// Visit every session value mutably; entries for which the closure
+    /// returns false are removed. Access times are NOT refreshed (a broadcast
+    /// is not client activity).
+    pub fn retain_values(&mut self, mut keep: impl FnMut(&mut T) -> bool) {
+        self.entries.retain(|_, entry| keep(&mut entry.value));
+    }
+
     /// Drop sessions whose idle time exceeds the TTL. Returns the removed ids.
     pub fn prune_expired(&mut self, now: Instant) -> Vec<String> {
         let ttl = self.ttl;

@@ -36,9 +36,15 @@ pub enum JsonRpcError {
     InvalidParams,
     InternalError,
     ToolError(String),
+    /// Server-defined error with an explicit code (e.g. -32001 session not found, #250).
+    Custom(i64, String),
 }
 
 impl JsonRpcError {
+    pub fn custom(code: i64, message: impl Into<String>) -> Self {
+        Self::Custom(code, message.into())
+    }
+
     pub fn code(&self) -> i64 {
         match self {
             Self::ParseError => -32700,
@@ -47,6 +53,7 @@ impl JsonRpcError {
             Self::InvalidParams => -32602,
             Self::InternalError => -32603,
             Self::ToolError(_) => -32000,
+            Self::Custom(code, _) => *code,
         }
     }
 
@@ -58,6 +65,7 @@ impl JsonRpcError {
             Self::InvalidParams => "Invalid params",
             Self::InternalError => "Internal error",
             Self::ToolError(m) => m,
+            Self::Custom(_, m) => m,
         }
     }
 }

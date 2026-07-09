@@ -3,12 +3,42 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 use agent_contract::tools::all_tools;
 use agent_contract::ToolExecutor;
 use serde_json::{json, Value};
 
 use crate::json_rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+use crate::session::{parse_session_id, SessionStore};
+
+/// Per-session server state (#250): negotiated on initialize; the SSE stream
+/// is registered by a later GET and written to by notifications.
+pub(crate) struct McpSession {
+    sse: Option<TcpStream>,
+}
+
+type SharedSessions = Arc<Mutex<SessionStore<McpSession>>>;
+
+/// Mint an unguessable session id without a rand/uuid dependency:
+/// two independently-seeded SipHash states over time + a counter.
+fn mint_session_id() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::AtomicU64;
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let c = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let mut a = RandomState::new().build_hasher();
+    a.write_u64(c);
+    a.write_u128(t.as_nanos());
+    let mut b = RandomState::new().build_hasher();
+    b.write_u128(t.as_nanos());
+    b.write_u64(c ^ 0x5bd1_e995);
+    format!("mcp-{:016x}{:016x}", a.finish(), b.finish())
+}
 
 /// Maximum milliseconds a single tool-call may hold the executor mutex (Issue #58).
 ///
@@ -83,6 +113,7 @@ impl McpConfig {
 pub struct McpServer {
     config: McpConfig,
     executor: Arc<Mutex<ToolExecutor>>,
+    sessions: SharedSessions,
 }
 
 impl McpServer {
@@ -93,7 +124,11 @@ impl McpServer {
     /// Serve an externally owned executor so the shell UI and the MCP
     /// server operate on the same project state.
     pub fn with_shared_executor(config: McpConfig, executor: Arc<Mutex<ToolExecutor>>) -> Self {
-        Self { config, executor }
+        Self {
+            config,
+            executor,
+            sessions: Arc::new(Mutex::new(SessionStore::with_defaults())),
+        }
     }
 
     /// Start the server (blocking). Call in a background thread.
@@ -108,6 +143,7 @@ impl McpServer {
             self.config.server_version.clone(),
             self.config.auth_token.clone(),
             Arc::clone(&self.executor),
+            Arc::clone(&self.sessions),
             Arc::new(AtomicBool::new(false)),
         );
         Ok(())
@@ -130,8 +166,18 @@ impl McpServer {
         let version = self.config.server_version.clone();
         let auth_token = self.config.auth_token.clone();
         let executor = Arc::clone(&self.executor);
+        let sessions = Arc::clone(&self.sessions);
+        let loop_sessions = Arc::clone(&sessions);
         let thread = thread::spawn(move || {
-            run_accept_loop(listener, name, version, auth_token, executor, loop_shutdown);
+            run_accept_loop(
+                listener,
+                name,
+                version,
+                auth_token,
+                executor,
+                loop_sessions,
+                loop_shutdown,
+            );
         });
 
         Ok(McpServerHandle {
@@ -139,6 +185,7 @@ impl McpServer {
             host: self.config.host.clone(),
             port: local.port(),
             thread: Mutex::new(Some(thread)),
+            sessions,
         })
     }
 }
@@ -149,12 +196,22 @@ pub struct McpServerHandle {
     host: String,
     port: u16,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
+    sessions: SharedSessions,
 }
 
 impl McpServerHandle {
     /// The port the server is actually bound to (resolved when port 0 was requested).
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Broadcast `notifications/tools/list_changed` to every session holding
+    /// an open SSE stream (#250). Streams whose write fails are dropped.
+    pub fn notify_tools_changed(&self) {
+        notify_sessions(
+            &self.sessions,
+            r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#,
+        );
     }
 
     /// Stop the server and wait for the accept loop to exit. Idempotent.
@@ -172,12 +229,30 @@ impl McpServerHandle {
     }
 }
 
+/// Write one SSE `message` event to every registered stream; prune dead ones.
+fn notify_sessions(sessions: &SharedSessions, payload: &str) {
+    let Ok(mut store) = sessions.lock() else {
+        return;
+    };
+    let frame = format!("event: message\ndata: {payload}\n\n");
+    store.retain_values(|session| {
+        let Some(stream) = session.sse.as_mut() else {
+            return true;
+        };
+        if stream.write_all(frame.as_bytes()).and_then(|_| stream.flush()).is_err() {
+            session.sse = None;
+        }
+        true
+    });
+}
+
 fn run_accept_loop(
     listener: TcpListener,
     server_name: String,
     server_version: String,
     auth_token: Option<String>,
     executor: Arc<Mutex<ToolExecutor>>,
+    sessions: SharedSessions,
     shutdown: Arc<AtomicBool>,
 ) {
     for stream in listener.incoming() {
@@ -190,8 +265,16 @@ fn run_accept_loop(
                 let version = server_version.clone();
                 let auth_token = auth_token.clone();
                 let executor = Arc::clone(&executor);
+                let sessions = Arc::clone(&sessions);
                 thread::spawn(move || {
-                    handle_connection(stream, &name, &version, auth_token.as_deref(), &executor);
+                    handle_connection(
+                        stream,
+                        &name,
+                        &version,
+                        auth_token.as_deref(),
+                        &executor,
+                        &sessions,
+                    );
                 });
             }
             Err(e) => {
@@ -201,26 +284,90 @@ fn run_accept_loop(
     }
 }
 
+/// Read one HTTP request: head up to the blank line, then exactly
+/// Content-Length body bytes (the body may arrive in later packets).
+/// Bodies over 1 MiB are refused (None).
+fn read_http_request(stream: &mut TcpStream) -> Option<String> {
+    const MAX_BODY: usize = 1024 * 1024;
+    let mut data: Vec<u8> = Vec::with_capacity(8192);
+    let mut buf = [0u8; 8192];
+    let head_end = loop {
+        if let Some(pos) = find_head_end(&data) {
+            break pos;
+        }
+        if data.len() > 64 * 1024 {
+            return None;
+        }
+        let n = stream.read(&mut buf).ok()?;
+        if n == 0 {
+            return None;
+        }
+        data.extend_from_slice(&buf[..n]);
+    };
+    let head = String::from_utf8_lossy(&data[..head_end]).to_string();
+    let content_length = head
+        .split("\r\n")
+        .skip(1)
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())?
+        })
+        .unwrap_or(0);
+    if content_length > MAX_BODY {
+        return None;
+    }
+    let body_start = head_end + 4;
+    while data.len() < body_start + content_length {
+        let n = stream.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+    }
+    Some(String::from_utf8_lossy(&data).to_string())
+}
+
+fn find_head_end(data: &[u8]) -> Option<usize> {
+    data.windows(4).position(|w| w == b"\r\n\r\n")
+}
+
+/// True when the request's Accept header asks for an SSE stream.
+fn wants_event_stream(head: &str) -> bool {
+    head.split("\r\n").skip(1).any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("accept")
+                && value.to_ascii_lowercase().contains("text/event-stream")
+        })
+    })
+}
+
+fn session_not_found_response(session_id: &str) -> String {
+    let resp = JsonRpcResponse::error(
+        Value::Null,
+        JsonRpcError::custom(-32001, format!("Session '{session_id}' not found or expired")),
+    );
+    build_http_response(404, "application/json", &serde_json::to_string(&resp).unwrap())
+}
+
 fn handle_connection(
     mut stream: TcpStream,
     server_name: &str,
     server_version: &str,
     auth_token: Option<&str>,
     executor: &Arc<Mutex<ToolExecutor>>,
+    sessions: &SharedSessions,
 ) {
-    let mut buf = [0u8; 8192];
-    let n = match stream.read(&mut buf) {
-        Ok(n) if n > 0 => n,
-        _ => return,
+    let Some(request) = read_http_request(&mut stream) else {
+        return;
     };
-
-    let request = String::from_utf8_lossy(&buf[..n]);
+    let head = request.split("\r\n\r\n").next().unwrap_or("");
 
     // Issue #122: when a token is configured, reject any request lacking a matching
     // `Authorization: Bearer <token>` BEFORE doing any work — a network-exposed
     // server must not serve tool calls unauthenticated.
     if let Some(token) = auth_token {
-        let head = request.split("\r\n\r\n").next().unwrap_or("");
         if !request_has_bearer(head, token) {
             let response = build_http_response(401, "application/json", "{\"error\":\"unauthorized\"}");
             let _ = stream.write_all(response.as_bytes());
@@ -229,7 +376,78 @@ fn handle_connection(
         }
     }
 
-    // Parse the HTTP request to get the body
+    let http_method = head.split_whitespace().next().unwrap_or("");
+    let session_id = parse_session_id(&request);
+    let now = Instant::now();
+    if let Ok(mut store) = sessions.lock() {
+        store.prune_expired(now);
+    }
+
+    // #250: DELETE terminates the session.
+    if http_method == "DELETE" {
+        let response = match session_id {
+            Some(id) => {
+                let removed = sessions
+                    .lock()
+                    .ok()
+                    .and_then(|mut store| store.remove(&id));
+                if removed.is_some() {
+                    build_http_response(200, "application/json", "{\"ok\":true}")
+                } else {
+                    session_not_found_response(&id)
+                }
+            }
+            None => build_http_response(400, "application/json", "{\"error\":\"missing Mcp-Session-Id\"}"),
+        };
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+        return;
+    }
+
+    // #250: GET + Accept: text/event-stream opens the session's notification
+    // stream. The socket is moved into the session and kept open; handler
+    // threads write to it via notify_sessions.
+    if http_method == "GET" && wants_event_stream(head) {
+        let Some(id) = session_id else {
+            let response =
+                build_http_response(400, "application/json", "{\"error\":\"missing Mcp-Session-Id\"}");
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            return;
+        };
+        let Ok(mut store) = sessions.lock() else {
+            return;
+        };
+        let Some(session) = store.get(&id, now) else {
+            drop(store);
+            let response = session_not_found_response(&id);
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            return;
+        };
+        let sse_head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n: connected\n\n";
+        if stream.write_all(sse_head.as_bytes()).and_then(|_| stream.flush()).is_ok() {
+            session.sse = Some(stream);
+        }
+        return;
+    }
+
+    // Session-routed POST: an unknown/expired id is a 404 per the MCP
+    // streamable-HTTP spec. Header-less requests keep the legacy shared path.
+    if let Some(id) = &session_id {
+        let known = sessions
+            .lock()
+            .ok()
+            .map(|mut store| store.get(id, now).is_some())
+            .unwrap_or(false);
+        if !known {
+            let response = session_not_found_response(id);
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            return;
+        }
+    }
+
     let body = match request.split("\r\n\r\n").nth(1) {
         Some(b) => b.trim(),
         None => "",
@@ -249,9 +467,24 @@ fn handle_connection(
     } else {
         match serde_json::from_str::<JsonRpcRequest>(body) {
             Ok(req) => {
+                let is_initialize = req.method == "initialize";
                 let resp = handle_json_rpc(&req, server_name, server_version, executor);
                 let body = serde_json::to_string(&resp).unwrap();
-                build_http_response(200, "application/json", &body)
+                if is_initialize && session_id.is_none() {
+                    // Mint the session and hand its id back in the header.
+                    let id = mint_session_id();
+                    if let Ok(mut store) = sessions.lock() {
+                        store.insert(id.clone(), McpSession { sse: None }, now);
+                    }
+                    build_http_response_with_headers(
+                        200,
+                        "application/json",
+                        &format!("Mcp-Session-Id: {id}\r\n"),
+                        &body,
+                    )
+                } else {
+                    build_http_response(200, "application/json", &body)
+                }
             }
             Err(_) => {
                 let resp = JsonRpcResponse::error(Value::Null, JsonRpcError::ParseError);
@@ -425,6 +658,20 @@ fn handle_json_rpc(
         }
 
         _ => JsonRpcResponse::error(id, JsonRpcError::MethodNotFound),
+    }
+}
+
+fn build_http_response_with_headers(
+    status: u16,
+    content_type: &str,
+    extra_headers: &str,
+    body: &str,
+) -> String {
+    let base = build_http_response(status, content_type, body);
+    // Inject after the status line; extra_headers ends with \r\n.
+    match base.split_once("\r\n") {
+        Some((status_line, rest)) => format!("{status_line}\r\n{extra_headers}{rest}"),
+        None => base,
     }
 }
 
