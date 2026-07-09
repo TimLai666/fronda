@@ -6,6 +6,7 @@
 use crate::read_tools::{
     format_inspect_media, format_search_results, format_timeline_json, format_transcript_json,
     InspectMediaInput, SearchHitInfo, TranscriptClipInput, TranscriptFormatOptions,
+    TranscriptWordInput,
 };
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
@@ -43,6 +44,35 @@ pub trait ClipAudioSource: Send + Sync {
         sample_rate: u32,
         channels: usize,
     ) -> Option<Vec<f32>>;
+}
+
+/// One transcribed word with start/end in SOURCE seconds (pre-placement).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WordStamp {
+    pub word: String,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+}
+
+/// Host seam for transcription: turn a media source's audio into word-level
+/// stamps honoring the requested language (BCP-47; `None` → platform default).
+/// The pure executor stays model-free — the app shell provides the
+/// implementation (whisper-class or platform STT); the MCP/headless path leaves
+/// it unset, so transcription-dependent flows keep the injected-words behavior
+/// ("No transcribable speech" when none are set).
+pub trait TranscriptionProvider: Send + Sync {
+    fn transcribe(
+        &self,
+        source: &MediaSource,
+        language: Option<&str>,
+    ) -> Result<Vec<WordStamp>, String>;
+}
+
+/// What a [`ToolExecutor::transcribe_timeline`] pass covered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptionOutcome {
+    pub clips_transcribed: usize,
+    pub words: usize,
 }
 
 /// Host seam for `export_project`: the pure executor validates the request and
@@ -484,6 +514,9 @@ pub struct ToolExecutor {
     /// Host audio decoder for `remove_silence` (#174). `None` on the pure/MCP path,
     /// where `remove_silence` reports it's unavailable.
     audio_source: Option<Arc<dyn ClipAudioSource>>,
+    /// Host transcription model. App-scoped (like `project_navigator`); `None` on the
+    /// pure/MCP path, where `transcribe_timeline` reports it's unavailable.
+    transcription_provider: Option<Arc<dyn TranscriptionProvider>>,
     /// Host exporter for `export_project`. `None` on the pure/MCP path.
     export_host: Option<Arc<dyn ExportHost>>,
     /// Host recents-registry reader for `get_projects`. `None` on the pure/MCP path.
@@ -524,6 +557,7 @@ impl ToolExecutor {
             timeline_words: Vec::new(),
             matte_writer: None,
             audio_source: None,
+            transcription_provider: None,
             export_host: None,
             project_lister: None,
             project_navigator: None,
@@ -583,6 +617,77 @@ impl ToolExecutor {
 
     pub fn timeline_words(&self) -> &[timeline_core::TimelineWord] {
         &self.timeline_words
+    }
+
+    /// Install the host transcription model. The app shell provides a
+    /// whisper-class or platform STT implementation; unset means
+    /// `transcribe_timeline` reports it's unavailable.
+    pub fn set_transcription_provider(&mut self, provider: Arc<dyn TranscriptionProvider>) {
+        self.transcription_provider = Some(provider);
+    }
+
+    /// Transcribe the timeline's audio-bearing clips (host UI trigger; upstream has
+    /// no standalone transcribe tool — get_transcript/remove_words read the result).
+    /// Each unique source is transcribed once with `Timeline.transcription_language`,
+    /// word stamps are mapped onto every clip via the silence-detector placement
+    /// convention (`timeline_core::map_word_stamps`), and the merged timeline-ordered
+    /// list replaces the `set_timeline_words` storage. Fails atomically: a provider
+    /// error leaves previously stored words untouched.
+    pub fn transcribe_timeline(&mut self) -> Result<TranscriptionOutcome, String> {
+        let provider = self.transcription_provider.clone().ok_or_else(|| {
+            "transcription is unavailable: no transcription provider is connected (run it from the app)."
+                .to_string()
+        })?;
+        let language = self.timeline.transcription_language.clone();
+        let fps = self.timeline.fps;
+
+        let mut located: Vec<(usize, usize)> = Vec::new();
+        for (ti, track) in self.timeline.tracks.iter().enumerate() {
+            for (ci, clip) in track.clips.iter().enumerate() {
+                let entry = self.media_manifest.entry_for(&clip.media_ref);
+                let audio_bearing = match entry.map(|e| e.r#type) {
+                    Some(ClipType::Audio) => true,
+                    Some(ClipType::Video) => entry.and_then(|e| e.has_audio).unwrap_or(false),
+                    _ => false,
+                };
+                if audio_bearing {
+                    located.push((ti, ci));
+                }
+            }
+        }
+        if located.is_empty() {
+            return Err("The timeline has no audio-bearing clips to transcribe.".to_string());
+        }
+        located.sort_by_key(|&(ti, ci)| (self.timeline.tracks[ti].clips[ci].start_frame, ti));
+
+        let mut stamps_by_media: std::collections::HashMap<String, Vec<WordStamp>> =
+            Default::default();
+        let mut all: Vec<timeline_core::TimelineWord> = Vec::new();
+        for (ti, ci) in located.iter().copied() {
+            let clip = &self.timeline.tracks[ti].clips[ci];
+            if !stamps_by_media.contains_key(&clip.media_ref) {
+                let source = self
+                    .media_manifest
+                    .entry_for(&clip.media_ref)
+                    .map(|e| e.source.clone())
+                    .ok_or_else(|| format!("Media '{}' is not in the library.", clip.media_ref))?;
+                let stamps = provider.transcribe(&source, language.as_deref())?;
+                stamps_by_media.insert(clip.media_ref.clone(), stamps);
+            }
+            let stamps = &stamps_by_media[&clip.media_ref];
+            let rows: Vec<(&str, f64, f64)> = stamps
+                .iter()
+                .map(|w| (w.word.as_str(), w.start_seconds, w.end_seconds))
+                .collect();
+            all.extend(timeline_core::map_word_stamps(&rows, clip, ti, all.len(), fps));
+        }
+
+        let outcome = TranscriptionOutcome {
+            clips_transcribed: located.len(),
+            words: all.len(),
+        };
+        self.set_timeline_words(all);
+        Ok(outcome)
     }
 
     /// Load the in-app agent's skills (upstream #199). The app scans
@@ -2935,8 +3040,22 @@ impl ToolExecutor {
             ..Default::default()
         };
 
-        // No transcript data source connected yet, return empty result
-        let formatted = format_transcript_json(fps, &[], &clips, &options);
+        // Stored timeline words (set_timeline_words / transcribe_timeline) for this
+        // media's clips feed the formatter; frames → seconds round-trips exactly
+        // through the formatter's fps scaling. Empty storage keeps today's output.
+        let clip_ids: std::collections::HashSet<&str> =
+            clips.iter().map(|c| c.id.as_str()).collect();
+        let words: Vec<TranscriptWordInput> = self
+            .timeline_words
+            .iter()
+            .filter(|w| clip_ids.contains(w.clip_id.as_str()))
+            .map(|w| TranscriptWordInput {
+                word: w.text.clone(),
+                start_seconds: w.start_frame as f64 / fps as f64,
+                end_seconds: w.end_frame as f64 / fps as f64,
+            })
+            .collect();
+        let formatted = format_transcript_json(fps, &words, &clips, &options);
         Ok(json!({
             "content": [{
                 "type": "text",
@@ -8108,6 +8227,217 @@ mod tests {
                 &json!({"words": [1], "cutAggressiveness": "nuclear"})
             )
             .is_err());
+    }
+
+    // ── transcription provider seam (transcription-provider-seam) ───────────
+
+    struct MockTranscriber {
+        stamps: Vec<WordStamp>,
+        calls: std::sync::Mutex<Vec<(String, Option<String>)>>,
+        fail: bool,
+    }
+
+    impl MockTranscriber {
+        fn new(stamps: Vec<WordStamp>) -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                stamps,
+                calls: std::sync::Mutex::new(Vec::new()),
+                fail: false,
+            })
+        }
+    }
+
+    impl TranscriptionProvider for MockTranscriber {
+        fn transcribe(
+            &self,
+            source: &MediaSource,
+            language: Option<&str>,
+        ) -> Result<Vec<WordStamp>, String> {
+            let key = match source {
+                MediaSource::External { absolute_path } => absolute_path.clone(),
+                MediaSource::Project { relative_path } => relative_path.clone(),
+            };
+            self.calls
+                .lock()
+                .unwrap()
+                .push((key, language.map(String::from)));
+            if self.fail {
+                return Err("transcription model failed".to_string());
+            }
+            Ok(self.stamps.clone())
+        }
+    }
+
+    fn stamp(word: &str, start: f64, end: f64) -> WordStamp {
+        WordStamp {
+            word: word.to_string(),
+            start_seconds: start,
+            end_seconds: end,
+        }
+    }
+
+    /// Executor with one audio-bearing video clip: media "m-audio" (hasAudio),
+    /// clip "clip-a" at frame 100, trim 60, duration 300, 30fps — the spec's
+    /// trimmed-clip placement example.
+    fn transcribe_exec() -> ToolExecutor {
+        let mut exec = make_executor();
+        exec.media_manifest_mut()
+            .entries
+            .push(media_entry("m-audio", ClipType::Video, true, 30.0));
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let mut c = crate::test_helpers::make_clip(100, 300);
+        c.id = "clip-a".into();
+        c.media_ref = "m-audio".into();
+        c.trim_start_frame = 60;
+        exec.timeline_mut().tracks[0].clips.push(c);
+        exec
+    }
+
+    #[test]
+    fn transcribe_timeline_without_provider_is_unavailable() {
+        let mut exec = transcribe_exec();
+        exec.set_timeline_words(vec![tw(0, 0, 0, 10, "kept")]);
+        let err = exec.transcribe_timeline().unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
+        assert_eq!(exec.timeline_words().len(), 1, "injected words untouched");
+    }
+
+    #[test]
+    fn transcribe_timeline_full_chain_to_get_transcript() {
+        // Task 2.2: transcribe → placement mapping → get_transcript returns real words.
+        let mut exec = transcribe_exec();
+        exec.set_transcription_provider(MockTranscriber::new(vec![
+            stamp("hello", 3.0, 3.5),
+            stamp("world", 4.0, 4.5),
+        ]));
+        let outcome = exec.transcribe_timeline().unwrap();
+        assert_eq!(outcome.clips_transcribed, 1);
+        assert_eq!(outcome.words, 2);
+
+        // Stored through the set_timeline_words storage, spec-table placement.
+        let words = exec.timeline_words();
+        assert_eq!(words.len(), 2);
+        assert_eq!((words[0].index, words[0].start_frame, words[0].end_frame), (0, 130, 145));
+        assert_eq!(words[0].clip_id, "clip-a");
+        assert_eq!((words[1].index, words[1].start_frame), (1, 160));
+
+        let out = exec
+            .execute("get_transcript", &json!({"mediaId": "m-audio"}))
+            .unwrap();
+        let text = out["content"][0]["text"].as_str().unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["clips"][0]["clipId"], "clip-a");
+        assert_eq!(payload["clips"][0]["words"][0]["word"], "hello");
+        assert_eq!(payload["clips"][0]["words"][0]["startFrame"], 130);
+        assert_eq!(payload["clips"][0]["words"][1]["startFrame"], 160);
+        assert_eq!(payload["text"], "hello world");
+
+        // Same storage remove_words reads: cutting by match works end-to-end.
+        let cut = exec
+            .execute("remove_words", &json!({"matches": ["hello"]}))
+            .unwrap();
+        assert_eq!(report_payload(&cut)["removedWords"], 1);
+    }
+
+    #[test]
+    fn transcribe_timeline_threads_transcription_language() {
+        let mut exec = transcribe_exec();
+        let provider = MockTranscriber::new(vec![stamp("ja-word", 3.0, 3.5)]);
+        exec.set_transcription_provider(provider.clone());
+        exec.timeline_mut().transcription_language = Some("ja".to_string());
+        exec.transcribe_timeline().unwrap();
+        let calls = provider.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], ("/m-audio".to_string(), Some("ja".to_string())));
+    }
+
+    #[test]
+    fn transcribe_timeline_no_language_passes_none() {
+        let mut exec = transcribe_exec();
+        let provider = MockTranscriber::new(vec![stamp("w", 3.0, 3.5)]);
+        exec.set_transcription_provider(provider.clone());
+        exec.transcribe_timeline().unwrap();
+        assert_eq!(provider.calls.lock().unwrap()[0].1, None);
+    }
+
+    #[test]
+    fn transcribe_timeline_refuses_without_audio_bearing_clips() {
+        // Image media + video media without audio: nothing to transcribe.
+        let mut exec = make_executor();
+        exec.media_manifest_mut()
+            .entries
+            .push(media_entry("m-img", ClipType::Image, false, 5.0));
+        exec.media_manifest_mut()
+            .entries
+            .push(media_entry("m-mute", ClipType::Video, false, 5.0));
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let mut a = crate::test_helpers::make_clip(0, 60);
+        a.media_ref = "m-img".into();
+        let mut b = crate::test_helpers::make_clip(60, 60);
+        b.media_ref = "m-mute".into();
+        exec.timeline_mut().tracks[0].clips.push(a);
+        exec.timeline_mut().tracks[0].clips.push(b);
+        exec.set_transcription_provider(MockTranscriber::new(vec![stamp("x", 0.0, 1.0)]));
+        let err = exec.transcribe_timeline().unwrap_err();
+        assert!(err.contains("no audio-bearing clips"), "{err}");
+    }
+
+    #[test]
+    fn transcribe_timeline_shared_source_transcribed_once() {
+        // Two clips over the same source (A shows 0..2s, B shows 2..4s):
+        // one provider call, words split by visibility, global indices contiguous.
+        let mut exec = make_executor();
+        exec.media_manifest_mut()
+            .entries
+            .push(media_entry("m-audio", ClipType::Audio, true, 30.0));
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Audio);
+        let mut a = crate::test_helpers::make_clip(0, 60);
+        a.id = "a".into();
+        a.media_ref = "m-audio".into();
+        let mut b = crate::test_helpers::make_clip(60, 60);
+        b.id = "b".into();
+        b.media_ref = "m-audio".into();
+        b.trim_start_frame = 60;
+        exec.timeline_mut().tracks[0].clips.push(a);
+        exec.timeline_mut().tracks[0].clips.push(b);
+        let provider = MockTranscriber::new(vec![stamp("one", 1.0, 1.5), stamp("two", 3.0, 3.5)]);
+        exec.set_transcription_provider(provider.clone());
+        let outcome = exec.transcribe_timeline().unwrap();
+        assert_eq!(provider.calls.lock().unwrap().len(), 1, "source cached");
+        assert_eq!(outcome.clips_transcribed, 2);
+        assert_eq!(outcome.words, 2);
+        let words = exec.timeline_words();
+        assert_eq!((words[0].index, words[0].clip_id.as_str(), words[0].start_frame), (0, "a", 30));
+        assert_eq!((words[1].index, words[1].clip_id.as_str(), words[1].start_frame), (1, "b", 90));
+    }
+
+    #[test]
+    fn transcribe_timeline_provider_error_keeps_existing_words() {
+        let mut exec = transcribe_exec();
+        exec.set_timeline_words(vec![tw(0, 0, 0, 10, "kept")]);
+        exec.set_transcription_provider(std::sync::Arc::new(MockTranscriber {
+            stamps: Vec::new(),
+            calls: std::sync::Mutex::new(Vec::new()),
+            fail: true,
+        }));
+        let err = exec.transcribe_timeline().unwrap_err();
+        assert!(err.contains("transcription model failed"), "{err}");
+        assert_eq!(exec.timeline_words().len(), 1, "no partial store on failure");
+    }
+
+    #[test]
+    fn get_transcript_without_stored_words_unchanged() {
+        // Provider installed but never run: get_transcript stays on today's
+        // empty-transcript output (byte-identical no-provider behavior).
+        let mut exec = transcribe_exec();
+        exec.set_transcription_provider(MockTranscriber::new(vec![stamp("x", 3.0, 3.5)]));
+        let out = exec
+            .execute("get_transcript", &json!({"mediaId": "m-audio"}))
+            .unwrap();
+        let payload: Value =
+            serde_json::from_str(out["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["clips"], json!([]));
+        assert_eq!(payload["text"], "");
     }
 
     // ── create_matte (#242) ──────────────────────────────────────────────────

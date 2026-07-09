@@ -82,8 +82,8 @@ pub use track_ops::{
     TrackInsertionError, MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT,
 };
 pub use word_cut::{
-    cut_ranges, ms_to_frames, plan_word_removal, span_frames, CutAggressiveness, PlannerWord,
-    TimelineWord, WordRemovalPlan,
+    cut_ranges, map_word_stamps, ms_to_frames, plan_word_removal, span_frames,
+    CutAggressiveness, PlannerWord, TimelineWord, WordRemovalPlan,
 };
 pub use workflow::{
     apply_ripple_insert_with_split, compute_ripple_delete, compute_ripple_delete_gap,
