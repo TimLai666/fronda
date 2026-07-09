@@ -30,12 +30,16 @@ const STARTER_PROMPTS: &[(&str, &str)] = &[
 ];
 
 /// gpui Chat/Agent panel view component.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ChatView {
     focus_handle: FocusHandle,
     model: ChatPanelModel,
     session_mgr: SessionManager,
     mention_picker: MentionPickerState,
+    /// IME-capable composer input; `model.input.text` mirrors it for sends.
+    composer_field: gpui::Entity<crate::text_field::TextField>,
+    /// Byte offset of the '@' that opened the mention picker.
+    mention_anchor: Option<usize>,
     /// Index into AVAILABLE_MODELS (Swift: editor.agentService.selectedModel).
     selected_model_idx: usize,
     /// Whether the model picker dropdown is visible.
@@ -88,16 +92,106 @@ impl ChatView {
             },
         ];
 
+        let composer_field =
+            cx.new(|cx| crate::text_field::TextField::new(cx, "Ask, or type @ to mention"));
+        cx.subscribe(&composer_field, |this, field, event, cx| match event {
+            crate::text_field::TextFieldEvent::Submitted => {
+                if this.model.show_mention_picker {
+                    this.insert_highlighted_mention(cx);
+                } else {
+                    this.submit_composer(cx);
+                }
+            }
+            crate::text_field::TextFieldEvent::Edited => {
+                let text = field.read(cx).text().to_string();
+                this.composer_edited(text, cx);
+            }
+        })
+        .detach();
+
         Self {
             focus_handle: handle,
             model: ChatPanelModel::default(),
             session_mgr: SessionManager::new(),
             mention_picker: MentionPickerState::new(mention_candidates),
+            composer_field,
+            mention_anchor: None,
             selected_model_idx: 1, // claude-sonnet-5 as default
             model_picker_open: false,
             history_open: false,
             expanded_tool_rows: HashSet::new(),
         }
+    }
+
+    /// Composer content changed: mirror it and drive the @mention picker —
+    /// a trailing '@' opens it, the text after the anchor is the live query,
+    /// deleting past the anchor closes it (Swift AgentInputBox semantics).
+    fn composer_edited(&mut self, text: String, cx: &mut Context<Self>) {
+        if let Some(anchor) = self.mention_anchor {
+            if text.len() <= anchor || !text[anchor..].starts_with('@') {
+                self.close_mention_picker();
+            } else {
+                self.mention_picker.query = text[anchor + 1..].to_string();
+                self.mention_picker.highlighted_index = 0;
+                self.mention_picker.refresh_filter();
+            }
+        } else if text.ends_with('@') && !self.model.show_mention_picker {
+            self.mention_anchor = Some(text.len() - 1);
+            self.model.show_mention_picker = true;
+            self.mention_picker.open("");
+        }
+        self.model.input.text = text;
+        self.model.input.cursor_position = self.model.input.text.len();
+        cx.notify();
+    }
+
+    fn close_mention_picker(&mut self) {
+        self.mention_anchor = None;
+        self.model.show_mention_picker = false;
+        self.mention_picker.close();
+    }
+
+    /// Replace the "@query" span with the picked candidate and close.
+    fn insert_highlighted_mention(&mut self, cx: &mut Context<Self>) {
+        if let Some(c) = self.mention_picker.selected_candidate() {
+            let label = c.label.clone();
+            let anchor = self.mention_anchor.unwrap_or(0);
+            let text = self.composer_field.read(cx).text().to_string();
+            let head = text.get(..anchor).unwrap_or("").to_string();
+            let new_text = format!("{head}@{label} ");
+            self.composer_field
+                .update(cx, |f, cx| f.set_text(new_text.clone(), cx));
+            self.model.input.text = new_text;
+            self.model.input.cursor_position = self.model.input.text.len();
+        }
+        self.close_mention_picker();
+        cx.notify();
+    }
+
+    /// Send the composer content as a user message (Enter in the field).
+    fn submit_composer(&mut self, cx: &mut Context<Self>) {
+        self.model.input.text = self.composer_field.read(cx).text().to_string();
+        if let Some(agent_text) = self.model.handle_send_action(false) {
+            self.composer_field.update(cx, |f, cx| f.set_text("", cx));
+            self.session_mgr.increment_message_count();
+            if self
+                .session_mgr
+                .active_session()
+                .map(|s| s.message_count == 1)
+                .unwrap_or(false)
+            {
+                let title = truncate_title(
+                    self.model
+                        .messages
+                        .last()
+                        .map(|m| m.text.as_str())
+                        .unwrap_or(""),
+                );
+                self.session_mgr.set_active_title(title);
+            }
+            self.spawn_agent_turn(agent_text, cx);
+        }
+        cx.notify();
     }
 
     /// Run an agent turn for `user_text` against the Anthropic API, then append
@@ -166,38 +260,9 @@ impl ChatView {
         .detach();
     }
 
-    /// Keys while the @mention picker is open: navigate, pick, or filter.
-    fn handle_mention_picker_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        match event.keystroke.key.as_str() {
-            "escape" => {
-                self.model.show_mention_picker = false;
-                self.mention_picker.close();
-            }
-            "enter" => {
-                if let Some(c) = self.mention_picker.selected_candidate() {
-                    let mention_text = format!("@{} ", c.label);
-                    self.model.input.text.push_str(&mention_text);
-                    self.model.input.cursor_position = self.model.input.text.len();
-                }
-                self.model.show_mention_picker = false;
-                self.mention_picker.close();
-            }
-            "down" => self.mention_picker.highlight_next(),
-            "up" => self.mention_picker.highlight_previous(),
-            "tab" => self.mention_picker.next_category(),
-            _ => {
-                let mut query = self.mention_picker.query.clone();
-                if crate::text_input::apply_editing_keystroke(&mut query, &event.keystroke) {
-                    self.mention_picker.query = query;
-                    self.mention_picker.highlighted_index = 0;
-                    self.mention_picker.refresh_filter();
-                }
-            }
-        }
-        cx.stop_propagation();
-        cx.notify();
-    }
-
+    /// Keys the composer TextField deliberately lets bubble. Typing and
+    /// editing live in the field (Edited events drive the picker query);
+    /// only navigation and shift+enter arrive here.
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -205,61 +270,26 @@ impl ChatView {
         cx: &mut Context<Self>,
     ) {
         if self.model.show_mention_picker {
-            self.handle_mention_picker_key(event, cx);
+            match event.keystroke.key.as_str() {
+                "escape" => self.close_mention_picker(),
+                "down" => self.mention_picker.highlight_next(),
+                "up" => self.mention_picker.highlight_previous(),
+                "tab" => self.mention_picker.next_category(),
+                _ => return,
+            }
+            cx.stop_propagation();
+            cx.notify();
             return;
         }
-        match event.keystroke.key.as_str() {
-            "enter" => {
-                if let Some(agent_text) = self
-                    .model
-                    .handle_send_action(event.keystroke.modifiers.shift)
-                {
-                    self.session_mgr.increment_message_count();
-                    if self
-                        .session_mgr
-                        .active_session()
-                        .map(|s| s.message_count == 1)
-                        .unwrap_or(false)
-                    {
-                        let title = truncate_title(
-                            self.model
-                                .messages
-                                .last()
-                                .map(|m| m.text.as_str())
-                                .unwrap_or(""),
-                        );
-                        self.session_mgr.set_active_title(title);
-                    }
-                    self.spawn_agent_turn(agent_text, cx);
-                }
-                cx.notify();
-            }
-            "@" => {
-                // Picker-open keys never reach this arm (routed above), so
-                // this is always an OPEN — set both flags explicitly instead
-                // of leaning on toggle keeping them in sync.
-                self.model.show_mention_picker = true;
-                self.mention_picker.open("");
-                cx.stop_propagation();
-                cx.notify();
-            }
-            _ => {
-                // Composer typing (backspace/space/printable); picker-open
-                // keys were already routed to handle_mention_picker_key.
-                let edited = crate::text_input::apply_editing_keystroke(
-                    &mut self.model.input.text,
-                    &event.keystroke,
-                );
-                // Consumed keys must not bubble to app_root's global
-                // shortcuts (space=play, q/w=trim, j/k/l=shuttle). Swallow
-                // backspace even on empty text — bubbling would hit the
-                // global Delete and remove selected clips.
-                if edited || event.keystroke.key.as_str() == "backspace" {
-                    self.model.input.cursor_position = self.model.input.text.len();
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }
+        if event.keystroke.key.as_str() == "enter" && event.keystroke.modifiers.shift {
+            // Swift: shift+enter inserts a newline instead of sending.
+            self.composer_field.update(cx, |f, cx| {
+                let text = format!("{}\n", f.text());
+                f.set_text(text, cx);
+            });
+            self.model.input.text = self.composer_field.read(cx).text().to_string();
+            cx.stop_propagation();
+            cx.notify();
         }
     }
 
@@ -923,7 +953,6 @@ impl ChatView {
         for (i, (_id, label, subtitle)) in candidates_snapshot.iter().enumerate() {
             let is_highlighted = i == self.mention_picker.highlighted_index;
             let display_label = label.clone();
-            let mention_label_capture = label.clone();
             let mention_subtitle = subtitle.clone();
             let highlight_bg = Hsla {
                 h: 0.0,
@@ -952,12 +981,8 @@ impl ChatView {
                               _event: &ClickEvent,
                               _window: &mut Window,
                               cx: &mut Context<ChatView>| {
-                            let mention_text = format!("@{} ", mention_label_capture);
-                            this.model.input.text.push_str(&mention_text);
-                            this.model.input.cursor_position = this.model.input.text.len();
-                            this.model.show_mention_picker = false;
-                            this.mention_picker.close();
-                            cx.notify();
+                            this.mention_picker.highlighted_index = i;
+                            this.insert_highlighted_mention(cx);
                         },
                     ))
                     .child(
@@ -1053,12 +1078,7 @@ impl Render for ChatView {
         // ── Input box ──
         let can_send = self.model.can_send();
         let is_running = self.model.is_agent_running;
-        let input_text = if self.model.input.is_empty() {
-            "Ask, or type @ to reference media".to_string()
-        } else {
-            self.model.input.text.clone()
-        };
-        let is_placeholder = self.model.input.is_empty();
+        let composer_field = self.composer_field.clone();
 
         let send_btn = if is_running {
             div()
@@ -1106,26 +1126,7 @@ impl Render for ChatView {
                      _event: &ClickEvent,
                      _window: &mut Window,
                      cx: &mut Context<ChatView>| {
-                        if let Some(agent_text) = this.model.handle_send_action(false) {
-                            this.session_mgr.increment_message_count();
-                            if this
-                                .session_mgr
-                                .active_session()
-                                .map(|s| s.message_count == 1)
-                                .unwrap_or(false)
-                            {
-                                let title = truncate_title(
-                                    this.model
-                                        .messages
-                                        .last()
-                                        .map(|m| m.text.as_str())
-                                        .unwrap_or(""),
-                                );
-                                this.session_mgr.set_active_title(title);
-                            }
-                            this.spawn_agent_turn(agent_text, cx);
-                        }
-                        cx.notify();
+                        this.submit_composer(cx);
                     },
                 ))
                 .child(
@@ -1156,7 +1157,7 @@ impl Render for ChatView {
                     .border_1()
                     .border_color(BorderColors::SUBTLE)
                     .bg(Background::SURFACE)
-                    // Text input area
+                    // Text input area (real TextField: IME, cursor, clipboard)
                     .child(
                         div()
                             .flex()
@@ -1166,17 +1167,9 @@ impl Render for ChatView {
                             .px(px(Spacing::MD_LG))
                             .pt(px(Spacing::SM_MD))
                             .pb(px(Spacing::XS))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(px(FontSize::SM_MD))
-                                    .text_color(if is_placeholder {
-                                        Text::MUTED
-                                    } else {
-                                        Text::PRIMARY
-                                    })
-                                    .child(input_text),
-                            ),
+                            .text_size(px(FontSize::SM_MD))
+                            .text_color(Text::PRIMARY)
+                            .child(div().flex_1().child(composer_field)),
                     )
                     // Bottom bar: model picker + send button
                     .child(

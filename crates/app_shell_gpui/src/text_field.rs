@@ -214,7 +214,14 @@ impl TextField {
         if mods.control || mods.platform || mods.function {
             return;
         }
-        if !matches!(event.keystroke.key.as_str(), "escape" | "tab") {
+        // "enter" only reaches here with a modifier held (the bare key is
+        // consumed by the Submit binding) — hosts handle e.g. shift+enter.
+        // up/down are meaningless in a single-line field; hosts use them for
+        // list navigation (mention picker).
+        if !matches!(
+            event.keystroke.key.as_str(),
+            "escape" | "tab" | "enter" | "up" | "down"
+        ) {
             cx.stop_propagation();
         }
     }
