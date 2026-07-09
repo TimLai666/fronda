@@ -5,6 +5,7 @@
 //!     optional screenshot row + context note + error text + Cancel/Send footer.
 //!   • Success: checkmark heading + detail text + Done button.
 
+use crate::text_area::{TextArea, TextAreaEvent};
 use crate::text_field::{TextField, TextFieldEvent};
 use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
 use app_contract::feedback_model::FeedbackViewModel;
@@ -26,6 +27,8 @@ pub struct FeedbackView {
     pub has_screenshot: bool,
     /// Real text field (IME-capable) for the reply email.
     email_field: Entity<TextField>,
+    /// Multiline message editor (IME-capable); `model.message` mirrors it.
+    message_area: Entity<TextArea>,
 }
 
 impl FeedbackView {
@@ -39,50 +42,48 @@ impl FeedbackView {
             }
         })
         .detach();
+        let message_area = cx.new(|cx| {
+            TextArea::new(cx, "Your feedback…")
+                .with_min_lines(5)
+                .with_max_lines(10)
+        });
+        cx.subscribe(&message_area, |this, area, event, cx| {
+            if matches!(event, TextAreaEvent::Edited) {
+                this.model.message = area.read(cx).text().to_string();
+                cx.notify();
+            }
+        })
+        .detach();
         Self {
             focus_handle: cx.focus_handle(),
             model: FeedbackViewModel::default(),
             is_signed_in: false,
             has_screenshot: false,
             email_field,
+            message_area,
         }
     }
 
-    /// Message typing (key_char path; the email field is a real TextField).
-    /// Enter is a newline; Tab moves focus to the email field.
+    /// Tab cycles focus between the message area and the email field
+    /// (both pass Tab through to the host).
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Message typing requires this view itself to be focused; when the
-        // email TextField has focus, its bubbled keys must not leak in here.
-        if !self.focus_handle.is_focused(window) {
+        if event.keystroke.key.as_str() != "tab" || self.is_signed_in {
             return;
         }
-        let edited = match event.keystroke.key.as_str() {
-            "tab" => {
-                if !self.is_signed_in {
-                    window.focus(&self.email_field.focus_handle(cx), cx);
-                }
-                true
-            }
-            "enter" => {
-                self.model.message.push('\n');
-                true
-            }
-            _ => crate::text_input::apply_editing_keystroke(
-                &mut self.model.message,
-                &event.keystroke,
-            ),
-        };
-        // Swallow backspace even on empty text — bubbling would hit the
-        // global Delete shortcut.
-        if edited || event.keystroke.key.as_str() == "backspace" {
-            cx.stop_propagation();
-            cx.notify();
+        if self.message_area.focus_handle(cx).is_focused(window) {
+            window.focus(&self.email_field.focus_handle(cx), cx);
+        } else if self.email_field.focus_handle(cx).is_focused(window) {
+            window.focus(&self.message_area.focus_handle(cx), cx);
+        } else {
+            return;
         }
+        cx.stop_propagation();
+        cx.notify();
     }
 
     fn can_submit(&self) -> bool {
@@ -109,12 +110,6 @@ impl FeedbackView {
         let has_reply = self.has_reply_email();
         let can_submit = self.can_submit();
         let is_sending = self.model.is_sending;
-        let msg_empty = self.model.message.trim().is_empty();
-        let msg_preview = if msg_empty {
-            "Your feedback…".to_string()
-        } else {
-            self.model.message.clone()
-        };
         let error_text = self.model.error.clone();
 
         let mut form = div().flex().flex_col().gap(px(Spacing::LG));
@@ -129,7 +124,6 @@ impl FeedbackView {
                 .child(
                     div()
                         .id("feedback-message-input")
-                        .h(px(160.0))
                         .rounded(px(Radius::SM))
                         .border_1()
                         .border_color(BorderColors::SUBTLE)
@@ -137,19 +131,15 @@ impl FeedbackView {
                         .p(px(Spacing::SM_MD))
                         .cursor_text()
                         .on_click(cx.listener(|this, _, window, cx| {
-                            window.focus(&this.focus_handle, cx);
+                            window.focus(&this.message_area.focus_handle(cx), cx);
                             cx.notify();
                         }))
                         .child(
                             div()
                                 .flex_1()
                                 .text_size(px(FontSize::MD))
-                                .text_color(if msg_empty {
-                                    Text::MUTED
-                                } else {
-                                    Text::PRIMARY
-                                })
-                                .child(msg_preview),
+                                .text_color(Text::PRIMARY)
+                                .child(self.message_area.clone()),
                         ),
                 ),
         );
@@ -510,7 +500,6 @@ impl Render for FeedbackView {
 
         div()
             .id("fronda-feedback")
-            .key_context("input")
             .track_focus(&self.focus_handle.clone())
             .on_key_down(cx.listener(Self::handle_key_down))
             .flex()

@@ -69,9 +69,9 @@ pub mod skill_store;
 #[cfg(feature = "desktop-app")]
 pub mod global_shortcuts;
 #[cfg(feature = "desktop-app")]
-pub mod text_field;
+pub mod text_area;
 #[cfg(feature = "desktop-app")]
-pub mod text_input;
+pub mod text_field;
 #[cfg(feature = "desktop-app")]
 pub mod theme;
 pub mod timeline_model;
