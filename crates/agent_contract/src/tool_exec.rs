@@ -125,6 +125,26 @@ pub trait ProjectNavigator: Send + Sync {
     fn create(&self, name: Option<&str>) -> Result<OpenedProject, String>;
 }
 
+/// Host seam for generation recovery (upstream #216): re-subscribe to an
+/// in-flight backend generation job and report its definitive outcome. Poll vs
+/// callback transport is the host's business — the seam only contracts the
+/// result: success carries result URLs, failure carries a reason. `Err` means
+/// the backend could not be reached; the manifest stays untouched so a later
+/// recovery pass can retry. Unset on the pure/MCP path.
+pub trait GenerationBackend: Send + Sync {
+    fn resume_job(&self, job_id: &str) -> Result<generation_core::GenerationOutcome, String>;
+}
+
+/// One planned recovery job and what happened to it (upstream #216).
+#[derive(Debug)]
+pub struct GenerationRecoveryRecord {
+    pub job: generation_core::RecoverableJob,
+    /// `None`: no backend installed — the action is recorded only.
+    /// `Some(Ok(()))`: the backend outcome was applied to the manifest.
+    /// `Some(Err(_))`: resume failed; the manifest is untouched for this job.
+    pub outcome: Option<Result<(), String>>,
+}
+
 const DEFAULT_CLIP_DURATION_FRAMES: i64 = 150;
 
 /// Resolved clip placement geometry from optional agent args + manifest entry.
@@ -490,6 +510,9 @@ pub struct ToolExecutor {
     project_lister: Option<Arc<dyn ProjectLister>>,
     /// Host navigator for open_project/new_project. `None` on the pure path.
     project_navigator: Option<Arc<dyn ProjectNavigator>>,
+    /// Host backend for generation recovery (#216). `None` on the pure/MCP path,
+    /// where recovery still plans but only records the actions.
+    generation_backend: Option<Arc<dyn GenerationBackend>>,
     /// The project's OTHER timelines (upstream #255) — nest carriers resolve
     /// their children here by id. The active timeline stays in `timeline`.
     sibling_timelines: Vec<Timeline>,
@@ -527,6 +550,7 @@ impl ToolExecutor {
             export_host: None,
             project_lister: None,
             project_navigator: None,
+            generation_backend: None,
             sibling_timelines: Vec::new(),
         }
     }
@@ -557,6 +581,40 @@ impl ToolExecutor {
     /// Install the host navigator for open_project/new_project.
     pub fn set_project_navigator(&mut self, nav: Arc<dyn ProjectNavigator>) {
         self.project_navigator = Some(nav);
+    }
+
+    /// Install the host generation backend for recovery (#216). Account-scoped
+    /// like the navigator — it survives project swaps.
+    pub fn set_generation_backend(&mut self, backend: Arc<dyn GenerationBackend>) {
+        self.generation_backend = Some(backend);
+    }
+
+    /// Plan and run generation recovery over the current manifest (#216):
+    /// resume each in-flight job via the host backend and apply its outcome.
+    /// Without a backend the plan is still returned with nothing applied (no
+    /// error), keeping recovery decoupled from boot wiring. Bumps the revision
+    /// when at least one outcome lands so observers see the manifest change.
+    pub fn recover_generations(&mut self) -> Vec<GenerationRecoveryRecord> {
+        let backend = self.generation_backend.clone();
+        let mut records = Vec::new();
+        let mut applied = false;
+        for job in generation_core::plan_generation_recovery(&self.media_manifest) {
+            let outcome = backend.as_ref().map(|b| {
+                b.resume_job(&job.backend_job_id).and_then(|o| {
+                    generation_core::apply_generation_outcome(
+                        &mut self.media_manifest,
+                        &job.asset_id,
+                        o,
+                    )
+                })
+            });
+            applied |= matches!(outcome, Some(Ok(())));
+            records.push(GenerationRecoveryRecord { job, outcome });
+        }
+        if applied {
+            self.revision += 1;
+        }
+        records
     }
 
     /// Replace the project's sibling timelines (upstream #255). The app shell
@@ -6584,6 +6642,116 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("generationStatus"));
+    }
+
+    // ── Generation recovery seam (upstream #216) ──
+
+    fn make_recovery_executor() -> ToolExecutor {
+        let mut manifest = MediaManifest::default();
+        for (id, job) in [
+            ("gen-ok", "job-ok"),
+            ("gen-fail", "job-fail"),
+            ("gen-err", "job-err"),
+        ] {
+            manifest.entries.push(core_model::MediaManifestEntry {
+                id: id.to_string(),
+                name: format!("{id}.mp4"),
+                r#type: core_model::ClipType::Video,
+                source: MediaSource::External {
+                    absolute_path: String::new(),
+                },
+                duration: 5.0,
+                generation_input: Some(GenerationInput {
+                    backend_job_id: Some(job.to_string()),
+                    ..Default::default()
+                }),
+                source_width: None,
+                source_height: None,
+                source_fps: None,
+                has_audio: None,
+                folder_id: None,
+                cached_remote_url: None,
+                cached_remote_url_expires_at: None,
+                source_timecode_frame: None,
+                source_timecode_quanta: None,
+                source_timecode_drop_frame: None,
+                ai_tags: None,
+                ai_description: None,
+                ai_label_status: None,
+                generation_status: Some("generating".to_string()),
+            });
+        }
+        ToolExecutor::new(Timeline::default(), manifest)
+    }
+
+    struct MockGenerationBackend;
+    impl GenerationBackend for MockGenerationBackend {
+        fn resume_job(&self, job_id: &str) -> Result<generation_core::GenerationOutcome, String> {
+            match job_id {
+                "job-ok" => Ok(generation_core::GenerationOutcome::Success {
+                    result_urls: vec!["https://cdn/out.mp4".into()],
+                }),
+                "job-fail" => Ok(generation_core::GenerationOutcome::Failure {
+                    reason: "job expired".into(),
+                }),
+                _ => Err("backend unreachable".into()),
+            }
+        }
+    }
+
+    #[test]
+    fn generation_recovery_full_chain_applies_outcomes() {
+        let mut exec = make_recovery_executor();
+        let rev0 = exec.revision();
+        exec.set_generation_backend(std::sync::Arc::new(MockGenerationBackend));
+
+        let records = exec.recover_generations();
+        assert_eq!(records.len(), 3);
+        assert!(matches!(records[0].outcome, Some(Ok(()))));
+        assert!(matches!(records[1].outcome, Some(Ok(()))));
+        assert!(matches!(records[2].outcome, Some(Err(_))));
+
+        let e0 = &exec.media_manifest().entries[0];
+        assert_eq!(e0.generation_status.as_deref(), Some("none"));
+        assert_eq!(
+            e0.generation_input.as_ref().unwrap().result_urls,
+            Some(vec!["https://cdn/out.mp4".to_string()])
+        );
+        let e1 = &exec.media_manifest().entries[1];
+        assert_eq!(e1.generation_status.as_deref(), Some("failed"));
+        assert_eq!(e1.generation_input.as_ref().unwrap().result_urls, None);
+        // Transport error leaves the entry untouched so a later pass can retry.
+        let e2 = &exec.media_manifest().entries[2];
+        assert_eq!(e2.generation_status.as_deref(), Some("generating"));
+        assert!(
+            exec.revision() > rev0,
+            "applied outcomes must bump the revision"
+        );
+
+        // Applied jobs are terminal — a second pass only retries the unreachable one.
+        let again = exec.recover_generations();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].job.backend_job_id, "job-err");
+    }
+
+    #[test]
+    fn generation_recovery_without_backend_records_plan_only() {
+        let mut exec = make_recovery_executor();
+        let rev0 = exec.revision();
+
+        let records = exec.recover_generations();
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(|r| r.outcome.is_none()));
+        assert!(records
+            .iter()
+            .all(|r| r.job.action == generation_core::RecoveryAction::Resubscribe));
+        // No backend: nothing applied, no error, manifest untouched.
+        assert!(exec
+            .media_manifest()
+            .entries
+            .iter()
+            .all(|e| e.generation_status.as_deref() == Some("generating")));
+        assert_eq!(exec.revision(), rev0);
     }
 
     #[test]
