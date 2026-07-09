@@ -147,6 +147,38 @@ pub struct TimelineWord {
     pub end_frame: i64,
 }
 
+/// Map source-second word stamps `(text, start_seconds, end_seconds)` onto one clip as
+/// [`TimelineWord`]s in project frames, via [`span_frames`] (source_offset_seconds =
+/// trim_start_frame / fps, divided by clip speed — the silence-detector placement
+/// convention). Invisible words are dropped without consuming an index; straddlers keep
+/// their visible sliver. Global indices run from `first_index` so per-clip results
+/// concatenate into one timeline-ordered list.
+pub fn map_word_stamps(
+    stamps: &[(&str, f64, f64)],
+    clip: &Clip,
+    track_index: usize,
+    first_index: usize,
+    fps: i64,
+) -> Vec<TimelineWord> {
+    let mut out = Vec::new();
+    for &(text, start_sec, end_sec) in stamps {
+        let Some((start_frame, end_frame)) = span_frames(start_sec, end_sec, clip, fps) else {
+            continue;
+        };
+        out.push(TimelineWord {
+            index: first_index + out.len(),
+            clip_id: clip.id.clone(),
+            track_index,
+            clip_start_frame: clip.start_frame,
+            clip_end_frame: clip.start_frame + clip.duration_frames,
+            text: text.to_string(),
+            start_frame,
+            end_frame,
+        });
+    }
+    out
+}
+
 /// The resolved cut plan: cut `ranges` on `primary_track`; the ripple carries linked
 /// partners across the same span. `removed_texts` is the removed words in timeline order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -418,6 +450,85 @@ mod tests {
         let c = clip(0, 30, 0, 2.0);
         // source 0..1s (0..30 src frames) → timeline 0..15.
         assert_eq!(span_frames(0.0, 1.0, &c, 30), Some((0, 15)));
+    }
+
+    // ── map_word_stamps (transcription-provider-seam) ───────────────────────
+
+    #[test]
+    fn map_word_stamps_spec_table_trimmed_clip() {
+        // Spec row 1: trim 60 @ 30fps (2.0s offset), word at source 3.0s,
+        // clip start 100 → project frame 130.
+        let c = clip(100, 300, 60, 1.0);
+        let words = map_word_stamps(&[("hello", 3.0, 3.5)], &c, 0, 0, 30);
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].start_frame, 130);
+        assert_eq!(words[0].end_frame, 145);
+        assert_eq!(words[0].text, "hello");
+        assert_eq!(words[0].index, 0);
+        assert_eq!(words[0].clip_id, "c");
+        assert_eq!(words[0].track_index, 0);
+        assert_eq!(words[0].clip_start_frame, 100);
+        assert_eq!(words[0].clip_end_frame, 400);
+    }
+
+    #[test]
+    fn map_word_stamps_spec_table_untrimmed_clip() {
+        // Spec row 2: trim 0 @ 30fps, word at source 1.0s, clip start 0 → frame 30.
+        let c = clip(0, 300, 0, 1.0);
+        let words = map_word_stamps(&[("one", 1.0, 1.5)], &c, 2, 5, 30);
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].start_frame, 30);
+        assert_eq!(words[0].end_frame, 45);
+        assert_eq!(words[0].index, 5, "global index starts at first_index");
+        assert_eq!(words[0].track_index, 2);
+    }
+
+    #[test]
+    fn map_word_stamps_speed_scales() {
+        // 2x speed, trim 60: source 3.0s = frame 90 → (90-60)/2 = 15 past clip start.
+        let c = clip(100, 300, 60, 2.0);
+        let words = map_word_stamps(&[("fast", 3.0, 3.5)], &c, 0, 0, 30);
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].start_frame, 115);
+        assert_eq!(words[0].end_frame, 123); // 100 + round(45/2)
+    }
+
+    #[test]
+    fn map_word_stamps_multi_clip_chaining() {
+        // One source split across two clips: A shows 0..2s, B shows 2..4s.
+        // Each word lands in exactly one clip; global indices stay contiguous.
+        let a = clip(0, 60, 0, 1.0);
+        let mut b = clip(60, 60, 60, 1.0);
+        b.id = "b".into();
+        let stamps = [("one", 1.0, 1.5), ("two", 3.0, 3.5)];
+        let mut all = map_word_stamps(&stamps, &a, 0, 0, 30);
+        all.extend(map_word_stamps(&stamps, &b, 0, all.len(), 30));
+        assert_eq!(all.len(), 2);
+        assert_eq!((all[0].index, all[0].start_frame), (0, 30));
+        assert_eq!(all[0].clip_id, "c");
+        assert_eq!((all[1].index, all[1].start_frame, all[1].end_frame), (1, 90, 105));
+        assert_eq!(all[1].clip_id, "b");
+    }
+
+    #[test]
+    fn map_word_stamps_drops_invisible_and_clamps_straddler() {
+        // trim 60 @ 30fps: visible source window is 2.0s.. — a word before it is
+        // dropped without consuming an index; a straddler keeps its visible sliver.
+        let c = clip(100, 300, 60, 1.0);
+        let stamps = [("gone", 0.5, 1.0), ("edge", 1.5, 2.5), ("in", 3.0, 3.5)];
+        let words = map_word_stamps(&stamps, &c, 0, 0, 30);
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].text, "edge");
+        assert_eq!((words[0].start_frame, words[0].end_frame), (100, 115));
+        assert_eq!(words[0].index, 0, "dropped word does not consume an index");
+        assert_eq!(words[1].text, "in");
+        assert_eq!(words[1].index, 1);
+    }
+
+    #[test]
+    fn map_word_stamps_empty_input() {
+        let c = clip(0, 300, 0, 1.0);
+        assert!(map_word_stamps(&[], &c, 0, 0, 30).is_empty());
     }
 
     // ── plan_word_removal ─────────────────────────────────────────────────
