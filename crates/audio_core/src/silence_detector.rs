@@ -170,6 +170,56 @@ pub fn detect_silence(
         .collect()
 }
 
+/// Invert speech spans (source seconds) into removable non-speech ranges over
+/// `[0, clip_duration]`. Overlapping/touching spans merge first. Boundaries
+/// abutting speech get `edge_padding_seconds`; clip edges stay unpadded (no
+/// speech onset to protect there, per the spec's worked examples). Ranges
+/// shorter than `min_silence_seconds` are dropped.
+pub fn speech_spans_to_dead_air(
+    spans: &[(f64, f64)],
+    clip_duration: f64,
+    min_silence_seconds: f64,
+    edge_padding_seconds: f64,
+) -> Vec<(f64, f64)> {
+    if clip_duration <= 0.0 {
+        return Vec::new();
+    }
+    let mut speech: Vec<(f64, f64)> = spans
+        .iter()
+        .map(|&(s, e)| (s.max(0.0), e.min(clip_duration)))
+        .filter(|&(s, e)| e > s)
+        .collect();
+    speech.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut merged: Vec<(f64, f64)> = Vec::with_capacity(speech.len());
+    for (s, e) in speech {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
+
+    let mut gaps = Vec::new();
+    let mut cursor = 0.0;
+    for &(s, e) in &merged {
+        if s > cursor {
+            gaps.push((cursor, s));
+        }
+        cursor = e;
+    }
+    if cursor < clip_duration {
+        gaps.push((cursor, clip_duration));
+    }
+
+    gaps.into_iter()
+        .filter_map(|(s, e)| {
+            let padded_s = if s > 0.0 { s + edge_padding_seconds } else { s };
+            let padded_e = if e < clip_duration { e - edge_padding_seconds } else { e };
+            (padded_e > padded_s && padded_e - padded_s >= min_silence_seconds)
+                .then_some((padded_s, padded_e))
+        })
+        .collect()
+}
+
 /// Clip placement parameters for converting source ranges to project frames.
 #[derive(Debug, Clone)]
 pub struct ClipPlacement {
@@ -362,6 +412,67 @@ mod tests {
         };
         let db = config.threshold_db();
         assert!((db - (-40.0)).abs() < 0.1, "db={db}");
+    }
+
+    #[test]
+    fn speech_spans_gap_between_speech_becomes_a_cut() {
+        // Spec scenario: [0,2],[5,8] over 8s, pad 0.1, min 0.5 → (2.1, 4.9).
+        let out = speech_spans_to_dead_air(&[(0.0, 2.0), (5.0, 8.0)], 8.0, 0.5, 0.1);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!((out[0].0 - 2.1).abs() < 1e-9, "{out:?}");
+        assert!((out[0].1 - 4.9).abs() < 1e-9, "{out:?}");
+    }
+
+    #[test]
+    fn speech_spans_head_and_tail_gaps_keep_clip_edges_unpadded() {
+        // Spec table: [1,7] over 8s → (0.0,0.9),(7.1,8.0).
+        let out = speech_spans_to_dead_air(&[(1.0, 7.0)], 8.0, 0.5, 0.1);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(out[0].0.abs() < 1e-9 && (out[0].1 - 0.9).abs() < 1e-9, "{out:?}");
+        assert!((out[1].0 - 7.1).abs() < 1e-9 && (out[1].1 - 8.0).abs() < 1e-9, "{out:?}");
+    }
+
+    #[test]
+    fn speech_spans_short_gap_filtered() {
+        // Spec table: [0,3],[3.3,8] → 0.3s gap under min 0.5 → none.
+        let out = speech_spans_to_dead_air(&[(0.0, 3.0), (3.3, 8.0)], 8.0, 0.5, 0.1);
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn speech_spans_all_speech_yields_nothing() {
+        let out = speech_spans_to_dead_air(&[(0.0, 8.0)], 8.0, 0.5, 0.1);
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn speech_spans_no_speech_removes_everything() {
+        let out = speech_spans_to_dead_air(&[], 8.0, 0.5, 0.1);
+        assert_eq!(out, vec![(0.0, 8.0)]);
+    }
+
+    #[test]
+    fn speech_spans_overlapping_and_touching_merge_before_inversion() {
+        // Unsorted + overlapping + touching: [2,4],[0,3],[4,5] merge to [0,5].
+        let out = speech_spans_to_dead_air(&[(2.0, 4.0), (0.0, 3.0), (4.0, 5.0)], 8.0, 0.5, 0.1);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!((out[0].0 - 5.1).abs() < 1e-9 && (out[0].1 - 8.0).abs() < 1e-9, "{out:?}");
+    }
+
+    #[test]
+    fn speech_spans_clamped_to_clip_duration() {
+        // Spans past the clip bounds clamp: speech [0,1],[6,8] → gap (1.1, 5.9).
+        let out = speech_spans_to_dead_air(&[(-1.0, 1.0), (6.0, 10.0)], 8.0, 0.5, 0.1);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!((out[0].0 - 1.1).abs() < 1e-9 && (out[0].1 - 5.9).abs() < 1e-9, "{out:?}");
+    }
+
+    #[test]
+    fn speech_spans_degenerate_inputs_yield_nothing() {
+        assert!(speech_spans_to_dead_air(&[], 0.0, 0.5, 0.1).is_empty());
+        // Inverted span is ignored, not inverted into fake speech.
+        let out = speech_spans_to_dead_air(&[(5.0, 3.0)], 8.0, 0.5, 0.1);
+        assert_eq!(out, vec![(0.0, 8.0)]);
     }
 
     #[test]
