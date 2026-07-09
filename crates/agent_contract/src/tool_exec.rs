@@ -45,6 +45,20 @@ pub trait ClipAudioSource: Send + Sync {
     ) -> Option<Vec<f32>>;
 }
 
+/// A detected speech span in source seconds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeechSpan {
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+}
+
+/// Host seam for speech analysis (upstream #261's VAD): return a source's
+/// speech spans, or `None` when analysis is unavailable for it — the caller
+/// then falls back to the RMS silence path. Unset on the pure/MCP path.
+pub trait SpeechAnalyzer: Send + Sync {
+    fn analyze(&self, source: &MediaSource, sample_rate: u32) -> Option<Vec<SpeechSpan>>;
+}
+
 /// Host seam for `export_project`: the pure executor validates the request and
 /// the app shell performs the actual render/write (video encode, interchange
 /// file, or project package). Unset on the MCP/headless path, where the tool
@@ -484,6 +498,8 @@ pub struct ToolExecutor {
     /// Host audio decoder for `remove_silence` (#174). `None` on the pure/MCP path,
     /// where `remove_silence` reports it's unavailable.
     audio_source: Option<Arc<dyn ClipAudioSource>>,
+    /// Host speech analyzer (VAD seam). `None` → `remove_silence` uses the RMS path.
+    speech_analyzer: Option<Arc<dyn SpeechAnalyzer>>,
     /// Host exporter for `export_project`. `None` on the pure/MCP path.
     export_host: Option<Arc<dyn ExportHost>>,
     /// Host recents-registry reader for `get_projects`. `None` on the pure/MCP path.
@@ -524,6 +540,7 @@ impl ToolExecutor {
             timeline_words: Vec::new(),
             matte_writer: None,
             audio_source: None,
+            speech_analyzer: None,
             export_host: None,
             project_lister: None,
             project_navigator: None,
@@ -542,6 +559,12 @@ impl ToolExecutor {
     /// unavailable.
     pub fn set_audio_source(&mut self, source: Arc<dyn ClipAudioSource>) {
         self.audio_source = Some(source);
+    }
+
+    /// Install the host speech analyzer. Optional — when unset (or when it
+    /// returns None for a source) `remove_silence` uses the RMS adaptive path.
+    pub fn set_speech_analyzer(&mut self, analyzer: Arc<dyn SpeechAnalyzer>) {
+        self.speech_analyzer = Some(analyzer);
     }
 
     /// Install the host exporter for `export_project`.
@@ -3483,9 +3506,10 @@ impl ToolExecutor {
         }))
     }
 
-    /// REMOVE_SILENCE: detect silent regions in a clip's audio via on-device RMS
-    /// and ripple-delete them (#174). Decoding is a host seam; the detector and
-    /// source→frame mapping are pure (`audio_core::silence_detector`).
+    /// REMOVE_SILENCE: detect dead air via the host SpeechAnalyzer when present
+    /// (span inversion), else on-device RMS, and ripple-delete it (#174).
+    /// Decoding/VAD are host seams; the detectors and source→frame mapping are
+    /// pure (`audio_core::silence_detector`).
     fn cmd_remove_silence(&mut self, args: &Value) -> Result<Value, String> {
         // Upstream #261 semantics by default: no arguments, whole-timeline
         // dead-air removal with a threshold ADAPTIVE to each recording's own
@@ -3604,7 +3628,8 @@ impl ToolExecutor {
 
     /// Detect dead-air frame ranges on ONE track against the CURRENT timeline
     /// state. `only_clip` restricts to a single clip (the clip-scoped mode);
-    /// otherwise every audio-bearing clip on the track is analysed.
+    /// otherwise every audio-bearing clip on the track is analysed. Per clip
+    /// the speech analyzer is consulted first; absent or None → RMS path.
     #[allow(clippy::too_many_arguments)]
     fn detect_track_dead_air(
         &self,
@@ -3644,10 +3669,10 @@ impl ToolExecutor {
                 }
                 _ => {}
             }
-            let Some(source) = self
+            let Some((source, source_duration)) = self
                 .media_manifest
                 .entry_for(&clip.media_ref)
-                .map(|e| e.source.clone())
+                .map(|e| (e.source.clone(), e.duration))
             else {
                 if only_clip.is_some() {
                     return Err(
@@ -3657,25 +3682,53 @@ impl ToolExecutor {
                 }
                 continue;
             };
-            let Some(pcm) = audio.decode_source_pcm(&source, sample_rate, channels) else {
-                if only_clip.is_some() {
-                    return Err("Could not decode the clip's audio.".to_string());
+            let spans = self
+                .speech_analyzer
+                .as_ref()
+                .and_then(|a| a.analyze(&source, sample_rate));
+            let source_ranges = match spans {
+                Some(spans) => {
+                    *analysed_any = true;
+                    let spans: Vec<(f64, f64)> = spans
+                        .iter()
+                        .map(|s| (s.start_seconds, s.end_seconds))
+                        .collect();
+                    sd::speech_spans_to_dead_air(
+                        &spans,
+                        source_duration,
+                        min_silence_seconds,
+                        edge_padding_seconds,
+                    )
+                    .into_iter()
+                    .map(|(start_seconds, end_seconds)| sd::SourceRange {
+                        start_seconds,
+                        end_seconds,
+                    })
+                    .collect()
                 }
-                continue;
+                None => {
+                    let Some(pcm) = audio.decode_source_pcm(&source, sample_rate, channels)
+                    else {
+                        if only_clip.is_some() {
+                            return Err("Could not decode the clip's audio.".to_string());
+                        }
+                        continue;
+                    };
+                    *analysed_any = true;
+                    let envelope = sd::rms_envelope(&pcm, channels, window);
+                    let envelope_rate = sample_rate as f64 / window as f64;
+                    let threshold = match threshold_db {
+                        Some(db) => sd::SilenceDetectionConfig::from_db(db),
+                        None => sd::adaptive_silence_threshold(&envelope),
+                    };
+                    let config = sd::SilenceDetectionConfig {
+                        threshold,
+                        min_silence_seconds,
+                        edge_padding_seconds,
+                    };
+                    sd::detect_silence(&envelope, envelope_rate, &config)
+                }
             };
-            *analysed_any = true;
-            let envelope = sd::rms_envelope(&pcm, channels, window);
-            let envelope_rate = sample_rate as f64 / window as f64;
-            let threshold = match threshold_db {
-                Some(db) => sd::SilenceDetectionConfig::from_db(db),
-                None => sd::adaptive_silence_threshold(&envelope),
-            };
-            let config = sd::SilenceDetectionConfig {
-                threshold,
-                min_silence_seconds,
-                edge_padding_seconds,
-            };
-            let source_ranges = sd::detect_silence(&envelope, envelope_rate, &config);
             let placement = sd::ClipPlacement {
                 timeline_start_frame: clip.start_frame,
                 duration_frames: clip.duration_frames,
@@ -8444,6 +8497,72 @@ mod tests {
             .unwrap_err();
         assert!(!err.contains("Unknown tool"), "{err}");
         assert!(err.contains("unavailable"), "{err}");
+    }
+
+    struct MockSpeech(Option<Vec<SpeechSpan>>);
+    impl SpeechAnalyzer for MockSpeech {
+        fn analyze(
+            &self,
+            _source: &core_model::MediaSource,
+            _sample_rate: u32,
+        ) -> Option<Vec<SpeechSpan>> {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn remove_silence_uses_analyzer_spans_over_rms() {
+        // MockLoudAudio has NO RMS-silent region; the analyzer says speech is
+        // only 0–2s of the 4s source, so any cut must come from span inversion.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("a1", 4.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockLoudAudio));
+        exec.set_speech_analyzer(std::sync::Arc::new(MockSpeech(Some(vec![SpeechSpan {
+            start_seconds: 0.0,
+            end_seconds: 2.0,
+        }]))));
+        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+
+        let res = exec
+            .execute("remove_silence", &json!({"clipId": clip_id}))
+            .unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["sectionsRemoved"], 1, "{v}");
+        // Dead air (2.1, 4.0) — trailing gap keeps the clip edge unpadded —
+        // ≈ 57 frames at 30fps.
+        let removed = v["removedFrames"].as_i64().unwrap();
+        assert!((55..=59).contains(&removed), "{v}");
+    }
+
+    #[test]
+    fn remove_silence_analyzer_none_falls_back_to_rms_identically() {
+        let run = |with_none_analyzer: bool| {
+            let mut manifest = MediaManifest::default();
+            manifest.entries.push(audio_media("a1", 4.0));
+            let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+            exec.set_audio_source(std::sync::Arc::new(MockAudio));
+            if with_none_analyzer {
+                exec.set_speech_analyzer(std::sync::Arc::new(MockSpeech(None)));
+            }
+            exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+            let res = exec.execute("remove_silence", &json!({})).unwrap();
+            let payload = res["content"][0]["text"].as_str().unwrap().to_string();
+            let spans: Vec<(i64, i64)> = exec
+                .timeline()
+                .tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .map(|c| (c.start_frame, c.start_frame + c.duration_frames))
+                .collect();
+            (payload, spans)
+        };
+        let (base_payload, base_spans) = run(false);
+        let (none_payload, none_spans) = run(true);
+        assert_eq!(base_payload, none_payload, "fallback payload identical");
+        assert_eq!(base_spans, none_spans, "fallback timeline identical");
     }
 
     fn sync_noise(n: usize) -> Vec<f32> {
