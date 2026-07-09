@@ -5,23 +5,18 @@
 //!     optional screenshot row + context note + error text + Cancel/Send footer.
 //!   • Success: checkmark heading + detail text + Done button.
 
+use crate::text_field::{TextField, TextFieldEvent};
 use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
 use app_contract::feedback_model::FeedbackViewModel;
 use gpui::{
-    div, prelude::*, px, Animation, AnimationExt as _, App, ClickEvent, Context, FocusHandle,
-    Focusable, InteractiveElement, KeyDownEvent, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, Animation, AnimationExt as _, App, ClickEvent, Context, Entity,
+    FocusHandle, Focusable, InteractiveElement, KeyDownEvent, ParentElement, Render, Styled,
+    Window,
 };
 use std::time::Duration;
 
-/// Which form field receives typing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FeedbackField {
-    Message,
-    Email,
-}
-
 /// gpui Feedback view component.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FeedbackView {
     focus_handle: FocusHandle,
     pub model: FeedbackViewModel,
@@ -29,51 +24,53 @@ pub struct FeedbackView {
     pub is_signed_in: bool,
     /// True when a screenshot was captured at open time.
     pub has_screenshot: bool,
-    focused_field: FeedbackField,
+    /// Real text field (IME-capable) for the reply email.
+    email_field: Entity<TextField>,
 }
 
 impl FeedbackView {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let email_field =
+            cx.new(|cx| TextField::new(cx, "you@example.com — so we can reply"));
+        cx.subscribe(&email_field, |this, field, event, cx| {
+            if matches!(event, TextFieldEvent::Edited) {
+                this.model.email = field.read(cx).text().to_string();
+                cx.notify();
+            }
+        })
+        .detach();
         Self {
             focus_handle: cx.focus_handle(),
             model: FeedbackViewModel::default(),
             is_signed_in: false,
             has_screenshot: false,
-            focused_field: FeedbackField::Message,
+            email_field,
         }
     }
 
-    /// Form typing: click a field to target it, Tab switches, Enter is a
-    /// newline in the message (single-line email ignores it).
+    /// Message typing (key_char path; the email field is a real TextField).
+    /// Enter is a newline; Tab moves focus to the email field.
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let edited = match event.keystroke.key.as_str() {
             "tab" => {
-                self.focused_field = match self.focused_field {
-                    FeedbackField::Message if !self.is_signed_in => FeedbackField::Email,
-                    _ => FeedbackField::Message,
-                };
+                if !self.is_signed_in {
+                    window.focus(&self.email_field.focus_handle(cx), cx);
+                }
                 true
             }
             "enter" => {
-                if self.focused_field == FeedbackField::Message {
-                    self.model.message.push('\n');
-                    true
-                } else {
-                    false
-                }
+                self.model.message.push('\n');
+                true
             }
-            _ => {
-                let target = match self.focused_field {
-                    FeedbackField::Message => &mut self.model.message,
-                    FeedbackField::Email => &mut self.model.email,
-                };
-                crate::text_input::apply_editing_keystroke(target, &event.keystroke)
-            }
+            _ => crate::text_input::apply_editing_keystroke(
+                &mut self.model.message,
+                &event.keystroke,
+            ),
         };
         // Swallow backspace even on empty text — bubbling would hit the
         // global Delete shortcut.
@@ -100,10 +97,6 @@ impl FeedbackView {
     }
 
     fn render_form(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Signing in hides the email field; don't leave typing targeting it.
-        if self.is_signed_in && self.focused_field == FeedbackField::Email {
-            self.focused_field = FeedbackField::Message;
-        }
         let is_signed_in = self.is_signed_in;
         let has_screenshot = self.has_screenshot;
         let include_screenshot = self.model.include_screenshot;
@@ -117,14 +110,6 @@ impl FeedbackView {
         } else {
             self.model.message.clone()
         };
-        let email_empty = self.model.email.is_empty();
-        let email_preview = if email_empty {
-            "you@example.com — so we can reply".to_string()
-        } else {
-            self.model.email.clone()
-        };
-        let msg_focused = self.focused_field == FeedbackField::Message;
-        let email_focused = self.focused_field == FeedbackField::Email;
         let error_text = self.model.error.clone();
 
         let mut form = div().flex().flex_col().gap(px(Spacing::LG));
@@ -142,16 +127,11 @@ impl FeedbackView {
                         .h(px(160.0))
                         .rounded(px(Radius::SM))
                         .border_1()
-                        .border_color(if msg_focused {
-                            BorderColors::PRIMARY
-                        } else {
-                            BorderColors::SUBTLE
-                        })
+                        .border_color(BorderColors::SUBTLE)
                         .bg(Background::SURFACE)
                         .p(px(Spacing::SM_MD))
                         .cursor_text()
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.focused_field = FeedbackField::Message;
                             window.focus(&this.focus_handle, cx);
                             cx.notify();
                         }))
@@ -182,27 +162,13 @@ impl FeedbackView {
                             .id("feedback-email-input")
                             .rounded(px(Radius::SM))
                             .border_1()
-                            .border_color(if email_focused {
-                                BorderColors::PRIMARY
-                            } else {
-                                BorderColors::SUBTLE
-                            })
+                            .border_color(BorderColors::SUBTLE)
                             .bg(Background::SURFACE)
                             .px(px(Spacing::MD_LG))
                             .py(px(Spacing::SM_MD))
                             .text_size(px(FontSize::MD))
-                            .text_color(if email_empty {
-                                Text::MUTED
-                            } else {
-                                Text::PRIMARY
-                            })
-                            .cursor_text()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.focused_field = FeedbackField::Email;
-                                window.focus(&this.focus_handle, cx);
-                                cx.notify();
-                            }))
-                            .child(email_preview),
+                            .text_color(Text::PRIMARY)
+                            .child(self.email_field.clone()),
                     ),
             );
         }

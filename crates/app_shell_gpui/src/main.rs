@@ -12,6 +12,7 @@ fn main() {
     gpui_platform::application()
         .with_assets(FrondaAssets)
         .run(move |cx: &mut App| {
+            app_shell_gpui::text_field::bind_text_field_keys(cx);
             open_main_window(cx);
         });
 }
