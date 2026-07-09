@@ -548,8 +548,11 @@ fn list_folders() -> ToolDefinition {
 fn list_models() -> ToolDefinition {
     ToolDefinition {
         name: "list_models",
-        description: "List available generation models.",
-        input_schema: object(&[]),
+        description: "Lists generation models with their capabilities (durations, aspect ratios, resolutions, first/last frame and reference support for video, voices/category for audio) and plan availability. Each entry carries 'available'; paid-only models on a free plan stay listed with available=false and an 'upgrade' hint instead of being hidden. Call before generate_video, generate_image, generate_audio, or generate_music and pick an available model that supports the constraints you need.",
+        input_schema: object(&[(
+            "type",
+            string("Filter by kind: video, image, or audio. Omit to list all models."),
+        )]),
     }
 }
 

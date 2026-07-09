@@ -12,6 +12,7 @@ path = "src/lib.rs"
 audio_core = { package = "fronda-audio-core", path = "../audio_core" }
 chrono.workspace = true
 core_model = { package = "fronda-core-model", path = "../core_model" }
+generation_core = { package = "fronda-generation-core", path = "../generation_core" }
 serde.workspace = true
 serde_json.workspace = true
 timeline_core = { package = "fronda-timeline-core", path = "../timeline_core" }

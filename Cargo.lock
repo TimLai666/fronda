@@ -1874,6 +1874,7 @@ dependencies = [
  "chrono",
  "fronda-audio-core",
  "fronda-core-model",
+ "fronda-generation-core",
  "fronda-timeline-core",
  "serde",
  "serde_json",
