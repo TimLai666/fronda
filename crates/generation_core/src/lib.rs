@@ -12,7 +12,7 @@ pub mod generation_payload;
 pub mod llm_config;
 pub mod model_catalog;
 
-use core_model::GenerationInput;
+use core_model::{GenerationInput, MediaManifest};
 use std::collections::HashMap;
 
 // ── States ──────────────────────────────────────────────────────
@@ -529,6 +529,89 @@ impl GenerationMachine {
             other => other, // can't reset while active
         }
     }
+}
+
+// ── Generation recovery (upstream #216) ─────────────────────────
+
+/// Recovery action for an in-flight generation found at project load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecoveryAction {
+    /// Re-subscribe to the backend job and await its outcome.
+    Resubscribe,
+}
+
+/// An asset whose generation was still in flight when the project was last saved:
+/// an active `generation_status` plus a persisted `backend_job_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoverableJob {
+    pub asset_id: String,
+    pub backend_job_id: String,
+    pub action: RecoveryAction,
+}
+
+/// "failed" and "none" (or absent) are terminal; everything mid-pipeline is active.
+fn generation_status_is_active(status: Option<&str>) -> bool {
+    matches!(status, Some("preparing" | "generating" | "downloading"))
+}
+
+/// List every asset whose generation is in flight, in manifest order, with the
+/// recovery action to take. Pure — no IO, no clock. Entries with a terminal
+/// status or without a backend job id are excluded (nothing to resume).
+pub fn plan_generation_recovery(manifest: &MediaManifest) -> Vec<RecoverableJob> {
+    manifest
+        .entries
+        .iter()
+        .filter(|e| generation_status_is_active(e.generation_status.as_deref()))
+        .filter_map(|e| {
+            let job_id = e.generation_input.as_ref()?.backend_job_id.as_deref()?;
+            if job_id.is_empty() {
+                return None;
+            }
+            Some(RecoverableJob {
+                asset_id: e.id.clone(),
+                backend_job_id: job_id.to_string(),
+                action: RecoveryAction::Resubscribe,
+            })
+        })
+        .collect()
+}
+
+/// Definitive outcome reported by the generation backend for a resumed job.
+/// Transport errors are NOT an outcome — a caller that cannot reach the backend
+/// must leave the manifest untouched so a later recovery can retry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenerationOutcome {
+    Success { result_urls: Vec<String> },
+    Failure { reason: String },
+}
+
+/// Write a backend outcome back into the manifest, keeping it consistent with
+/// the get_media "poll until none" contract: success stores `result_urls` and
+/// finishes the status ("none"); failure marks the status "failed" and writes
+/// no URLs (the reason is for the caller/log — media.json has no field for it).
+pub fn apply_generation_outcome(
+    manifest: &mut MediaManifest,
+    asset_id: &str,
+    outcome: GenerationOutcome,
+) -> Result<(), String> {
+    let entry = manifest
+        .entries
+        .iter_mut()
+        .find(|e| e.id == asset_id)
+        .ok_or_else(|| format!("No media entry '{asset_id}'"))?;
+    match outcome {
+        GenerationOutcome::Success { result_urls } => {
+            entry
+                .generation_input
+                .get_or_insert_with(GenerationInput::default)
+                .result_urls = Some(result_urls);
+            entry.generation_status = Some("none".to_string());
+        }
+        GenerationOutcome::Failure { .. } => {
+            entry.generation_status = Some("failed".to_string());
+        }
+    }
+    Ok(())
 }
 
 // ── Export progress state machine (EXP-008~010) ─────────────────
@@ -2644,5 +2727,230 @@ mod tests {
     fn exp_008_removal_failure_still_returns_removed() {
         let status = prepare_export_destination("/output/video.mp4", |_| true, |_| false);
         assert_eq!(status, DestinationStatus::RemovedExisting);
+    }
+
+    // ── Generation recovery (upstream #216) ──────────────────────
+
+    fn recovery_entry(
+        id: &str,
+        status: Option<&str>,
+        job_id: Option<&str>,
+    ) -> core_model::MediaManifestEntry {
+        core_model::MediaManifestEntry {
+            id: id.to_string(),
+            name: format!("gen-{id}"),
+            r#type: core_model::ClipType::Video,
+            source: core_model::MediaSource::External {
+                absolute_path: format!("/tmp/{id}.mp4"),
+            },
+            duration: 5.0,
+            generation_input: job_id.map(|j| GenerationInput {
+                backend_job_id: Some(j.to_string()),
+                ..Default::default()
+            }),
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+            generation_status: status.map(String::from),
+        }
+    }
+
+    fn recovery_manifest(entries: Vec<core_model::MediaManifestEntry>) -> core_model::MediaManifest {
+        core_model::MediaManifest {
+            entries,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rec_in_flight_job_listed_with_resubscribe() {
+        let manifest =
+            recovery_manifest(vec![recovery_entry("a", Some("generating"), Some("job-1"))]);
+        let plan = plan_generation_recovery(&manifest);
+        assert_eq!(
+            plan,
+            vec![RecoverableJob {
+                asset_id: "a".into(),
+                backend_job_id: "job-1".into(),
+                action: RecoveryAction::Resubscribe,
+            }]
+        );
+    }
+
+    #[test]
+    fn rec_completed_and_never_started_skipped() {
+        let mut input_without_job = recovery_entry("d", Some("generating"), Some("job-x"));
+        input_without_job
+            .generation_input
+            .as_mut()
+            .unwrap()
+            .backend_job_id = None;
+        let manifest = recovery_manifest(vec![
+            recovery_entry("a", Some("none"), Some("job-1")),
+            recovery_entry("b", None, Some("job-2")),
+            recovery_entry("c", Some("generating"), None),
+            input_without_job,
+            recovery_entry("e", Some("failed"), Some("job-3")),
+            recovery_entry("f", Some("generating"), Some("")),
+        ]);
+        assert!(plan_generation_recovery(&manifest).is_empty());
+    }
+
+    #[test]
+    fn rec_all_active_statuses_listed_in_manifest_order() {
+        let manifest = recovery_manifest(vec![
+            recovery_entry("a", Some("preparing"), Some("job-a")),
+            recovery_entry("b", Some("generating"), Some("job-b")),
+            recovery_entry("c", Some("downloading"), Some("job-c")),
+        ]);
+        let plan = plan_generation_recovery(&manifest);
+        let ids: Vec<&str> = plan.iter().map(|j| j.asset_id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "b", "c"]);
+        assert!(plan.iter().all(|j| j.action == RecoveryAction::Resubscribe));
+        // Deterministic: replanning yields the identical plan.
+        assert_eq!(plan, plan_generation_recovery(&manifest));
+    }
+
+    #[test]
+    fn rec_success_writes_results_and_finishes() {
+        let mut manifest =
+            recovery_manifest(vec![recovery_entry("a", Some("generating"), Some("job-1"))]);
+        apply_generation_outcome(
+            &mut manifest,
+            "a",
+            GenerationOutcome::Success {
+                result_urls: vec!["https://cdn/out.mp4".into()],
+            },
+        )
+        .unwrap();
+        let e = &manifest.entries[0];
+        assert_eq!(e.generation_status.as_deref(), Some("none"));
+        assert_eq!(
+            e.generation_input.as_ref().unwrap().result_urls,
+            Some(vec!["https://cdn/out.mp4".to_string()])
+        );
+        assert!(plan_generation_recovery(&manifest).is_empty());
+    }
+
+    #[test]
+    fn rec_failure_recorded_without_result_urls() {
+        let mut manifest =
+            recovery_manifest(vec![recovery_entry("a", Some("downloading"), Some("job-1"))]);
+        apply_generation_outcome(
+            &mut manifest,
+            "a",
+            GenerationOutcome::Failure {
+                reason: "job expired".into(),
+            },
+        )
+        .unwrap();
+        let e = &manifest.entries[0];
+        assert_eq!(e.generation_status.as_deref(), Some("failed"));
+        assert_eq!(e.generation_input.as_ref().unwrap().result_urls, None);
+        assert!(plan_generation_recovery(&manifest).is_empty());
+    }
+
+    #[test]
+    fn rec_unknown_asset_id_errors() {
+        let mut manifest = recovery_manifest(vec![]);
+        assert!(apply_generation_outcome(
+            &mut manifest,
+            "ghost",
+            GenerationOutcome::Failure { reason: "x".into() },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rec_success_without_generation_input_still_stores_urls() {
+        let mut manifest = recovery_manifest(vec![recovery_entry("a", Some("downloading"), None)]);
+        apply_generation_outcome(
+            &mut manifest,
+            "a",
+            GenerationOutcome::Success {
+                result_urls: vec!["https://cdn/x.png".into()],
+            },
+        )
+        .unwrap();
+        let e = &manifest.entries[0];
+        assert_eq!(e.generation_status.as_deref(), Some("none"));
+        assert_eq!(
+            e.generation_input.as_ref().unwrap().result_urls,
+            Some(vec!["https://cdn/x.png".to_string()])
+        );
+    }
+
+    #[test]
+    fn rec_round_trip_uses_swift_serde_keys() {
+        // Parse a manifest exactly as media.json writes it (Swift key casing),
+        // recover, and prove the mutation lands on the real on-disk keys.
+        let raw = serde_json::json!({
+            "version": 2,
+            "entries": [{
+                "id": "gen-1",
+                "name": "Generated video",
+                "type": "video",
+                "source": { "external": { "absolutePath": "/tmp/gen-1.mp4" } },
+                "duration": 5.0,
+                "generationStatus": "generating",
+                "generationInput": {
+                    "prompt": "a sunrise",
+                    "model": "m1",
+                    "duration": 5,
+                    "aspectRatio": "16:9",
+                    "backendJobId": "job-9"
+                }
+            }],
+            "folders": []
+        });
+        let mut manifest: core_model::MediaManifest = serde_json::from_value(raw).unwrap();
+        let plan = plan_generation_recovery(&manifest);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].backend_job_id, "job-9");
+
+        apply_generation_outcome(
+            &mut manifest,
+            "gen-1",
+            GenerationOutcome::Success {
+                result_urls: vec!["https://cdn/out.mp4".into()],
+            },
+        )
+        .unwrap();
+
+        let out = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(out["entries"][0]["generationStatus"], "none");
+        assert_eq!(
+            out["entries"][0]["generationInput"]["resultURLs"],
+            serde_json::json!(["https://cdn/out.mp4"])
+        );
+        assert!(
+            out["entries"][0]["generationInput"]
+                .as_object()
+                .unwrap()
+                .get("resultUrls")
+                .is_none(),
+            "no lowercased acronym key"
+        );
+
+        let reloaded: core_model::MediaManifest = serde_json::from_value(out).unwrap();
+        assert!(plan_generation_recovery(&reloaded).is_empty());
+        assert_eq!(
+            reloaded.entries[0]
+                .generation_input
+                .as_ref()
+                .unwrap()
+                .result_urls,
+            Some(vec!["https://cdn/out.mp4".to_string()])
+        );
     }
 }

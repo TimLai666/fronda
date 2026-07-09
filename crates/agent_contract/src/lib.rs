@@ -18,15 +18,9 @@ pub use agent_loop::{
     ToolUse,
 };
 pub use tool_exec::{
-<<<<<<< HEAD
-    AgentSkill, ClipAudioSource, ExportHost, ExportOutcome, ExportRequest, FeedbackPayload,
-    FeedbackSender, KnownProject, MatteWriter, OpenedProject, ProjectLister, ProjectNavigator,
-    ProjectSeams, ToolExecutor,
-=======
     AccountState, AgentSkill, ClipAudioSource, ExportHost, ExportOutcome, ExportRequest,
-    KnownProject, MatteWriter, OpenedProject, ProjectLister, ProjectNavigator, ProjectSeams,
-    ToolExecutor,
->>>>>>> worktree-agent-a9973e879f6bb394e
+    FeedbackPayload, FeedbackSender, GenerationBackend, GenerationRecoveryRecord, KnownProject,
+    MatteWriter, OpenedProject, ProjectLister, ProjectNavigator, ProjectSeams, ToolExecutor,
 };
 pub use tools::{skill_prompt_index, system_instruction_with_skills};
 pub use undo::{UndoCommand, UndoError, UndoStack};
