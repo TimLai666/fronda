@@ -128,7 +128,12 @@ impl ChatView {
     /// deleting past the anchor closes it (Swift AgentInputBox semantics).
     fn composer_edited(&mut self, text: String, cx: &mut Context<Self>) {
         if let Some(anchor) = self.mention_anchor {
-            if text.len() <= anchor || !text[anchor..].starts_with('@') {
+            // is_char_boundary: an IME edit before the anchor can shift a
+            // multi-byte char across it — slicing would panic (review find).
+            if text.len() <= anchor
+                || !text.is_char_boundary(anchor)
+                || !text[anchor..].starts_with('@')
+            {
                 self.close_mention_picker();
             } else {
                 self.mention_picker.query = text[anchor + 1..].to_string();

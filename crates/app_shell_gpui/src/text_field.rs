@@ -430,10 +430,14 @@ impl EntityInputHandler for TextField {
         } else {
             self.marked_range = None;
         }
+        // Composition-relative selection offsets into the document by the
+        // START of the replaced region (the upstream example adds range.end
+        // to the end — wrong whenever the previous marked range was
+        // non-empty; caret lands mid-char during CJK composition).
         self.selected_range = new_selected_range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
+            .map(|new_range| new_range.start + range.start..new_range.end + range.start)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
 
         cx.emit(TextFieldEvent::Edited);
