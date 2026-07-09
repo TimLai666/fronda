@@ -1,4 +1,4 @@
-//! All 63 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 64 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -16,6 +16,7 @@
 //! v0.6.1 gap port: added upstream's read-only get_projects via ProjectLister (63 → 64).
 //! v0.6.1 nav port: open_project implemented + new_project added via ProjectNavigator;
 //! the speculative create_project/delete_project stubs removed (64 → 63).
+//! Upstream #152: added send_feedback via the FeedbackSender seam (63 → 64).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -31,7 +32,7 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 63 tools exposed to the agent.
+/// Returns all 64 tools exposed to the agent.
 ///
 /// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -87,6 +88,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         rename_media(),
         ripple_delete_ranges(),
         search_media(),
+        send_feedback(),
         set_blend_mode(),
         set_chroma_key(),
         set_clip_properties(),
@@ -148,6 +150,9 @@ Edits are undoable and effectively free — make them directly rather than askin
 
 # Media library
 - create_folder / move_to_folder / rename_media organize the library; import_media registers an external video, audio, or image file.
+
+# Feedback
+- send_feedback: relay a bug report or feature request to the Fronda team in the user's own words — only when the user asks.
 
 Keep replies terse and outcome-first. Always verify clip and track IDs exist before referencing them."#;
 
@@ -1253,6 +1258,17 @@ fn new_project() -> ToolDefinition {
     }
 }
 
+fn send_feedback() -> ToolDefinition {
+    ToolDefinition {
+        name: "send_feedback",
+        description: "Send the user's product feedback (bug report or feature request) to the Fronda team. Pass the user's own words; the app version and a timeline summary are attached automatically. Each unique message sends once, at most 8 per session.",
+        input_schema: object(&[(
+            "message",
+            string("The feedback text, in the user's words (required)."),
+        )]),
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1267,8 +1283,8 @@ mod tests {
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            63,
-            "TDEF-001: 63 tools (see the header history)"
+            64,
+            "TDEF-001: 64 tools (see the header history)"
         );
     }
 
@@ -1297,7 +1313,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 63, "all 63 tool names must be unique");
+        assert_eq!(names.len(), 64, "all 64 tool names must be unique");
     }
 
     #[test]
