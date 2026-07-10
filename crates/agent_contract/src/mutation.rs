@@ -1125,10 +1125,9 @@ pub struct ImportFolderInput {
     pub recursive: bool,
 }
 
-/// Validate `import_folder` input.
-///
-/// UNWIRED: matches the schema (`path`), but the stub executor still reads
-/// `folderName` — wire once the executor is fixed to the schema shape.
+/// Validates `import_folder` args per the advertised schema (`path` +
+/// optional `recursive`). Wired into the live gate since the executor was
+/// aligned to read `path` (it used to invent `folderName`).
 pub fn validate_import_folder(input: &Value) -> ValidationResult<ImportFolderInput> {
     let path = match input.get("path").and_then(|v| v.as_str()) {
         Some(p) if !p.is_empty() => p.to_string(),

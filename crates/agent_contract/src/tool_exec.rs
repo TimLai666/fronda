@@ -967,6 +967,7 @@ impl ToolExecutor {
             // validator-only (None) pending a Swift-parity decision — the Rust
             // executor deliberately styles non-text clips today.
             "set_clip_properties" => gate(m::validate_set_clip_properties(args, None)),
+            "import_folder" => gate(m::validate_import_folder(args)),
             "remove_clips" => gate(m::validate_remove_clips(args)),
             "move_clips" | "move_clips_linked" => gate(m::validate_move_clips(args)),
             "add_clips" => gate(m::validate_add_clips(args)),
@@ -4973,14 +4974,23 @@ impl ToolExecutor {
     }
 
     fn cmd_import_folder(&mut self, args: &Value) -> Result<Value, String> {
-        let folder_name = args
-            .get("folderName")
+        // Aligned to the advertised schema (`path`, not the old `folderName`
+        // the stub invented): the created folder is named after the last
+        // path component. Actual file scanning remains unimplemented.
+        let path = args
+            .get("path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing folderName".to_string())?;
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| "import_folder: missing or empty 'path'".to_string())?;
         let recursive = args
             .get("recursive")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
+        let folder_name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.is_empty())
+            .unwrap_or(path);
 
         let folder = core_model::MediaFolder {
             id: Uuid::new_v4().to_string(),
@@ -4994,8 +5004,8 @@ impl ToolExecutor {
             "content": [{
                 "type": "text",
                 "text": format!(
-                    "Created folder '{}' (id: {}, recursive: {}) — actual file scanning is not yet implemented",
-                    folder_name, folder_id, recursive
+                    "Created folder '{}' from '{}' (id: {}, recursive: {}) — actual file scanning is not yet implemented",
+                    folder_name, path, folder_id, recursive
                 )
             }]
         }))
@@ -8243,11 +8253,24 @@ mod tests {
 
     #[test]
     fn exec_031_import_folder() {
+        // Schema-aligned: the tool takes `path` (the stub used to invent
+        // `folderName`, so agents following the advertised schema got
+        // "Missing folderName"). Folder name = last path component.
         let mut exec = make_executor();
         let _result = exec
-            .execute("import_folder", &json!({"folderName": "New Folder"}))
+            .execute(
+                "import_folder",
+                &json!({"path": "C:/Media/Shoot Day 2", "recursive": false}),
+            )
             .unwrap();
         assert_eq!(exec.media_manifest.folders.len(), 1);
+        assert_eq!(exec.media_manifest.folders[0].name, "Shoot Day 2");
+
+        // The old invented arg no longer works — the wired validator rejects.
+        let err = exec
+            .execute("import_folder", &json!({"folderName": "New Folder"}))
+            .unwrap_err();
+        assert!(err.contains("path"), "got: {err}");
     }
 
     #[test]
