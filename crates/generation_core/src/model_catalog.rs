@@ -698,6 +698,111 @@ pub fn catalog() -> &'static [ModelConfig] {
     CATALOG.get_or_init(build_catalog)
 }
 
+// ── Upscale catalog (Swift `UpscaleModelConfig` at 9dfde8d^) ────────
+//
+// Swift keeps upscalers as their own type, not a Video/Image/Audio caps
+// variant — mirrored here (also keeps `ModelCaps` matches exhaustive
+// elsewhere). `buildFalInput` payload closures are backend plumbing and
+// are not carried, same rule as the other configs.
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpscaleModelConfig {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub speed: &'static str,
+    pub endpoint: &'static str,
+    /// USD per source second.
+    pub price_per_second: f64,
+    pub p75_duration_seconds: i64,
+    pub supported_types: &'static [core_model::ClipType],
+}
+
+impl UpscaleModelConfig {
+    pub fn kind(&self) -> ModelKind {
+        ModelKind::Upscale
+    }
+
+    /// Swift `supportedTypes.contains`.
+    pub fn supports(&self, clip_type: core_model::ClipType) -> bool {
+        self.supported_types.contains(&clip_type)
+    }
+}
+
+/// All upscale models, in Swift `allModels` order (video, then image).
+pub fn upscale_catalog() -> &'static [UpscaleModelConfig] {
+    use core_model::ClipType;
+    const UPSCALE_CATALOG: &[UpscaleModelConfig] = &[
+        UpscaleModelConfig {
+            id: "bytedance-upscaler",
+            display_name: "Bytedance Upscaler",
+            speed: "Fast",
+            endpoint: "fal-ai/bytedance-upscaler/upscale/video",
+            price_per_second: 0.0288,
+            p75_duration_seconds: 130,
+            supported_types: &[ClipType::Video],
+        },
+        UpscaleModelConfig {
+            id: "seedvr-upscaler",
+            display_name: "SeedVR2",
+            speed: "Medium",
+            endpoint: "fal-ai/seedvr/upscale/video",
+            price_per_second: 0.062,
+            p75_duration_seconds: 691,
+            supported_types: &[ClipType::Video],
+        },
+        UpscaleModelConfig {
+            id: "topaz-upscaler",
+            display_name: "Topaz Upscale",
+            speed: "Slow",
+            endpoint: "fal-ai/topaz/upscale/video",
+            price_per_second: 0.08,
+            p75_duration_seconds: 65,
+            supported_types: &[ClipType::Video],
+        },
+        UpscaleModelConfig {
+            id: "seedvr-image-upscaler",
+            display_name: "SeedVR2",
+            speed: "Fast",
+            endpoint: "fal-ai/seedvr/upscale/image",
+            price_per_second: 0.04,
+            p75_duration_seconds: 19,
+            supported_types: &[ClipType::Image],
+        },
+        UpscaleModelConfig {
+            id: "topaz-image-upscaler",
+            display_name: "Topaz Upscale",
+            speed: "Medium",
+            endpoint: "fal-ai/topaz/upscale/image",
+            price_per_second: 0.08,
+            p75_duration_seconds: 24,
+            supported_types: &[ClipType::Image],
+        },
+    ];
+    UPSCALE_CATALOG
+}
+
+/// Swift `UpscaleModelConfig.models(for:)`.
+pub fn upscale_models_for(clip_type: core_model::ClipType) -> Vec<&'static UpscaleModelConfig> {
+    upscale_catalog()
+        .iter()
+        .filter(|m| m.supports(clip_type))
+        .collect()
+}
+
+pub fn upscale_model_by_id(id: &str) -> Option<&'static UpscaleModelConfig> {
+    upscale_catalog().iter().find(|m| m.id == id)
+}
+
+/// Swift `UpscaleModelConfig.allIds.contains` (the Rerun branch test).
+pub fn is_upscale_model_id(id: &str) -> bool {
+    upscale_model_by_id(id).is_some()
+}
+
+/// Swift `CostEstimator.upscaleCost`: pricePerSecond × max(1, duration).
+pub fn upscale_cost(model: &UpscaleModelConfig, duration_seconds: i64) -> Option<f64> {
+    Some(model.price_per_second * duration_seconds.max(1) as f64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1031,6 +1136,99 @@ mod tests {
         assert_eq!(format_usd(Some(0.005)), "<$0.01");
         assert_eq!(format_usd(Some(1.512)), "$1.51");
         assert_eq!(format_usd(Some(3.4)), "$3.40");
+    }
+
+    #[test]
+    fn upscale_catalog_snapshot_field_for_field() {
+        // Pins the Swift `UpscaleModelConfig.allModels` list at 9dfde8d^.
+        use core_model::ClipType;
+        let got: Vec<(&str, &str, &str, &str, f64, i64, &[ClipType])> = upscale_catalog()
+            .iter()
+            .map(|m| {
+                (
+                    m.id,
+                    m.display_name,
+                    m.speed,
+                    m.endpoint,
+                    m.price_per_second,
+                    m.p75_duration_seconds,
+                    m.supported_types,
+                )
+            })
+            .collect();
+        let expected: Vec<(&str, &str, &str, &str, f64, i64, &[ClipType])> = vec![
+            (
+                "bytedance-upscaler",
+                "Bytedance Upscaler",
+                "Fast",
+                "fal-ai/bytedance-upscaler/upscale/video",
+                0.0288,
+                130,
+                &[ClipType::Video],
+            ),
+            (
+                "seedvr-upscaler",
+                "SeedVR2",
+                "Medium",
+                "fal-ai/seedvr/upscale/video",
+                0.062,
+                691,
+                &[ClipType::Video],
+            ),
+            (
+                "topaz-upscaler",
+                "Topaz Upscale",
+                "Slow",
+                "fal-ai/topaz/upscale/video",
+                0.08,
+                65,
+                &[ClipType::Video],
+            ),
+            (
+                "seedvr-image-upscaler",
+                "SeedVR2",
+                "Fast",
+                "fal-ai/seedvr/upscale/image",
+                0.04,
+                19,
+                &[ClipType::Image],
+            ),
+            (
+                "topaz-image-upscaler",
+                "Topaz Upscale",
+                "Medium",
+                "fal-ai/topaz/upscale/image",
+                0.08,
+                24,
+                &[ClipType::Image],
+            ),
+        ];
+        assert_eq!(got, expected);
+        assert!(upscale_catalog().iter().all(|m| m.kind() == ModelKind::Upscale));
+    }
+
+    #[test]
+    fn upscale_models_for_filters_by_type() {
+        use core_model::ClipType;
+        let video: Vec<&str> = upscale_models_for(ClipType::Video).iter().map(|m| m.id).collect();
+        assert_eq!(
+            video,
+            vec!["bytedance-upscaler", "seedvr-upscaler", "topaz-upscaler"]
+        );
+        let image: Vec<&str> = upscale_models_for(ClipType::Image).iter().map(|m| m.id).collect();
+        assert_eq!(image, vec!["seedvr-image-upscaler", "topaz-image-upscaler"]);
+        assert!(upscale_models_for(ClipType::Audio).is_empty());
+    }
+
+    #[test]
+    fn upscale_id_lookup_and_cost() {
+        assert!(is_upscale_model_id("topaz-upscaler"));
+        assert!(!is_upscale_model_id("seedance-2"));
+        let m = upscale_model_by_id("bytedance-upscaler").unwrap();
+        // Swift upscaleCost clamps duration to ≥ 1.
+        assert_eq!(upscale_cost(m, 10), Some(0.288));
+        assert_eq!(upscale_cost(m, 0), Some(0.0288));
+        assert_eq!(format_usd(upscale_cost(m, 10)), "$0.29");
     }
 
     #[test]

@@ -1619,6 +1619,17 @@ impl Render for InspectorView {
         }
         let rows_enabled = first_clip.is_some();
 
+        // Forward the media-library selection so AI Edit actions bind to it.
+        // Guarded like the text-tab entity syncs above — notify only on change.
+        let asset_sel = self.selected_media_asset_id.clone();
+        self.ai_edit_view.update(cx, |ai, cx| {
+            if ai.selected_media_asset_id != asset_sel {
+                ai.selected_media_asset_id = asset_sel;
+                ai.state.status = None;
+                ai.state.show_upscale_picker = false;
+                cx.notify();
+            }
+        });
         let ai_edit_entity = self.ai_edit_view.clone();
         let kf_entity = self.keyframes_view.clone();
 
