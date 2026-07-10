@@ -66,6 +66,11 @@ fn default_text_duration_frames(fps: i64) -> i64 {
     ((3.0 * fps.max(1) as f64).round() as i64).max(1)
 }
 
+/// Prompt handed off from the media tabs (agent-chat seam), drained on the
+/// next editor render — the seam closure has no gpui context, so it parks the
+/// prompt here and the caller's notify triggers the redraw that delivers it.
+static PENDING_AGENT_PROMPT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 /// Root view that switches between Home and Editor.
 #[derive(Debug, Clone)]
 pub struct AppRoot {
@@ -145,8 +150,77 @@ impl AppRoot {
             self.preview_view = Some(cx.new(|cx| PreviewView::new(cx)));
             self.timeline_view = Some(cx.new(|cx| TimelineView::new(cx)));
             self.inspector_view = Some(cx.new(|cx| InspectorView::new(cx)));
+            self.wire_cross_view_state(cx);
         }
         cx.notify();
+    }
+
+    /// Cross-view wiring installed once with the editor entities: timeline
+    /// selection/playhead and media-library selection feed the inspector, the
+    /// inspector's crop toggle drives the preview's crop overlay, and the
+    /// media tabs' agent handoff seam parks prompts for the chat composer.
+    fn wire_cross_view_state(&mut self, cx: &mut Context<Self>) {
+        if let Some(timeline) = self.timeline_view.clone() {
+            cx.observe(&timeline, |this, timeline, cx| {
+                let (selected, playhead) = {
+                    let state = &timeline.read(cx).state;
+                    (state.selected_clip_ids.clone(), state.playhead_frame)
+                };
+                if let Some(inspector) = this.inspector_view.clone() {
+                    inspector.update(cx, |ins, cx| {
+                        if ins.selected_clip_ids != selected || ins.playhead_frame != playhead {
+                            ins.selected_clip_ids = selected;
+                            ins.playhead_frame = playhead;
+                            cx.notify();
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
+        if let Some(media) = self.media_panel_view.clone() {
+            cx.observe(&media, |this, media, cx| {
+                // Source-mode target: the anchor (last plainly-clicked or
+                // toggled id) when still selected, else the newest selected.
+                let asset = {
+                    let library = &media.read(cx).library;
+                    library
+                        .selection_anchor
+                        .as_ref()
+                        .filter(|a| library.selection.iter().any(|s| s == *a))
+                        .or_else(|| library.selection.last())
+                        .cloned()
+                };
+                if let Some(inspector) = this.inspector_view.clone() {
+                    inspector.update(cx, |ins, cx| {
+                        if ins.selected_media_asset_id != asset {
+                            ins.selected_media_asset_id = asset;
+                            cx.notify();
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
+        if let Some(inspector) = self.inspector_view.clone() {
+            cx.observe(&inspector, |this, inspector, cx| {
+                let crop = inspector.read(cx).crop_editing_active;
+                if let Some(preview) = this.preview_view.clone() {
+                    preview.update(cx, |preview, cx| {
+                        if preview.show_crop_overlay != crop {
+                            preview.show_crop_overlay = crop;
+                            cx.notify();
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
+        crate::media_panel_view::set_agent_chat_handoff(Box::new(|prompt| {
+            if let Ok(mut slot) = PENDING_AGENT_PROMPT.lock() {
+                *slot = Some(prompt.to_string());
+            }
+        }));
     }
 
     /// Toolbar "T": insert a default text clip at the timeline playhead via
@@ -1299,10 +1373,33 @@ impl Focusable for AppRoot {
 }
 
 impl Render for AppRoot {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content: gpui::AnyElement = match self.active_screen {
             ActiveScreen::Home => self.render_home(cx).into_any_element(),
             ActiveScreen::Editor => {
+                // Agent-chat handoff: reveal the agent pane and draft the
+                // parked prompt into the composer (Swift: newChat + draft +
+                // open panel). Focus/text mutation is deferred out of render.
+                let pending = PENDING_AGENT_PROMPT.lock().ok().and_then(|mut s| s.take());
+                if let Some(prompt) = pending {
+                    if self
+                        .pane_layout
+                        .maximized_pane
+                        .is_some_and(|p| p != PaneId::Agent)
+                    {
+                        self.pane_layout.unmaximize();
+                    }
+                    if !self.pane_layout.is_visible(PaneId::Agent) {
+                        self.pane_layout.toggle_pane(PaneId::Agent);
+                    }
+                    if let Some(chat) = self.chat_view.clone() {
+                        cx.defer_in(window, move |_, window, cx| {
+                            chat.update(cx, |chat, cx| {
+                                chat.set_composer_text(prompt, window, cx);
+                            });
+                        });
+                    }
+                }
                 let layout = self.pane_layout.clone();
                 let contents = editor_view::PaneContents::new(
                     self.chat_view.clone(),

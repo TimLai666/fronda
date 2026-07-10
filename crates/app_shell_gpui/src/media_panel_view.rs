@@ -953,6 +953,13 @@ enum ToolbarMenu {
     Overflow,
 }
 
+/// Right-click target in the library grid: an asset or a folder tile.
+#[derive(Debug, Clone)]
+enum LibraryMenuTarget {
+    Asset { id: String },
+    Folder { id: String, name: String },
+}
+
 /// Media panel gpui entity.
 pub struct MediaPanelView {
     pub state: MediaPanelState,
@@ -974,6 +981,12 @@ pub struct MediaPanelView {
     folder_rename_field: Entity<crate::text_field::TextField>,
     /// Folder id being renamed inline, if any.
     folder_editing: Option<String>,
+    /// Inline asset rename (same TextField pattern, commits via rename_media).
+    asset_rename_field: Entity<crate::text_field::TextField>,
+    /// Asset id being renamed inline, if any.
+    asset_editing: Option<String>,
+    /// Right-click menu on asset/folder tiles (context-menu-system 2.2/2.3).
+    library_menu: crate::context_menu::ContextMenuState<LibraryMenuTarget>,
     open_menu: Option<ToolbarMenu>,
     /// Captions tab state (captions-tab spec).
     pub captions: CaptionsState,
@@ -1009,6 +1022,14 @@ impl MediaPanelView {
             }
         })
         .detach();
+        let asset_rename_field = cx.new(|cx| crate::text_field::TextField::new(cx, "Asset name"));
+        cx.subscribe(&asset_rename_field, |this, _field, event, cx| {
+            if matches!(event, crate::text_field::TextFieldEvent::Submitted) {
+                this.commit_asset_rename(cx);
+                cx.notify();
+            }
+        })
+        .detach();
         let music_prompt_area = cx.new(|cx| {
             crate::text_area::TextArea::new(cx, "Describe the music…")
                 .with_min_lines(2)
@@ -1032,6 +1053,9 @@ impl MediaPanelView {
             search_field,
             folder_rename_field,
             folder_editing: None,
+            asset_rename_field,
+            asset_editing: None,
+            library_menu: crate::context_menu::ContextMenuState::new(),
             open_menu: None,
             captions: CaptionsState::default(),
             music: MusicState::default(),
@@ -1089,6 +1113,18 @@ impl MediaPanelView {
         if self.folder_editing.as_ref().is_some_and(|id| !folder_exists(id)) {
             self.folder_editing = None;
         }
+        let entry_exists = |id: &String| self.manifest.entries.iter().any(|e| &e.id == id);
+        if self.asset_editing.as_ref().is_some_and(|id| !entry_exists(id)) {
+            self.asset_editing = None;
+        }
+        let menu_target_gone = match self.library_menu.target() {
+            Some(LibraryMenuTarget::Asset { id }) => !entry_exists(id),
+            Some(LibraryMenuTarget::Folder { id, .. }) => !folder_exists(id),
+            None => false,
+        };
+        if menu_target_gone {
+            self.library_menu.close();
+        }
         self.library
             .selection
             .retain(|id| self.manifest.entries.iter().any(|e| &e.id == id));
@@ -1096,6 +1132,7 @@ impl MediaPanelView {
     }
 
     pub fn select_tab(&mut self, tab: MediaPanelTab, cx: &mut Context<Self>) {
+        self.library_menu.close();
         self.state.select_tab(tab);
         cx.notify();
     }
@@ -1161,7 +1198,8 @@ impl MediaPanelView {
         }
     }
 
-    /// Begin inline rename of a folder tile.
+    /// Begin inline rename of a folder tile. A rename already in progress
+    /// commits first (Swift commits on focus loss).
     fn begin_folder_rename(
         &mut self,
         id: &str,
@@ -1169,12 +1207,152 @@ impl MediaPanelView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.commit_folder_rename(cx);
+        self.commit_asset_rename(cx);
         self.folder_editing = Some(id.to_string());
         let seed = seed.to_string();
         self.folder_rename_field.update(cx, |field, cx| {
             field.set_text(seed, cx);
         });
         window.focus(&self.folder_rename_field.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Begin inline rename of an asset tile (context menu Rename). A rename
+    /// already in progress commits first.
+    fn begin_asset_rename(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_folder_rename(cx);
+        self.commit_asset_rename(cx);
+        let Some(name) = self
+            .manifest
+            .entries
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.name.clone())
+        else {
+            return;
+        };
+        self.asset_editing = Some(id.to_string());
+        self.asset_rename_field.update(cx, |field, cx| {
+            field.set_text(name, cx);
+        });
+        window.focus(&self.asset_rename_field.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Commit an in-progress asset rename (Enter or click-away). An empty
+    /// name cancels, mirroring the folder rename.
+    fn commit_asset_rename(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.asset_editing.take() {
+            let name = self.asset_rename_field.read(cx).text().trim().to_string();
+            if !name.is_empty() {
+                Self::run_shared_tool(
+                    "rename_media",
+                    serde_json::json!({ "mediaId": id, "name": name }),
+                );
+            }
+        }
+    }
+
+    /// Resolved on-disk source of an asset (existing files only).
+    fn asset_source_path(&self, id: &str) -> Option<std::path::PathBuf> {
+        self.state
+            .items
+            .iter()
+            .find(|i| i.id == id)
+            .and_then(|i| i.source_path.clone())
+    }
+
+    /// Asset tile menu (Swift AssetThumbnailView.contextMenuItems subset).
+    /// Reveal is omitted when no local source file resolves (project-card
+    /// missing-package pattern). Order defines activation indices.
+    fn asset_menu_entries(can_reveal: bool) -> Vec<crate::context_menu::MenuEntry> {
+        use crate::context_menu::MenuEntry;
+        let mut entries = vec![MenuEntry::item("rename", "Rename")];
+        if can_reveal {
+            entries.push(MenuEntry::item("reveal", "Reveal in File Manager"));
+        }
+        entries.push(MenuEntry::separator());
+        entries.push(MenuEntry::destructive("delete", "Delete"));
+        entries
+    }
+
+    /// Folder tile menu (Swift FolderTileView.contextMenuItems).
+    fn folder_menu_entries() -> Vec<crate::context_menu::MenuEntry> {
+        use crate::context_menu::MenuEntry;
+        vec![
+            MenuEntry::item("open", "Open"),
+            MenuEntry::item("rename", "Rename"),
+            MenuEntry::separator(),
+            MenuEntry::destructive("delete", "Delete"),
+        ]
+    }
+
+    fn library_menu_entries(
+        &self,
+        target: &LibraryMenuTarget,
+    ) -> Vec<crate::context_menu::MenuEntry> {
+        match target {
+            LibraryMenuTarget::Asset { id } => {
+                Self::asset_menu_entries(self.asset_source_path(id).is_some())
+            }
+            LibraryMenuTarget::Folder { .. } => Self::folder_menu_entries(),
+        }
+    }
+
+    /// Delete from the tile menu: the whole selection when the clicked asset
+    /// is part of it (Swift contextTargetIds), else just that asset.
+    fn delete_asset_via_menu(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.library.selection.iter().any(|s| s == id) {
+            self.delete_selection(cx);
+        } else {
+            Self::run_shared_tool("delete_media", serde_json::json!({ "mediaId": id }));
+            cx.notify();
+        }
+    }
+
+    fn activate_library_menu_item(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.library_menu.target().cloned() else {
+            return;
+        };
+        let entries = self.library_menu_entries(&target);
+        if let crate::context_menu::Activation::Perform(action) =
+            self.library_menu.activate(index, &entries)
+        {
+            match target {
+                LibraryMenuTarget::Asset { id } => match action {
+                    "rename" => self.begin_asset_rename(&id, window, cx),
+                    "reveal" => {
+                        if let Some(path) = self.asset_source_path(&id) {
+                            crate::platform_adapter::reveal_in_file_manager(&path);
+                        }
+                    }
+                    "delete" => self.delete_asset_via_menu(&id, cx),
+                    _ => {}
+                },
+                LibraryMenuTarget::Folder { id, name } => match action {
+                    "open" => {
+                        self.library.current_folder = Some(id);
+                        self.library.clear_selection();
+                    }
+                    "rename" => self.begin_folder_rename(&id, &name, window, cx),
+                    "delete" => {
+                        // Executor semantics: direct child assets move to the
+                        // library root; subfolders are not re-parented.
+                        Self::run_shared_tool(
+                            "delete_folder",
+                            serde_json::json!({ "folderId": id }),
+                        );
+                    }
+                    _ => {}
+                },
+            }
+        }
         cx.notify();
     }
 
@@ -1197,6 +1375,10 @@ impl MediaPanelView {
     /// Click on an asset tile with the mouse-down modifiers applied.
     fn handle_asset_click(&mut self, id: &str, e: &gpui::MouseDownEvent, cx: &mut Context<Self>) {
         self.open_menu = None;
+        // A click on another tile commits pending inline renames (the tile
+        // stops propagation, so the grid's click-away can't).
+        self.commit_folder_rename(cx);
+        self.commit_asset_rename(cx);
         if e.modifiers.shift {
             let ordered = self.ordered_visible_ids();
             self.library.select_range(&ordered, id);
@@ -1208,8 +1390,9 @@ impl MediaPanelView {
         cx.notify();
     }
 
-    /// Escape cancels the folder rename, then an open menu, then the
-    /// selection (the rename TextField lets Escape bubble here).
+    /// Escape closes the context menu, then cancels inline renames, then an
+    /// open toolbar menu, then the selection (the rename TextField lets
+    /// Escape bubble here).
     fn handle_key_down(
         &mut self,
         event: &gpui::KeyDownEvent,
@@ -1219,7 +1402,14 @@ impl MediaPanelView {
         if event.keystroke.key.as_str() != "escape" {
             return;
         }
-        if self.folder_editing.take().is_some() || self.open_menu.take().is_some() {
+        if self.library_menu.is_open() {
+            self.library_menu.close();
+            cx.stop_propagation();
+            cx.notify();
+        } else if self.folder_editing.take().is_some()
+            || self.asset_editing.take().is_some()
+            || self.open_menu.take().is_some()
+        {
             cx.stop_propagation();
             cx.notify();
         } else if !self.library.selection.is_empty() {
@@ -1322,8 +1512,12 @@ struct AssetTileData {
 }
 
 /// 80×60 thumbnail + name strip (Swift AssetThumbnailView) with a selection
-/// ring; click handling is attached by the caller.
-fn asset_tile(data: &AssetTileData) -> gpui::Stateful<gpui::Div> {
+/// ring; click handling is attached by the caller. A rename field replaces
+/// the name strip while an inline rename is active.
+fn asset_tile(
+    data: &AssetTileData,
+    rename_field: Option<Entity<crate::text_field::TextField>>,
+) -> gpui::Stateful<gpui::Div> {
     let mut thumb = div()
         .w(px(80.0))
         .h(px(60.0))
@@ -1359,6 +1553,28 @@ fn asset_tile(data: &AssetTileData) -> gpui::Stateful<gpui::Div> {
     if data.selected {
         thumb = thumb.border_2().border_color(Accent::PRIMARY);
     }
+    let name_strip: AnyElement = if let Some(field) = rename_field {
+        div()
+            .w(px(80.0))
+            .pt(px(Spacing::XXS))
+            .text_size(px(FontSize::XS))
+            .text_color(Text::PRIMARY)
+            .child(field)
+            .into_any_element()
+    } else {
+        div()
+            .w(px(80.0))
+            .pt(px(Spacing::XXS))
+            .text_color(if data.selected {
+                Text::PRIMARY
+            } else {
+                Text::SECONDARY
+            })
+            .text_size(px(FontSize::XS))
+            .overflow_hidden()
+            .child(data.name.clone())
+            .into_any_element()
+    };
     div()
         .id(SharedString::from(format!("tile-{}", data.id)))
         .flex()
@@ -1366,19 +1582,7 @@ fn asset_tile(data: &AssetTileData) -> gpui::Stateful<gpui::Div> {
         .w(px(80.0))
         .cursor_pointer()
         .child(thumb)
-        .child(
-            div()
-                .w(px(80.0))
-                .pt(px(Spacing::XXS))
-                .text_color(if data.selected {
-                    Text::PRIMARY
-                } else {
-                    Text::SECONDARY
-                })
-                .text_size(px(FontSize::XS))
-                .overflow_hidden()
-                .child(data.name.clone()),
-        )
+        .child(name_strip)
 }
 
 /// 22×22 toolbar icon button (Swift toolbarMenuIcon).
@@ -1478,33 +1682,52 @@ impl MediaPanelView {
     }
 
     /// Asset tile with selection mouse handling; draggable onto timeline
-    /// tracks and generation reference tiles (AssetDrag payload).
+    /// tracks and generation reference tiles (AssetDrag payload). Right-click
+    /// opens the context menu; while renaming inline the selection/drag
+    /// handlers are dropped so typing can't fight them.
     fn render_asset_tile(
         &self,
         e: &MediaManifestEntry,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let data = self.asset_tile_data(e);
+        let editing = self.asset_editing.as_deref() == Some(e.id.as_str());
         let id = data.id.clone();
+        let menu_id = data.id.clone();
         let drag_name = data.name.clone();
-        asset_tile(&data)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.handle_asset_click(&id, ev, cx);
-                }),
-            )
-            .on_drag(
-                AssetDrag {
-                    asset_id: e.id.clone(),
-                    media_type: e.r#type,
-                },
-                move |_, _, _, cx| {
-                    let name = drag_name.clone();
-                    cx.new(|_| AssetDragPreview { name })
-                },
-            )
+        let rename_field = editing.then(|| self.asset_rename_field.clone());
+        let tile = asset_tile(&data, rename_field).on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                this.library_menu.open_at(
+                    ev.position.x.as_f32(),
+                    ev.position.y.as_f32(),
+                    LibraryMenuTarget::Asset { id: menu_id.clone() },
+                );
+                cx.notify();
+            }),
+        );
+        if editing {
+            return tile;
+        }
+        tile.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                this.handle_asset_click(&id, ev, cx);
+            }),
+        )
+        .on_drag(
+            AssetDrag {
+                asset_id: e.id.clone(),
+                media_type: e.r#type,
+            },
+            move |_, _, _, cx| {
+                let name = drag_name.clone();
+                cx.new(|_| AssetDragPreview { name })
+            },
+        )
     }
 
     /// Folder tile: div-drawn folder glyph, count badge, double-click to
@@ -1517,6 +1740,8 @@ impl MediaPanelView {
         let open_id = id.clone();
         let rename_id = id.clone();
         let rename_seed = name.clone();
+        let menu_folder_id = id.clone();
+        let menu_folder_name = name.clone();
         let accent = gpui::Hsla {
             a: 0.85,
             ..Accent::PRIMARY
@@ -1607,6 +1832,21 @@ impl MediaPanelView {
                     cx.notify();
                 }
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.library_menu.open_at(
+                        ev.position.x.as_f32(),
+                        ev.position.y.as_f32(),
+                        LibraryMenuTarget::Folder {
+                            id: menu_folder_id.clone(),
+                            name: menu_folder_name.clone(),
+                        },
+                    );
+                    cx.notify();
+                }),
+            )
             .into_any_element()
     }
 
@@ -1641,9 +1881,10 @@ impl MediaPanelView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    let renaming = this.folder_editing.is_some();
+                    let renaming = this.folder_editing.is_some() || this.asset_editing.is_some();
                     if renaming {
                         this.commit_folder_rename(cx);
+                        this.commit_asset_rename(cx);
                     }
                     if renaming || this.open_menu.is_some() || !this.library.selection.is_empty()
                     {
@@ -2211,6 +2452,23 @@ impl MediaPanelView {
                     .child(self.generation.clone()),
             )
             .children(self.render_menu_overlay(cx))
+            // Asset/folder tile context menu (deferred popover, above all)
+            .when_some(self.library_menu.open_menu().cloned(), |el, open| {
+                let entries = self.library_menu_entries(&open.target);
+                el.child(crate::context_menu::render_context_menu(
+                    gpui::point(px(open.x), px(open.y)),
+                    entries,
+                    open.confirming,
+                    cx,
+                    |this: &mut MediaPanelView, index, window, cx| {
+                        this.activate_library_menu_item(index, window, cx)
+                    },
+                    |this: &mut MediaPanelView, _window, cx| {
+                        this.library_menu.close();
+                        cx.notify();
+                    },
+                ))
+            })
             .into_any_element()
     }
 }
@@ -3890,6 +4148,50 @@ mod library_tests {
         s.clear_selection();
         assert!(s.selection.is_empty());
         assert!(s.selection_anchor.is_none());
+    }
+
+    // ── Tile context menus (context-menu-system 2.2/2.3) ────────────────
+
+    fn entry_ids(entries: &[crate::context_menu::MenuEntry]) -> Vec<&'static str> {
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                crate::context_menu::MenuEntry::Item(item) => Some(item.id),
+                crate::context_menu::MenuEntry::Separator => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn asset_menu_lists_rename_reveal_delete() {
+        let ids = entry_ids(&MediaPanelView::asset_menu_entries(true));
+        assert_eq!(ids, vec!["rename", "reveal", "delete"]);
+    }
+
+    #[test]
+    fn asset_menu_drops_reveal_without_local_file() {
+        let ids = entry_ids(&MediaPanelView::asset_menu_entries(false));
+        assert_eq!(ids, vec!["rename", "delete"]);
+    }
+
+    #[test]
+    fn folder_menu_lists_open_rename_delete() {
+        let ids = entry_ids(&MediaPanelView::folder_menu_entries());
+        assert_eq!(ids, vec!["open", "rename", "delete"]);
+    }
+
+    #[test]
+    fn asset_delete_is_plain_destructive_not_confirm() {
+        // delete_media only drops the manifest entry (no disk delete), so it
+        // must not use the arm-then-confirm step reserved for data loss.
+        for entry in MediaPanelView::asset_menu_entries(true) {
+            if let crate::context_menu::MenuEntry::Item(item) = entry {
+                if item.id == "delete" {
+                    assert!(item.destructive);
+                    assert!(item.confirm_label.is_none());
+                }
+            }
+        }
     }
 }
 
