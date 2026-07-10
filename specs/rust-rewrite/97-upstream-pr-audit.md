@@ -508,18 +508,28 @@ format_timecode already uses 1798/17982 divisors; frame 1800 @29.97DF =
 Anthropic base URL (**PORTED 2026-07-10**: AnthropicConfig::from_env reads
 ANTHROPIC_BASE_URL, chat_view wired, URL construction unit-tested);
 #176 duplicate_clips (M); #169 viewer guides
-(M); #198 TwelveLabs (L); #32 OpenRouter (L); #65 wght axis renderer (M);
-#67 duplicate-project context-menu UI (S); #246 people mask (watch).
+(M) (**PORTED 2026-07-10 upstream-m-batch**: Guides dropdown menu +
+toggle wiring over the pre-existing #167 overlay/state); #198 TwelveLabs
+(L); #32 OpenRouter (L); #65 wght axis renderer (M) (**PORTED 2026-07-10
+upstream-m-batch**: ab_glyph `set_variation(wght)` + bundled variable
+families wired into `font_for`); #67 duplicate-project context-menu UI (S)
+(**PORTED 2026-07-10 upstream-m-batch**: card "Duplicate" → host `plan_duplicate`
++ recursive copy + recents refresh); #246 people mask (watch).
 
 **(d) open issues = gaps, ranked:** #211 autosave (VERIFIED: Fronda has
 NO autosave — data-loss, M); #264 overflow hardening (**PORTED 2026-07-10**
 via the #265 ceiling above); #154 XML/FCPXML
-IMPORT (strategic XL, neither side has it); #164 shortcut parity (M);
+IMPORT (strategic XL, neither side has it); #164 shortcut parity (M)
+(**PORTED 2026-07-10 upstream-m-batch**: `[`/`]` trim + ⇧⌫ ripple added;
+V/C/A/⇧A/Esc deferred — no tool-mode/deselect concept yet);
 #212 speed <0.25x (**VERIFIED-OK 2026-07-10**: Rust accepts any positive
 speed end-to-end, 0.1x duration math pinned; also fixed the live executor
 silently storing speed<=0 — now rejects like Swift); #140/#17/#142 multi-provider
 LLM (S then L); #156 folder hierarchy → #263's path model (L); #158 audio
-EQ/compression (L); #45 arrow/line shapes (S-M); #137 multi-window (L);
+EQ/compression (L); #45 arrow/line shapes (S-M) (**PORTED 2026-07-10
+upstream-m-batch**: `rasterize_line_or_arrow` — endpoints normalized 0..1
+of the box, documented assumption since shapes are Rust-native/no Swift
+rasterizer); #137 multi-window (L);
 #166 export workspace panel (M); #286 dockable panels (L); #287 custom
 STT (aligns with transcription seam).
 

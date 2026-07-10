@@ -236,6 +236,9 @@ pub fn all_shortcuts() -> Vec<Shortcut> {
         Shortcut::cmd("k", MenuAction::SplitAtPlayhead),
         Shortcut::new("q", Modifiers::default(), MenuAction::TrimStartToPlayhead),
         Shortcut::new("w", Modifiers::default(), MenuAction::TrimEndToPlayhead),
+        // Bracket aliases for trim (Swift ShortcutsPane "[ or Q" / "] or W", #164).
+        Shortcut::new("[", Modifiers::default(), MenuAction::TrimStartToPlayhead),
+        Shortcut::new("]", Modifiers::default(), MenuAction::TrimEndToPlayhead),
         Shortcut::new("backspace", Modifiers::default(), MenuAction::Delete),
         // View menu (MENU-005)
         Shortcut::cmd("0", MenuAction::ToggleMediaPanel),
@@ -299,11 +302,19 @@ pub fn all_shortcuts() -> Vec<Shortcut> {
             },
             MenuAction::ClearMarks,
         ),
-        // Ripple delete (Issue #164)
+        // Ripple delete (Issue #164): ⌥⌫ (Premiere/Resolve) and ⇧⌫ (Swift canonical).
         Shortcut::new(
             "backspace",
             Modifiers {
                 option: true,
+                ..Default::default()
+            },
+            MenuAction::RippleDelete,
+        ),
+        Shortcut::new(
+            "backspace",
+            Modifiers {
+                shift: true,
                 ..Default::default()
             },
             MenuAction::RippleDelete,
@@ -427,8 +438,32 @@ mod tests {
     #[test]
     fn menu_008_shortcuts_count() {
         let shortcuts = all_shortcuts();
-        // 27 original + 17 new playback/marking/ripple/zoom shortcuts (Issue #164)
-        assert_eq!(shortcuts.len(), 44);
+        // 44 prior + 3 Swift-parity aliases ([ / ] trim, ⇧⌫ ripple) (Issue #164)
+        assert_eq!(shortcuts.len(), 47);
+    }
+
+    #[test]
+    fn issue_164_bracket_trim_aliases() {
+        assert_eq!(
+            route_shortcut("[", &Modifiers::default()),
+            Some(MenuAction::TrimStartToPlayhead)
+        );
+        assert_eq!(
+            route_shortcut("]", &Modifiers::default()),
+            Some(MenuAction::TrimEndToPlayhead)
+        );
+    }
+
+    #[test]
+    fn issue_164_shift_backspace_ripple_delete() {
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            route_shortcut("backspace", &shift),
+            Some(MenuAction::RippleDelete)
+        );
     }
 
     #[test]
