@@ -459,3 +459,48 @@ Source: `Tests/PalmierProTests/` directory listing.
 6. **Port `CompositionBuilderTests`** — verify CompositionPlan matches Swift.
 7. **Port `PalmierProjectExportTests`** — self-contained .palmier export.
 8. **Search/indexing pipeline** — requires significant new type + algorithm work.
+
+## 2026-07-10 FULL PR+ISSUE sweep (first ever; upstream HEAD 141c69b)
+
+Inventory: 207 PRs (146 merged/24 open/37 closed-unmerged), 79 issues
+(47 open/32 closed). 19 merged PRs past cdd63ff. Full agent report in the
+session; actionable extract:
+
+**Done immediately (this session):** #283 multicamGroups +
+Clip.multicamGroupId opaque passthrough (292364d — was silently erased on
+Fronda saves, same class as #261 speakers).
+
+**(b) merged-unported, ranked:** #283 multicam ENGINE (MulticamEngine,
+manage_multicam/change_cam/get_multicam tools, XL — after tool-surface
+decision); #263 tool-surface v2 (48 consolidated tools: organize_media,
+manage_tracks, close_project, mutation envelopes, relationship-first
+get_timeline — XL, **NEEDS USER DECISION**: converging breaks Fronda's
+shipped 64-tool MCP surface) + its embedded ripple bug (VERIFIED IN RUST:
+linked partners of clips on cleared sync-locked tracks left behind —
+fixpoint propagation needed, S, do first); #269 sync_clips v2 (timecode
+mode + SourceTimecode NTSC frame-duration fix ~18f/10min — verify Rust
+math, M-L); #274 detect_beats + snap-to-beat (L, ML host seam); #138
+10-bit HDR export via ffmpeg Main10 (M); #268 sonnet5 effort:low in
+requests (S); #284/#279 XS; #280/#281 timeline UI polish (Tier 4).
+
+**(c) open PRs, ranked:** #124 stranded linked audio on overwrite
+(VERIFIED IN RUST — top priority with the #263 ripple fix, S-M); #265
+frame-arg 1e9 bound (UNVERIFIED overflow exposure in mutation.rs, S);
+#139 drop-frame timecode divisor bug (UNVERIFIED whether ported into
+format_timecode — test frame 1800 @29.97DF, S); #36 custom Anthropic base
+URL (verified hardcoded, S); #176 duplicate_clips (M); #169 viewer guides
+(M); #198 TwelveLabs (L); #32 OpenRouter (L); #65 wght axis renderer (M);
+#67 duplicate-project context-menu UI (S); #246 people mask (watch).
+
+**(d) open issues = gaps, ranked:** #211 autosave (VERIFIED: Fronda has
+NO autosave — data-loss, M); #264 overflow hardening (S); #154 XML/FCPXML
+IMPORT (strategic XL, neither side has it); #164 shortcut parity (M);
+#212 speed <0.25x (UNVERIFIED range, XS-S); #140/#17/#142 multi-provider
+LLM (S then L); #156 folder hierarchy → #263's path model (L); #158 audio
+EQ/compression (L); #45 arrow/line shapes (S-M); #137 multi-window (L);
+#166 export workspace panel (M); #286 dockable panels (L); #287 custom
+STT (aligns with transcription seam).
+
+Absorbed/N-A verified: #188 LAN+bearer (Rust surpasses), #190 outline,
+#175, #187/#108/#96/#95 (architecture avoided), platform asks (#20/#195/
+#220/#262) answered by Fronda's cross-platform reality.

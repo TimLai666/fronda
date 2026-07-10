@@ -10,7 +10,7 @@ use crate::read_tools::{
 };
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
-    AnimPair, Clip, ClipType, Crop, Effect, GenerationInput, Interpolation, Keyframe, KeyframeTrack,
+    AnimPair, Clip, ClipType, Crop, Effect, Interpolation, Keyframe, KeyframeTrack,
     LayoutFit, MatteAspect, MediaManifest, MediaManifestEntry, MediaSource, TextRgba, TextStyle,
     Timeline, Transform, VideoLayout,
 };
@@ -6931,7 +6931,7 @@ mod tests {
                     absolute_path: String::new(),
                 },
                 duration: 5.0,
-                generation_input: Some(GenerationInput {
+                generation_input: Some(core_model::GenerationInput {
                     backend_job_id: Some(job.to_string()),
                     ..Default::default()
                 }),
