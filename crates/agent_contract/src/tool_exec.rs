@@ -5000,6 +5000,31 @@ impl ToolExecutor {
 
     // ── Text / annotation tools ────────────────────────────────────────────
 
+    /// Overwrite-place each clip at its own start_frame (ascending start
+    /// order, mirroring Swift placeTextClips); returns ids in input order.
+    fn place_clips_at_own_starts(
+        &mut self,
+        track_index: usize,
+        clips: &[Clip],
+    ) -> Result<Vec<String>, String> {
+        let mut ids = vec![String::new(); clips.len()];
+        let mut order: Vec<usize> = (0..clips.len()).collect();
+        order.sort_by_key(|&i| clips[i].start_frame);
+        for i in order {
+            let placed = timeline_core::place_clips(
+                &mut self.timeline,
+                track_index,
+                clips[i].start_frame,
+                std::slice::from_ref(&clips[i]),
+            );
+            ids[i] = placed
+                .into_iter()
+                .next()
+                .ok_or_else(|| "Failed to place clip".to_string())?;
+        }
+        Ok(ids)
+    }
+
     fn cmd_add_texts(&mut self, args: &Value) -> Result<Value, String> {
         let texts_val = args
             .get("texts")
@@ -5033,7 +5058,6 @@ impl ToolExecutor {
             }
         };
 
-        let mut created_ids: Vec<String> = Vec::new();
         let mut clips: Vec<Clip> = Vec::new();
         let mut current_frame = 0i64;
 
@@ -5062,6 +5086,12 @@ impl ToolExecutor {
                 .unwrap_or(150);
             crate::mutation::require_frame_in_bounds(start_frame, "startFrame")?;
             crate::mutation::require_frame_in_bounds(duration_frames, "durationFrames")?;
+            if start_frame < 0 {
+                return Err(format!("startFrame must be >= 0 (got {start_frame})"));
+            }
+            if duration_frames < 1 {
+                return Err(format!("durationFrames must be >= 1 (got {duration_frames})"));
+            }
 
             // Per-entry text styling (reuses the set_clip_properties parsers).
             let mut style = TextStyle::default();
@@ -5149,13 +5179,11 @@ impl ToolExecutor {
                 text_animation,
                 word_timings: None,
             };
-            let clip_id = clip.id.clone();
-            created_ids.push(clip_id);
             clips.push(clip);
             current_frame = start_frame + duration_frames;
         }
 
-        timeline_core::place_clips(&mut self.timeline, ti, 0, &clips);
+        let created_ids = self.place_clips_at_own_starts(ti, &clips)?;
 
         Ok(json!({
             "content": [{
@@ -5176,16 +5204,19 @@ impl ToolExecutor {
         }
 
         // Find or create a video track
-        let ti = self
+        let ti = match self
             .timeline
             .tracks
             .iter()
             .position(|t| t.r#type == core_model::ClipType::Video)
-            .unwrap_or(0);
-        if ti >= self.timeline.tracks.len() {
-            timeline_core::insert_track_at(&mut self.timeline, 0, core_model::ClipType::Video)
-                .map_err(|_| "Failed to create track".to_string())?;
-        }
+        {
+            Some(idx) => idx,
+            None => {
+                timeline_core::insert_track_at(&mut self.timeline, 0, core_model::ClipType::Video)
+                    .map_err(|_| "Failed to create track".to_string())?;
+                0
+            }
+        };
 
         let mut current_frame = 0i64;
         for clip in &self.timeline.tracks[ti].clips {
@@ -5195,7 +5226,6 @@ impl ToolExecutor {
             }
         }
 
-        let mut created_ids: Vec<String> = Vec::new();
         let mut clips: Vec<Clip> = Vec::new();
 
         for entry in entries {
@@ -5208,6 +5238,14 @@ impl ToolExecutor {
                 .get("durationFrames")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(150);
+            crate::mutation::require_frame_in_bounds(start_frame, "startFrame")?;
+            crate::mutation::require_frame_in_bounds(duration_frames, "durationFrames")?;
+            if start_frame < 0 {
+                return Err(format!("startFrame must be >= 0 (got {start_frame})"));
+            }
+            if duration_frames < 1 {
+                return Err(format!("durationFrames must be >= 1 (got {duration_frames})"));
+            }
 
             let shape_kind = match shape_type.to_lowercase().as_str() {
                 "oval" => core_model::ShapeKind::Oval,
@@ -5300,13 +5338,11 @@ impl ToolExecutor {
                 text_animation: None,
                 word_timings: None,
             };
-            let clip_id = clip.id.clone();
-            created_ids.push(clip_id);
             clips.push(clip);
             current_frame = start_frame + duration_frames;
         }
 
-        timeline_core::place_clips(&mut self.timeline, 0, 0, &clips);
+        let created_ids = self.place_clips_at_own_starts(ti, &clips)?;
 
         Ok(json!({
             "content": [{
@@ -8080,6 +8116,132 @@ mod tests {
     }
 
     #[test]
+    fn add_texts_honors_start_frame_and_reports_real_ids() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let head = crate::test_helpers::make_clip(0, 90);
+        let placed = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[head]);
+        let head_id = placed.first().expect("head placed").clone();
+
+        let result = exec
+            .execute(
+                "add_texts",
+                &json!({"texts": [{"content": "T", "startFrame": 120, "durationFrames": 60}]}),
+            )
+            .unwrap();
+
+        let track = &exec.timeline().tracks[0];
+        let text_clip = track
+            .clips
+            .iter()
+            .find(|c| c.media_type == ClipType::Text)
+            .expect("text clip placed");
+        assert_eq!(text_clip.start_frame, 120, "text must land at startFrame");
+        assert_eq!(text_clip.duration_frames, 60);
+
+        let head = track
+            .clips
+            .iter()
+            .find(|c| c.id == head_id)
+            .expect("head clip must not be clobbered");
+        assert_eq!((head.start_frame, head.duration_frames), (0, 90));
+
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains(&text_clip.id),
+            "reported id must be the placed clip's id: {text}"
+        );
+        // The reported id must resolve on the timeline via find_clip.
+        let reported = text.split('"').nth(1).expect("response lists the created id");
+        let loc = timeline_core::find_clip(exec.timeline(), reported)
+            .expect("reported id must exist on the timeline");
+        assert_eq!(
+            exec.timeline().tracks[loc.track_index].clips[loc.clip_index].start_frame,
+            120
+        );
+    }
+
+    #[test]
+    fn add_texts_default_appends_after_existing_content() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let head = crate::test_helpers::make_clip(0, 90);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[head]);
+
+        exec.execute("add_texts", &json!({"texts": [{"content": "T"}]}))
+            .unwrap();
+
+        let track = &exec.timeline().tracks[0];
+        assert_eq!(track.clips.len(), 2, "head clip untouched");
+        let text_clip = track
+            .clips
+            .iter()
+            .find(|c| c.media_type == ClipType::Text)
+            .unwrap();
+        assert_eq!(text_clip.start_frame, 90, "default start appends after content");
+    }
+
+    #[test]
+    fn add_texts_reports_ids_in_entry_order_for_unordered_starts() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let result = exec
+            .execute(
+                "add_texts",
+                &json!({"texts": [
+                    {"content": "B", "startFrame": 300, "durationFrames": 30},
+                    {"content": "A", "startFrame": 0, "durationFrames": 30}
+                ]}),
+            )
+            .unwrap();
+
+        let track = &exec.timeline().tracks[0];
+        let b = track
+            .clips
+            .iter()
+            .find(|c| c.text_content.as_deref() == Some("B"))
+            .unwrap();
+        let a = track
+            .clips
+            .iter()
+            .find(|c| c.text_content.as_deref() == Some("A"))
+            .unwrap();
+        assert_eq!(b.start_frame, 300);
+        assert_eq!(a.start_frame, 0);
+
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let b_pos = text.find(&b.id).expect("B id reported");
+        let a_pos = text.find(&a.id).expect("A id reported");
+        assert!(b_pos < a_pos, "ids reported in entry order: {text}");
+    }
+
+    #[test]
+    fn add_texts_rejects_negative_start_frame() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "add_texts",
+                &json!({"texts": [{"content": "x", "startFrame": -5, "durationFrames": 30}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("startFrame must be >= 0"), "got: {err}");
+    }
+
+    #[test]
+    fn add_texts_rejects_non_positive_duration() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "add_texts",
+                &json!({"texts": [{"content": "x", "startFrame": 0, "durationFrames": 0}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("durationFrames must be >= 1"), "got: {err}");
+    }
+
+    #[test]
     fn add_texts_applies_per_entry_style_and_transform() {
         let mut exec = make_executor();
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
@@ -8216,6 +8378,81 @@ mod tests {
             .execute("add_shapes", &json!({"entries": []}))
             .unwrap_err();
         assert!(err.contains("non-empty"));
+    }
+
+    #[test]
+    fn add_shapes_honors_start_frame_on_video_track_with_real_ids() {
+        let mut exec = make_executor();
+        // Text track above the video track: the video track is NOT index 0.
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Text);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
+        assert_eq!(exec.timeline().tracks[1].r#type, ClipType::Video);
+        let head = crate::test_helpers::make_clip(0, 90);
+        let placed = timeline_core::place_clips(exec.timeline_mut(), 1, 0, &[head]);
+        let head_id = placed.first().expect("head placed").clone();
+
+        let result = exec
+            .execute(
+                "add_shapes",
+                &json!({"entries": [{"type": "rect", "startFrame": 120, "durationFrames": 60}]}),
+            )
+            .unwrap();
+
+        assert!(
+            exec.timeline().tracks[0].clips.is_empty(),
+            "text track (index 0) must stay untouched"
+        );
+        let track = &exec.timeline().tracks[1];
+        let shape = track
+            .clips
+            .iter()
+            .find(|c| c.media_type == ClipType::Shape)
+            .expect("shape placed on the video track");
+        assert_eq!(shape.start_frame, 120, "shape must land at startFrame");
+        let head = track
+            .clips
+            .iter()
+            .find(|c| c.id == head_id)
+            .expect("head clip must not be clobbered");
+        assert_eq!((head.start_frame, head.duration_frames), (0, 90));
+
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains(&shape.id),
+            "reported id must be the placed clip's id: {text}"
+        );
+        // The reported id must resolve on the timeline via find_clip.
+        let reported = text.split('"').nth(1).expect("response lists the created id");
+        assert!(
+            timeline_core::find_clip(exec.timeline(), reported).is_some(),
+            "reported id must exist on the timeline"
+        );
+    }
+
+    #[test]
+    fn add_shapes_rejects_overflowing_start_frame() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "add_shapes",
+                &json!({"entries": [{"type": "rect", "startFrame": i64::MAX, "durationFrames": 10}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("exceeds the maximum supported frame"), "err={err}");
+    }
+
+    #[test]
+    fn add_shapes_rejects_negative_start_frame() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "add_shapes",
+                &json!({"entries": [{"type": "rect", "startFrame": -1, "durationFrames": 10}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("startFrame must be >= 0"), "got: {err}");
     }
 
     #[test]
