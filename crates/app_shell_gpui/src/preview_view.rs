@@ -123,6 +123,36 @@ pub fn zoom_preset_active(canvas_zoom: f64, preset_value: f64) -> bool {
     (canvas_zoom - preset_value).abs() < 0.01
 }
 
+/// One row of the Guides dropdown (Issue #169).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuideRow {
+    pub guide: ViewerGuide,
+    pub label: &'static str,
+    pub checked: bool,
+}
+
+/// Rows for the viewer-guides dropdown, in display order: safe-zone + center
+/// first, then format references. Mirrors Swift ViewerGuideMenu.
+pub fn guide_menu_rows(state: &ViewerGuideState) -> Vec<GuideRow> {
+    const ORDER: [ViewerGuide; 7] = [
+        ViewerGuide::ActionSafe,
+        ViewerGuide::TitleSafe,
+        ViewerGuide::Center,
+        ViewerGuide::Scope,
+        ViewerGuide::Wide,
+        ViewerGuide::Square,
+        ViewerGuide::Portrait,
+    ];
+    ORDER
+        .iter()
+        .map(|&g| GuideRow {
+            guide: g,
+            label: g.label(),
+            checked: state.is_active(g),
+        })
+        .collect()
+}
+
 /// Zoom badge label (Swift `zoomBadgeLabel`): "Fit" at 1.0, else a percentage.
 pub fn zoom_badge_label(canvas_zoom: f64) -> String {
     if zoom_preset_active(canvas_zoom, 1.0) {
@@ -324,11 +354,28 @@ impl PreviewView {
     }
 
     fn toggle_settings_menu(&mut self, menu: SettingsMenu, cx: &mut Context<Self>) {
+        self.show_guide_menu = false;
         self.open_settings_menu = if self.open_settings_menu == Some(menu) {
             None
         } else {
             Some(menu)
         };
+        cx.notify();
+    }
+
+    /// Show/hide the Guides dropdown (Issue #169). Closes the settings menu so
+    /// the two anchored dropdowns never overlap.
+    fn toggle_guide_menu(&mut self, cx: &mut Context<Self>) {
+        self.show_guide_menu = !self.show_guide_menu;
+        if self.show_guide_menu {
+            self.open_settings_menu = None;
+        }
+        cx.notify();
+    }
+
+    /// Toggle one viewer guide on/off; the menu stays open for multi-select.
+    fn toggle_guide(&mut self, guide: ViewerGuide, cx: &mut Context<Self>) {
+        self.guide_state.toggle(guide);
         cx.notify();
     }
 
@@ -661,6 +708,8 @@ impl Render for PreviewView {
         let crop_entity = self.crop_overlay.clone();
         let active_guides: Vec<ViewerGuide> = self.guide_state.active_guides().to_vec();
         let any_guides = !active_guides.is_empty();
+        let guide_menu_open = self.show_guide_menu;
+        let guide_rows = guide_menu_rows(&self.guide_state);
 
         // Real project settings for the badge row (was hardcoded).
         let (aspect_label, fps_label, quality_label, tl_width, tl_height, tl_fps) = {
@@ -1148,7 +1197,10 @@ impl Render for PreviewView {
                                     } else {
                                         Text::MUTED
                                     })
-                                    .child("⊞"),
+                                    .child("⊞")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_guide_menu(cx);
+                                    })),
                             )
                             // Capture frame button (Swift: captureFrameButton → camera SF symbol)
                             .child(
@@ -1196,6 +1248,61 @@ impl Render for PreviewView {
                             .hover(|s| s.bg(Background::PROMINENT))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.apply_settings_selection(&select, cx);
+                            }))
+                            .child(
+                                div()
+                                    .w(px(crate::theme::IconSize::XXS))
+                                    .text_size(px(FontSize::XS))
+                                    .text_color(Accent::PRIMARY)
+                                    .child(if row.checked { "✓" } else { "" }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(FontSize::SM))
+                                    .text_color(Text::SECONDARY)
+                                    .child(row.label),
+                            ),
+                    );
+                }
+                el.child(panel)
+            })
+            // Guides dropdown — SMPTE safe zones, center cross, format references
+            // (Swift ViewerGuideMenu). Anchored above the transport bar (Issue #169).
+            .when(guide_menu_open, |el| {
+                let mut panel = div()
+                    .id("preview-guide-menu")
+                    .occlude()
+                    .absolute()
+                    .bottom(px(36.0 + Spacing::XS))
+                    .right(px(Spacing::MD))
+                    .flex()
+                    .flex_col()
+                    .py(px(Spacing::XS))
+                    .min_w(px(160.0))
+                    .bg(Background::RAISED)
+                    .border_1()
+                    .border_color(BorderColors::SUBTLE)
+                    .rounded(px(Radius::SM))
+                    .shadow_lg()
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.show_guide_menu = false;
+                        cx.notify();
+                    }));
+                for (i, row) in guide_rows.into_iter().enumerate() {
+                    let guide = row.guide;
+                    panel = panel.child(
+                        div()
+                            .id(("preview-guide-row", i))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Spacing::SM))
+                            .px(px(Spacing::MD))
+                            .py(px(Spacing::XS))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(Background::PROMINENT))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_guide(guide, cx);
                             }))
                             .child(
                                 div()
@@ -1274,5 +1381,25 @@ mod tests {
         assert_eq!(capture_file_name(42, 7), "frame-42-7.png");
         assert_ne!(capture_file_name(42, 7), capture_file_name(42, 8));
         assert_ne!(capture_file_name(42, 7), capture_file_name(43, 7));
+    }
+
+    #[test]
+    fn guide_menu_rows_reflect_state() {
+        let mut st = ViewerGuideState::new();
+        let rows = guide_menu_rows(&st);
+        assert_eq!(rows.len(), 7);
+        assert_eq!(rows[0].guide, ViewerGuide::ActionSafe);
+        assert_eq!(rows[0].label, "Action Safe");
+        assert!(rows.iter().all(|r| !r.checked), "none active initially");
+        st.toggle(ViewerGuide::TitleSafe);
+        let rows = guide_menu_rows(&st);
+        assert!(
+            rows.iter().find(|r| r.guide == ViewerGuide::TitleSafe).unwrap().checked,
+            "toggled guide is checked"
+        );
+        assert!(
+            !rows.iter().find(|r| r.guide == ViewerGuide::ActionSafe).unwrap().checked,
+            "others stay unchecked"
+        );
     }
 }

@@ -592,6 +592,9 @@ impl AppRoot {
         if accessible {
             entries.push(MenuEntry::item("open", "Open"));
             entries.push(MenuEntry::item("reveal", "Reveal in File Manager"));
+            // Duplicate copies the .palmier package on disk (Issue #67); a missing
+            // package can't be duplicated, so it's accessible-gated.
+            entries.push(MenuEntry::item("duplicate", "Duplicate"));
             entries.push(MenuEntry::separator());
         }
         entries.push(MenuEntry::item("remove-recents", "Remove from Recents"));
@@ -615,6 +618,7 @@ impl AppRoot {
                 match id {
                     "open" => self.open_project_at(&target.path, cx),
                     "reveal" => crate::platform_adapter::reveal_in_file_manager(&target.path),
+                    "duplicate" => self.duplicate_project_at(&target.path, cx),
                     "remove-recents" => {
                         Self::remove_from_recents(&target.registry_id);
                         self.home_cards_loaded_at = None;
@@ -640,6 +644,60 @@ impl AppRoot {
                 eprintln!("Failed to update recents: {reason}");
             }
         }
+    }
+
+    /// Duplicate the project's .palmier package on disk, register the copy in
+    /// recents, and refresh the Home cards (Issue #67). Errors are logged, not
+    /// surfaced — the tool itself is host-gated, so the host owns the fs I/O.
+    fn duplicate_project_at(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        match Self::duplicate_project_package(path) {
+            Ok(dest) => {
+                let registry_path = crate::project_registry_store::default_registry_path();
+                if let Err(reason) =
+                    crate::project_registry_store::record_opened_at(&registry_path, &dest)
+                {
+                    eprintln!("Failed to register duplicated project: {reason}");
+                }
+                self.home_cards_loaded_at = None;
+            }
+            Err(reason) => eprintln!("Failed to duplicate project: {reason}"),
+        }
+        cx.notify();
+    }
+
+    /// Copy a `.palmier` package next to the original as "<name> (Copy).palmier"
+    /// (project_io's duplicate plan + a recursive tree copy). Returns the new
+    /// package path. Pure host fs I/O — no gpui, so it is unit-testable.
+    fn duplicate_project_package(
+        source: &std::path::Path,
+    ) -> Result<std::path::PathBuf, String> {
+        let name = source
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Project");
+        let plan = project_io::project_duplicate::plan_duplicate(
+            source,
+            &project_io::project_duplicate::DuplicateOptions::default(),
+            name,
+        )?;
+        Self::copy_dir_all(&plan.source_path, &plan.destination_path)?;
+        Ok(plan.destination_path)
+    }
+
+    /// Recursively copy a directory tree (a .palmier package is a directory).
+    fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+        std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+        for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                Self::copy_dir_all(&from, &to)?;
+            } else {
+                std::fs::copy(&from, &to).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
     }
 
     /// Delete the .palmier package from disk, then drop the recents entry.
@@ -1554,6 +1612,11 @@ impl Render for AppRoot {
                 },
             ))
             .on_action(cx.listener(
+                |this, _: &crate::global_shortcuts::RippleDeleteSelection, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::RippleDelete, w, cx)
+                },
+            ))
+            .on_action(cx.listener(
                 |this, _: &crate::global_shortcuts::MaximizeFocusedPane, w, cx| {
                     this.perform_menu_action(menu::MenuAction::MaximizeFocusedPane, w, cx)
                 },
@@ -1669,12 +1732,33 @@ mod tests {
     #[test]
     fn accessible_card_menu_has_open_and_reveal() {
         let ids = entry_ids(&AppRoot::project_card_menu_entries(true));
-        assert_eq!(ids, vec!["open", "reveal", "remove-recents", "delete"]);
+        assert_eq!(ids, vec!["open", "reveal", "duplicate", "remove-recents", "delete"]);
     }
 
     #[test]
     fn missing_card_menu_drops_open_and_reveal() {
         let ids = entry_ids(&AppRoot::project_card_menu_entries(false));
+        // Duplicate is accessible-gated too — a missing package can't be copied.
         assert_eq!(ids, vec!["remove-recents", "delete"]);
+    }
+
+    #[test]
+    fn duplicate_project_package_copies_tree_as_copy() {
+        // Issue #67: build a fake .palmier package, duplicate it, and verify the
+        // "<name> (Copy).palmier" tree exists with the copied contents.
+        let base = std::env::temp_dir().join(format!("fronda-dup-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("My Project.palmier");
+        std::fs::create_dir_all(src.join("media")).unwrap();
+        std::fs::write(src.join("project.json"), b"{\"timelines\":[]}").unwrap();
+        std::fs::write(src.join("media").join("a.txt"), b"hi").unwrap();
+
+        let dest = AppRoot::duplicate_project_package(&src).unwrap();
+        assert_eq!(dest, base.join("My Project (Copy).palmier"));
+        assert!(dest.join("project.json").is_file(), "project.json copied");
+        assert_eq!(std::fs::read(dest.join("media").join("a.txt")).unwrap(), b"hi");
+        // The original is untouched.
+        assert!(src.join("project.json").is_file());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

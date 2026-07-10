@@ -21,6 +21,7 @@ actions!(
         TrimStartToPlayhead,
         TrimEndToPlayhead,
         DeleteSelection,
+        RippleDeleteSelection,
         MaximizeFocusedPane,
         MarkIn,
         MarkOut,
@@ -44,7 +45,12 @@ pub fn bind_global_shortcut_keys(cx: &mut App) {
         KeyBinding::new("shift-right", SkipFramesForward, CTX),
         KeyBinding::new("q", TrimStartToPlayhead, CTX),
         KeyBinding::new("w", TrimEndToPlayhead, CTX),
+        // Bracket aliases for trim (Swift "[ or Q" / "] or W", Issue #164).
+        KeyBinding::new("[", TrimStartToPlayhead, CTX),
+        KeyBinding::new("]", TrimEndToPlayhead, CTX),
         KeyBinding::new("backspace", DeleteSelection, CTX),
+        // ⇧⌫ ripple delete (Swift canonical; ⌥⌫ stays via the chord path).
+        KeyBinding::new("shift-backspace", RippleDeleteSelection, CTX),
         KeyBinding::new("`", MaximizeFocusedPane, CTX),
         KeyBinding::new("i", MarkIn, CTX),
         KeyBinding::new("o", MarkOut, CTX),

@@ -572,18 +572,101 @@ fn rgba_to_u8(c: &Rgba) -> [u8; 4] {
     ]
 }
 
+/// Perpendicular distance from point `p` to the segment `a`–`b` (all in pixels).
+fn dist_point_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (abx, aby) = (b.0 - a.0, b.1 - a.1);
+    let len_sq = abx * abx + aby * aby;
+    let t = if len_sq <= f64::EPSILON {
+        0.0
+    } else {
+        (((p.0 - a.0) * abx + (p.1 - a.1) * aby) / len_sq).clamp(0.0, 1.0)
+    };
+    let (cx, cy) = (a.0 + t * abx, a.1 + t * aby);
+    ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt()
+}
+
+/// Paint every pixel within `half` of the segment `a`–`b` in `color` (hard edge,
+/// matching the rect/ellipse stroke style). At least 1px thick.
+fn draw_thick_segment(
+    img: &mut RgbaImage,
+    a: (f64, f64),
+    b: (f64, f64),
+    half: f64,
+    color: [u8; 4],
+) {
+    let (w, h) = (img.width, img.height);
+    let r = half.max(0.5);
+    let min_x = (a.0.min(b.0) - r).floor().max(0.0) as usize;
+    let max_x = ((a.0.max(b.0) + r).ceil().max(0.0) as usize).min(w);
+    let min_y = (a.1.min(b.1) - r).floor().max(0.0) as usize;
+    let max_y = ((a.1.max(b.1) + r).ceil().max(0.0) as usize).min(h);
+    for y in min_y..max_y {
+        for x in min_x..max_x {
+            if dist_point_segment((x as f64 + 0.5, y as f64 + 0.5), a, b) <= r {
+                let i = (y * w + x) * 4;
+                img.pixels[i..i + 4].copy_from_slice(&color);
+            }
+        }
+    }
+}
+
+/// Rasterize a Line or Arrow into a `w`×`h` box. Endpoints are normalized 0..1
+/// of the box (start=(0,0) top-left, end=(1,1) bottom-right); no endpoints → a
+/// horizontal line/arrow through the vertical centre. An Arrow also draws two
+/// barbs at the `end` point (arrowhead length scales with the stroke width).
+fn rasterize_line_or_arrow(shape: &ShapeStyle, w: usize, h: usize) -> RgbaImage {
+    let mut img = RgbaImage::new(w, h);
+    let color = rgba_to_u8(&shape.stroke.color);
+    let sw = shape.stroke.width.max(1.0);
+    let half = sw / 2.0;
+    let (fw, fh) = (w as f64, h as f64);
+    let (start, end) = match &shape.endpoints {
+        Some(ep) => (
+            (ep.start.x * fw, ep.start.y * fh),
+            (ep.end.x * fw, ep.end.y * fh),
+        ),
+        None => ((0.0, fh / 2.0), (fw, fh / 2.0)),
+    };
+    draw_thick_segment(&mut img, start, end, half, color);
+    if shape.kind == ShapeKind::Arrow {
+        let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len > f64::EPSILON {
+            let (ux, uy) = (dx / len, dy / len);
+            // Barb length: a few stroke widths, but at least a fraction of the box,
+            // never longer than the shaft.
+            let head = (sw * 4.0).max(w.min(h) as f64 * 0.18).min(len);
+            let angle = 0.5_f64; // ~28.6° off the shaft
+            let (ca, sa) = (angle.cos(), angle.sin());
+            // Reverse travel direction, rotated ±angle.
+            let (rx, ry) = (-ux, -uy);
+            let b1 = (
+                end.0 + head * (rx * ca - ry * sa),
+                end.1 + head * (rx * sa + ry * ca),
+            );
+            let b2 = (
+                end.0 + head * (rx * ca + ry * sa),
+                end.1 + head * (-rx * sa + ry * ca),
+            );
+            draw_thick_segment(&mut img, end, b1, half, color);
+            draw_thick_segment(&mut img, end, b2, half, color);
+        }
+    }
+    img
+}
+
 /// Rasterize a shape annotation into a `w`×`h` RGBA image (transparent outside
 /// the shape). Rect and Oval/Circle render fill + a border stroke; Arrow and
-/// Line are not yet composited (returned transparent). PR #46.
+/// Line draw a stroke-width shaft (Arrow adds a barbed head). PR #46 / Issue #45.
 pub fn rasterize_shape(shape: &ShapeStyle, w: usize, h: usize) -> RgbaImage {
     let mut img = RgbaImage::new(w, h);
     if w == 0 || h == 0 {
         return img;
     }
-    let is_ellipse = matches!(shape.kind, ShapeKind::Oval | ShapeKind::Circle);
-    if !is_ellipse && shape.kind != ShapeKind::Rect {
-        return img;
+    if matches!(shape.kind, ShapeKind::Line | ShapeKind::Arrow) {
+        return rasterize_line_or_arrow(shape, w, h);
     }
+    let is_ellipse = matches!(shape.kind, ShapeKind::Oval | ShapeKind::Circle);
     let fill = rgba_to_u8(&shape.fill.color);
     let stroke = rgba_to_u8(&shape.stroke.color);
     let sw = shape.stroke.width.max(0.0);
@@ -1393,6 +1476,75 @@ mod tests {
         let stroke_run = (0..24).filter(|&x| px(&img, x, 4)[3] > 0).count();
         assert!(stroke_run >= 2, "mid-row must have some stroke, got {stroke_run}px");
         assert!(stroke_run <= 6, "mid-row stroke stays thin, got {stroke_run}px");
+    }
+
+    // Issue #45: arrow / line shape rasterization. Endpoints are normalized 0..1
+    // of the shape's bounding box (start=(0,0) top-left, end=(1,1) bottom-right);
+    // no endpoints → a horizontal line/arrow through the vertical centre.
+    fn stroke_shape(
+        kind: core_model::shape_style::ShapeKind,
+        width: f64,
+        endpoints: Option<core_model::shape_style::Endpoints>,
+    ) -> ShapeStyle {
+        use core_model::shape_style::{Fill, Rgba, Stroke};
+        ShapeStyle {
+            kind,
+            stroke: Stroke {
+                color: Rgba { r: 1.0, g: 0.0, b: 0.0, a: 1.0 },
+                width,
+                dashed: false,
+                arrowhead_style: None,
+            },
+            fill: Fill { enabled: false, color: Rgba::default() },
+            arrowhead: None,
+            endpoints,
+        }
+    }
+
+    #[test]
+    fn rasterize_line_default_is_horizontal_centre() {
+        use core_model::shape_style::ShapeKind;
+        let img = rasterize_shape(&stroke_shape(ShapeKind::Line, 2.0, None), 20, 10);
+        // The line runs full-width along the vertical centre in the stroke colour.
+        assert_eq!(px(&img, 10, 5), [255, 0, 0, 255], "centre is stroke-coloured");
+        assert!(px(&img, 1, 5)[3] > 0, "line spans to the left edge");
+        assert!(px(&img, 18, 5)[3] > 0, "line spans to the right edge");
+        // Top and bottom rows are clear (thin centred stroke).
+        assert_eq!(px(&img, 10, 0)[3], 0, "top row empty");
+        assert_eq!(px(&img, 10, 9)[3], 0, "bottom row empty");
+    }
+
+    #[test]
+    fn rasterize_line_diagonal_follows_endpoints() {
+        use core_model::shape_style::{Endpoints, Point2d, ShapeKind};
+        let ep = Endpoints {
+            start: Point2d { x: 0.0, y: 0.0 },
+            end: Point2d { x: 1.0, y: 1.0 },
+            start_control: None,
+            end_control: None,
+        };
+        let img = rasterize_shape(&stroke_shape(ShapeKind::Line, 2.0, Some(ep)), 16, 16);
+        // On the main diagonal → filled; the off-diagonal corners stay clear.
+        assert!(px(&img, 8, 8)[3] > 0, "main diagonal filled");
+        assert_eq!(px(&img, 15, 0)[3], 0, "top-right corner clear");
+        assert_eq!(px(&img, 0, 15)[3], 0, "bottom-left corner clear");
+    }
+
+    #[test]
+    fn rasterize_arrow_head_spreads_near_the_tip() {
+        use core_model::shape_style::ShapeKind;
+        let arrow = rasterize_shape(&stroke_shape(ShapeKind::Arrow, 2.0, None), 40, 20);
+        let filled_rows = |col: usize| (0..20).filter(|&y| px(&arrow, col, y)[3] > 0).count();
+        let near_tip = filled_rows(36);
+        let near_tail = filled_rows(4);
+        assert!(
+            near_tip > near_tail,
+            "arrowhead spreads vertically near the tip ({near_tip}) vs the tail ({near_tail})"
+        );
+        // A plain Line of the same geometry has no head — its tip stays thin.
+        let line = rasterize_shape(&stroke_shape(ShapeKind::Line, 2.0, None), 40, 20);
+        let line_tip = (0..20).filter(|&y| px(&line, 36, y)[3] > 0).count();
+        assert!(line_tip <= near_tail + 1, "line has no arrowhead spread, got {line_tip}");
     }
 
     #[test]

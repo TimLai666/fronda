@@ -3,13 +3,14 @@
 //! Renders a clip's `text_content` into an RGBA layer using a bundled font
 //! (Poppins) via the pure-Rust `ab_glyph` rasterizer — the linked ffmpeg has no
 //! text support and the compositor stays platform-free. Covers bundled font
-//! families (by name), Regular/Bold weight, `\n` line breaks, L/C/R alignment,
-//! letter spacing, line height, drop shadow, caption background, and outline —
-//! with `font_size` scaled to Swift's 1080-tall reference canvas. Text rotation,
-//! shadow blur, rounded background corners, and variable-font axes are follow-ups.
+//! families (by name), Regular/Bold weight — plus the wght axis on bundled
+//! variable families (Inter/Geist/…, Issue #65) — `\n` line breaks, L/C/R
+//! alignment, letter spacing, line height, drop shadow, caption background, and
+//! outline, with `font_size` scaled to Swift's 1080-tall reference canvas. Text
+//! rotation, shadow blur, and rounded background corners are follow-ups.
 
 use crate::compositor::RgbaImage;
-use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont, VariableFont};
 use core_model::{TextAlignment, TextStyle};
 
 macro_rules! font {
@@ -25,15 +26,40 @@ static BEBAS_NEUE: &[u8] = font!("BebasNeue/BebasNeue-Regular.ttf");
 static PERMANENT_MARKER: &[u8] = font!("PermanentMarker/PermanentMarker-Regular.ttf");
 static SHRIKHAND: &[u8] = font!("Shrikhand/Shrikhand-Regular.ttf");
 static BASEMENT_GROTESQUE: &[u8] = font!("BasementGrotesque/BasementGrotesque-Black.ttf");
+// Variable families (wght axis) — one file spans all weights (Issue #65).
+static INTER: &[u8] = font!("Inter/Inter[opsz,wght].ttf");
+static GEIST: &[u8] = font!("Geist/Geist[wght].ttf");
+static GEIST_MONO: &[u8] = font!("GeistMono/GeistMono[wght].ttf");
+static DM_SANS: &[u8] = font!("DMSans/DMSans[opsz,wght].ttf");
+static CAVEAT: &[u8] = font!("Caveat/Caveat[wght].ttf");
+static PLAYFAIR_DISPLAY: &[u8] = font!("PlayfairDisplay/PlayfairDisplay[wght].ttf");
+static SPACE_GROTESK: &[u8] = font!("SpaceGrotesk/SpaceGrotesk[wght].ttf");
 
 /// Pick the embedded font bytes for a `font_name` (case-insensitive substring
-/// match against a bundled family), honouring `bold` for families that ship a
-/// bold weight. Falls back to Poppins for unknown / system fonts (e.g. the
-/// default "Helvetica-Bold", which is not bundled).
+/// match against a bundled family). Variable families (Inter/Geist/… — a single
+/// file spanning all weights) ignore `bold`; their weight comes from the wght
+/// axis applied at render time. Static families honour `bold` via a Bold file.
+/// Falls back to Poppins for unknown / system fonts (e.g. the default
+/// "Helvetica-Bold", which is not bundled).
 fn font_for(font_name: &str, bold: bool) -> &'static [u8] {
     let n = font_name.to_ascii_lowercase();
     let has = |needle: &str| n.replace([' ', '-', '_'], "").contains(needle);
-    if has("anton") {
+    // Variable families first ("geistmono" before "geist"; both are substrings).
+    if has("geistmono") {
+        GEIST_MONO
+    } else if has("geist") {
+        GEIST
+    } else if has("inter") {
+        INTER
+    } else if has("dmsans") {
+        DM_SANS
+    } else if has("caveat") {
+        CAVEAT
+    } else if has("playfairdisplay") {
+        PLAYFAIR_DISPLAY
+    } else if has("spacegrotesk") {
+        SPACE_GROTESK
+    } else if has("anton") {
         ANTON
     } else if has("bebas") {
         BEBAS_NEUE
@@ -109,9 +135,12 @@ pub fn render_text(
         return img;
     }
     let bytes = font_for(&style.font_name, style.font_weight >= 600.0);
-    let Ok(font) = FontRef::try_from_slice(bytes) else {
+    let Ok(mut font) = FontRef::try_from_slice(bytes) else {
         return img;
     };
+    // Variable fonts: drive weight by the wght axis. On static faces this is a
+    // no-op (the Regular/Bold file chosen by font_for still applies). Issue #65.
+    font.set_variation(b"wght", style.font_weight as f32);
     // Swift sizes text for a 1080-tall reference canvas and scales by
     // canvas_height / 1080 (TextLayerController). Match it so sizes are consistent
     // across export resolutions.
@@ -306,6 +335,39 @@ mod tests {
         // A painted pixel carries the text colour (red-dominant).
         let lit = img.pixels.chunks_exact(4).find(|p| p[3] > 200).unwrap();
         assert!(lit[0] > lit[1] && lit[0] > lit[2], "red text");
+    }
+
+    #[test]
+    fn font_for_maps_variable_families() {
+        // Bundled variable families are selectable (Swift BundledFonts registers
+        // every bundled face). "geistmono" must win over "geist" (substring).
+        assert!(std::ptr::eq(font_for("Inter", false), INTER));
+        assert!(std::ptr::eq(font_for("Geist", false), GEIST));
+        assert!(std::ptr::eq(font_for("Geist Mono", false), GEIST_MONO));
+        assert!(std::ptr::eq(font_for("DM Sans", false), DM_SANS));
+        assert!(std::ptr::eq(font_for("Caveat", false), CAVEAT));
+        assert!(std::ptr::eq(font_for("Playfair Display", false), PLAYFAIR_DISPLAY));
+        assert!(std::ptr::eq(font_for("Space Grotesk", false), SPACE_GROTESK));
+        // Variable families ignore the bold flag (weight is an axis, not a file).
+        assert!(std::ptr::eq(font_for("Inter", true), INTER));
+    }
+
+    #[test]
+    fn variable_font_wght_axis_changes_stroke_weight() {
+        // Inter is a variable font (wght axis). Both weights are below the 600
+        // bold threshold, so font_for returns the SAME file — any rendering
+        // difference must come from the applied wght axis, not a Regular/Bold
+        // file swap. Issue #65.
+        let white = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let mut light = style(300.0, white, TextAlignment::Center);
+        light.font_name = "Inter".into();
+        light.font_weight = 100.0;
+        let mut heavy = light.clone();
+        heavy.font_weight = 590.0;
+        let l = any_opaque(&render_text("B", &light, 800, 1080, 0.5, 0.5));
+        let h = any_opaque(&render_text("B", &heavy, 800, 1080, 0.5, 0.5));
+        assert!(l > 0 && h > 0, "both render (light={l}, heavy={h})");
+        assert!(h > l, "heavier wght paints thicker strokes: light={l}, heavy={h}");
     }
 
     #[test]
