@@ -173,6 +173,18 @@ impl ChatView {
         cx.notify();
     }
 
+    /// Cross-view handoff: draft `text` into the composer and focus it
+    /// (Swift: agentService draft + panel reveal). Does not send.
+    pub fn set_composer_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_mention_picker();
+        self.composer_field
+            .update(cx, |field, cx| field.set_text(text.clone(), cx));
+        self.model.input.text = text;
+        self.model.input.cursor_position = self.model.input.text.len();
+        window.focus(&self.composer_field.focus_handle(cx), cx);
+        cx.notify();
+    }
+
     /// Send the composer content as a user message (Enter in the field).
     fn submit_composer(&mut self, cx: &mut Context<Self>) {
         self.model.input.text = self.composer_field.read(cx).text().to_string();
