@@ -953,6 +953,9 @@ impl Render for TextArea {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
+            // Content past max_lines clips instead of painting over
+            // neighboring UI (scrolling is still a follow-up).
+            .overflow_hidden()
             // "input" gates the "!input" global-shortcut bindings off while
             // any text input is focused.
             .key_context("FrondaTextArea input")

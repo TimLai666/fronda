@@ -13,5 +13,5 @@
 ## 3. 驗證與記錄
 
 - [x] 3.1 三個 gate 以 exit code 驗證全綠：cargo test --workspace、cargo test -p fronda-app-shell-gpui --features desktop-app、cargo check -p fronda-app-shell-gpui --features desktop-app --bin fronda 皆 EXIT=0
-- [ ] 3.2 對整合後的 diff 做一輪對抗審查（重點：合併衝突解法、TextArea 幾何數學、事件鏡射一致性、max_lines 溢出繪製的可見影響），確認發現並修復
+- [x] 3.2 對整合後的 diff 做一輪對抗審查（重點：合併衝突解法、TextArea 幾何數學、事件鏡射一致性、max_lines 溢出繪製的可見影響），確認發現並修復
 - [x] 3.3 已知限制記錄於 AGENTS.md 或 change 附註：互動行為（IME、軟換行游標、滑鼠選取）僅由編譯與純測試驗證，無 gpui 互動測試；超過 max_lines 時內容繪製溢出（捲動為後續工作）；feedback message 高度由固定 160px 改為內容驅動 5–10 行
