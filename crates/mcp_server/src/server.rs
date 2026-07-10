@@ -552,6 +552,8 @@ fn handle_json_rpc(
                     "name": server_name,
                     "version": server_version,
                 },
+                // Appendix B composition: serverInstructions + projectNavigation.
+                "instructions": agent_contract::tools::mcp_instructions(),
             }),
         ),
 

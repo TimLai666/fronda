@@ -136,12 +136,13 @@ fn tdef_004_system_instruction_exists() {
 #[test]
 fn tdef_005_instruction_contract_key_guidance() {
     let required_phrases = [
-        "get_timeline once per session",
-        "get_media before referencing",
-        "list_models before any generation",
-        "inspect_media before describing",
-        "user confirmation before execution",
-        "terse and outcome-first",
+        "Call get_timeline once per session",
+        "Call get_media before referencing any asset",
+        "Call list_models before any generate_* or upscale call",
+        "inspect_media first",
+        "then wait for confirmation",
+        "lead with the outcome",
+        "# Fronda extensions",
     ];
     for phrase in &required_phrases {
         assert!(
