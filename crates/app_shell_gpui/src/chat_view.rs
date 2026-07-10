@@ -237,7 +237,8 @@ impl ChatView {
                     let mut transport = crate::anthropic_transport::AnthropicTransport::new(
                         crate::anthropic_transport::AnthropicConfig::from_env(api_key),
                     )?;
-                    let tools = agent_contract::all_tools();
+                    // In-app surface (tool-surface-v2 C-1): shared tools + read_skill.
+                    let tools = agent_contract::tools::in_app_tools();
                     // Include any installed skills in the system prompt so the
                     // agent knows they exist (read via the read_skill tool).
                     let system = {

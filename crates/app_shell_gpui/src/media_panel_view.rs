@@ -3392,13 +3392,18 @@ impl MediaPanelView {
             cx.notify();
             return;
         }
-        let args = serde_json::json!({
+        // tool-surface-v2: generate_music is absorbed into generate_audio;
+        // pin the selected music-category model explicitly.
+        let mut args = serde_json::json!({
             "prompt": self.music.prompt.trim(),
             "duration": duration.round(),
         });
+        if let Some(m) = model {
+            args["model"] = serde_json::json!(m.id);
+        }
         let executor = crate::editor_state_hub::EditorStateHub::global().executor();
         let result = match executor.lock() {
-            Ok(mut exec) => exec.execute("generate_music", &args),
+            Ok(mut exec) => exec.execute("generate_audio", &args),
             Err(_) => Err("Editor state lock poisoned".to_string()),
         };
         self.music.note = music_generate_note(&result);

@@ -1049,10 +1049,7 @@ pub fn generation_tool_call(state: &GenerationState) -> (&'static str, serde_jso
     let tool = match &model.caps {
         ModelCaps::Video(_) => "generate_video",
         ModelCaps::Image(_) => "generate_image",
-        ModelCaps::Audio(c) => match c.category {
-            AudioCategory::Music => "generate_music",
-            AudioCategory::Tts => "generate_audio",
-        },
+        ModelCaps::Audio(_) => "generate_audio",
     };
     (tool, args)
 }
@@ -3000,14 +2997,14 @@ mod tests {
         mm.prompt = "lofi hip hop".into();
         mm.params.instrumental = true;
         let (tool, args) = generation_tool_call(&mm);
-        assert_eq!(tool, "generate_music");
+        assert_eq!(tool, "generate_audio");
         assert_eq!(args["instrumental"], true);
         assert!(args.get("duration").is_none(), "minimax has no duration caps");
 
         let mut em = audio_state("elevenlabs-music");
         em.prompt = "orchestral".into();
         let (tool, args) = generation_tool_call(&em);
-        assert_eq!(tool, "generate_music");
+        assert_eq!(tool, "generate_audio");
         assert_eq!(args["duration"], 30.0);
     }
 

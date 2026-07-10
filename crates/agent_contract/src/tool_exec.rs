@@ -4,9 +4,8 @@
 //! and provides a single `execute()` entry point for the MCP server.
 
 use crate::read_tools::{
-    format_inspect_media, format_search_results, format_timeline_json, format_transcript_json,
-    InspectMediaInput, SearchHitInfo, TranscriptClipInput, TranscriptFormatOptions,
-    TranscriptWordInput,
+    format_inspect_media, format_search_results, format_timeline_json, InspectMediaInput,
+    SearchHitInfo,
 };
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
@@ -674,6 +673,9 @@ pub struct ToolExecutor {
     /// The user's playhead frame, reported by get_timeline v2 (C-5
     /// `currentFrame`). The host app sets it; 0 on the pure/MCP path.
     current_frame: i64,
+    /// detect_beats analyses cache, keyed by mediaRef — the whole file is
+    /// analysed once; windowed calls only trim the response.
+    beat_cache: std::collections::HashMap<String, audio_core::beat_detector::BeatAnalysis>,
 }
 
 /// Read-only tools: successful execution does not bump the revision.
@@ -681,8 +683,8 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "get_timeline",
     "get_media",
     "search_media",
-    "list_folders",
     "list_models",
+    "detect_beats",
     "inspect_media",
     "inspect_timeline",
     "get_transcript",
@@ -698,6 +700,20 @@ enum OrganizeItem {
     Timeline(String),
     /// Folder, resolved from its path to the pre-call folder id.
     Folder(String),
+}
+
+/// Hue (0–1, saturation/value 1) to RGB — the key.chroma keyHue convention.
+fn hue_to_rgb(hue: f64) -> (f64, f64, f64) {
+    let h = (hue.rem_euclid(1.0)) * 6.0;
+    let x = 1.0 - (h % 2.0 - 1.0).abs();
+    match h as u32 {
+        0 => (1.0, x, 0.0),
+        1 => (x, 1.0, 0.0),
+        2 => (0.0, 1.0, x),
+        3 => (0.0, x, 1.0),
+        4 => (x, 0.0, 1.0),
+        _ => (1.0, 0.0, x),
+    }
 }
 
 /// Track display label (tool-surface-v2 C-4/C-5): visual tracks are
@@ -746,6 +762,7 @@ impl ToolExecutor {
             generation_backend: None,
             sibling_timelines: Vec::new(),
             current_frame: 0,
+            beat_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -1122,10 +1139,6 @@ impl ToolExecutor {
             "organize_media" => gate(m::validate_organize_media(args)),
             "close_project" => gate(m::validate_close_project(args)),
             "import_media" => gate(m::validate_import_media(args)),
-            "set_chroma_key" => gate(m::validate_set_chroma_key(args)),
-            "set_blend_mode" => gate(m::validate_set_blend_mode(args)),
-            "set_color_grade" => gate(m::validate_set_color_grade(args)),
-            "generate_music" => gate(m::validate_generate_music(args)),
             _ => Ok(()),
         }
     }
@@ -1163,9 +1176,6 @@ impl ToolExecutor {
             "add_shapes" => self.exec_mut(tool_name, ToolExecutor::cmd_add_shapes, args),
             "apply_color" => self.exec_enveloped(tool_name, ToolExecutor::cmd_apply_color, args),
             "apply_effect" => self.exec_enveloped(tool_name, ToolExecutor::cmd_apply_effect, args),
-            "set_chroma_key" => self.exec_mut(tool_name, ToolExecutor::cmd_set_chroma_key, args),
-            "set_blend_mode" => self.exec_mut(tool_name, ToolExecutor::cmd_set_blend_mode, args),
-            "set_color_grade" => self.exec_mut(tool_name, ToolExecutor::cmd_set_color_grade, args),
             "set_project_settings" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_set_project_settings, args)
             }
@@ -1207,7 +1217,8 @@ impl ToolExecutor {
             "remove_silence" => {
                 self.exec_enveloped(tool_name, ToolExecutor::cmd_remove_silence, args)
             }
-            "sync_audio" => self.exec_enveloped(tool_name, ToolExecutor::cmd_sync_audio, args),
+            "sync_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_sync_clips, args),
+            "detect_beats" => self.cmd_detect_beats(args),
             "denoise_audio" => {
                 self.exec_enveloped(tool_name, ToolExecutor::cmd_denoise_audio, args)
             }
@@ -1215,7 +1226,6 @@ impl ToolExecutor {
             // ── Read-only tools ──────────────────────────────────────────
             "get_media" => self.cmd_get_media(args),
             "search_media" => self.cmd_search_media(args),
-            "list_folders" => self.cmd_list_folders(),
             "list_models" => self.cmd_list_models(args),
             "inspect_media" => self.cmd_inspect_media(args),
             "inspect_timeline" => self.cmd_inspect_timeline(),
@@ -1226,7 +1236,6 @@ impl ToolExecutor {
             "generate_video" => self.cmd_generate_video(args),
             "generate_image" => self.cmd_generate_image(args),
             "generate_audio" => self.cmd_generate_audio(args),
-            "generate_music" => self.cmd_generate_music(args),
             "upscale_media" => self.cmd_upscale_media(args),
 
             // ── Read-only color inspect (no mutation) ────────────────────
@@ -3654,36 +3663,138 @@ impl ToolExecutor {
 
     // ── Media read-only tools ──────────────────────────────────────────────
 
+    /// GET_MEDIA v2 (absorbs list_folders): the library inventory — assets
+    /// with content hints, plus folders (as paths) and timelines on
+    /// unfiltered reads. Filters: ids (placeholder polling), folder (path,
+    /// includes subfolders), pending (unresolved generations only).
     fn cmd_get_media(&self, args: &Value) -> Result<Value, String> {
-        let media_id = args
-            .get("mediaId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing mediaId".to_string())?;
+        let ids_filter: Option<Vec<String>> = args.get("ids").and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
+        let folder_filter = args.get("folder").and_then(|v| v.as_str());
+        let pending = args
+            .get("pending")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let filtered = ids_filter.is_some() || folder_filter.is_some() || pending;
 
-        let entry = self
+        // Folder path filter: the named folder plus every descendant.
+        let folder_scope: Option<std::collections::HashSet<String>> = match folder_filter {
+            Some(path) => {
+                let folders = &self.media_manifest.folders;
+                let root = crate::organize::resolve_folder(folders, path)
+                    .map_err(|e| format!("get_media: {e}"))?
+                    .ok_or_else(|| format!("get_media: folder '{path}' not found"))?;
+                let mut scope: std::collections::HashSet<String> = Default::default();
+                scope.insert(root.clone());
+                let mut grew = true;
+                while grew {
+                    grew = false;
+                    for f in folders {
+                        if scope.contains(&f.id) {
+                            continue;
+                        }
+                        if f
+                            .parent_folder_id
+                            .as_ref()
+                            .is_some_and(|pid| scope.contains(pid))
+                        {
+                            scope.insert(f.id.clone());
+                            grew = true;
+                        }
+                    }
+                }
+                Some(scope)
+            }
+            None => None,
+        };
+
+        let assets: Vec<Value> = self
             .media_manifest
             .entries
             .iter()
-            .find(|e| e.id == media_id)
-            .ok_or_else(|| format!("Media '{}' not found", media_id))?;
+            .filter(|e| {
+                ids_filter
+                    .as_ref()
+                    .is_none_or(|ids| ids.iter().any(|id| id == &e.id))
+            })
+            .filter(|e| {
+                folder_scope
+                    .as_ref()
+                    .is_none_or(|scope| e.folder_id.as_ref().is_some_and(|f| scope.contains(f)))
+            })
+            .filter(|e| {
+                !pending
+                    || e.generation_status
+                        .as_deref()
+                        .is_some_and(|st| !st.is_empty() && st != "none")
+            })
+            .map(|e| {
+                let mut a = serde_json::Map::new();
+                a.insert("id".into(), json!(e.id));
+                a.insert("name".into(), json!(e.name));
+                a.insert("type".into(), json!(e.r#type.name()));
+                if e.duration > 0.0 {
+                    a.insert(
+                        "durationSeconds".into(),
+                        json!(crate::timeline_v2::round3(e.duration)),
+                    );
+                }
+                if let Some(w) = e.source_width {
+                    a.insert("width".into(), json!(w));
+                }
+                if let Some(h) = e.source_height {
+                    a.insert("height".into(), json!(h));
+                }
+                if let Some(fps) = e.source_fps {
+                    a.insert("fps".into(), json!(crate::timeline_v2::round3(fps)));
+                }
+                if e.has_audio == Some(true) {
+                    a.insert("hasAudio".into(), json!(true));
+                }
+                if let Some(fid) = &e.folder_id {
+                    a.insert(
+                        "folder".into(),
+                        json!(crate::organize::folder_path(&self.media_manifest.folders, fid)),
+                    );
+                }
+                if let Some(gi) = &e.generation_input {
+                    a.insert("prompt".into(), json!(gi.prompt));
+                }
+                if let Some(st) = e
+                    .generation_status
+                    .as_deref()
+                    .filter(|st| !st.is_empty() && *st != "none")
+                {
+                    a.insert("generationStatus".into(), json!(st));
+                }
+                Value::Object(a)
+            })
+            .collect();
 
-        // Surface async-generation status (#216) so the agent waits for 'none'
-        // before referencing an asset that is still preparing/generating/downloading.
-        let status_note = match entry.generation_status.as_deref() {
-            Some(s) if s != "none" && !s.is_empty() => {
-                format!(", generationStatus: {s} (not ready — poll get_media until 'none')")
+        let mut out = serde_json::Map::new();
+        out.insert("assets".into(), json!(assets));
+        if !filtered {
+            let folder_paths: Vec<String> = self
+                .media_manifest
+                .folders
+                .iter()
+                .map(|f| crate::organize::folder_path(&self.media_manifest.folders, &f.id))
+                .collect();
+            if !folder_paths.is_empty() {
+                out.insert("folders".into(), json!(folder_paths));
             }
-            _ => String::new(),
-        };
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "Media: {} ({:?}), duration: {:.1}s, source: {:?}{status_note}",
-                    entry.name, entry.r#type, entry.duration, entry.source
-                )
-            }]
-        }))
+            let mut timelines = vec![json!({
+                "timelineId": self.timeline.id, "name": self.timeline.name, "active": true
+            })];
+            for t in &self.sibling_timelines {
+                timelines.push(json!({"timelineId": t.id, "name": t.name}));
+            }
+            out.insert("timelines".into(), json!(timelines));
+        }
+        Ok(Self::json_content(&Value::Object(out)))
     }
 
     fn cmd_search_media(&self, args: &Value) -> Result<Value, String> {
@@ -3742,32 +3853,6 @@ impl ToolExecutor {
             "content": [{
                 "type": "text",
                 "text": output_json
-            }]
-        }))
-    }
-
-    fn cmd_list_folders(&self) -> Result<Value, String> {
-        let folders = &self.media_manifest.folders;
-        if folders.is_empty() {
-            return Ok(json!({
-                "content": [{"type": "text", "text": "No folders".to_string()}]
-            }));
-        }
-        let lines: Vec<String> = folders
-            .iter()
-            .map(|f| {
-                let parent = f
-                    .parent_folder_id
-                    .as_ref()
-                    .map(|p| format!(" (parent: {})", p))
-                    .unwrap_or_default();
-                format!("{}: {}{}", f.id, f.name, parent)
-            })
-            .collect();
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Folders ({}):\n{}", folders.len(), lines.join("\n"))
             }]
         }))
     }
@@ -5212,13 +5297,13 @@ impl ToolExecutor {
         Ok(ranges)
     }
 
-    fn cmd_sync_audio(&mut self, args: &Value) -> Result<Value, String> {
+    fn cmd_sync_clips(&mut self, args: &Value) -> Result<Value, String> {
         use audio_core::audio_sync_correlator::AudioSyncCorrelator;
 
         let ref_id = args
             .get("referenceClipId")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "sync_audio requires 'referenceClipId'.".to_string())?
+            .ok_or_else(|| "sync_clips requires 'referenceClipId'.".to_string())?
             .to_string();
         let mut target_ids: Vec<String> = args
             .get("targetClipIds")
@@ -5231,7 +5316,7 @@ impl ToolExecutor {
             }
         }
         if target_ids.is_empty() {
-            return Err("sync_audio requires 'targetClipId' or 'targetClipIds'.".to_string());
+            return Err("sync_clips requires 'targetClipId' or 'targetClipIds'.".to_string());
         }
         let min_confidence = args
             .get("minConfidence")
@@ -5243,10 +5328,27 @@ impl ToolExecutor {
             .filter(|s| *s > 0.0)
             .unwrap_or(30.0);
 
-        let audio = self.audio_source.clone().ok_or_else(|| {
-            "sync_audio is unavailable: no audio decoder is connected (run it from the app)."
-                .to_string()
-        })?;
+        let mode = args
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("auto");
+        if !matches!(mode, "auto" | "audio" | "timecode") {
+            return Err(format!("Invalid mode '{mode}'. Use auto, audio, or timecode."));
+        }
+        // The audio decoder is only required when audio correlation can run;
+        // pure-timecode syncs work without it.
+        let audio_seam = self.audio_source.clone();
+        let audio = match (mode, &audio_seam) {
+            ("timecode", _) => None,
+            (_, Some(seam)) => Some(seam.clone()),
+            ("audio", None) => {
+                return Err(
+                    "sync_clips is unavailable: no audio decoder is connected (run it from the app)."
+                        .to_string(),
+                )
+            }
+            (_, None) => None,
+        };
         let sample_rate = 44_100u32;
         let channels = 1usize;
         let frame_size = 1024usize;
@@ -5260,11 +5362,18 @@ impl ToolExecutor {
             .entry_for(&ref_clip.media_ref)
             .map(|e| e.source.clone())
             .ok_or_else(|| "The reference clip's media isn't in the library.".to_string())?;
-        let ref_pcm = audio
-            .decode_source_pcm(&ref_source, sample_rate, channels)
-            .ok_or_else(|| "Could not decode the reference clip's audio.".to_string())?;
-        let ref_f64: Vec<f64> = ref_pcm.iter().map(|&s| s as f64).collect();
+        // Audio correlation decodes the reference lazily — timecode syncs
+        // never touch the decoder.
+        let mut ref_f64: Option<Vec<f64>> = None;
         let ref_anchor = ref_clip.start_frame - ref_clip.trim_start_frame;
+        // Embedded source timecode in seconds (frame / quanta), when present.
+        let tc_seconds = |media_ref: &str, manifest: &MediaManifest| -> Option<f64> {
+            let e = manifest.entry_for(media_ref)?;
+            let frame = e.source_timecode_frame? as f64;
+            let quanta = e.source_timecode_quanta.filter(|q| *q > 0)? as f64;
+            Some(frame / quanta)
+        };
+        let ref_tc = tc_seconds(&ref_clip.media_ref, &self.media_manifest);
 
         let fps = self.timeline.fps as f64;
         let mut synced: Vec<Value> = Vec::new();
@@ -5286,50 +5395,155 @@ impl ToolExecutor {
                 skipped.push(json!({"clipId": tid, "reason": "media not in library"}));
                 continue;
             };
-            let Some(tpcm) = audio.decode_source_pcm(&tsource, sample_rate, channels) else {
-                skipped.push(json!({"clipId": tid, "reason": "could not decode audio"}));
-                continue;
-            };
-            let tf64: Vec<f64> = tpcm.iter().map(|&s| s as f64).collect();
-            match AudioSyncCorrelator::find_sync_offset_windowed(
-                &ref_f64,
-                &tf64,
-                sample_rate as f64,
-                frame_size,
-                fps,
-                Some(search_window_seconds),
-            ) {
-                Some(off) if off.confidence >= min_confidence => {
-                    // A delayed target (positive offset) must move earlier; align the
-                    // clips' source-sample-0 anchors (start_frame - trim_start_frame).
-                    let tgt_anchor = tclip.start_frame - tclip.trim_start_frame;
-                    let delta = ref_anchor - tgt_anchor - off.offset_frames;
-                    let new_start = (tclip.start_frame + delta).max(0);
-                    // move_clips re-inserts moved clips under NEW ids — report the
-                    // new id or the agent is left holding a dead reference.
-                    let placed = timeline_core::move_clips(
-                        &mut self.timeline,
-                        &[tid.clone()],
-                        tloc.track_index,
-                        new_start,
-                    );
-                    let new_id = placed.first().cloned().unwrap_or_else(|| tid.clone());
-                    synced.push(json!({
+            // Timecode first (mode auto/timecode): both files carrying an
+            // embedded timecode align exactly, confidence 1.0.
+            let tgt_tc = tc_seconds(&tclip.media_ref, &self.media_manifest);
+            let timecode_offset: Option<i64> = match (mode, ref_tc, tgt_tc) {
+                ("audio", _, _) => None,
+                // Correlator sign convention: positive offset = the shared
+                // content sits LATER in the target's file = the target
+                // started recording EARLIER (smaller timecode).
+                (_, Some(r), Some(t)) => Some(((r - t) * fps).round() as i64),
+                ("timecode", _, _) => {
+                    skipped.push(json!({
                         "clipId": tid,
-                        "newClipId": new_id,
-                        "offsetFrames": off.offset_frames,
-                        "movedToFrame": new_start,
-                        "confidence": off.confidence,
+                        "reason": "timecode mode: both files need an embedded source timecode"
                     }));
+                    continue;
                 }
-                Some(off) => skipped.push(json!({
-                    "clipId": tid, "reason": "low confidence", "confidence": off.confidence
-                })),
-                None => skipped.push(json!({"clipId": tid, "reason": "no match found"})),
-            }
+                _ => None,
+            };
+
+            let (offset_frames, confidence, method) = if let Some(off) = timecode_offset {
+                (off, 1.0f64, "timecode")
+            } else {
+                let Some(audio) = &audio else {
+                    skipped.push(json!({
+                        "clipId": tid,
+                        "reason": "no embedded timecode and no audio decoder connected"
+                    }));
+                    continue;
+                };
+                if ref_f64.is_none() {
+                    let Some(pcm) = audio.decode_source_pcm(&ref_source, sample_rate, channels)
+                    else {
+                        return Err("Could not decode the reference clip's audio.".to_string());
+                    };
+                    ref_f64 = Some(pcm.iter().map(|&s| s as f64).collect());
+                }
+                let Some(tpcm) = audio.decode_source_pcm(&tsource, sample_rate, channels) else {
+                    skipped.push(json!({"clipId": tid, "reason": "could not decode audio"}));
+                    continue;
+                };
+                let tf64: Vec<f64> = tpcm.iter().map(|&s| s as f64).collect();
+                match AudioSyncCorrelator::find_sync_offset_windowed(
+                    ref_f64.as_ref().expect("decoded above"),
+                    &tf64,
+                    sample_rate as f64,
+                    frame_size,
+                    fps,
+                    Some(search_window_seconds),
+                ) {
+                    Some(off) if off.confidence >= min_confidence => {
+                        (off.offset_frames, off.confidence, "audio")
+                    }
+                    Some(off) => {
+                        skipped.push(json!({
+                            "clipId": tid, "reason": "low confidence", "confidence": off.confidence
+                        }));
+                        continue;
+                    }
+                    None => {
+                        skipped.push(json!({"clipId": tid, "reason": "no match found"}));
+                        continue;
+                    }
+                }
+            };
+
+            // A delayed target (positive offset) must move earlier; align the
+            // clips' source-sample-0 anchors (start_frame - trim_start_frame).
+            let tgt_anchor = tclip.start_frame - tclip.trim_start_frame;
+            let delta = ref_anchor - tgt_anchor - offset_frames;
+            let new_start = (tclip.start_frame + delta).max(0);
+            // move_clips re-inserts moved clips under NEW ids — report the
+            // new id or the agent is left holding a dead reference.
+            let placed = timeline_core::move_clips(
+                &mut self.timeline,
+                &[tid.clone()],
+                tloc.track_index,
+                new_start,
+            );
+            let new_id = placed.first().cloned().unwrap_or_else(|| tid.clone());
+            synced.push(json!({
+                "clipId": tid,
+                "newClipId": new_id,
+                "offsetFrames": offset_frames,
+                "movedToFrame": new_start,
+                "confidence": crate::timeline_v2::round3(confidence),
+                "method": method,
+            }));
         }
 
         Ok(json!({ "synced": synced, "skipped": skipped }))
+    }
+
+    /// DETECT_BEATS (tool-surface-v2): on-device beat/downbeat detection on a
+    /// media asset's audio, in SOURCE seconds + estimated bpm. The whole file
+    /// is analysed once and cached; startSeconds/endSeconds trim the response.
+    /// Decoding runs through the ClipAudioSource host seam.
+    fn cmd_detect_beats(&mut self, args: &Value) -> Result<Value, String> {
+        let media_ref = args
+            .get("mediaRef")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing mediaRef".to_string())?;
+        let entry = self
+            .media_manifest
+            .entry_for(media_ref)
+            .ok_or_else(|| format!("Media '{media_ref}' not found"))?;
+        if !matches!(entry.r#type, ClipType::Audio | ClipType::Video) {
+            return Err(format!(
+                "detect_beats works on audio or video assets; '{}' is {}.",
+                entry.name,
+                entry.r#type.name()
+            ));
+        }
+        if !self.beat_cache.contains_key(media_ref) {
+            let audio = self.audio_source.clone().ok_or_else(|| {
+                "detect_beats is unavailable: no audio decoder is connected (run it from the app)."
+                    .to_string()
+            })?;
+            let sample_rate = 44_100u32;
+            let pcm = audio
+                .decode_source_pcm(&entry.source, sample_rate, 1)
+                .ok_or_else(|| format!("Could not decode audio from '{}'.", entry.name))?;
+            let analysis = audio_core::beat_detector::detect_beats(&pcm, 1, sample_rate);
+            self.beat_cache.insert(media_ref.to_string(), analysis);
+        }
+        let analysis = &self.beat_cache[media_ref];
+        let start = args.get("startSeconds").and_then(|v| v.as_f64());
+        let end = args.get("endSeconds").and_then(|v| v.as_f64());
+        let in_range = |t: f64| -> bool {
+            start.is_none_or(|s| t >= s) && end.is_none_or(|e| t <= e)
+        };
+        let beats: Vec<f64> = analysis
+            .beats
+            .iter()
+            .copied()
+            .filter(|t| in_range(*t))
+            .map(crate::timeline_v2::round3)
+            .collect();
+        let downbeats: Vec<f64> = analysis
+            .downbeats
+            .iter()
+            .copied()
+            .filter(|t| in_range(*t))
+            .map(crate::timeline_v2::round3)
+            .collect();
+        Ok(Self::json_content(&json!({
+            "bpm": crate::timeline_v2::round3(analysis.bpm),
+            "beats": beats,
+            "downbeats": downbeats,
+        })))
     }
 
     /// DENOISE_AUDIO (upstream #251): toggle the `audio.denoise` effect on audio
@@ -6481,44 +6695,215 @@ impl ToolExecutor {
         }))
     }
 
+    /// APPLY_COLOR v2 (absorbs set_color_grade): named grading knobs over
+    /// clipIds with MERGE semantics; reset starts from neutral; `color`
+    /// replaces the whole grade (the grade-copy path). Scalars store as
+    /// per-knob `color.<knob>` effects (the compositor's vocabulary); curves,
+    /// hue curves, and the LUT store as JSON-string params round-tripped by
+    /// get_timeline's `color` object.
     fn cmd_apply_color(&mut self, args: &Value) -> Result<Value, String> {
-        let clip_id = args
-            .get("clipId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing clipId".to_string())?;
-
-        let Some(loc) = timeline_core::find_clip(&self.timeline, clip_id) else {
-            return Err(format!("Clip '{}' not found", clip_id));
+        let clip_ids: Vec<String> = match args.get("clipIds").and_then(|v| v.as_array()) {
+            Some(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
+            None => args
+                .get("clipId")
+                .and_then(|v| v.as_str())
+                .map(|s| vec![s.to_string()])
+                .unwrap_or_default(),
         };
-        let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
-
-        let reset = args.get("reset").and_then(|v| v.as_bool()).unwrap_or(false);
-
-        if reset {
-            // Remove all color effects
-            if let Some(ref mut effects) = clip.effects {
-                effects.retain(|e| !e.r#type.starts_with("color."));
+        if clip_ids.is_empty() {
+            return Err("Missing clipIds".to_string());
+        }
+        for cid in &clip_ids {
+            if timeline_core::find_clip(&self.timeline, cid).is_none() {
+                return Err(format!("Clip '{cid}' not found"));
             }
         }
 
-        let exposure = args.get("exposure").and_then(|v| v.as_f64());
-        let contrast = args.get("contrast").and_then(|v| v.as_f64());
-        let saturation = args.get("saturation").and_then(|v| v.as_f64());
-        let temperature = args.get("temperature").and_then(|v| v.as_f64());
+        let reset = args.get("reset").and_then(|v| v.as_bool()).unwrap_or(false);
+        let color_copy = args.get("color").and_then(|v| v.as_object()).cloned();
 
-        let effects = clip.effects.get_or_insert(Vec::new());
+        // (knob, param name, min, max) — apply_color's scalar vocabulary.
+        const KNOBS: &[(&str, &str, f64, f64)] = &[
+            ("exposure", "ev", -3.0, 3.0),
+            ("contrast", "amount", 0.5, 1.5),
+            ("saturation", "amount", 0.0, 2.0),
+            ("vibrance", "value", -1.0, 1.0),
+            ("temperature", "amount", 2000.0, 11000.0),
+            ("tint", "value", -100.0, 100.0),
+            ("highlights", "value", -1.0, 1.0),
+            ("shadows", "value", -1.0, 1.0),
+            ("blacks", "value", -1.0, 1.0),
+            ("whites", "value", -1.0, 1.0),
+            ("shadowsHue", "value", 0.0, 360.0),
+            ("shadowsAmount", "value", 0.0, 1.0),
+            ("shadowsLum", "value", -0.5, 0.5),
+            ("midsHue", "value", 0.0, 360.0),
+            ("midsAmount", "value", 0.0, 1.0),
+            ("midsGamma", "value", 0.5, 2.0),
+            ("highsHue", "value", 0.0, 360.0),
+            ("highsAmount", "value", 0.0, 1.0),
+            ("highsGain", "value", 0.5, 1.5),
+        ];
+        let knob_args: Vec<(&str, &str, f64)> = KNOBS
+            .iter()
+            .filter_map(|(knob, param, lo, hi)| {
+                args.get(*knob)
+                    .and_then(|v| v.as_f64())
+                    .map(|v| (*knob, *param, v.clamp(*lo, *hi)))
+            })
+            .collect();
+        let curve_args: Vec<(&str, Value)> = ["masterCurve", "redCurve", "greenCurve", "blueCurve"]
+            .iter()
+            .filter_map(|k| args.get(*k).filter(|v| v.is_array()).map(|v| (*k, v.clone())))
+            .collect();
+        let hue_curves = args
+            .get("hueCurves")
+            .and_then(|v| v.get("targets"))
+            .filter(|v| v.is_array())
+            .cloned();
+        let lut = args.get("lut").and_then(|v| v.as_object()).cloned();
 
-        if let Some(v) = exposure {
-            Self::upsert_effect_param(effects, "color.exposure", "ev", v);
+        let has_knobs = !knob_args.is_empty()
+            || !curve_args.is_empty()
+            || hue_curves.is_some()
+            || lut.is_some();
+        if color_copy.is_some() && (reset || has_knobs) {
+            return Err(
+                "apply_color: 'color' replaces the whole grade — it is mutually exclusive with reset and individual knobs."
+                    .to_string(),
+            );
         }
-        if let Some(v) = contrast {
-            Self::upsert_effect_param(effects, "color.contrast", "amount", v);
-        }
-        if let Some(v) = saturation {
-            Self::upsert_effect_param(effects, "color.saturation", "amount", v);
-        }
-        if let Some(v) = temperature {
-            Self::upsert_effect_param(effects, "color.temperature", "amount", v);
+
+        for cid in &clip_ids {
+            let loc = timeline_core::find_clip(&self.timeline, cid).expect("checked above");
+            let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            if reset || color_copy.is_some() {
+                if let Some(effects) = &mut clip.effects {
+                    effects.retain(|e| !e.r#type.starts_with("color."));
+                }
+            }
+            let effects = clip.effects.get_or_insert(Vec::new());
+
+            // The grade-copy path re-applies the pasted object's knobs.
+            let copied: Vec<(String, Value)> = color_copy
+                .as_ref()
+                .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default();
+            let scalar_source: Vec<(&str, &str, f64)> = if color_copy.is_some() {
+                KNOBS
+                    .iter()
+                    .filter_map(|(knob, param, lo, hi)| {
+                        copied
+                            .iter()
+                            .find(|(k, _)| k == knob)
+                            .and_then(|(_, v)| v.as_f64())
+                            .map(|v| (*knob, *param, v.clamp(*lo, *hi)))
+                    })
+                    .collect()
+            } else {
+                knob_args.clone()
+            };
+            for (knob, param, value) in &scalar_source {
+                Self::upsert_effect_param(effects, &format!("color.{knob}"), param, *value);
+            }
+
+            let curve_source: Vec<(&str, Value)> = if color_copy.is_some() {
+                ["masterCurve", "redCurve", "greenCurve", "blueCurve"]
+                    .iter()
+                    .filter_map(|k| {
+                        copied
+                            .iter()
+                            .find(|(key, _)| key == k)
+                            .map(|(_, v)| (*k, v.clone()))
+                    })
+                    .collect()
+            } else {
+                curve_args.clone()
+            };
+            for (key, value) in &curve_source {
+                let channel = key.trim_end_matches("Curve");
+                let entry = effects.iter_mut().find(|e| e.r#type == "color.curves");
+                let serialized = serde_json::to_string(value).unwrap_or_else(|_| "[]".into());
+                match entry {
+                    Some(e) => {
+                        e.params
+                            .insert(channel.to_string(), core_model::EffectParam::string(&serialized));
+                    }
+                    None => {
+                        let mut params = std::collections::HashMap::new();
+                        params.insert(
+                            channel.to_string(),
+                            core_model::EffectParam::string(&serialized),
+                        );
+                        effects.push(Effect {
+                            id: Uuid::new_v4().to_string(),
+                            r#type: "color.curves".to_string(),
+                            enabled: true,
+                            params,
+                        });
+                    }
+                }
+            }
+
+            let hue_source = if color_copy.is_some() {
+                copied
+                    .iter()
+                    .find(|(k, _)| k == "hueCurves")
+                    .and_then(|(_, v)| v.get("targets"))
+                    .cloned()
+            } else {
+                hue_curves.clone()
+            };
+            if let Some(targets) = &hue_source {
+                let serialized = serde_json::to_string(targets).unwrap_or_else(|_| "[]".into());
+                effects.retain(|e| e.r#type != "color.hueCurves");
+                let mut params = std::collections::HashMap::new();
+                params.insert(
+                    "targets".to_string(),
+                    core_model::EffectParam::string(&serialized),
+                );
+                effects.push(Effect {
+                    id: Uuid::new_v4().to_string(),
+                    r#type: "color.hueCurves".to_string(),
+                    enabled: true,
+                    params,
+                });
+            }
+
+            let lut_source = if color_copy.is_some() {
+                copied
+                    .iter()
+                    .find(|(k, _)| k == "lut")
+                    .and_then(|(_, v)| v.as_object().cloned())
+            } else {
+                lut.clone()
+            };
+            if let Some(lut_obj) = &lut_source {
+                let Some(path) = lut_obj.get("path").and_then(|v| v.as_str()) else {
+                    return Err("apply_color: lut requires a 'path'".to_string());
+                };
+                let strength = lut_obj
+                    .get("strength")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0)
+                    .clamp(0.0, 1.0);
+                effects.retain(|e| e.r#type != "color.lut");
+                let mut params = std::collections::HashMap::new();
+                params.insert("path".to_string(), core_model::EffectParam::string(path));
+                params.insert("strength".to_string(), core_model::EffectParam::value(strength));
+                effects.push(Effect {
+                    id: Uuid::new_v4().to_string(),
+                    r#type: "color.lut".to_string(),
+                    enabled: true,
+                    params,
+                });
+            }
+            if effects.is_empty() {
+                clip.effects = None;
+            }
         }
 
         Ok(json!({}))
@@ -6554,15 +6939,200 @@ impl ToolExecutor {
         }
     }
 
+    /// APPLY_EFFECT v2 (absorbs set_chroma_key): merge non-color effects by
+    /// type over clipIds; out-of-range params clamp; `remove` deletes by
+    /// type; enabled=false bypasses without removing. `key.chroma` also
+    /// mirrors into `Clip.chroma_key` so the compositor keys immediately.
     fn cmd_apply_effect(&mut self, args: &Value) -> Result<Value, String> {
-        let clip_id = args
-            .get("clipId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing clipId".to_string())?;
-        let effect_type = args
-            .get("effectType")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing effectType".to_string())?;
+        // (type, [(param, min, max, default)]) — Appendix C effect catalog.
+        const CATALOG: &[(&str, &[(&str, f64, f64)])] = &[
+            ("detail.clarity", &[("clarity", -1.0, 1.0), ("dehaze", -1.0, 1.0)]),
+            ("blur.gaussian", &[("radius", 0.0, 100.0)]),
+            ("blur.sharpen", &[("amount", 0.0, 2.0)]),
+            ("blur.noiseReduction", &[("amount", 0.0, 1.0)]),
+            ("blur.motion", &[("radius", 0.0, 100.0), ("angle", -180.0, 180.0)]),
+            ("stylize.grain", &[("amount", 0.0, 1.0), ("size", 0.5, 4.0)]),
+            (
+                "stylize.vignette",
+                &[
+                    ("amount", -1.0, 1.0),
+                    ("midpoint", 0.0, 1.0),
+                    ("roundness", -1.0, 1.0),
+                    ("feather", 0.0, 1.0),
+                ],
+            ),
+            (
+                "stylize.glow",
+                &[
+                    ("intensity", 0.0, 1.0),
+                    ("radius", 0.0, 100.0),
+                    ("threshold", 0.0, 1.0),
+                    ("warmth", 0.0, 1.0),
+                ],
+            ),
+            (
+                "key.chroma",
+                &[
+                    ("keyHue", 0.0, 1.0),
+                    ("tolerance", 0.0, 1.0),
+                    ("softness", 0.0, 1.0),
+                    ("spill", 0.0, 1.0),
+                ],
+            ),
+        ];
+
+        // Legacy single-clip shape ({clipId, effectType, ...}) still parses.
+        if args.get("clipIds").is_none() {
+            if let (Some(clip_id), Some(effect_type)) = (
+                args.get("clipId").and_then(|v| v.as_str()),
+                args.get("effectType").and_then(|v| v.as_str()),
+            ) {
+                return self.legacy_apply_effect(args, clip_id, effect_type);
+            }
+        }
+
+        let clip_ids: Vec<String> = args
+            .get("clipIds")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if clip_ids.is_empty() {
+            return Err("Missing clipIds".to_string());
+        }
+        for cid in &clip_ids {
+            if timeline_core::find_clip(&self.timeline, cid).is_none() {
+                return Err(format!("Clip '{cid}' not found"));
+            }
+        }
+
+        // Parse + clamp every effect entry before mutating anything.
+        struct EffectSpec {
+            r#type: String,
+            params: Vec<(String, f64)>,
+            enabled: bool,
+        }
+        let mut specs: Vec<EffectSpec> = Vec::new();
+        if let Some(list) = args.get("effects").and_then(|v| v.as_array()) {
+            for (i, e) in list.iter().enumerate() {
+                let ty = e
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| format!("effects[{i}]: missing type"))?;
+                let Some((_, catalog_params)) = CATALOG.iter().find(|(t, _)| *t == ty) else {
+                    let known: Vec<&str> = CATALOG.iter().map(|(t, _)| *t).collect();
+                    return Err(format!(
+                        "effects[{i}]: unknown effect type '{ty}'. Available: {}",
+                        known.join(", ")
+                    ));
+                };
+                let mut params: Vec<(String, f64)> = Vec::new();
+                if let Some(pv) = e.get("params").and_then(|v| v.as_object()) {
+                    for (name, value) in pv {
+                        let Some((_, lo, hi)) =
+                            catalog_params.iter().find(|(n, _, _)| n == name)
+                        else {
+                            let names: Vec<&str> =
+                                catalog_params.iter().map(|(n, _, _)| *n).collect();
+                            return Err(format!(
+                                "effects[{i}]: '{ty}' has no param '{name}'. Params: {}",
+                                names.join(", ")
+                            ));
+                        };
+                        let v = value
+                            .as_f64()
+                            .ok_or_else(|| format!("effects[{i}]: param '{name}' must be a number"))?;
+                        params.push((name.clone(), v.clamp(*lo, *hi)));
+                    }
+                }
+                specs.push(EffectSpec {
+                    r#type: ty.to_string(),
+                    params,
+                    enabled: e.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                });
+            }
+        }
+        let removals: Vec<String> = args
+            .get("remove")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if specs.is_empty() && removals.is_empty() {
+            return Err("Pass at least one of 'effects' or 'remove'.".to_string());
+        }
+
+        for cid in &clip_ids {
+            let loc = timeline_core::find_clip(&self.timeline, cid).expect("checked above");
+            let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            for ty in &removals {
+                if ty == "key.chroma" {
+                    clip.chroma_key = None;
+                }
+                if let Some(effects) = &mut clip.effects {
+                    effects.retain(|e| &e.r#type != ty);
+                }
+            }
+            for spec in &specs {
+                let effects = clip.effects.get_or_insert(Vec::new());
+                match effects.iter_mut().find(|e| e.r#type == spec.r#type) {
+                    Some(e) => {
+                        e.enabled = spec.enabled;
+                        for (name, value) in &spec.params {
+                            e.params
+                                .insert(name.clone(), core_model::EffectParam::value(*value));
+                        }
+                    }
+                    None => {
+                        let mut params = std::collections::HashMap::new();
+                        for (name, value) in &spec.params {
+                            params.insert(name.clone(), core_model::EffectParam::value(*value));
+                        }
+                        effects.push(Effect {
+                            id: Uuid::new_v4().to_string(),
+                            r#type: spec.r#type.clone(),
+                            enabled: spec.enabled,
+                            params,
+                        });
+                    }
+                }
+                // Mirror the chroma key into the render model.
+                if spec.r#type == "key.chroma" {
+                    let entry = clip
+                        .effects
+                        .as_ref()
+                        .and_then(|es| es.iter().find(|e| e.r#type == "key.chroma"))
+                        .cloned();
+                    if let Some(entry) = entry {
+                        let get = |name: &str, default: f64| {
+                            entry.params.get(name).and_then(|p| p.value).unwrap_or(default)
+                        };
+                        let hue = get("keyHue", 1.0 / 3.0);
+                        let (r, g, b) = hue_to_rgb(hue);
+                        clip.chroma_key = Some(core_model::ChromaKey {
+                            enabled: spec.enabled,
+                            key_r: r,
+                            key_g: g,
+                            key_b: b,
+                            tolerance: get("tolerance", 0.0),
+                            spill_suppression: get("spill", 0.5),
+                        });
+                    }
+                }
+            }
+            if clip.effects.as_ref().is_some_and(|e| e.is_empty()) {
+                clip.effects = None;
+            }
+        }
+        Ok(json!({}))
+    }
+
+    /// Pre-v2 apply_effect shape ({clipId, effectType, intensity, remove}) —
+    /// kept for in-app callers; free-form types, no catalog clamping.
+    fn legacy_apply_effect(
+        &mut self,
+        args: &Value,
+        clip_id: &str,
+        effect_type: &str,
+    ) -> Result<Value, String> {
         let enabled = args
             .get("enabled")
             .and_then(|v| v.as_bool())
@@ -6581,6 +7151,9 @@ impl ToolExecutor {
         if remove {
             if let Some(ref mut effects) = clip.effects {
                 effects.retain(|e| e.r#type != effect_type);
+                if effects.is_empty() {
+                    clip.effects = None;
+                }
             }
         } else {
             let effects = clip.effects.get_or_insert(Vec::new());
@@ -6608,194 +7181,7 @@ impl ToolExecutor {
                 }
             }
         }
-
         Ok(json!({}))
-    }
-
-    fn cmd_set_chroma_key(&mut self, args: &Value) -> Result<Value, String> {
-        let clip_id = args
-            .get("clipId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing clipId".to_string())?;
-
-        let Some(loc) = timeline_core::find_clip(&self.timeline, clip_id) else {
-            return Err(format!("Clip '{}' not found", clip_id));
-        };
-        let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
-
-        let enabled = args
-            .get("enabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        let color = args.get("color").and_then(|v| v.as_str());
-        let threshold = args.get("threshold").and_then(|v| v.as_f64());
-        let smoothness = args.get("smoothness").and_then(|v| v.as_f64());
-
-        let effects = clip.effects.get_or_insert(Vec::new());
-        let existing = effects.iter_mut().find(|e| e.r#type == "chroma.key");
-
-        match existing {
-            Some(effect) => {
-                effect.enabled = enabled;
-                if let Some(c) = color {
-                    effect
-                        .params
-                        .insert("color".to_string(), core_model::EffectParam::string(c));
-                }
-                if let Some(v) = threshold {
-                    effect
-                        .params
-                        .insert("threshold".to_string(), core_model::EffectParam::value(v));
-                }
-                if let Some(v) = smoothness {
-                    effect
-                        .params
-                        .insert("smoothness".to_string(), core_model::EffectParam::value(v));
-                }
-            }
-            None => {
-                let mut params = std::collections::HashMap::new();
-                if let Some(c) = color {
-                    params.insert("color".to_string(), core_model::EffectParam::string(c));
-                }
-                if let Some(v) = threshold {
-                    params.insert("threshold".to_string(), core_model::EffectParam::value(v));
-                }
-                if let Some(v) = smoothness {
-                    params.insert("smoothness".to_string(), core_model::EffectParam::value(v));
-                }
-                effects.push(Effect {
-                    id: Uuid::new_v4().to_string(),
-                    r#type: "chroma.key".to_string(),
-                    enabled,
-                    params,
-                });
-            }
-        }
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Set chroma key on clip '{}' (enabled: {})", clip_id, enabled)
-            }]
-        }))
-    }
-
-    fn cmd_set_blend_mode(&mut self, args: &Value) -> Result<Value, String> {
-        let clip_id = args
-            .get("clipId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing clipId".to_string())?;
-        let mode = args
-            .get("mode")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing mode".to_string())?;
-
-        let Some(loc) = timeline_core::find_clip(&self.timeline, clip_id) else {
-            return Err(format!("Clip '{}' not found", clip_id));
-        };
-        let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
-
-        let effects = clip.effects.get_or_insert(Vec::new());
-        let existing = effects.iter_mut().find(|e| e.r#type == "blend.mode");
-
-        match existing {
-            Some(effect) => {
-                effect
-                    .params
-                    .insert("mode".to_string(), core_model::EffectParam::string(mode));
-            }
-            None => {
-                let mut params = std::collections::HashMap::new();
-                params.insert("mode".to_string(), core_model::EffectParam::string(mode));
-                effects.push(Effect {
-                    id: Uuid::new_v4().to_string(),
-                    r#type: "blend.mode".to_string(),
-                    enabled: true,
-                    params,
-                });
-            }
-        }
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Set blend mode '{}' on clip '{}'", mode, clip_id)
-            }]
-        }))
-    }
-
-    fn cmd_set_color_grade(&mut self, args: &Value) -> Result<Value, String> {
-        let clip_id = args
-            .get("clipId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing clipId".to_string())?;
-
-        let Some(loc) = timeline_core::find_clip(&self.timeline, clip_id) else {
-            return Err(format!("Clip '{}' not found", clip_id));
-        };
-        let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
-
-        let exposure = args.get("exposure").and_then(|v| v.as_f64());
-        let contrast = args.get("contrast").and_then(|v| v.as_f64());
-        let saturation = args.get("saturation").and_then(|v| v.as_f64());
-        let temperature = args.get("temperature").and_then(|v| v.as_f64());
-
-        let effects = clip.effects.get_or_insert(Vec::new());
-
-        let color_grade = effects.iter_mut().find(|e| e.r#type == "color.grade");
-        match color_grade {
-            Some(effect) => {
-                if let Some(v) = exposure {
-                    effect
-                        .params
-                        .insert("exposure".to_string(), core_model::EffectParam::value(v));
-                }
-                if let Some(v) = contrast {
-                    effect
-                        .params
-                        .insert("contrast".to_string(), core_model::EffectParam::value(v));
-                }
-                if let Some(v) = saturation {
-                    effect
-                        .params
-                        .insert("saturation".to_string(), core_model::EffectParam::value(v));
-                }
-                if let Some(v) = temperature {
-                    effect
-                        .params
-                        .insert("temperature".to_string(), core_model::EffectParam::value(v));
-                }
-            }
-            None => {
-                let mut params = std::collections::HashMap::new();
-                if let Some(v) = exposure {
-                    params.insert("exposure".to_string(), core_model::EffectParam::value(v));
-                }
-                if let Some(v) = contrast {
-                    params.insert("contrast".to_string(), core_model::EffectParam::value(v));
-                }
-                if let Some(v) = saturation {
-                    params.insert("saturation".to_string(), core_model::EffectParam::value(v));
-                }
-                if let Some(v) = temperature {
-                    params.insert("temperature".to_string(), core_model::EffectParam::value(v));
-                }
-                effects.push(Effect {
-                    id: Uuid::new_v4().to_string(),
-                    r#type: "color.grade".to_string(),
-                    enabled: true,
-                    params,
-                });
-            }
-        }
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Set color grade on clip '{}'", clip_id)
-            }]
-        }))
     }
 
     // ── Color inspect (read-only) ──────────────────────────────────────────
@@ -6968,72 +7354,51 @@ impl ToolExecutor {
         }))
     }
 
+    /// GENERATE_AUDIO v2 (absorbs generate_music): TTS, text-to-music, and
+    /// video-to-audio through one tool. The model resolves from the audio
+    /// catalog (music-category models included); generation itself still
+    /// needs the remote backend, reported honestly.
     fn cmd_generate_audio(&mut self, args: &Value) -> Result<Value, String> {
-        let prompt = args
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing prompt".to_string())?;
-        let duration = args
-            .get("duration")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(10.0);
-        if let Some(id) = args.get("model").and_then(|v| v.as_str()) {
-            self.resolve_generation_model(generation_core::ModelKind::Audio, Some(id))?;
-        }
-
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "Audio generation queued ({:.1}s, prompt: '{}'). Actual generation requires a remote API.",
-                    duration, prompt
-                )
-            }],
-            "isError": true,
-        }))
-    }
-
-    fn cmd_generate_music(&mut self, args: &Value) -> Result<Value, String> {
-        let prompt = args
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing prompt".to_string())?;
-        let duration = args
-            .get("duration")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(30.0);
-        let style = args.get("style").and_then(|v| v.as_str());
+        let prompt = args.get("prompt").and_then(|v| v.as_str());
         let model = match args.get("model").and_then(|v| v.as_str()) {
             Some(id) => {
                 self.resolve_generation_model(generation_core::ModelKind::Audio, Some(id))?
             }
             None => {
-                let m = model_catalog::catalog()
+                let is_paid = self.is_paid_account();
+                model_catalog::catalog()
                     .iter()
-                    .filter(|m| {
-                        matches!(&m.caps, model_catalog::ModelCaps::Audio(c)
-                            if c.category == model_catalog::AudioCategory::Music)
-                    })
-                    .find(|m| {
-                        model_catalog::model_available(self.is_paid_account(), m.paid_only)
-                    })
-                    .ok_or_else(|| model_catalog::no_available_model_message("music"))?;
-                m
+                    .filter(|m| m.kind_str() == "audio")
+                    .find(|m| model_catalog::model_available(is_paid, m.paid_only))
+                    .ok_or_else(|| model_catalog::no_available_model_message("audio"))?
             }
         };
+        let is_music = matches!(&model.caps, model_catalog::ModelCaps::Audio(c)
+            if c.category == model_catalog::AudioCategory::Music);
+        let has_video_source = args.get("videoSourceMediaRef").is_some()
+            || args.get("videoSourceStartFrame").is_some();
+        if prompt.is_none() && !has_video_source {
+            return Err(
+                "Missing prompt (required for TTS and text-to-music; optional only for video-to-audio models)."
+                    .to_string(),
+            );
+        }
+        let duration = args.get("duration").and_then(|v| v.as_f64());
+        let _ = (
+            args.get("voice").and_then(|v| v.as_str()),
+            args.get("lyrics").and_then(|v| v.as_str()),
+            args.get("instrumental").and_then(|v| v.as_bool()),
+            args.get("styleInstructions").and_then(|v| v.as_str()),
+        );
 
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "Music generation queued (model: {}, {:.1}s, style: {:?}, prompt: '{}'). Actual generation requires a remote API.",
-                    model.id, duration, style, prompt
-                )
-            }],
-            "isError": true,
-        }))
+        Err(format!(
+            "generate_audio is unavailable: the remote generation backend isn't connected (model: {}, {}{}).",
+            model.id,
+            if is_music { "music" } else { "speech/audio" },
+            duration
+                .map(|d| format!(", {d:.1}s"))
+                .unwrap_or_default(),
+        ))
     }
 
     fn cmd_upscale_media(&mut self, args: &Value) -> Result<Value, String> {
@@ -8520,10 +8885,13 @@ mod tests {
     fn exec_011_get_media_found() {
         let mut exec = make_executor_with_media();
         let result = exec
-            .execute("get_media", &json!({"mediaId": "media-001"}))
+            .execute("get_media", &json!({"ids": ["media-001"]}))
             .unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("test_video.mp4"));
+        let v: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["assets"][0]["name"], json!("test_video.mp4"));
+        assert_eq!(v["assets"][0]["type"], json!("video"));
+        assert_eq!(v["assets"][0]["hasAudio"], json!(true));
+        assert!(v.get("folders").is_none(), "filtered reads skip folders");
     }
 
     #[test]
@@ -8533,25 +8901,24 @@ mod tests {
         let mut exec = make_executor_with_media();
         exec.media_manifest.entries[0].generation_status = Some("generating".into());
         let res = exec
-            .execute("get_media", &json!({"mediaId": "media-001"}))
+            .execute("get_media", &json!({"ids": ["media-001"]}))
             .unwrap();
-        assert!(
-            res["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("generationStatus: generating"),
-            "got: {}",
-            res["content"][0]["text"]
-        );
-        // 'none' is ready → not surfaced.
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["assets"][0]["generationStatus"], json!("generating"));
+        // pending:true finds the unresolved asset too.
+        let pend = exec.execute("get_media", &json!({"pending": true})).unwrap();
+        let pv: Value = serde_json::from_str(pend["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(pv["assets"].as_array().unwrap().len(), 1);
+        // 'none' is ready → not surfaced, and pending no longer matches.
         exec.media_manifest.entries[0].generation_status = Some("none".into());
         let res2 = exec
-            .execute("get_media", &json!({"mediaId": "media-001"}))
+            .execute("get_media", &json!({"ids": ["media-001"]}))
             .unwrap();
-        assert!(!res2["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("generationStatus"));
+        let v2: Value = serde_json::from_str(res2["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(v2["assets"][0].get("generationStatus").is_none());
+        let pend2 = exec.execute("get_media", &json!({"pending": true})).unwrap();
+        let pv2: Value = serde_json::from_str(pend2["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(pv2["assets"].as_array().unwrap().len(), 0);
     }
 
     // ── Generation recovery seam (upstream #216) ──
@@ -8665,19 +9032,27 @@ mod tests {
     }
 
     #[test]
-    fn exec_012_get_media_not_found() {
+    fn exec_012_get_media_unknown_id_returns_empty() {
+        // v2: an ids poll for an unknown id returns no assets — the caller
+        // learns the placeholder vanished without an error round.
         let mut exec = make_executor_with_media();
-        let err = exec
-            .execute("get_media", &json!({"mediaId": "nonexistent"}))
-            .unwrap_err();
-        assert!(err.contains("not found"));
+        let res = exec
+            .execute("get_media", &json!({"ids": ["nonexistent"]}))
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["assets"].as_array().unwrap().len(), 0);
     }
 
     #[test]
-    fn exec_013_get_media_missing_id() {
+    fn exec_013_get_media_unfiltered_lists_folders_and_timelines() {
+        // v2 (absorbs list_folders): unfiltered reads include folders as
+        // paths and the timelines list.
         let mut exec = make_executor_with_media();
-        let err = exec.execute("get_media", &json!({})).unwrap_err();
-        assert!(err.contains("Missing mediaId"));
+        let res = exec.execute("get_media", &json!({})).unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["folders"], json!(["Test Folder"]));
+        assert_eq!(v["timelines"][0]["active"], json!(true));
+        assert_eq!(v["assets"].as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -8792,19 +9167,30 @@ mod tests {
     }
 
     #[test]
-    fn exec_016_list_folders() {
+    fn exec_016_get_media_folder_filter_includes_subfolders() {
         let mut exec = make_executor_with_media();
-        let result = exec.execute("list_folders", &json!({})).unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Folders (1)"));
+        exec.media_manifest.folders.push(core_model::MediaFolder {
+            id: "folder-002".to_string(),
+            name: "Takes".to_string(),
+            parent_folder_id: Some("folder-001".to_string()),
+        });
+        exec.media_manifest.entries[0].folder_id = Some("folder-002".to_string());
+        let res = exec
+            .execute("get_media", &json!({"folder": "Test Folder"}))
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["assets"].as_array().unwrap().len(), 1, "subfolder asset matches");
+        assert_eq!(v["assets"][0]["folder"], json!("Test Folder/Takes"));
     }
 
     #[test]
-    fn exec_017_list_folders_empty() {
+    fn exec_017_get_media_empty_library() {
         let mut exec = make_executor();
-        let result = exec.execute("list_folders", &json!({})).unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("No folders"));
+        let res = exec.execute("get_media", &json!({})).unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["assets"].as_array().unwrap().len(), 0);
+        assert!(v.get("folders").is_none(), "no folders key when empty");
+        assert!(v["timelines"].is_array(), "timelines always listed unfiltered");
     }
 
     #[test]
@@ -8997,13 +9383,18 @@ mod tests {
     }
 
     #[test]
-    fn model_gating_generate_music_defaults_to_music_model() {
+    fn model_gating_generate_audio_resolves_music_model() {
+        // v2 (absorbs generate_music): a music-category model resolves through
+        // generate_audio and the honest backend-gap error names it.
         let mut exec = make_executor();
-        let result = exec
-            .execute("generate_music", &json!({"prompt": "calm piano"}))
-            .unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("minimax-music-v2.6"), "got: {text}");
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"prompt": "calm piano", "model": "minimax-music-v2.6"}),
+            )
+            .unwrap_err();
+        assert!(err.contains("minimax-music-v2.6"), "got: {err}");
+        assert!(err.contains("music"), "categorized as music: {err}");
         assert!(exec.media_manifest().entries.is_empty());
     }
 
@@ -10073,16 +10464,22 @@ mod tests {
         let clip = crate::test_helpers::make_clip(0, 150);
         let placed = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[clip]);
         let clip_id = placed.first().expect("place_clips returned empty");
+        // v2: chroma keying is apply_effect's key.chroma (absorbs set_chroma_key).
         let result = exec
             .execute(
-                "set_chroma_key",
-                &json!({"clipId": clip_id, "color": "#00FF00"}),
+                "apply_effect",
+                &json!({"clipIds": [clip_id], "effects": [
+                    {"type": "key.chroma", "params": {"keyHue": 0.333, "tolerance": 0.4}}
+                ]}),
             )
             .unwrap();
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("chroma"));
+        let env: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(env["clips"][0]["effects"][0]["type"], json!("key.chroma"));
+        // The renderer's chroma key mirrors the effect (green at hue 1/3).
+        let clip = &exec.timeline().tracks[0].clips[0];
+        let ck = clip.chroma_key.as_ref().expect("chroma key mirrored");
+        assert!(ck.key_g > 0.9 && ck.key_r < 0.1, "keyHue 0.333 = green");
+        assert!((ck.tolerance - 0.4).abs() < 1e-9);
     }
 
     #[test]
@@ -10092,16 +10489,29 @@ mod tests {
         let clip = crate::test_helpers::make_clip(0, 150);
         let placed = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[clip]);
         let clip_id = placed.first().expect("place_clips returned empty");
+        // v2: blend modes are set_clip_properties.blendMode (absorbs set_blend_mode).
         let result = exec
             .execute(
-                "set_blend_mode",
-                &json!({"clipId": clip_id, "mode": "multiply"}),
+                "set_clip_properties",
+                &json!({"clipIds": [clip_id], "blendMode": "multiply"}),
             )
             .unwrap();
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("blend"));
+        let env: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(env["clips"][0]["blendMode"], json!("multiply"));
+        assert_eq!(
+            exec.timeline().tracks[0].clips[0].blend_mode,
+            core_model::BlendMode::Multiply
+        );
+        // 'normal' clears the blend.
+        exec.execute(
+            "set_clip_properties",
+            &json!({"clipIds": [clip_id], "blendMode": "normal"}),
+        )
+        .unwrap();
+        assert_eq!(
+            exec.timeline().tracks[0].clips[0].blend_mode,
+            core_model::BlendMode::Normal
+        );
     }
 
     #[test]
@@ -10111,16 +10521,34 @@ mod tests {
         let clip = crate::test_helpers::make_clip(0, 150);
         let placed = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[clip]);
         let clip_id = placed.first().expect("place_clips returned empty");
+        // v2: grading is apply_color (absorbs set_color_grade); the envelope's
+        // clip row echoes the resulting grade as the `color` object.
         let result = exec
             .execute(
-                "set_color_grade",
-                &json!({"clipId": clip_id, "saturation": 1.2}),
+                "apply_color",
+                &json!({"clipIds": [clip_id], "saturation": 1.2}),
             )
             .unwrap();
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("color grade"));
+        let env: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(env["clips"][0]["color"], json!({"saturation": 1.2}));
+        // MERGE semantics: a second knob keeps the first.
+        exec.execute("apply_color", &json!({"clipIds": [clip_id], "exposure": 0.5}))
+            .unwrap();
+        let gt = exec.execute("get_timeline", &json!({})).unwrap();
+        let tv: Value = serde_json::from_str(gt["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            tv["tracks"][0]["clips"][0]["color"],
+            json!({"saturation": 1.2, "exposure": 0.5})
+        );
+        // reset:true starts from neutral.
+        exec.execute(
+            "apply_color",
+            &json!({"clipIds": [clip_id], "reset": true, "contrast": 1.1}),
+        )
+        .unwrap();
+        let gt2 = exec.execute("get_timeline", &json!({})).unwrap();
+        let tv2: Value = serde_json::from_str(gt2["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(tv2["tracks"][0]["clips"][0]["color"], json!({"contrast": 1.1}));
     }
 
     #[test]
@@ -10216,19 +10644,17 @@ mod tests {
     #[test]
     fn exec_051_generate_audio() {
         let mut exec = make_executor();
-        let result = exec
+        let err = exec
             .execute("generate_audio", &json!({"prompt": "Narration"}))
-            .unwrap();
-        assert_eq!(result["isError"], true);
+            .unwrap_err();
+        assert!(err.contains("unavailable"), "honest backend gap: {err}");
     }
 
     #[test]
-    fn exec_052_generate_music() {
+    fn exec_052_generate_audio_requires_prompt_without_video_source() {
         let mut exec = make_executor();
-        let result = exec
-            .execute("generate_music", &json!({"prompt": "Upbeat pop"}))
-            .unwrap();
-        assert_eq!(result["isError"], true);
+        let err = exec.execute("generate_audio", &json!({})).unwrap_err();
+        assert!(err.contains("prompt"), "got: {err}");
     }
 
     #[test]
@@ -11642,7 +12068,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_audio_moves_delayed_target_earlier() {
+    fn sync_clips_moves_delayed_target_earlier() {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(audio_media("ref", 1.0));
         manifest.entries.push(audio_media("tgt", 1.0));
@@ -11694,7 +12120,7 @@ mod tests {
 
         let res = exec
             .execute(
-                "sync_audio",
+                "sync_clips",
                 &json!({"referenceClipId": ref_id, "targetClipIds": [tgt_id]}),
             )
             .unwrap();
@@ -11721,7 +12147,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_audio_skips_below_min_confidence() {
+    fn sync_clips_skips_below_min_confidence() {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(audio_media("ref", 1.0));
         manifest.entries.push(audio_media("tgt", 1.0));
@@ -11742,7 +12168,7 @@ mod tests {
         // An impossible threshold forces the match into `skipped`.
         let res = exec
             .execute(
-                "sync_audio",
+                "sync_clips",
                 &json!({"referenceClipId": ref_id, "targetClipIds": [tgt_id], "minConfidence": 2.0}),
             )
             .unwrap();
@@ -11754,20 +12180,81 @@ mod tests {
     }
 
     #[test]
-    fn sync_audio_unavailable_without_audio_source() {
+    fn sync_clips_unavailable_without_audio_source() {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(audio_media("ref", 1.0));
+        manifest.entries.push(audio_media("tgt", 1.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "ref", "startFrame": 0}]})).unwrap();
+        exec.execute(
+            "add_clips",
+            &json!({"entries": [{"mediaRef": "ref", "startFrame": 0}, {"mediaRef": "tgt", "startFrame": 30}]}),
+        )
+        .unwrap();
         let ref_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let tgt_id = exec.timeline().tracks[0].clips[1].id.clone();
+        // mode audio without a decoder: hard error.
         let err = exec
             .execute(
-                "sync_audio",
-                &json!({"referenceClipId": ref_id, "targetClipIds": ["x"]}),
+                "sync_clips",
+                &json!({"referenceClipId": ref_id, "targetClipIds": [tgt_id], "mode": "audio"}),
             )
             .unwrap_err();
         assert!(!err.contains("Unknown tool"), "{err}");
         assert!(err.contains("unavailable"), "{err}");
+        // mode auto without a decoder or timecodes: the target is skipped
+        // with the decoder gap named.
+        let res = exec
+            .execute(
+                "sync_clips",
+                &json!({"referenceClipId": ref_id, "targetClipIds": [tgt_id]}),
+            )
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(v["skipped"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no audio decoder"));
+    }
+
+    #[test]
+    fn sync_clips_timecode_mode_aligns_exactly() {
+        // Both files carry embedded source timecode: ref at 01:00:00:00 and
+        // target 2s later — the target shifts 60 frames (30fps) with
+        // confidence 1.0, no audio decoder needed.
+        let mut manifest = MediaManifest::default();
+        let mut r = audio_media("ref", 10.0);
+        r.source_timecode_frame = Some(90_000); // 3600s * 25
+        r.source_timecode_quanta = Some(25);
+        let mut t = audio_media("tgt", 10.0);
+        t.source_timecode_frame = Some(90_050); // +2s
+        t.source_timecode_quanta = Some(25);
+        manifest.entries.push(r);
+        manifest.entries.push(t);
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute(
+            "add_clips",
+            &json!({"entries": [{"mediaRef": "ref", "startFrame": 100}, {"mediaRef": "tgt", "startFrame": 400}]}),
+        )
+        .unwrap();
+        let ref_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let tgt_id = exec.timeline().tracks[0].clips[1].id.clone();
+        let res = exec
+            .execute(
+                "sync_clips",
+                &json!({"referenceClipId": ref_id, "targetClipId": tgt_id, "mode": "timecode"}),
+            )
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        let synced = &v["synced"][0];
+        assert_eq!(synced["method"], json!("timecode"));
+        assert_eq!(synced["confidence"], json!(1.0));
+        assert_eq!(
+            synced["offsetFrames"],
+            json!(-60),
+            "recording started 2s later = content 2s earlier in file (correlator sign)"
+        );
+        // Target anchors 60 frames after the reference: 100 + 60 = 160.
+        assert_eq!(synced["movedToFrame"], json!(160));
     }
 
     fn denoise_exec() -> (ToolExecutor, String) {
@@ -12918,5 +13405,89 @@ mod tests {
         let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(v["clips"].as_array().unwrap().len(), 1);
         assert_eq!(v["clips"][0]["words"][0], json!([1, "two", 100]));
+    }
+
+    // ── detect_beats (tool-surface-v2 NEW) ──────────────────────────────────
+
+    struct MockClickAudio;
+    impl ClipAudioSource for MockClickAudio {
+        fn decode_source_pcm(
+            &self,
+            _source: &core_model::MediaSource,
+            sample_rate: u32,
+            channels: usize,
+        ) -> Option<Vec<f32>> {
+            // 8s click track at 120 BPM (0.5s spacing), every 4th click louder.
+            let n = sample_rate as usize * 8;
+            let mut pcm = vec![0.0f32; n * channels];
+            let mut k = 0usize;
+            let mut t = 0.0f64;
+            while t < 8.0 {
+                let start = (t * sample_rate as f64) as usize;
+                let amp = if k % 4 == 0 { 0.9 } else { 0.4 };
+                for i in 0..(sample_rate as usize / 100).min(n.saturating_sub(start)) {
+                    for c in 0..channels {
+                        pcm[(start + i) * channels + c] =
+                            amp * (1.0 - i as f32 / (sample_rate as f32 / 100.0));
+                    }
+                }
+                t += 0.5;
+                k += 1;
+            }
+            Some(pcm)
+        }
+    }
+
+    #[test]
+    fn detect_beats_returns_bpm_and_windowed_beats() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("music", 8.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockClickAudio));
+        let res = exec
+            .execute("detect_beats", &json!({"mediaRef": "music"}))
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        let bpm = v["bpm"].as_f64().unwrap();
+        assert!((bpm - 120.0).abs() < 3.0, "bpm={bpm}");
+        assert!(v["beats"].as_array().unwrap().len() >= 14);
+        assert!(!v["downbeats"].as_array().unwrap().is_empty());
+
+        // Windowing trims the response (the analysis is cached).
+        let win = exec
+            .execute(
+                "detect_beats",
+                &json!({"mediaRef": "music", "startSeconds": 2.0, "endSeconds": 4.0}),
+            )
+            .unwrap();
+        let wv: Value = serde_json::from_str(win["content"][0]["text"].as_str().unwrap()).unwrap();
+        for b in wv["beats"].as_array().unwrap() {
+            let t = b.as_f64().unwrap();
+            assert!((2.0..=4.0).contains(&t), "windowed beat {t}");
+        }
+    }
+
+    #[test]
+    fn detect_beats_unavailable_without_audio_source() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("music", 8.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let err = exec
+            .execute("detect_beats", &json!({"mediaRef": "music"}))
+            .unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
+    }
+
+    #[test]
+    fn detect_beats_rejects_non_audio_assets() {
+        let mut exec = make_executor_with_media(); // video asset is fine
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("img", ClipType::Image, false, 0.0));
+        *exec.media_manifest_mut() = manifest;
+        exec.set_audio_source(std::sync::Arc::new(MockClickAudio));
+        let err = exec
+            .execute("detect_beats", &json!({"mediaRef": "img"}))
+            .unwrap_err();
+        assert!(err.contains("audio or video"), "{err}");
     }
 }

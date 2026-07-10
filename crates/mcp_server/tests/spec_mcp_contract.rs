@@ -26,14 +26,19 @@ fn mcp_002_server_version() {
 // ── MCP-003: Exposes the same tool set as the in-app agent ───────────────────
 
 #[test]
-fn mcp_003_exposes_57_tools() {
-    // Interim tool-surface-v2 count: 64 + 3 new − 10 retired = 57 (tools.rs
-    // header history).
-    let tools = agent_contract::all_tools();
+fn mcp_003_exposes_52_tools() {
+    // Final tool-surface-v2 counts (design.md C-1): 53 total = 48 shared
+    // + 4 MCP-only project tools + 1 in-app-only read_skill; the MCP
+    // surface exposes 52 (everything but read_skill).
     assert_eq!(
-        tools.len(),
-        57,
-        "MCP-003: 57 tools (see agent_contract tools.rs header history)"
+        agent_contract::all_tools().len(),
+        53,
+        "53 total tools (see agent_contract tools.rs header history)"
+    );
+    assert_eq!(
+        agent_contract::tools::mcp_tools().len(),
+        52,
+        "MCP-003: 52 MCP-surface tools"
     );
 }
 
@@ -62,7 +67,7 @@ fn mcp_003_all_tool_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 57, "all 57 tool names must be unique");
+    assert_eq!(names.len(), 53, "all 53 tool names must be unique");
 }
 
 #[test]
@@ -209,7 +214,7 @@ fn json_rpc_tools_list_request_format() {
 
 #[test]
 fn json_rpc_tools_list_response_format() {
-    let tools: Vec<serde_json::Value> = agent_contract::all_tools()
+    let tools: Vec<serde_json::Value> = agent_contract::tools::mcp_tools()
         .into_iter()
         .map(|t| {
             serde_json::json!({
@@ -232,7 +237,7 @@ fn json_rpc_tools_list_response_format() {
         .pointer("/result/tools")
         .and_then(|v| v.as_array())
         .unwrap();
-    assert_eq!(tools_arr.len(), 57);
+    assert_eq!(tools_arr.len(), 52);
 
     // Each tool entry has required fields
     for tool_val in tools_arr {

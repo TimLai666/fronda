@@ -980,11 +980,22 @@ pub struct ApplyColorInput {
 }
 
 pub fn validate_apply_color(input: &Value) -> ValidationResult<ApplyColorInput> {
-    let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => {
-            return ValidationResult::Error("apply_color: 'clipId' is required".into());
-        }
+    // v2: clipIds array (the legacy singular clipId still validates).
+    let clip_id = match input.get("clipIds").and_then(|v| v.as_array()) {
+        Some(arr) => match arr.iter().filter_map(|v| v.as_str()).next() {
+            Some(first) if !arr.is_empty() => first.to_string(),
+            _ => {
+                return ValidationResult::Error(
+                    "apply_color: 'clipIds' must contain at least one clip id".into(),
+                )
+            }
+        },
+        None => match input.get("clipId").and_then(|v| v.as_str()) {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => {
+                return ValidationResult::Error("apply_color: 'clipIds' is required".into());
+            }
+        },
     };
     ValidationResult::Ok(ApplyColorInput {
         clip_id,
@@ -1015,11 +1026,23 @@ pub struct ApplyEffectInput {
 }
 
 pub fn validate_apply_effect(input: &Value) -> ValidationResult<ApplyEffectInput> {
-    let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => {
-            return ValidationResult::Error("apply_effect: 'clipId' is required".into());
-        }
+    // v2: clipIds array + effects entries (the legacy singular clipId +
+    // effectType shape still validates).
+    let clip_id = match input.get("clipIds").and_then(|v| v.as_array()) {
+        Some(arr) => match arr.iter().filter_map(|v| v.as_str()).next() {
+            Some(first) if !arr.is_empty() => first.to_string(),
+            _ => {
+                return ValidationResult::Error(
+                    "apply_effect: 'clipIds' must contain at least one clip id".into(),
+                )
+            }
+        },
+        None => match input.get("clipId").and_then(|v| v.as_str()) {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => {
+                return ValidationResult::Error("apply_effect: 'clipIds' is required".into());
+            }
+        },
     };
     let remove = input
         .get("remove")

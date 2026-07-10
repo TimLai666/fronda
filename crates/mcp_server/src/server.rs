@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use agent_contract::tools::all_tools;
+use agent_contract::tools::mcp_tools;
 use agent_contract::ToolExecutor;
 use serde_json::{json, Value};
 
@@ -556,7 +556,7 @@ fn handle_json_rpc(
         ),
 
         "tools/list" => {
-            let tools: Vec<Value> = all_tools()
+            let tools: Vec<Value> = mcp_tools()
                 .into_iter()
                 .map(|t| {
                     json!({
@@ -583,7 +583,7 @@ fn handle_json_rpc(
                 .unwrap_or("");
             let arguments = req.params.get("arguments").cloned().unwrap_or(json!({}));
 
-            let tools = all_tools();
+            let tools = mcp_tools();
             let tool = tools.iter().find(|t| t.name == name);
 
             match tool {
@@ -1001,7 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_57_tools() {
+    fn tools_list_returns_52_tools() {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: json!(1),
@@ -1014,8 +1014,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            57,
-            "MCP-003: 57 tools (see agent_contract tools.rs header history)"
+            52,
+            "MCP-003: 52 MCP-surface tools (see agent_contract tools.rs header history)"
         );
     }
 

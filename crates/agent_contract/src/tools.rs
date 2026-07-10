@@ -1,4 +1,4 @@
-//! All 57 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 53 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -22,12 +22,28 @@
 //! delete_folder, move_to_folder, rename_media, delete_media (→ organize_media),
 //! remove_tracks (→ manage_tracks), create_matte + import_folder (→ import_media
 //! source.matte/source.path-directory), duplicate_timeline (→ create_timeline
-//! 'from') (−10). 64 + 3 − 10 = 57. Interim count — phases 4-5 retire
-//! list_folders/set_blend_mode/set_chroma_key/set_color_grade/generate_music
-//! and land the host split toward the final v2 surface (design.md C-1).
+//! 'from') (−10). 64 + 3 − 10 = 57.
+//! tool-surface-v2 phases 4-5: retired list_folders (→ get_media),
+//! set_blend_mode (→ set_clip_properties.blendMode), set_chroma_key
+//! (→ apply_effect key.chroma), set_color_grade (→ apply_color),
+//! generate_music (→ generate_audio) (−5); added detect_beats (+1);
+//! sync_audio renamed to sync_clips. 57 − 5 + 1 = 53 (design.md C-1:
+//! 45 upstream + 8 Rust extensions). Host split (C-1): shared 48 +
+//! 4 MCP-only project tools + 1 in-app-only read_skill → MCP surface 52,
+//! in-app surface 49.
 
 use serde::Serialize;
 use serde_json::Value;
+
+/// Which host surface exposes a tool (tool-surface-v2 C-1): both hosts,
+/// the MCP server only (project navigation), or the in-app agent only
+/// (read_skill).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolHost {
+    Shared,
+    McpOnly,
+    InAppOnly,
+}
 
 /// A single tool definition exposed to the agent/MCP surface.
 ///
@@ -40,9 +56,43 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 57 tools exposed to the agent.
+impl ToolDefinition {
+    /// Host marker (tool-surface-v2 C-1).
+    pub fn host(&self) -> ToolHost {
+        tool_host(self.name)
+    }
+}
+
+/// Host marker for a tool name (tool-surface-v2 C-1): the four project
+/// tools are MCP-only (the in-app agent always has its project open);
+/// read_skill is in-app-only (skills live in the app's prompt).
+pub fn tool_host(name: &str) -> ToolHost {
+    match name {
+        "get_projects" | "open_project" | "new_project" | "close_project" => ToolHost::McpOnly,
+        "read_skill" => ToolHost::InAppOnly,
+        _ => ToolHost::Shared,
+    }
+}
+
+/// The MCP server surface (C-1): shared tools + the four project tools (52).
+pub fn mcp_tools() -> Vec<ToolDefinition> {
+    all_tools()
+        .into_iter()
+        .filter(|t| t.host() != ToolHost::InAppOnly)
+        .collect()
+}
+
+/// The in-app agent surface (C-1): shared tools + read_skill (49).
+pub fn in_app_tools() -> Vec<ToolDefinition> {
+    all_tools()
+        .into_iter()
+        .filter(|t| t.host() != ToolHost::McpOnly)
+        .collect()
+}
+
+/// Returns all 53 tools across both host surfaces.
 ///
-/// TDEF-001: tool set (see the header history; interim v2 count).
+/// TDEF-001: tool set (see the header history; design.md C-1).
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
@@ -64,7 +114,6 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         list_clip_presets(),
         generate_audio(),
         generate_image(),
-        generate_music(),
         generate_video(),
         export_project(),
         get_media(),
@@ -76,7 +125,6 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         inspect_color(),
         inspect_media(),
         inspect_timeline(),
-        list_folders(),
         list_models(),
         manage_tracks(),
         move_clips(),
@@ -85,15 +133,13 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         organize_media(),
         remove_clips(),
         remove_silence(),
-        sync_audio(),
+        sync_clips(),
+        detect_beats(),
         remove_words(),
         ripple_delete_ranges(),
         search_media(),
         send_feedback(),
-        set_blend_mode(),
-        set_chroma_key(),
         set_clip_properties(),
-        set_color_grade(),
         set_keyframes(),
         set_project_settings(),
         read_skill(),
@@ -184,97 +230,169 @@ pub fn system_instruction_with_skills(skills: &[crate::tool_exec::AgentSkill]) -
 // Tool factory functions
 // ---------------------------------------------------------------------------
 
+/// tool-surface-v2 flattened textStyle. Description verbatim from
+/// upstream@141c69b.
 fn update_text() -> ToolDefinition {
     ToolDefinition {
         name: "update_text",
-        description: "Updates text clips or a captionGroupId. Use for content, typography, color, animation, or text-box transform. MERGES: only the fields you pass change; the rest keep their current values. Auto-fit-to-content on typography changes is not applied yet — pass transform to resize the box explicitly.",
-        input_schema: object(&[
+        description: "Updates text clips or a captionGroupId. Use for content, typography, color, outline color, background color, animation, or text-box transform. Content/typography changes auto-fit the box unless transform is passed. Unknown fields are rejected.",
+        input_schema: object_optional(&[
             ("clipIds", array("Text clip IDs. Optional if captionGroupId is given.")),
             ("captionGroupId", string("Caption group id from get_timeline.")),
             ("content", string("Replacement text. Supports \\n.")),
-            ("fontName", string("Font family name.")),
-            ("fontSize", number("Font size in points (1080-tall reference canvas).")),
-            ("fontWeight", number("Font weight 100-900.")),
-            ("color", string("Text color hex (#RGB, #RRGGBB, or #RRGGBBAA).")),
-            ("alignment", string("left, center, or right.")),
             (
                 "transform",
-                object_any("Partial text-box transform {centerX, centerY, width, height, rotation}; omitted fields keep current values."),
+                object_schema(
+                    &[
+                        ("centerX", number("0-1 horizontal center.")),
+                        ("centerY", number("0-1 vertical center.")),
+                        ("width", number("0-1 width.")),
+                        ("height", number("0-1 height.")),
+                    ],
+                    &[],
+                ),
             ),
-            ("animation", string("Animation preset; 'off' clears.")),
-            ("highlightColor", string("Active-word hex for per-word presets.")),
+            ("fontName", string("Font name.")),
+            ("fontSize", number("Canvas points.")),
+            ("isBold", boolean("Bold.")),
+            ("isItalic", boolean("Italic.")),
+            ("color", string("Text color hex.")),
+            ("alignment", string_enum("Text alignment.", &["left", "center", "right"])),
+            ("borderColor", string("Text outline hex; enables outline.")),
+            ("backgroundColor", string("Text box fill hex; enables fill.")),
+            (
+                "animation",
+                string_enum("Animation preset; off clears.", &["off", "fadeIn", "popIn", "slideUp", "typewriter", "wordReveal", "wordSlide", "wordPop", "wordCycle", "highlightPop", "highlightBlock"]),
+            ),
+            ("highlightColor", string("Active-word hex.")),
         ]),
     }
 }
 
+/// tool-surface-v2 no-targeting shape. Description verbatim from
+/// upstream@141c69b.
 fn add_captions() -> ToolDefinition {
     ToolDefinition {
         name: "add_captions",
-        description: "Generate captions for clips in the timeline.",
-        input_schema: object(&[
-            ("trackId", string("Target track id")),
-            ("clipIds", string("Optional specific clip ids to caption (comma-separated)")),
-            ("language", string("Optional BCP-47 spoken language. Overrides project transcriptionLanguage for this call; falls back to system language if neither is set.")),
-            ("wordsPerCaption", string("Optional max words per caption group (1-12, default 6). Upstream PR #92.")),
+        description: "Transcribes the timeline's spoken audio and creates styled caption text clips on their own track — no targeting needed; it finds the spoken content itself. The app uses cloud only when the signed-in account has enough credits for the uncached request; otherwise it uses local transcription. Cloud auto-detects language. Per-word animations are timed from the transcript. Returns the caption group summary (captionGroupId, clipCount, frameRange, shared style, textPreview) — restyle it later with update_text and that captionGroupId.",
+        input_schema: object_optional(&[
+            ("language", string("BCP-47 speech language. Applies to local only; cloud auto-detects.")),
+            (
+                "transform",
+                object_schema(
+                    &[
+                        ("centerX", number("0-1 horizontal center.")),
+                        ("centerY", number("0-1 vertical center.")),
+                    ],
+                    &[],
+                ),
+            ),
+            ("textCase", string_enum("Letter case.", &["auto", "upper", "lower"])),
+            ("censorProfanity", boolean("Mask profanity.")),
+            ("maxWords", integer("Max words per caption.")),
+            ("fontName", string("Font name.")),
+            ("fontSize", number("Canvas points.")),
+            ("isBold", boolean("Bold.")),
+            ("isItalic", boolean("Italic.")),
+            ("color", string("Text color hex.")),
+            ("alignment", string_enum("Text alignment.", &["left", "center", "right"])),
+            ("borderColor", string("Text outline hex; enables outline.")),
+            ("backgroundColor", string("Text box fill hex; enables fill.")),
+            (
+                "animation",
+                string_enum("Caption animation preset.", &["off", "fadeIn", "popIn", "slideUp", "typewriter", "wordReveal", "wordSlide", "wordPop", "wordCycle", "highlightPop", "highlightBlock"]),
+            ),
+            ("highlightColor", string("Active-word hex.")),
         ]),
     }
 }
 
+/// tool-surface-v2 entries shape. Description verbatim from upstream@141c69b.
 fn add_clips() -> ToolDefinition {
     ToolDefinition {
         name: "add_clips",
-        description: "Add media clips to the end of the timeline. Clip type and \
-            full source length are taken from the media asset; project fps is \
-            authoritative and is not changed to match the source. A video-with-audio \
-            asset placed on a video track also gets a linked audio clip on an audio \
-            track (created if needed). NESTING: mediaRef may also be a timelineId — \
-            the timeline is placed as a single live nested clip (mediaType 'sequence'), \
-            with a linked audio clip when the child has audio. Duration defaults to \
-            the child's full length; trims and durationFrames work as for video. \
-            Cycles (a timeline containing itself) and empty timelines are rejected.",
-        input_schema: object(&[
-            ("mediaIds", array("Media asset ids to add")),
-            (
-                "trackIndex",
-                integer("Optional target track index (0-based). Omit to auto-create/reuse a video track for visual clips and an audio track for audio clips."),
+        description: "Places one or more media assets on the timeline as a single undoable action. Each entry's asset type must be compatible with its target track (video/image are interchangeable across video/image tracks; audio requires an audio track). When a video asset with audio is placed on a video track, a linked audio clip is automatically created on an audio track (an existing one if available, otherwise a new one). The whole batch is one undo step.\n\ntrackIndex is optional. Omit it on all entries and the tool auto-creates the needed tracks — one shared video track for visual entries and one shared audio track for audio entries (matches the captioning pattern in add_texts). To target existing tracks, set trackIndex on every entry. Mixing (some entries specify, others omit) is rejected — split into two calls.\n\nTracks work as layers: clips on the SAME track are sequential — if a new clip's range overlaps an existing clip on that track, the existing clip is trimmed/split/removed to make room, matching the UI's drag-onto-track overwrite behavior.\n\nNESTING: mediaRef may also be a timelineId — the timeline is placed as a single live nested clip (mediaType 'sequence'), with a linked audio clip when the child has audio. Duration defaults to the child's full length; source and endFrame work as for video. Cycles (a timeline containing itself) and empty timelines are rejected.",
+        input_schema: object(&[(
+            "entries",
+            array_of(
+                "Clips to add. Each entry is validated up front; one bad entry rejects the whole call with no partial state.",
+                object_schema(
+                    &[
+                        ("mediaRef", string("ID of the media asset from get_media")),
+                        (
+                            "trackIndex",
+                            integer("Optional. Track index (0-based). Omit on every entry to auto-create one shared track per asset zone (video/audio)."),
+                        ),
+                        (
+                            "startFrame",
+                            integer("Timeline frame position to place the clip (project frames)."),
+                        ),
+                        (
+                            "endFrame",
+                            integer("Optional. Occupy timeline frames [startFrame, endFrame) — a gap from get_timeline copies straight in. For stills and frame-exact fills. Mutually exclusive with source."),
+                        ),
+                        (
+                            "source",
+                            array("Optional. [startSeconds, endSeconds] — which span of the source to use, in the source seconds search_media hits and inspect_media segments speak. For stills this is the display length in seconds. Omit both for the whole asset. Mutually exclusive with endFrame."),
+                        ),
+                    ],
+                    &["mediaRef", "startFrame"],
+                ),
             ),
-            (
-                "trimStartFrame",
-                integer("Optional head trim (in-point), in project frames. Default 0."),
-            ),
-            (
-                "trimEndFrame",
-                integer("Optional tail trim (out-point), in project frames. \
-                    Mutually exclusive with durationFrames. Omit both to place \
-                    the full remaining source (extendable)."),
-            ),
-            (
-                "durationFrames",
-                integer("Optional visible duration, in project frames. Derived from \
-                    the source when omitted. Mutually exclusive with trimEndFrame."),
-            ),
-        ]),
+        )]),
     }
 }
 
+/// tool-surface-v2 entries shape (flattened textStyle). Description verbatim
+/// from upstream@141c69b.
 fn add_texts() -> ToolDefinition {
     ToolDefinition {
         name: "add_texts",
-        description: "Add one or more text overlay clips (titles, lower-thirds) in a \
-            single undoable action. Pass a `texts` array; each entry takes: content \
-            (the text), startFrame, durationFrames, and optional styling — fontName, \
-            fontSize, fontWeight (400 = regular, 700 = bold), color ('#RGB' / \
-            '#RRGGBB' / '#RRGGBBAA'), alignment ('left' / 'center' / 'right'), \
-            transform ({centerX, centerY, width, height} in 0–1 normalized canvas \
-            coords; centre-only shifts position), and animation ('off', 'fadeIn', \
-            'popIn', 'slideUp', 'typewriter', 'wordReveal', 'wordSlide', 'wordPop', \
-            'wordCycle', 'highlightPop', 'highlightBlock') with an optional \
-            highlightColor hex for the per-word highlight presets. For captioning \
-            spoken audio, prefer add_captions.",
+        description: "Adds text clips as timeline layers. Omit trackIndex on every entry to create one new top video track; otherwise set trackIndex on every entry. Transform is normalized text-box center/size; center-only auto-fits, all four fields override the box. Use add_captions for spoken audio captions. Unknown fields are rejected.",
         input_schema: object(&[(
-            "texts",
-            array(
-                "Array of {content, startFrame, durationFrames, fontName?, fontSize?, color?, alignment?, transform?, animation?, highlightColor?}",
+            "entries",
+            array_of(
+                "Text clips to add.",
+                object_schema(
+                    &[
+                        (
+                            "trackIndex",
+                            integer("Existing non-audio track. Omit on all entries to create a new top track."),
+                        ),
+                        ("startFrame", integer("Timeline start frame.")),
+                        (
+                            "endFrame",
+                            integer("Occupy timeline frames [startFrame, endFrame) — copy a clip's frames pair to title exactly that span."),
+                        ),
+                        ("content", string("Text. Supports \\n.")),
+                        (
+                            "transform",
+                            object_schema(
+                                &[
+                                    ("centerX", number("0-1 horizontal center.")),
+                                    ("centerY", number("0-1 vertical center.")),
+                                    ("width", number("0-1 width.")),
+                                    ("height", number("0-1 height.")),
+                                ],
+                                &[],
+                            ),
+                        ),
+                        ("fontName", string("Font name.")),
+                        ("fontSize", number("Canvas points.")),
+                        ("isBold", boolean("Bold.")),
+                        ("isItalic", boolean("Italic.")),
+                        ("color", string("Text color hex.")),
+                        ("alignment", string_enum("Text alignment.", &["left", "center", "right"])),
+                        ("borderColor", string("Text outline hex; enables outline.")),
+                        ("backgroundColor", string("Text box fill hex; enables fill.")),
+                        (
+                            "animation",
+                            string_enum("Animation preset; off clears.", &["off", "fadeIn", "popIn", "slideUp", "typewriter", "wordReveal", "wordSlide", "wordPop", "wordCycle", "highlightPop", "highlightBlock"]),
+                        ),
+                        ("highlightColor", string("Active-word hex.")),
+                    ],
+                    &["startFrame", "endFrame", "content"],
+                ),
             ),
         )]),
     }
@@ -326,13 +444,61 @@ fn organize_media() -> ToolDefinition {
     }
 }
 
+/// tool-surface-v2 (absorbs generate_music). Description verbatim from
+/// upstream@141c69b.
 fn generate_audio() -> ToolDefinition {
     ToolDefinition {
         name: "generate_audio",
-        description: "Generate audio using the configured model.",
-        input_schema: object(&[
-            ("prompt", string("Description of the audio to generate")),
-            ("duration", number("Duration in seconds")),
+        description: "Starts an async AI audio generation: text-to-speech, text-to-music, or video-to-music (scoring a video). Returns a placeholder asset ID immediately; the asset appears in get_media and becomes usable in add_clips once ready. TTS models convert the prompt into speech and accept a 'voice'. Music models generate tracks from a prompt; pass 'lyrics' for vocals where supported, or set 'instrumental' true when the selected model supports it. Video-to-audio models (inputs include 'video' — see list_models) generate audio that matches a VIDEO: provide a timeline span via videoSourceStartFrame+videoSourceEndFrame (e.g. to score the timeline), or a video asset via videoSourceMediaRef; the prompt is then an optional style guide. PLACEMENT: when you pass a timeline span, the result is placed on the timeline automatically at that span (no add_clips needed); for a media-asset source or a plain text-to-speech/music result, the asset lands in the library and you place it with add_clips. Use list_models with type='audio' to see each model's 'inputs', category, and voices. Costs real money and is not undoable.",
+        input_schema: object_optional(&[
+            (
+                "prompt",
+                string("Required for TTS (the text to speak) and text-to-music (style/mood/genre). Optional style guide for video-to-music models."),
+            ),
+            (
+                "name",
+                string("Display name for the asset in the media library. Defaults to first 30 chars of prompt."),
+            ),
+            (
+                "model",
+                string("Model ID. Use list_models with type='audio' to see options and their 'inputs'. Defaults to the first model."),
+            ),
+            (
+                "voice",
+                string("TTS only. Voice preset name. list_models shows voicesSample (first 3) + voiceCount; any voice supported by the model is accepted. Defaults to the model's defaultVoice. Ignored by music models."),
+            ),
+            (
+                "lyrics",
+                string("Music models with vocals. Lyrics with optional [Verse]/[Chorus] section tags. If omitted and instrumental=false, supported models auto-write lyrics from the prompt."),
+            ),
+            (
+                "styleInstructions",
+                string("TTS models that support delivery instructions (e.g. 'warm and slow', 'British accent')."),
+            ),
+            (
+                "instrumental",
+                boolean("Music models only. true = no vocals when the selected model supports it. Defaults to false."),
+            ),
+            (
+                "duration",
+                integer("Length in seconds. Supported ranges vary by model; for a video source, defaults to the span/clip length. Ignored by TTS."),
+            ),
+            (
+                "videoSourceStartFrame",
+                integer("Video-to-audio models only. Start frame (timeline) of a span to render and score — pair with videoSourceEndFrame. Use get_timeline for frame numbers; for the whole timeline use 0 to the timeline's end frame."),
+            ),
+            (
+                "videoSourceEndFrame",
+                integer("Video-to-audio models only. End frame (exclusive) of the span to score. Must be > videoSourceStartFrame."),
+            ),
+            (
+                "videoSourceMediaRef",
+                string("Video-to-audio models only. Score this existing video asset instead of a timeline span. Mutually exclusive with the videoSource frames."),
+            ),
+            (
+                "folder",
+                string("Optional destination folder path, e.g. 'Hero shots/Takes'. Created if missing. Omit for the project root."),
+            ),
         ]),
     }
 }
@@ -387,35 +553,75 @@ fn generate_video() -> ToolDefinition {
     }
 }
 
+/// tool-surface-v2 (absorbs list_folders). Description verbatim from
+/// upstream@141c69b.
 fn get_media() -> ToolDefinition {
     ToolDefinition {
         name: "get_media",
-        description:
-            "Return the media manifest as JSON. Pass optional folderId to scope to a folder. \
-             Also exposes generationStatus (preparing | generating | downloading | failed | none) \
-             for async-generated assets — wait until 'none' before referencing them.",
-        input_schema: object(&[("folderId", string("Optional folder id to scope results"))]),
+        description: "The library inventory: media assets, folders, and timelines. Call before referencing any asset — every mediaRef in other tools comes from the asset ids returned here. Assets report name, type, durationSeconds, width/height/fps, hasAudio, folder path, and (for AI-generated assets) the generation prompt as a content hint. generationStatus appears only while an async generation/import is unresolved (preparing | generating | downloading | failed) — its absence means the asset is ready.\n\nFilters: ids (poll specific placeholders cheaply), folder (a path; includes subfolders), pending:true (only unresolved generations/imports). Filtered reads return just the matching assets; unfiltered reads also include folders (as paths) and timelines.",
+        input_schema: object_optional(&[
+            (
+                "ids",
+                array("Optional. Return only these asset ids — the cheap way to poll a generation placeholder."),
+            ),
+            (
+                "folder",
+                string("Optional folder path filter, e.g. 'B-roll/Sunset'. Includes subfolders."),
+            ),
+            (
+                "pending",
+                boolean("Optional. true returns only assets with an unresolved generationStatus."),
+            ),
+        ]),
     }
 }
 
+/// tool-surface-v2 C-5: relationship-first read. Description verbatim from
+/// upstream@141c69b.
 fn get_timeline() -> ToolDefinition {
     ToolDefinition {
         name: "get_timeline",
-        description: "Return project settings (fps, resolution, totalFrames, transcriptionLanguage) and timeline tracks as JSON.",
-        input_schema: object(&[]),
+        description: "Always call at the start of a session. Returns project settings (fps, resolution, totalFrames, durationSeconds), tracks with their index (what every trackIndex parameter takes), type, and clips, plus canGenerate (if false, generation/upscale tools will fail — tell the user to sign in to Palmier and subscribe before attempting them). The clipId values here are what every other tool accepts.\n\nEvery clip occupies frames: [start, end) — timeline frames, end exclusive, duration = end − start. gaps on a track lists its empty [start, end) spans; no gaps key means contiguous. A video clip's linked audio partner is folded into it as audio: {id, track, …} carrying only what deviates (volume, effects, differing trims); the partner is not repeated on its own track, which instead reports linkedClips (its folded count). Address the audio side by its nested id.\n\nFields equal to their defaults are omitted: mediaType 'video', sourceClipType = mediaType, speed 1, volume 1, opacity 1, trims/fades 0, identity transform/crop, default textStyle, track muted/hidden false. Text clips never report trims. Keyframe tracks that animate nothing are shown as what they are: identity tracks are dropped, constant ones appear as the static field (e.g. crop: {left: 0.31}). A graded clip carries `color` — its grade in apply_color's own vocabulary, pasteable to other clips via apply_color's color parameter. Other effects appear as effects: [{type, params}], the exact shape apply_effect accepts.\n\nCaption clips (sharing a captionGroupId) come back per track as captionGroups summaries: clipCount, frameRange, shared style, and a textPreview — individual caption clips and their ids are NOT listed. That summary is all you need to restyle (update_text with captionGroupId) or judge coverage; the spoken words live in get_transcript. Only when you must touch individual caption clips (retime one, delete one, fix one word's style), re-read with captionDetail:true — ideally windowed — to get [clipId, startFrame, endFrame, text] rows, capped at 200 per group. Caption clips whose properties deviate from the group always appear individually in clips.",
+        input_schema: object_optional(&[
+            (
+                "startFrame",
+                integer("Optional. Window start (inclusive); only clips intersecting [startFrame, endFrame) are returned. Tracks report totalClips when the window hides some."),
+            ),
+            ("endFrame", integer("Optional. Window end (exclusive).")),
+            (
+                "captionDetail",
+                boolean("Optional. true expands captionGroups into per-clip [clipId, startFrame, endFrame, text] rows. Combine with a window; only needed to edit individual caption clips."),
+            ),
+        ]),
     }
 }
 
+/// tool-surface-v2 C-6. Description verbatim from upstream@141c69b.
 fn get_transcript() -> ToolDefinition {
     ToolDefinition {
         name: "get_transcript",
-        description: "Return the transcript for a media asset. Transcription runs on-device and defaults to the system language — pass language when the audio is in another language.",
-        input_schema: object(&[
-            ("mediaId", string("Media asset id")),
-            ("startFrame", string("Optional start frame for range-limited transcript")),
-            ("endFrame", string("Optional end frame for range-limited transcript")),
-            ("language", string("Optional BCP-47 spoken language (e.g. 'fr', 'ja', 'en-GB'). Overrides project transcriptionLanguage for this call; falls back to system language if neither is set.")),
-            ("wordTimestamps", string("Legacy flag: tolerated and ignored for backward compatibility.")),
+        description: "Returns the spoken transcript of the CURRENT timeline in project frames — the post-edit caption track in one call. Unlike inspect_media (which transcribes one source asset in isolation, in source seconds), this walks every audio/video clip on the timeline, maps each word through that clip's trim/speed/position, and concatenates in timeline order. Deleted ranges are gone by construction, so after cuts this always reflects what's actually audible — no stale results, no per-clip frame math. The app chooses cloud only when the signed-in account has enough credits for the uncached request; otherwise it uses local transcription and reports the resolved transcriptionSource in the response.\n\nReturns clips in timeline order, each with its words as compact [index, text, startFrame] rows (a word runs to the next word's start; the last word to its clip's end). Speakers, when identified, arrive as run-length turns: speakers = [[firstWordIndex, name], ...]. The index is a stable, global, 0-based position in timeline order; pass it straight to remove_words to cut that word (the intuitive path for text-based editing). Indices stay global even when scoped with clipId or paged with a window. Capped at 10000 words; page with startFrame/endFrame using nextStartFrame.\n\nFor comprehension rather than cutting — summarizing, finding a topic, take selection on long media — pass granularity='segments': sentence rows [firstWordIndex, text, start, end] at a fraction of the tokens, whose firstWordIndex jumps you back into word mode for the cut window.\n\nUse for transcript-driven edits (filler-word / dead-air removal, locating a quote, take selection) and to verify what remains after cutting. To cut, prefer remove_words (give it the indices); drop to ripple_delete_ranges only for non-word-aligned spans.",
+        input_schema: object_optional(&[
+            (
+                "startFrame",
+                integer("Optional. Only return words ending after this project frame. Use with the returned nextStartFrame to page a long timeline."),
+            ),
+            (
+                "endFrame",
+                integer("Optional. Only return words starting before this project frame."),
+            ),
+            (
+                "clipId",
+                string("Scope the transcript to a single clip — returns only what that clip says, in project frames. Answers \"what's in clip X?\" without scanning the whole timeline."),
+            ),
+            (
+                "granularity",
+                string_enum("words (default) for cutting with remove_words; segments for cheap sentence-level reading — rows carry firstWordIndex to drill back into words.", &["words", "segments"]),
+            ),
+            (
+                "language",
+                string("Optional BCP-47 speech language. Applies to local only; cloud auto-detects."),
+            ),
         ]),
     }
 }
@@ -478,30 +684,39 @@ fn import_media() -> ToolDefinition {
     }
 }
 
+/// tool-surface-v2 entries shape. Description verbatim from upstream@141c69b.
 fn insert_clips() -> ToolDefinition {
     ToolDefinition {
         name: "insert_clips",
-        description: "Insert clips at a specific frame position, pushing existing \
-            content later. Clip type and source length come from the media asset; \
-            project fps is authoritative and is not changed to match the source. \
-            As in add_clips, mediaRef may be a timelineId to splice in a nested \
-            timeline.",
+        description: "Inserts one or more media assets at a single point and RIPPLES: every clip at or after atFrame is pushed right to open a gap, so nothing is overwritten. This is the non-destructive counterpart to add_clips (which clears the landing region, trimming/splitting/removing whatever's there). Use insert_clips to splice footage in without losing existing clips; use add_clips to fill empty space or deliberately overwrite.\n\nEntries are laid end-to-end starting at atFrame on the target track (entry[0] at atFrame, entry[1] immediately after, ...). The push equals the sum of the entries' durations and is applied to the target track, every sync-locked track, AND the audio track any auto-created linked audio lands on — so a clip and its linked audio stay aligned. As in add_clips, a video asset with audio spawns a linked audio clip. One undoable action; one bad entry rejects the whole call with no partial state.\n\ntrackIndex is required — ripple needs an existing track to push. For placement into empty space, use add_clips.\n\nAs in add_clips, mediaRef may be a timelineId to splice in a nested timeline.",
         input_schema: object(&[
-            ("mediaIds", array("Media asset ids to insert")),
-            ("frame", integer("Insertion frame position")),
             (
-                "trimStartFrame",
-                integer("Optional head trim (in-point), in project frames. Default 0."),
+                "trackIndex",
+                integer("Track index (0-based, from get_timeline) to insert into and ripple."),
             ),
             (
-                "trimEndFrame",
-                integer("Optional tail trim (out-point), in project frames. \
-                    Mutually exclusive with durationFrames."),
+                "atFrame",
+                integer("Timeline frame (project frames) where insertion begins. Every clip at or after this frame on rippled tracks shifts right by the total inserted duration."),
             ),
             (
-                "durationFrames",
-                integer("Optional visible duration, in project frames. Derived from \
-                    the source when omitted. Mutually exclusive with trimEndFrame."),
+                "entries",
+                array_of(
+                    "Clips to insert, placed sequentially from atFrame. Validated up front; one bad entry rejects the whole call.",
+                    object_schema(
+                        &[
+                            ("mediaRef", string("ID of the media asset from get_media.")),
+                            (
+                                "source",
+                                array("Optional. [startSeconds, endSeconds] — which span of the source to use, in source seconds; for stills, the display length. Omit for the whole asset. Mutually exclusive with durationFrames."),
+                            ),
+                            (
+                                "durationFrames",
+                                integer("Optional. Exact length in project frames (entries stack end-to-end, so they have lengths, not positions). Mutually exclusive with source."),
+                            ),
+                        ],
+                        &["mediaRef"],
+                    ),
+                ),
             ),
         ]),
     }
@@ -606,13 +821,6 @@ fn inspect_timeline() -> ToolDefinition {
     }
 }
 
-fn list_folders() -> ToolDefinition {
-    ToolDefinition {
-        name: "list_folders",
-        description: "List all media folders.",
-        input_schema: object(&[]),
-    }
-}
 
 fn list_models() -> ToolDefinition {
     ToolDefinition {
@@ -625,15 +833,31 @@ fn list_models() -> ToolDefinition {
     }
 }
 
+/// tool-surface-v2 moves shape. Description verbatim from upstream@141c69b.
 fn move_clips() -> ToolDefinition {
     ToolDefinition {
         name: "move_clips",
-        description: "Move clips to a new position or track.",
-        input_schema: object(&[
-            ("clipIds", array("Clip ids to move")),
-            ("frame", integer("Destination start frame")),
-            ("trackIndex", integer("Optional destination track index")),
-        ]),
+        description: "Moves one or more clips to a new track and/or frame position. Single undoable action. Each move specifies the clip ID and at least one of toTrack (must be compatible with the clip's media type) and toFrame. Overlap on the destination is resolved as in add_clips (existing clips on the destination track are trimmed/split/removed). Linked partners follow the named clip: startFrame propagates as a delta to preserve l-cut / j-cut offsets; tracks stay with the named clip. Multicam clips must move as a whole group; partial group moves and camera lane changes are refused.",
+        input_schema: object(&[(
+            "moves",
+            array_of(
+                "Per-clip move requests. At least one of toTrack or toFrame is required per entry.",
+                object_schema(
+                    &[
+                        ("clipId", string("The clip ID to move.")),
+                        (
+                            "toTrack",
+                            integer("Destination track index (0-based). Omit to keep the clip on its current track."),
+                        ),
+                        (
+                            "toFrame",
+                            integer("Destination start frame. Omit to keep the clip at its current start."),
+                        ),
+                    ],
+                    &["clipId"],
+                ),
+            ),
+        )]),
     }
 }
 
@@ -683,11 +907,8 @@ fn manage_tracks() -> ToolDefinition {
 fn remove_clips() -> ToolDefinition {
     ToolDefinition {
         name: "remove_clips",
-        description: "Remove clips from the timeline.",
-        input_schema: object(&[
-            ("clipIds", array("Clip ids to remove")),
-            ("ripple", boolean("If true, ripple-close the gap")),
-        ]),
+        description: "Removes one or more clips by ID as a single undoable action. Any clip that belongs to a link group (e.g. a video with its paired audio) takes its whole group with it, matching the UI's linked-delete behavior.",
+        input_schema: object(&[("clipIds", array("Clip IDs to remove."))]),
     }
 }
 
@@ -708,22 +929,32 @@ fn close_project() -> ToolDefinition {
     }
 }
 
+/// tool-surface-v2 shape ([start, end] pairs, clipId mode, units,
+/// ignoreSyncLockedTracks). Description verbatim from upstream@141c69b.
 fn ripple_delete_ranges() -> ToolDefinition {
     ToolDefinition {
         name: "ripple_delete_ranges",
-        description: "Delete frame ranges from the timeline with ripple. Sync-locked tracks are cut \
-            in sync with the anchor and their gaps closed. List a track in \
-            ignoreSyncLockTrackIndices to treat it as unlocked for this call — it is left in \
-            place, neither cut nor shifted.",
-        input_schema: object(&[
+        description: "Cuts one or more ranges out and closes the gaps in one undoable action — the fast path for filler-word/dead-air removal. Replaces hand-cranked split_clips → remove_clips → move_clips loops: pass every range at once.\n\nTwo modes — pass exactly one of clipId or trackIndex:\n• trackIndex (preferred for transcript-driven cuts): ranges are PROJECT frames and may span any number of clips on that track. get_transcript returns a clips array with nested words in project frames — collect every cut across the whole timeline and pass them in ONE call, no per-clip splitting and no re-reading the timeline between cuts. units must be 'frames'.\n• clipId: ranges are cut within that single clip only, clamped to its visible span. Allows units 'seconds' (source-media seconds, e.g. inspect_media WITHOUT a clipId or search_media hits); 'frames' = project frames. Use when you already have one clip's per-word timestamps.\n\nOverlapping ranges merge. Linked audio/video partners of every touched clip are cut on the same span so A/V stays in sync. Remaining clips shift left to close every gap; sync-locked tracks shift along to preserve alignment (their content isn't cut). Refuses without changing anything if a sync-locked track can't absorb the shift (e.g. it would move past frame 0). Map the blocking track to its index via get_timeline and pass that index in ignoreSyncLockedTracks to cut anyway, leaving that track's clips in place.",
+        input_schema: object_optional(&[
+            (
+                "trackIndex",
+                integer("Cut project-frame ranges spanning every clip they cross on this track, in one call. From get_transcript's clips array. Mutually exclusive with clipId; requires units 'frames'."),
+            ),
+            (
+                "clipId",
+                string("Cut ranges within this single clip only, clamped to its visible span. Mutually exclusive with trackIndex."),
+            ),
             (
                 "ranges",
-                array("Array of {start, end} frame ranges to delete"),
+                array("Ranges to remove, each a [start, end] pair (end > start). In the unit given by 'units'."),
             ),
-            ("trackIndex", integer("Optional: scope to specific track")),
             (
-                "ignoreSyncLockTrackIndices",
-                array("Optional: track indices to treat as unlocked (left in place) for this call"),
+                "units",
+                string_enum("Interpretation of range values. 'frames' (default) = project/timeline frames, matching get_transcript and inspect_media-with-clipId. 'seconds' = source-media seconds (clipId mode only).", &["seconds", "frames"]),
+            ),
+            (
+                "ignoreSyncLockedTracks",
+                array("Track indices to exempt from sync-lock for this call only. Their clips stay put instead of shifting to close the gap. Use to get past a refusal naming a sync-locked overlay track (e.g. a text track that can't absorb the shift) when the cut doesn't touch that track's content."),
             ),
         ]),
     }
@@ -732,39 +963,23 @@ fn ripple_delete_ranges() -> ToolDefinition {
 fn remove_words() -> ToolDefinition {
     ToolDefinition {
         name: "remove_words",
-        description: "Cut speech by the word, Descript-style — the primary tool for text-based \
-            editing (filler words, flubbed sentences, dropped retakes, tightening a ramble). Pass \
-            `words` for precise get_transcript indices/ranges, or `matches` for exact filler tokens \
-            like \"um\" and \"uh\". This resolves them to frames, removes the surrounding pause so \
-            survivors don't end up double-spaced, merges adjacent removals, cuts linked A/V \
-            partners, and closes the gaps. Words across multiple clips on ONE track are handled in \
-            a single undoable action; if your selection spans multiple UNLINKED tracks the call is \
-            refused — cut one track at a time, or link the tracks first. After it runs, indices \
-            have shifted — re-read get_transcript before another remove_words.",
+        description: "Cut speech by the word, Descript-style — the primary tool for text-based editing (filler words, flubbed sentences, dropped retakes, tightening a ramble). Pass words for precise get_transcript indices/ranges, or matches for exact filler tokens like \"um\" and \"uh\". This resolves them to frames, removes the surrounding pause so survivors don't end up double-spaced, merges adjacent removals, cuts linked A/V partners, and closes the gaps. You never deal in frame numbers — that's the whole point versus ripple_delete_ranges.\n\nWorkflow: call get_transcript, read it as prose, then pass the indices of the words to drop. Omit language by default; remove_words reuses the previous get_transcript source so cloud/local word indices stay aligned. Words across multiple clips on ONE track are handled in a single undoable action, and any linked A/V partner (e.g. the video paired with this audio) is cut automatically. Edit one track at a time: if your indices span multiple unlinked tracks (e.g. two separate mics), the call is refused — cut each track in its own call, or link the tracks into one unit first. After it runs, indices have shifted — re-read get_transcript before another remove_words.\n\nWhen to use which: words for selective edits after reading the transcript; matches for removing every exact filler token; ripple_delete_ranges only for spans that aren't word-aligned. Verify reworded retakes and sub-frame seam fragments against the word list, not a summary.",
         input_schema: object_optional(&[
             (
                 "words",
-                array(
-                    "Words to remove, by get_transcript index. Each element is a single index \
-                    (e.g. 42) or an inclusive [startIndex, endIndex] span (e.g. [12, 18]). Mix \
-                    freely: [3, [12, 18], 40]. Mutually exclusive with matches. Re-read after any edit.",
-                ),
+                array("Words to remove, by get_transcript index. Each element is either a single index (e.g. 42) or an inclusive [startIndex, endIndex] span (e.g. [12, 18]). Mutually exclusive with matches. Re-read after any edit."),
             ),
             (
                 "matches",
-                array(
-                    "Exact single-word tokens to remove everywhere, case-insensitive with \
-                    surrounding punctuation ignored, e.g. [\"um\", \"uh\", \"hmm\"]. Mutually \
-                    exclusive with words. Avoid broad words like \"like\" unless the user wants every occurrence.",
-                ),
+                array("Exact single-word tokens to remove everywhere, case-insensitive with surrounding punctuation ignored, e.g. [\"um\", \"uh\", \"hmm\"]. Mutually exclusive with words. Avoid broad words like \"like\" unless the user explicitly wants every occurrence removed."),
             ),
             (
                 "cutAggressiveness",
-                string(
-                    "How much silence to leave between the words on either side of a cut: 'tight' \
-                    (snappy), 'balanced' (default, natural beat), or 'loose' (more breathing room). \
-                    The removed words' own frames always go regardless.",
-                ),
+                string_enum("How much silence to leave between the words on either side of a cut. 'tight' butts them close (snappy, can feel clipped), 'balanced' (default) keeps a natural beat, 'loose' leaves more breathing room. The removed words' own frames always go regardless.", &["tight", "balanced", "loose"]),
+            ),
+            (
+                "language",
+                string("Optional BCP-47 speech language for local transcription. Omit to reuse the previous get_transcript language."),
             ),
         ]),
     }
@@ -778,26 +993,51 @@ fn search_media() -> ToolDefinition {
     }
 }
 
+/// tool-surface-v2 flat shape (absorbs set_blend_mode). Description verbatim
+/// from upstream@141c69b.
 fn set_clip_properties() -> ToolDefinition {
     ToolDefinition {
         name: "set_clip_properties",
-        description: "Apply property values to one or more clips in a single undoable \
-            action. `properties` is an object; pass any combination of: \
-            durationFrames, trimStartFrame, trimEndFrame, speed, volume (0 to ~5.62 linear; +15 dB boost ceiling), \
-            opacity (0-1), transform ({centerX, centerY, width, height, rotation, \
-            flipHorizontal, flipVertical} — partial merge, 0-1 normalized canvas \
-            coords). For text clips only: content (string), fontName, fontSize, \
-            fontWeight (400 = regular, 700 = bold), color ('#RGB' / '#RRGGBB' / \
-            '#RRGGBBAA'), alignment ('left' / 'center' / 'right'), background and \
-            border (each {enabled, color, padding?, cornerRadius?} for the caption \
-            fill/stroke). Setting volume or opacity here clears any keyframe track \
-            on that property.",
+        description: "Apply the same generic clip property values to one or more clips in a single undoable action. Pass any combination of durationFrames, trimStartFrame, trimEndFrame, speed, volume, opacity, transform, or blendMode (video/image clips only). For text content, typography, captions, and text animation, use update_text.\n\nNOT for preview layout — split screen, picture-in-picture, grid, sidebar, and any multi-clip canvas arrangement belong to apply_layout, which sets transform and crop together. Do not use transform here (or set_keyframes position/scale/crop) to build those layouts.\n\nAll values apply to every clip in clipIds; for per-clip differences, make separate calls. trimStartFrame/trimEndFrame are offsets from the source media, not the timeline. speed 1.0 is normal, <1.0 slows (clip gets longer on the timeline), >1.0 speeds up. volume and opacity are 0.0–1.0. transform is for rare single-clip tweaks only — 0–1 normalized canvas coords, partial merge; flipHorizontal/flipVertical mirror across the axis.\n\nFor moves and start-frame changes, use move_clips. For animated values (keyframes), use set_keyframes — setting volume or opacity here clears any existing keyframe track on that property.\n\nTiming changes (durationFrames, trimStartFrame, trimEndFrame, speed) on a linked clip carry over to its linked partner so audio/video stay in sync — same as the timeline UI. Per-clip fields (volume, opacity, transform, blendMode) don't propagate. trim and speed are skipped for text partners.",
         input_schema: object(&[
-            ("clipIds", array("Clip ids to modify")),
             (
-                "properties",
-                object_any(
-                    "Properties to set: durationFrames, trimStartFrame, trimEndFrame, speed, volume, opacity, transform, and (text clips) content, fontName, fontSize, color, alignment",
+                "clipIds",
+                array("Clip IDs to update. The property values below apply to every clip in this list."),
+            ),
+            ("durationFrames", integer("New duration in frames.")),
+            (
+                "trimStartFrame",
+                integer("SOURCE-media offset, NOT a timeline frame: frames trimmed off the start of the source — measured in PROJECT frames (the timeline's fps, same units as startFrame/durationFrames; never the source's own fps). To turn a get_transcript project frame P into this clip's source offset, use trimStartFrame + (P − startFrame) × speed; setting trimStartFrame to that value makes the clip begin at P's source content."),
+            ),
+            (
+                "trimEndFrame",
+                integer("SOURCE-media offset, NOT a timeline frame: frames trimmed off the end of the source, in PROJECT frames. Maps the same way as trimStartFrame via startFrame/speed."),
+            ),
+            (
+                "speed",
+                number("Playback speed multiplier (default 1.0). >1 speeds up, <1 slows down. The clip's timeline length is rescaled to keep the same source content (2x speed → half the frames), unless you also pass durationFrames to set the length explicitly."),
+            ),
+            ("volume", number("Volume 0.0-1.0. Clears any existing volume keyframes.")),
+            ("opacity", number("Opacity 0.0-1.0. Clears any existing opacity keyframes.")),
+            (
+                "transform",
+                object_schema(
+                    &[
+                        ("centerX", number("0-1 horizontal center.")),
+                        ("centerY", number("0-1 vertical center.")),
+                        ("width", number("0-1 width.")),
+                        ("height", number("0-1 height.")),
+                        ("flipHorizontal", boolean("Mirror across the vertical axis.")),
+                        ("flipVertical", boolean("Mirror across the horizontal axis.")),
+                    ],
+                    &[],
+                ),
+            ),
+            (
+                "blendMode",
+                string_enum(
+                    "Video/image clips only. How the clip composites over the tracks below it (Premiere/Photoshop blend modes). 'normal' is the default (source-over) and clears any blend. Rejected on text/audio clips.",
+                    &["normal", "darken", "multiply", "colorBurn", "lighten", "screen", "colorDodge", "overlay", "softLight", "hardLight", "difference", "exclusion", "hue", "saturation", "color", "luminosity"],
                 ),
             ),
         ]),
@@ -876,62 +1116,9 @@ fn upscale_media() -> ToolDefinition {
     }
 }
 
-fn set_chroma_key() -> ToolDefinition {
-    ToolDefinition {
-        name: "set_chroma_key",
-        description: "Set chroma key (green screen) parameters on a clip.",
-        input_schema: object(&[
-            ("clipId", string("Clip id to apply chroma key to")),
-            ("enabled", boolean("Enable or disable chroma key")),
-            ("color", string("Key color as hex (#RRGGBB)")),
-            ("threshold", number("Similarity threshold 0-1")),
-            ("smoothness", number("Edge smoothness 0-1")),
-        ]),
-    }
-}
 
-fn set_blend_mode() -> ToolDefinition {
-    ToolDefinition {
-        name: "set_blend_mode",
-        description: "Set the blend mode for a clip's compositing.",
-        input_schema: object(&[
-            ("clipId", string("Clip id")),
-            (
-                "mode",
-                string("Blend mode: normal, multiply, screen, overlay, etc."),
-            ),
-        ]),
-    }
-}
 
-fn set_color_grade() -> ToolDefinition {
-    ToolDefinition {
-        name: "set_color_grade",
-        description: "Set color grade parameters on a clip.",
-        input_schema: object(&[
-            ("clipId", string("Clip id")),
-            ("exposure", number("Exposure adjustment (-4 to 4)")),
-            ("contrast", number("Contrast adjustment (0 to 4)")),
-            ("saturation", number("Saturation (0 to 4)")),
-            ("temperature", number("Temperature adjustment (-1 to 1)")),
-        ]),
-    }
-}
 
-fn generate_music() -> ToolDefinition {
-    ToolDefinition {
-        name: "generate_music",
-        description: "Generate music using the configured model.",
-        input_schema: object(&[
-            ("prompt", string("Description of the music to generate")),
-            ("duration", number("Duration in seconds")),
-            (
-                "style",
-                string("Optional music style (e.g., cinematic, ambient, upbeat)"),
-            ),
-        ]),
-    }
-}
 
 fn duplicate_project() -> ToolDefinition {
     ToolDefinition {
@@ -962,37 +1149,130 @@ fn apply_animation() -> ToolDefinition {
     }
 }
 
+/// tool-surface-v2 (absorbs set_color_grade). Description verbatim from
+/// upstream@141c69b.
 fn apply_color() -> ToolDefinition {
     ToolDefinition {
         name: "apply_color",
-        description: "Apply color grading parameters to a clip. MERGE semantics — only passed params change. PR #8.",
+        description: "Author/refine a color grade on video/image clips with named controls — the colorist path, distinct from apply_effect (looks/FX). Returns the clips with their resulting grade as a `color` object — the same object get_timeline shows; pass one back via the `color` parameter to copy a grade between clips (replaces the whole grade). MERGES with the clip's current grade: only the params you pass change, the rest are preserved, so you can nudge one knob at a time (pass reset:true to start from neutral). Applies as live, editable color.* effects; non-color effects untouched. Iterate: apply_color → inspect_color(clipId, reference) → read the gap → adjust → repeat. Undoable. All knobs optional. Color WHEELS use HUE (0–360°, standard) + AMOUNT per tonal zone — to push shadows teal, set shadowsHue 180 and shadowsAmount ~0.15. CURVES (master + per-channel R/G/B) give precise tone shaping — per-channel curves are tone-selective (e.g. pull the blue curve down in the highlights to tame a bright sky). HUE CURVES do secondary/qualified correction — target a source hue and shift its hue/saturation/lightness (e.g. desaturate greens, warm the skin) without a mask. LUT applies a .cube film-look pack on top of the grade.",
         input_schema: object(&[
-            ("clipId", string("Clip id to grade")),
-            ("exposure", number("Exposure adjustment (-4 to 4)")),
-            ("contrast", number("Contrast adjustment (0 to 4)")),
-            ("saturation", number("Saturation (0 to 4)")),
-            ("vibrance", number("Vibrance adjustment (0 to 2)")),
-            ("temperature", number("Temperature adjustment (-1 to 1)")),
-            ("tint", number("Tint adjustment (-1 to 1)")),
-            ("highlights", number("Highlight adjustment (-1 to 1)")),
-            ("shadows", number("Shadow adjustment (-1 to 1)")),
-            ("blacks", number("Black point adjustment (-1 to 1)")),
-            ("whites", number("White point adjustment (-1 to 1)")),
-            ("reset", boolean("If true, reset all color params to neutral before applying")),
+            ("clipIds", array("Clip ids from get_timeline.")),
+            (
+                "reset",
+                boolean("Start from neutral instead of merging onto the clip's current grade. Default false."),
+            ),
+            (
+                "color",
+                object_any("A complete grade object as read from a clip's `color` key (get_timeline or an apply_color echo). Replaces the target clips' grade — the grade-copy path. Mutually exclusive with reset and individual knobs."),
+            ),
+            ("exposure", number("-3…3 EV. Overall brightness in linear light.")),
+            ("contrast", number("0.5…1.5 (1 = neutral).")),
+            ("saturation", number("0…2 (1 = neutral; <1 mutes).")),
+            ("vibrance", number("-1…1 (protects skin tones).")),
+            (
+                "temperature",
+                number("2000…11000 K. HIGHER = WARMER, lower = cooler/bluer (6500 = neutral)."),
+            ),
+            ("tint", number("-100…100. Positive = green, negative = magenta.")),
+            ("highlights", number("-1…1. Recover (<0) or lift (>0) highlights.")),
+            ("shadows", number("-1…1. Lift (>0) or deepen (<0) shadows.")),
+            ("blacks", number("-1…1. Black point. Negative deepens, positive lifts (faded look).")),
+            ("whites", number("-1…1. White point.")),
+            (
+                "shadowsHue",
+                number("Shadow color-push hue 0–360° (0 red, 30 orange, 60 yellow, 120 green, 180 cyan, 240 blue, 300 magenta). Use with shadowsAmount."),
+            ),
+            ("shadowsAmount", number("0…1 strength of the shadow color push (0 = neutral).")),
+            ("shadowsLum", number("-0.5…0.5 shadow lift (brightness).")),
+            ("midsHue", number("Midtone color-push hue 0–360° (see shadowsHue). Use with midsAmount.")),
+            ("midsAmount", number("0…1 strength of the midtone color push.")),
+            ("midsGamma", number("0.5…2 midtone brightness (gamma; 1 = neutral).")),
+            ("highsHue", number("Highlight color-push hue 0–360° (see shadowsHue). Use with highsAmount.")),
+            ("highsAmount", number("0…1 strength of the highlight color push.")),
+            ("highsGain", number("0.5…1.5 highlight brightness (gain; 1 = neutral).")),
+            (
+                "masterCurve",
+                array("Luma tone curve as [x,y] control points in 0–1 (input→output), preserves chroma. E.g. [[0,0.06],[1,0.95]] = lifted/faded film toe."),
+            ),
+            ("redCurve", array("Red-channel tone curve, [x,y] points 0–1.")),
+            ("greenCurve", array("Green-channel tone curve, [x,y] points 0–1.")),
+            (
+                "blueCurve",
+                array("Blue-channel tone curve, [x,y] points 0–1. Tone-selective: e.g. [[0,0],[0.7,0.7],[1,0.85]] pulls blue only in the highlights (tames a sky) and leaves shadows."),
+            ),
+            (
+                "hueCurves",
+                object_schema(
+                    &[(
+                        "targets",
+                        array_of(
+                            "One or more source-hue regions to adjust (e.g. skin at 30, sky at 210).",
+                            object_schema(
+                                &[
+                                    (
+                                        "targetHue",
+                                        number("Source hue to act on, 0–360° (0 red, 30 orange/skin, 60 yellow, 120 green, 180 cyan, 210 sky-blue, 240 blue, 300 magenta)."),
+                                    ),
+                                    ("hueShift", number("Rotate that hue by -30…30°.")),
+                                    (
+                                        "satScale",
+                                        number("Saturation multiplier for that hue, 0–2 (1 = neutral; 1.3 pops it, 0.6 mutes it, 0 fully desaturates)."),
+                                    ),
+                                    ("lumShift", number("Lightness shift for that hue, -0.5…0.5.")),
+                                ],
+                                &["targetHue"],
+                            ),
+                        ),
+                    )],
+                    &[],
+                ),
+            ),
+            (
+                "lut",
+                object_schema(
+                    &[
+                        (
+                            "path",
+                            string("Absolute path to a .cube file (~ is expanded). Copied into project storage so it survives saves."),
+                        ),
+                        ("strength", number("Dry/wet mix 0-1 (default 1).")),
+                    ],
+                    &[],
+                ),
+            ),
         ]),
     }
 }
 
+/// tool-surface-v2 (absorbs set_chroma_key). Description verbatim from
+/// upstream@141c69b, catalog lines from Appendix C.
 fn apply_effect() -> ToolDefinition {
     ToolDefinition {
         name: "apply_effect",
-        description: "Apply non-color effects (blur, sharpen, glow, grain, vignette) to a clip. PR #8.",
+        description: "Apply non-color effects (blur, sharpen, stylize, detail, key) to video/image clips as a live, editable effect stack — the looks/FX path, distinct from apply_color (grading). MERGES: each effect you pass is added or updated by type; effects you don't mention are left in place. Pass enabled:false to bypass one without removing it, or list its type in `remove` to delete it. Out-of-range params are clamped; params you omit keep their current (or default) value. Undoable. Returns the clips with their resulting effects as [{type, params}] — the same shape this tool accepts, so copying effects between clips is passing a clip's effects array back in.\n\nAvailable effects — type: param (range, default):\n• detail.clarity — Clarity & Haze: clarity (-1…1, default 0), dehaze (-1…1, default 0)\n• blur.gaussian — Gaussian Blur: radius (0…100px, default 8)\n• blur.sharpen — Sharpen: amount (0…2, default 0.4)\n• blur.noiseReduction — Noise Reduction: amount (0…1, default 0)\n• blur.motion — Motion Blur: radius (0…100px, default 0), angle (-180…180°, default 0)\n• stylize.grain — Film Grain: amount (0…1, default 0), size (0.5…4, default 1.5)\n• stylize.vignette — Vignette: amount (-1…1, default 0), midpoint (0…1, default 0.5), roundness (-1…1, default 0), feather (0…1, default 0.5)\n• stylize.glow — Glow: intensity (0…1, default 0), radius (0…100px, default 20), threshold (0…1, default 0.6), warmth (0…1, default 0)\n• key.chroma — Chroma Key: keyHue (0…1, default 0.333), tolerance (0…1, default 0), softness (0…1, default 0.5), spill (0…1, default 0.5)",
         input_schema: object(&[
-            ("clipId", string("Clip id")),
-            ("type", string("Effect type ID (e.g. 'blur.gaussian', 'stylize.glow', 'detail.sharpen', 'stylize.grain', 'stylize.vignette')")),
-            ("enabled", boolean("Enable or disable the effect")),
-            ("remove", array("Optional list of effect type IDs to remove from the clip")),
-            ("intensity", number("Effect intensity (0 to 1)")),
+            ("clipIds", array("Clip ids from get_timeline.")),
+            (
+                "effects",
+                array_of(
+                    "Effects to add or update on the clips.",
+                    object_schema(
+                        &[
+                            ("type", string("Effect type id, e.g. stylize.glow (see list above).")),
+                            (
+                                "params",
+                                object_any("Param values keyed by name. Out-of-range values are clamped; omitted params keep their current/default value."),
+                            ),
+                            (
+                                "enabled",
+                                boolean("Default true. false bypasses the effect without removing it."),
+                            ),
+                        ],
+                        &["type"],
+                    ),
+                ),
+            ),
+            ("remove", array("Effect type ids to remove from the clips.")),
         ]),
     }
 }
@@ -1257,21 +1537,47 @@ fn remove_silence() -> ToolDefinition {
 
 // ── Issue #119: multi-track audio sync MCP tool ──────────────────────────────
 
-fn sync_audio() -> ToolDefinition {
+/// tool-surface-v2: renamed from sync_audio; adds mode (auto|audio|timecode).
+/// Description verbatim from upstream@141c69b.
+fn sync_clips() -> ToolDefinition {
     ToolDefinition {
-        name: "sync_audio",
-        description: "Align one or more clips to a reference clip by cross-correlating audio and shifting targets on the timeline. referenceClipId stays put — use for dual-system sound (camera + external audio) or multicam. Returns offsetFrames and confidence (0–1) per target; refuses weak matches.",
+        name: "sync_clips",
+        description: "Align one or more clips to a reference clip by shifting targets on the timeline — use for dual-system sound (camera + external audio) or multicam. Default mode 'auto' aligns by embedded source timecode when both files carry one (exact, confidence 1.0), falling back to audio cross-correlation otherwise; force a method with mode. referenceClipId stays put. Returns offsetFrames, confidence (0–1), and method (timecode|audio) per target; refuses weak audio matches.",
         input_schema: object(&[
             ("referenceClipId", string("Clip the others align to. Stays put.")),
             ("targetClipId", string("Single clip to align. Use targetClipIds for several.")),
             ("targetClipIds", array("Clips to align with the reference.")),
             (
+                "mode",
+                string_enum("auto (default): timecode when available, else audio. audio/timecode force that method.", &["auto", "audio", "timecode"]),
+            ),
+            (
                 "searchWindowSeconds",
-                number("Max ± offset to search in seconds (default 30)."),
+                number("Max ± offset to search in seconds, audio mode only (default 30)."),
             ),
             (
                 "minConfidence",
-                number("Minimum correlation confidence 0–1 (default 0.5)."),
+                number("Minimum audio correlation confidence 0–1 (default 0.5)."),
+            ),
+        ]),
+    }
+}
+
+/// tool-surface-v2 NEW: on-device beat detection. Description verbatim from
+/// upstream@141c69b.
+fn detect_beats() -> ToolDefinition {
+    ToolDefinition {
+        name: "detect_beats",
+        description: "Detect musical beats and downbeats in a media asset's audio, on-device. Returns beats and downbeats in SOURCE seconds (multiply by fps for frame values, same convention as search_media hits) plus estimated bpm. Downbeats mark bar starts — cut on downbeats for edits that land musically; beats are fine for faster montage rhythms.\n\nUse for beat-synced editing: snapping cuts to a music bed, building montages where clip boundaries hit the beat, or timing text/caption entrances to the bar. To place a cut at a beat B on a clip, the timeline frame is startFrame + (B × fps − trimStartFrame) / speed. Works on music; speech or ambience returns few or no beats. Runs locally — no subscription needed.",
+        input_schema: object(&[
+            ("mediaRef", string("Audio or video asset id from get_media.")),
+            (
+                "startSeconds",
+                number("Optional. Return only beats at or after this source-media second. The whole file is analyzed once and cached; windowing trims the response, not the work."),
+            ),
+            (
+                "endSeconds",
+                number("Optional. Return only beats at or before this source-media second."),
             ),
         ]),
     }
@@ -1370,15 +1676,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_57_tools() {
-        // Interim tool-surface-v2 count: 64 + 3 new (organize_media,
-        // manage_tracks, close_project) − 10 retired = 57 (header history).
+    fn tdef_001_exactly_53_tools() {
+        // Final tool-surface-v2 count (design.md C-1): 57 − 5 retired
+        // (list_folders, set_blend_mode, set_chroma_key, set_color_grade,
+        // generate_music) + 1 new (detect_beats) = 53
+        // = 45 upstream (48 − 3 deferred multicam) + 8 Rust extensions.
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            57,
-            "TDEF-001: 57 tools (see the header history)"
+            53,
+            "TDEF-001: 53 tools (see the header history)"
         );
+    }
+
+    #[test]
+    fn tdef_001_host_split_counts() {
+        // C-1 host split: shared 48; MCP = shared + 4 project tools = 52;
+        // in-app = shared + read_skill = 49.
+        let shared = all_tools()
+            .iter()
+            .filter(|t| t.host() == ToolHost::Shared)
+            .count();
+        assert_eq!(shared, 48, "shared surface");
+        assert_eq!(mcp_tools().len(), 52, "MCP surface");
+        assert_eq!(in_app_tools().len(), 49, "in-app surface");
+        let mcp_names: Vec<&str> = mcp_tools().iter().map(|t| t.name).collect();
+        assert!(!mcp_names.contains(&"read_skill"), "read_skill is in-app only");
+        let in_app_names: Vec<&str> = in_app_tools().iter().map(|t| t.name).collect();
+        for project_tool in ["get_projects", "open_project", "new_project", "close_project"] {
+            assert!(mcp_names.contains(&project_tool));
+            assert!(
+                !in_app_names.contains(&project_tool),
+                "{project_tool} is MCP-only"
+            );
+        }
+        assert!(in_app_names.contains(&"read_skill"));
     }
 
     #[test]
@@ -1406,7 +1738,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 57, "all 57 tool names must be unique");
+        assert_eq!(names.len(), 53, "all 53 tool names must be unique");
     }
 
     #[test]

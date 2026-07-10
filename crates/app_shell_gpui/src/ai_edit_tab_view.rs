@@ -6,7 +6,7 @@
 //!   • AI Audio section (collapsible, video assets only): Music / SFX
 //!
 //! Actions dispatch through the shared executor (upscale_media /
-//! generate_music / generate_audio; Rerun replays the stored
+//! generate_audio (music + TTS, tool-surface-v2); Rerun replays the stored
 //! generation_input). Results and errors land on a status line —
 //! backend-gated actions report that state honestly, no fake progress.
 
@@ -97,7 +97,8 @@ fn video_audio_args(asset: &SelectedAsset) -> serde_json::Value {
 }
 
 pub fn music_tool_call(asset: &SelectedAsset) -> (&'static str, serde_json::Value) {
-    ("generate_music", video_audio_args(asset))
+    // tool-surface-v2: generate_music is absorbed into generate_audio.
+    ("generate_audio", video_audio_args(asset))
 }
 
 pub fn sfx_tool_call(asset: &SelectedAsset) -> (&'static str, serde_json::Value) {
@@ -178,10 +179,7 @@ pub fn rerun_tool_call(
         Some(m) => match &m.caps {
             ModelCaps::Video(_) => "generate_video",
             ModelCaps::Image(_) => "generate_image",
-            ModelCaps::Audio(c) => match c.category {
-                AudioCategory::Music => "generate_music",
-                AudioCategory::Tts => "generate_audio",
-            },
+            ModelCaps::Audio(_) => "generate_audio",
         },
         None => match asset.clip_type {
             ClipType::Video => "generate_video",
@@ -787,7 +785,7 @@ mod tests {
     fn music_and_sfx_calls_carry_video_reference() {
         let a = asset(ClipType::Video, None);
         let (tool, args) = music_tool_call(&a);
-        assert_eq!(tool, "generate_music");
+        assert_eq!(tool, "generate_audio");
         assert_eq!(args["prompt"], "");
         assert_eq!(args["referenceVideoAssetIds"], json!(["asset-1"]));
         assert_eq!(args["duration"], json!(12.0));
@@ -862,7 +860,7 @@ mod tests {
             rerun_tool_call(&asset(ct, Some(input))).unwrap().0
         };
         assert_eq!(by_model("nano-banana-pro", ClipType::Image), "generate_image");
-        assert_eq!(by_model("minimax-music-v2.6", ClipType::Audio), "generate_music");
+        assert_eq!(by_model("minimax-music-v2.6", ClipType::Audio), "generate_audio");
         assert_eq!(by_model("elevenlabs-tts-v3", ClipType::Audio), "generate_audio");
     }
 
