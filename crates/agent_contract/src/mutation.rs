@@ -31,9 +31,12 @@ impl<T> ValidationResult<T> {
 /// Upstream #264/#265: frame-valued tool args are ceiling-bounded so
 /// `start + duration` can never overflow i64 (debug panic / release wrap).
 /// ~9,259 hours at 30fps — far beyond any real timeline, far below i64::MAX.
-/// Volume ceiling in linear gain: Swift's inspector allows up to +15 dB
-/// (10^(15/20)); the tool layer must accept the whole UI-reachable range.
-pub const VOLUME_CEILING_LINEAR: f64 = 5.623413251903491;
+/// Volume ceiling in linear gain: the single source of truth is the
+/// inspector's dB scale (Swift VolumeScale.ceilingDb = +15 dB) — the tool
+/// layer must accept the whole UI-reachable range.
+pub fn volume_ceiling_linear() -> f64 {
+    timeline_core::linear_from_db(timeline_core::VOLUME_CEILING_DB)
+}
 
 pub const MAX_TOOL_FRAME: i64 = 1_000_000_000;
 
@@ -219,9 +222,10 @@ pub fn validate_set_clip_properties(
             // the reachable state space, not #144's 0..1 agent-only bound.
             // The Rust inspector writes THROUGH this tool layer (Swift's
             // bypasses it), so 0..1 would silently break dB boosts.
-            if !(0.0..=VOLUME_CEILING_LINEAR).contains(&vol) {
+            let ceiling = volume_ceiling_linear();
+            if !(0.0..=ceiling).contains(&vol) {
                 return ValidationResult::Error(format!(
-                    "set_clip_properties: 'volume' must be between 0 and {VOLUME_CEILING_LINEAR:.4} (+15 dB), got {vol}"
+                    "set_clip_properties: 'volume' must be between 0 and {ceiling:.4} (+15 dB), got {vol}"
                 ));
             }
         }

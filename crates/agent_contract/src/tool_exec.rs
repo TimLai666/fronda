@@ -6587,6 +6587,40 @@ mod tests {
     }
 
     #[test]
+    fn inspector_shaped_volume_boost_roundtrip() {
+        // Pins the resolved #144 inspector conflict end-to-end (gpui-free):
+        // the inspector converts its dB slider via linear_from_db and commits
+        // through this same executor. The full slider range must be accepted;
+        // one step past the ceiling must reject without touching the clip.
+        let mut exec = executor_with_clip();
+        for db in [-60.0, -12.5, 0.0, 7.3, timeline_core::VOLUME_CEILING_DB] {
+            let linear = timeline_core::linear_from_db(db);
+            exec.execute(
+                "set_clip_properties",
+                &json!({"clipIds": ["c"], "properties": {"volume": linear}}),
+            )
+            .unwrap_or_else(|e| panic!("{db} dB (linear {linear}) must be accepted: {e}"));
+            let stored = exec.timeline().tracks[0].clips[0].volume;
+            assert!((stored - linear).abs() < 1e-9, "{db} dB round-trips");
+        }
+        let ceiling = crate::mutation::volume_ceiling_linear();
+        let err = exec
+            .execute(
+                "set_clip_properties",
+                &json!({"clipIds": ["c"], "properties": {"volume": ceiling + 0.001}}),
+            )
+            .unwrap_err();
+        assert!(err.contains("volume"), "past-ceiling rejects: {err}");
+        assert!(
+            (exec.timeline().tracks[0].clips[0].volume
+                - timeline_core::linear_from_db(timeline_core::VOLUME_CEILING_DB))
+            .abs()
+                < 1e-9,
+            "rejection leaves the last accepted value"
+        );
+    }
+
+    #[test]
     fn validator_rejection_leaves_revision_unchanged() {
         let mut exec = executor_with_clip();
         let before = exec.revision();

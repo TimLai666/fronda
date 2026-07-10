@@ -716,7 +716,7 @@ fn set_clip_properties() -> ToolDefinition {
         name: "set_clip_properties",
         description: "Apply property values to one or more clips in a single undoable \
             action. `properties` is an object; pass any combination of: \
-            durationFrames, trimStartFrame, trimEndFrame, speed, volume (0-1), \
+            durationFrames, trimStartFrame, trimEndFrame, speed, volume (0 to ~5.62 linear; +15 dB boost ceiling), \
             opacity (0-1), transform ({centerX, centerY, width, height, rotation, \
             flipHorizontal, flipVertical} — partial merge, 0-1 normalized canvas \
             coords). For text clips only: content (string), fontName, fontSize, \

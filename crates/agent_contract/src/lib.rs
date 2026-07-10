@@ -33,7 +33,7 @@ pub use tools::{all_tools, ToolDefinition, SYSTEM_INSTRUCTION};
 
 pub use hex_color_parser::parse_hex_color;
 pub use mutation::{
-    require_frame_in_bounds, validate_add_captions, validate_add_clips, validate_add_texts,
+    require_frame_in_bounds, volume_ceiling_linear, validate_add_captions, validate_add_clips, validate_add_texts,
     validate_create_folder,
     validate_delete_folder, validate_delete_media, validate_duplicate_project,
     validate_generate_music, validate_hex_color, validate_import_folder, validate_insert_clips,
