@@ -299,9 +299,21 @@ fn resolve_placement(
     );
 
     let arg_i64 = |key: &str| args.get(key).and_then(Value::as_i64);
-    let trim_start_in = arg_i64("trimStartFrame").unwrap_or(0).max(0);
-    let duration_in = arg_i64("durationFrames");
-    let trim_end_in = arg_i64("trimEndFrame");
+    // v2 `source: [startSeconds, endSeconds]` — source seconds scaled by the
+    // authoritative PROJECT fps (never the source's own fps).
+    let src_s = args.get("sourceStartSeconds").and_then(Value::as_f64);
+    let src_e = args.get("sourceEndSeconds").and_then(Value::as_f64);
+    let (trim_start_in, duration_in, trim_end_in) = if let (Some(s), Some(e)) = (src_s, src_e) {
+        let ts = ((s * project_fps as f64).round() as i64).max(0);
+        let d = (((e - s) * project_fps as f64).round() as i64).max(1);
+        (ts, Some(d), None)
+    } else {
+        (
+            arg_i64("trimStartFrame").unwrap_or(0).max(0),
+            arg_i64("durationFrames"),
+            arg_i64("trimEndFrame"),
+        )
+    };
 
     // Upstream #264/#265: ceiling-bound before any start+duration arithmetic.
     crate::mutation::require_frame_in_bounds(trim_start_in, "trimStartFrame")?;
@@ -1013,16 +1025,50 @@ impl ToolExecutor {
         })
     }
 
+    /// The full id universe for the short-id contract (C-3): timelines,
+    /// clips, linkGroupIds, captionGroupIds (active + siblings), and media
+    /// assets.
+    fn id_universe(&self) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+        for t in std::iter::once(&self.timeline).chain(self.sibling_timelines.iter()) {
+            ids.push(t.id.clone());
+            for clip in t.tracks.iter().flat_map(|tr| &tr.clips) {
+                ids.push(clip.id.clone());
+                if let Some(lg) = &clip.link_group_id {
+                    ids.push(lg.clone());
+                }
+                if let Some(cg) = &clip.caption_group_id {
+                    ids.push(cg.clone());
+                }
+            }
+        }
+        for e in &self.media_manifest.entries {
+            ids.push(e.id.clone());
+        }
+        ids
+    }
+
     /// Execute a tool by name with validated JSON arguments.
     ///
     /// Returns the JSON result that should become the MCP `content` array.
     /// For mutation tools, automatically snapshots before/after for undo.
+    ///
+    /// Short-id contract (C-3): known id keys in the input expand from
+    /// >= 8-char prefixes; every known full id in the output is shortened to
+    /// its unique prefix over the pre ∪ post id universe.
     pub fn execute(&mut self, tool_name: &str, args: &Value) -> Result<Value, String> {
-        let result = self.execute_inner(tool_name, args);
+        let pre_universe = self.id_universe();
+        let expanded = crate::id_short::expand_input_ids(args, &pre_universe)?;
+        let result = self.execute_inner(tool_name, &expanded);
         if result.is_ok() && !READ_ONLY_TOOLS.contains(&tool_name) {
             self.revision += 1;
         }
-        result
+        result.map(|value| {
+            let mut universe = pre_universe;
+            universe.extend(self.id_universe());
+            let map = crate::id_short::shorten_ids(&universe);
+            crate::id_short::shorten_output_ids(&value, &map)
+        })
     }
 
     /// Pre-dispatch gate: run the matching `mutation` validator so the pure
@@ -1081,29 +1127,33 @@ impl ToolExecutor {
             // ── Read-only tools ──────────────────────────────────────────
             "get_timeline" => self.cmd_get_timeline(),
 
-            // ── Mutation tools (undo-tracked) ────────────────────────────
-            "split_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_split_clips, args),
-            "remove_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_clips, args),
-            "move_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_move_clips, args),
+            // ── Mutation tools (undo-tracked, mutation envelope C-4) ─────
+            "split_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_split_clips, args),
+            "remove_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_remove_clips, args),
+            "move_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_move_clips, args),
             "move_clips_linked" => {
-                self.exec_mut(tool_name, ToolExecutor::cmd_move_clips_linked, args)
+                self.exec_enveloped(tool_name, ToolExecutor::cmd_move_clips_linked, args)
             }
             "set_clip_properties" => {
-                self.exec_mut(tool_name, ToolExecutor::cmd_set_clip_properties, args)
+                self.exec_enveloped(tool_name, ToolExecutor::cmd_set_clip_properties, args)
             }
-            "set_keyframes" => self.exec_mut(tool_name, ToolExecutor::cmd_set_keyframes, args),
+            "set_keyframes" => {
+                self.exec_enveloped(tool_name, ToolExecutor::cmd_set_keyframes, args)
+            }
             "ripple_delete_ranges" => {
-                self.exec_mut(tool_name, ToolExecutor::cmd_ripple_delete_ranges, args)
+                self.exec_enveloped(tool_name, ToolExecutor::cmd_ripple_delete_ranges, args)
             }
-            "remove_words" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_words, args),
-            "manage_tracks" => self.exec_mut(tool_name, ToolExecutor::cmd_manage_tracks, args),
-            "add_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_add_clips, args),
-            "insert_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_insert_clips, args),
-            "apply_layout" => self.exec_mut(tool_name, ToolExecutor::cmd_apply_layout, args),
-            "add_texts" => self.exec_mut(tool_name, ToolExecutor::cmd_add_texts, args),
+            "remove_words" => self.exec_enveloped(tool_name, ToolExecutor::cmd_remove_words, args),
+            "manage_tracks" => {
+                self.exec_enveloped(tool_name, ToolExecutor::cmd_manage_tracks, args)
+            }
+            "add_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_add_clips, args),
+            "insert_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_insert_clips, args),
+            "apply_layout" => self.exec_enveloped(tool_name, ToolExecutor::cmd_apply_layout, args),
+            "add_texts" => self.exec_enveloped(tool_name, ToolExecutor::cmd_add_texts, args),
             "add_shapes" => self.exec_mut(tool_name, ToolExecutor::cmd_add_shapes, args),
-            "apply_color" => self.exec_mut(tool_name, ToolExecutor::cmd_apply_color, args),
-            "apply_effect" => self.exec_mut(tool_name, ToolExecutor::cmd_apply_effect, args),
+            "apply_color" => self.exec_enveloped(tool_name, ToolExecutor::cmd_apply_color, args),
+            "apply_effect" => self.exec_enveloped(tool_name, ToolExecutor::cmd_apply_effect, args),
             "set_chroma_key" => self.exec_mut(tool_name, ToolExecutor::cmd_set_chroma_key, args),
             "set_blend_mode" => self.exec_mut(tool_name, ToolExecutor::cmd_set_blend_mode, args),
             "set_color_grade" => self.exec_mut(tool_name, ToolExecutor::cmd_set_color_grade, args),
@@ -1114,7 +1164,7 @@ impl ToolExecutor {
             "redo" => self.cmd_redo(),
 
             // ── Media mutation tools (no undo yet) ───────────────────────
-            "organize_media" => self.cmd_organize_media(args),
+            "organize_media" => self.exec_organize_enveloped(args),
             "import_media" => self.cmd_import_media(args),
             "duplicate_project" => self.cmd_duplicate_project(),
             // #238 (half-ported): these tools are advertised but their full behaviour switches the
@@ -1134,7 +1184,7 @@ impl ToolExecutor {
             "export_project" => self.cmd_export_project(args),
             "get_projects" => self.cmd_get_projects(),
             "send_feedback" => self.cmd_send_feedback(args),
-            "update_text" => self.exec_mut(tool_name, ToolExecutor::cmd_update_text, args),
+            "update_text" => self.exec_enveloped(tool_name, ToolExecutor::cmd_update_text, args),
             "create_timeline" => self.cmd_create_timeline(args),
             "set_active_timeline" => self.cmd_set_active_timeline(args),
             "dissolve_compound_clip" => {
@@ -1145,9 +1195,13 @@ impl ToolExecutor {
                 self.exec_mut(tool_name, ToolExecutor::cmd_apply_clip_preset, args)
             }
             "list_clip_presets" => self.cmd_list_clip_presets(),
-            "remove_silence" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_silence, args),
-            "sync_audio" => self.exec_mut(tool_name, ToolExecutor::cmd_sync_audio, args),
-            "denoise_audio" => self.exec_mut(tool_name, ToolExecutor::cmd_denoise_audio, args),
+            "remove_silence" => {
+                self.exec_enveloped(tool_name, ToolExecutor::cmd_remove_silence, args)
+            }
+            "sync_audio" => self.exec_enveloped(tool_name, ToolExecutor::cmd_sync_audio, args),
+            "denoise_audio" => {
+                self.exec_enveloped(tool_name, ToolExecutor::cmd_denoise_audio, args)
+            }
 
             // ── Read-only tools ──────────────────────────────────────────
             "get_media" => self.cmd_get_media(args),
@@ -1170,7 +1224,7 @@ impl ToolExecutor {
             "inspect_color" => self.cmd_inspect_color(args),
 
             // ── Captions (stub — needs transcription engine) ─────────────
-            "add_captions" => self.cmd_add_captions(args),
+            "add_captions" => self.exec_enveloped(tool_name, ToolExecutor::cmd_add_captions, args),
             "apply_animation" => self.cmd_apply_animation(args),
 
             _ => Err(format!("Unknown tool: {tool_name}")),
@@ -1200,6 +1254,58 @@ impl ToolExecutor {
         }
 
         Ok(result)
+    }
+
+    /// Wrap a JSON payload as MCP text content.
+    fn json_content(payload: &Value) -> Value {
+        json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".into()),
+            }]
+        })
+    }
+
+    /// Undo-wrapper + mutation envelope (tool-surface-v2 C-4): `f` returns its
+    /// tool-specific extra keys as a plain JSON object; the envelope diff of
+    /// the timelines around the call merges them in.
+    fn exec_enveloped(
+        &mut self,
+        tool_name: &str,
+        f: fn(&mut ToolExecutor, &Value) -> Result<Value, String>,
+        args: &Value,
+    ) -> Result<Value, String> {
+        let before = self.timeline.clone();
+        let extras = f(self, args)?;
+        let after = self.timeline.clone();
+
+        if before != after {
+            let cmd = UndoCommand::new(
+                Uuid::new_v4().to_string(),
+                tool_name.to_string(),
+                before.clone(),
+                after.clone(),
+            );
+            self.undo_stack.push_command(cmd);
+        }
+
+        let env = crate::envelope::build_envelope(&before, &after, extras);
+        Ok(Self::json_content(&env))
+    }
+
+    /// organize_media's envelope (C-4 exception): when the call deleted the
+    /// active timeline and switched to another, the before/after diff is
+    /// meaningless — return the plain payload (whose notes already carry the
+    /// re-read reminder) instead of an envelope.
+    fn exec_organize_enveloped(&mut self, args: &Value) -> Result<Value, String> {
+        let before = self.timeline.clone();
+        let extras = self.cmd_organize_media(args)?;
+        if self.timeline.id != before.id {
+            return Ok(Self::json_content(&extras));
+        }
+        let after = self.timeline.clone();
+        let env = crate::envelope::build_envelope(&before, &after, extras);
+        Ok(Self::json_content(&env))
     }
 
     // ── Tool implementations ─────────────────────────────────────────────
@@ -1333,16 +1439,8 @@ impl ToolExecutor {
             }
         }
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "Split at {} cut point(s). Created {} new clip(s): {new_ids:?}",
-                    cuts.len(),
-                    new_ids.len()
-                )
-            }]
-        }))
+        let _ = new_ids;
+        Ok(json!({}))
     }
 
     fn cmd_remove_clips(&mut self, args: &Value) -> Result<Value, String> {
@@ -1354,53 +1452,108 @@ impl ToolExecutor {
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
 
-        let ripple = args
-            .get("ripple")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let len = clip_ids.len();
-        timeline_core::remove_clips(&mut self.timeline, clip_ids, ripple);
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Removed {len} clip(s) (ripple={ripple})")
-            }]
-        }))
+        // v2: a clip in a link group takes its whole group with it (linked
+        // delete, matching the UI).
+        let id_set: std::collections::BTreeSet<String> = clip_ids.into_iter().collect();
+        let expanded = timeline_core::expand_to_link_group(&self.timeline, &id_set);
+        timeline_core::remove_clips(&mut self.timeline, expanded, false);
+        Ok(json!({}))
     }
 
     fn cmd_move_clips(&mut self, args: &Value) -> Result<Value, String> {
-        let clip_ids: Vec<String> = args
-            .get("clipIds")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| "Missing clipIds".to_string())?
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-
-        let to_track = args
-            .get("toTrack")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| "Missing toTrack".to_string())? as usize;
-        let to_frame = args
-            .get("toFrame")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| "Missing toFrame".to_string())?;
-
-        if to_track >= self.timeline.tracks.len() {
-            return Err(format!(
-                "Track index {to_track} out of bounds ({} tracks)",
-                self.timeline.tracks.len()
-            ));
+        // v2 shape: moves: [{clipId, toTrack?, toFrame?}]. The legacy
+        // clipIds/toTrack/toFrame shape still parses for older callers.
+        let mut moves: Vec<(String, Option<usize>, Option<i64>)> = Vec::new();
+        if let Some(arr) = args.get("moves").and_then(|v| v.as_array()) {
+            for (i, m) in arr.iter().enumerate() {
+                let clip_id = m
+                    .get("clipId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| format!("moves[{i}]: missing clipId"))?;
+                let to_track = m.get("toTrack").and_then(|v| v.as_i64());
+                let to_frame = m.get("toFrame").and_then(|v| v.as_i64());
+                if to_track.is_none() && to_frame.is_none() {
+                    return Err(format!(
+                        "moves[{i}]: at least one of toTrack or toFrame is required"
+                    ));
+                }
+                let to_track = match to_track {
+                    Some(t) => Some(usize::try_from(t).map_err(|_| {
+                        format!("moves[{i}]: toTrack must be a non-negative track index")
+                    })?),
+                    None => None,
+                };
+                moves.push((clip_id.to_string(), to_track, to_frame));
+            }
+        } else {
+            let clip_ids: Vec<String> = args
+                .get("clipIds")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| "Missing moves array".to_string())?
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            let to_track = args
+                .get("toTrack")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "Missing toTrack".to_string())? as usize;
+            let to_frame = args
+                .get("toFrame")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "Missing toFrame".to_string())?;
+            if to_track >= self.timeline.tracks.len() {
+                return Err(format!(
+                    "Track index {to_track} out of bounds ({} tracks)",
+                    self.timeline.tracks.len()
+                ));
+            }
+            let placed =
+                timeline_core::move_clips(&mut self.timeline, &clip_ids, to_track, to_frame);
+            let _ = placed;
+            return Ok(json!({}));
+        }
+        if moves.is_empty() {
+            return Err("moves must be non-empty".to_string());
         }
 
-        let placed = timeline_core::move_clips(&mut self.timeline, &clip_ids, to_track, to_frame);
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Moved {} clip(s) to track {to_track} at frame {to_frame}: {placed:?}",
-                    placed.len())
-            }]
-        }))
+        // Validate every move up front so one bad entry rejects the whole call.
+        for (i, (clip_id, to_track, _)) in moves.iter().enumerate() {
+            let loc = timeline_core::find_clip(&self.timeline, clip_id)
+                .ok_or_else(|| format!("moves[{i}]: clip '{clip_id}' not found"))?;
+            if let Some(t) = to_track {
+                let track = self
+                    .timeline
+                    .tracks
+                    .get(*t)
+                    .ok_or_else(|| format!("moves[{i}]: toTrack {t} out of bounds"))?;
+                let mt = self.timeline.tracks[loc.track_index].clips[loc.clip_index].media_type;
+                if !track.is_compatible_with(mt) {
+                    return Err(format!(
+                        "moves[{i}]: track {t} ({}) is incompatible with a {} clip",
+                        track.r#type.name(),
+                        mt.name()
+                    ));
+                }
+            }
+        }
+
+        // Apply sequentially; linked partners follow via the core move
+        // (startFrame propagates as a delta, tracks stay put).
+        for (clip_id, to_track, to_frame) in &moves {
+            let Some(loc) = timeline_core::find_clip(&self.timeline, clip_id) else {
+                continue;
+            };
+            let clip = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            let dest_track = to_track.unwrap_or(loc.track_index);
+            let dest_frame = to_frame.unwrap_or(clip.start_frame);
+            timeline_core::move_clips(
+                &mut self.timeline,
+                &[clip_id.clone()],
+                dest_track,
+                dest_frame,
+            );
+        }
+        Ok(json!({}))
     }
 
     fn cmd_move_clips_linked(&mut self, args: &Value) -> Result<Value, String> {
@@ -1416,9 +1569,9 @@ impl ToolExecutor {
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
 
-        let properties = args
-            .get("properties")
-            .ok_or_else(|| "Missing properties".to_string())?;
+        // v2: property fields are top-level (the legacy nested 'properties'
+        // object still parses for older callers).
+        let properties = args.get("properties").unwrap_or(args);
 
         // Range/ceiling checks (#144 speed/volume/opacity/trim, #264 frame
         // bounds) run in validate_args before dispatch.
@@ -1483,6 +1636,35 @@ impl ToolExecutor {
             border,
         };
 
+        // v2: blendMode (absorbs set_blend_mode). 'normal' clears; rejected on
+        // text/audio clips per the schema.
+        let blend_mode: Option<core_model::BlendMode> = match properties.get("blendMode").and_then(|v| v.as_str())
+        {
+            Some(name) => Some(
+                serde_json::from_value::<core_model::BlendMode>(json!(name)).map_err(|_| {
+                    let valid: Vec<String> = core_model::BlendMode::all()
+                        .iter()
+                        .map(|m| crate::timeline_v2::blend_mode_name(*m))
+                        .collect();
+                    format!("invalid blendMode '{name}'. Valid: {}", valid.join(", "))
+                })?,
+            ),
+            None => None,
+        };
+        if blend_mode.is_some() {
+            for clip_id in &clip_ids {
+                if let Some(loc) = timeline_core::find_clip(&self.timeline, clip_id) {
+                    let mt = self.timeline.tracks[loc.track_index].clips[loc.clip_index].media_type;
+                    if matches!(mt, ClipType::Text | ClipType::Audio) {
+                        return Err(format!(
+                            "blendMode applies to video/image clips only; clip '{clip_id}' is {}.",
+                            mt.name()
+                        ));
+                    }
+                }
+            }
+        }
+
         let mut changed_count = 0usize;
         let mut changed_fields: Vec<String> = Vec::new();
         for clip_id in &clip_ids {
@@ -1491,21 +1673,65 @@ impl ToolExecutor {
             };
             let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
             let changes = timeline_core::set_clip_properties(clip, &update);
+            // v2: static volume/opacity replace any keyframe track on that property.
+            if volume.is_some() {
+                clip.volume_track = None;
+            }
+            if opacity.is_some() {
+                clip.opacity_track = None;
+            }
+            if let Some(bm) = blend_mode {
+                clip.blend_mode = bm;
+            }
             changed_count += 1;
             if changed_fields.is_empty() {
                 changed_fields = changes.changed;
             }
         }
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "Updated properties on {changed_count} clip(s): {}",
-                    changed_fields.join(", ")
-                )
-            }]
-        }))
+        // v2: timing changes carry to linked partners so A/V stays in sync;
+        // trim and speed are skipped for text partners.
+        let has_timing =
+            duration.is_some() || trim_start.is_some() || trim_end.is_some() || speed.is_some();
+        if has_timing {
+            let named: std::collections::BTreeSet<String> = clip_ids.iter().cloned().collect();
+            let mut partner_ids: Vec<String> = Vec::new();
+            for clip_id in &clip_ids {
+                for pid in timeline_core::linked_partner_ids(&self.timeline, clip_id) {
+                    if !named.contains(&pid) && !partner_ids.contains(&pid) {
+                        partner_ids.push(pid);
+                    }
+                }
+            }
+            for pid in partner_ids {
+                let Some(loc) = timeline_core::find_clip(&self.timeline, &pid) else {
+                    continue;
+                };
+                let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+                let is_text = clip.media_type == ClipType::Text;
+                let partner_update = timeline_core::ClipPropertyUpdate {
+                    duration_frames: duration,
+                    trim_start_frame: if is_text { None } else { trim_start },
+                    trim_end_frame: if is_text { None } else { trim_end },
+                    speed: if is_text { None } else { speed },
+                    transform: None,
+                    content: None,
+                    font_name: None,
+                    font_size: None,
+                    font_weight: None,
+                    color: None,
+                    alignment: None,
+                    background: None,
+                    border: None,
+                    volume: None,
+                    opacity: None,
+                };
+                let _ = timeline_core::set_clip_properties(clip, &partner_update);
+            }
+        }
+
+        let _ = (changed_count, changed_fields);
+        Ok(json!({}))
     }
 
     fn cmd_set_keyframes(&mut self, args: &Value) -> Result<Value, String> {
@@ -1604,51 +1830,100 @@ impl ToolExecutor {
             _ => unreachable!("property validated above"),
         }
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "Set {kf_len} keyframe(s) on clip '{clip_id}' property '{property}'"
-                )
-            }]
-        }))
+        let _ = kf_len;
+        Ok(json!({}))
     }
 
     fn cmd_ripple_delete_ranges(&mut self, args: &Value) -> Result<Value, String> {
-        let track_index = args
-            .get("trackIndex")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| "Missing trackIndex".to_string())? as usize;
+        let clip_id = args.get("clipId").and_then(|v| v.as_str());
+        let track_index_arg = args.get("trackIndex").and_then(|v| v.as_i64());
+        if clip_id.is_some() == track_index_arg.is_some() {
+            return Err("Pass exactly one of 'trackIndex' or 'clipId'.".to_string());
+        }
+        let units = args
+            .get("units")
+            .and_then(|v| v.as_str())
+            .unwrap_or("frames");
+        if !matches!(units, "frames" | "seconds") {
+            return Err(format!("Invalid units '{units}'. Use 'frames' or 'seconds'."));
+        }
+        if units == "seconds" && clip_id.is_none() {
+            return Err("units 'seconds' requires clipId mode (source-media seconds).".to_string());
+        }
+
         let ranges_val = args
             .get("ranges")
             .and_then(|v| v.as_array())
             .ok_or_else(|| "Missing ranges array".to_string())?;
-
-        let ranges: Vec<timeline_core::FrameRange> = ranges_val
+        // v2 rows are [start, end] pairs; legacy {start, end} objects still parse.
+        let raw_ranges: Vec<(f64, f64)> = ranges_val
             .iter()
             .filter_map(|r| {
-                let start = r.get("start").and_then(|v| v.as_i64())?;
-                let end = r.get("end").and_then(|v| v.as_i64())?;
-                if end > start {
-                    Some(timeline_core::FrameRange { start, end })
+                if let Some(pair) = r.as_array() {
+                    let s = pair.first().and_then(|v| v.as_f64())?;
+                    let e = pair.get(1).and_then(|v| v.as_f64())?;
+                    (e > s).then_some((s, e))
                 } else {
-                    None
+                    let s = r.get("start").and_then(|v| v.as_f64())?;
+                    let e = r.get("end").and_then(|v| v.as_f64())?;
+                    (e > s).then_some((s, e))
                 }
             })
             .collect();
-
-        if ranges.is_empty() {
+        if raw_ranges.is_empty() {
             return Err("No valid ranges".to_string());
         }
 
-        if track_index >= self.timeline.tracks.len() {
-            return Err(format!("Track index {track_index} out of bounds"));
-        }
+        // Resolve to (track_index, project-frame ranges).
+        let (track_index, ranges) = if let Some(cid) = clip_id {
+            let loc = timeline_core::find_clip(&self.timeline, cid)
+                .ok_or_else(|| format!("Clip '{cid}' not found"))?;
+            let clip = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+            let (start, end) = (clip.start_frame, clip.start_frame + clip.duration_frames);
+            let fps = self.timeline.fps.max(1) as f64;
+            let (trim, speed) = (clip.trim_start_frame as f64, clip.speed.max(0.0001));
+            let to_project = |v: f64| -> i64 {
+                if units == "seconds" {
+                    // Source seconds → project frames through the clip mapping.
+                    (start as f64 + (v * fps - trim) / speed).round() as i64
+                } else {
+                    v.round() as i64
+                }
+            };
+            let clamped: Vec<timeline_core::FrameRange> = raw_ranges
+                .iter()
+                .map(|(s, e)| timeline_core::FrameRange {
+                    start: to_project(*s).clamp(start, end),
+                    end: to_project(*e).clamp(start, end),
+                })
+                .filter(|r| r.end > r.start)
+                .collect();
+            if clamped.is_empty() {
+                return Err(format!(
+                    "No range overlaps clip '{cid}' [{start}, {end})."
+                ));
+            }
+            (loc.track_index, clamped)
+        } else {
+            let ti = track_index_arg.unwrap();
+            let ti = usize::try_from(ti)
+                .ok()
+                .filter(|i| *i < self.timeline.tracks.len())
+                .ok_or_else(|| format!("Track index {ti} out of bounds"))?;
+            let ranges = raw_ranges
+                .iter()
+                .map(|(s, e)| timeline_core::FrameRange {
+                    start: s.round() as i64,
+                    end: e.round() as i64,
+                })
+                .collect();
+            (ti, ranges)
+        };
 
-        // #207: tracks the caller wants treated as UNLOCKED for this call — a
-        // sync-locked track listed here is left in place (neither cut nor shifted).
+        // #207 (v2 name): tracks the caller wants treated as UNLOCKED for this
+        // call — a sync-locked track listed here is left in place.
         let ignore_sync_lock_track_indices: std::collections::BTreeSet<usize> = args
-            .get("ignoreSyncLockTrackIndices")
+            .get("ignoreSyncLockedTracks")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
@@ -1659,21 +1934,8 @@ impl ToolExecutor {
             })
             .unwrap_or_default();
 
-        match self.apply_ripple_delete_on_track(track_index, ranges, ignore_sync_lock_track_indices)
-        {
-            Ok((removed_frames, removed)) => Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!(
-                        "Ripple-deleted {removed_frames} frames across {removed} track(s)"
-                    )
-                }]
-            })),
-            Err(msg) => Ok(json!({
-                "content": [{ "type": "text", "text": msg }],
-                "isError": true,
-            })),
-        }
+        self.apply_ripple_delete_on_track(track_index, ranges, ignore_sync_lock_track_indices)
+            .map(|(_removed_frames, _cleared)| json!({}))
     }
 
     /// Apply a ripple delete on one track and return `(removed_frames, cleared_track_count)`.
@@ -1826,7 +2088,7 @@ impl ToolExecutor {
             "removedFrames": removed_frames,
             "tracksEdited": tracks_edited,
             "cutAggressiveness": aggressiveness.as_str(),
-            "note": "Removed and closed the gaps. Re-read get_transcript before another remove_words.",
+            "notes": ["Removed and closed the gaps. Re-read get_transcript before another remove_words."],
         });
         let preview: String = removed_texts
             .iter()
@@ -1846,12 +2108,7 @@ impl ToolExecutor {
             payload["indicesIgnored"] = json!(ignored);
         }
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string(&payload).unwrap_or_default()
-            }]
-        }))
+        Ok(payload)
     }
 
     /// Parse the `words` arg: each element is a single integer index or an inclusive
@@ -2049,12 +2306,7 @@ impl ToolExecutor {
                 "Track indices changed — 'tracks' is the new order; index 0 renders on top."
             ]);
         }
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&out).unwrap_or_default()
-            }]
-        }))
+        Ok(out)
     }
 
     fn cmd_set_project_settings(&mut self, args: &Value) -> Result<Value, String> {
@@ -2330,17 +2582,11 @@ impl ToolExecutor {
             applied.push(format!("{} -> {}", slot.id, clip_ids.join(", ")));
         }
 
+        let _ = applied;
         Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "Applied '{layout_name}' layout ({}) on existing clips: {}. \
-                     Stacking follows current track order; reorder tracks if a PIP inset \
-                     isn't on top.",
-                    fit.as_str(),
-                    applied.join("; ")
-                )
-            }]
+            "layout": layout_name,
+            "fit": fit.as_str(),
+            "notes": ["Stacking follows current track order; reorder tracks if a PIP inset isn't on top."],
         }))
     }
 
@@ -2508,18 +2754,12 @@ impl ToolExecutor {
             return Err("apply_layout created no clips.".to_string());
         }
         let created = self.timeline.tracks.len() - tracks_before;
-        let prefix = settings_note.map(|n| format!("{n} ")).unwrap_or_default();
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "{prefix}Created {created} video track(s). Applied '{layout_name}' layout \
-                     ({}) at frame {start_frame} for {duration_frames}: {}.",
-                    fit.as_str(),
-                    applied.join("; ")
-                )
-            }]
-        }))
+        let _ = (created, applied);
+        let mut extras = json!({ "layout": layout_name, "fit": fit.as_str() });
+        if let Some(n) = settings_note {
+            extras["notes"] = json!([n]);
+        }
+        Ok(extras)
     }
 
     /// CLP-007/008: create a linked audio clip for each placed video-with-audio
@@ -2556,20 +2796,102 @@ impl ToolExecutor {
     }
 
     fn cmd_add_clips(&mut self, args: &Value) -> Result<Value, String> {
-        let media_ids: Vec<String> = args
-            .get("mediaIds")
+        // v2 shape: entries: [{mediaRef, trackIndex?, startFrame, endFrame? |
+        // source?}]. Every entry is validated up front; one bad entry rejects
+        // the whole call with no partial state.
+        let entries_val = args
+            .get("entries")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| "Missing mediaIds".to_string())?
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| "Missing entries array".to_string())?;
 
-        // trackIndex is optional (MUT-002/003): omit it and the tool auto-creates /
-        // reuses a video track for visual clips and an audio track for audio clips.
-        let track_index_opt = args
-            .get("trackIndex")
-            .and_then(|v| v.as_i64())
-            .map(|i| i as usize);
+        struct AddEntry {
+            media_ref: String,
+            track_index: Option<usize>,
+            start_frame: i64,
+            placement_args: Value,
+        }
+        let mut entries: Vec<AddEntry> = Vec::with_capacity(entries_val.len());
+        for (i, e) in entries_val.iter().enumerate() {
+            let media_ref = e
+                .get("mediaRef")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("entries[{i}]: missing mediaRef"))?
+                .to_string();
+            let start_frame = e
+                .get("startFrame")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| format!("entries[{i}]: missing startFrame"))?;
+            crate::mutation::require_frame_in_bounds(start_frame, "startFrame")
+                .map_err(|err| format!("entries[{i}]: {err}"))?;
+            if start_frame < 0 {
+                return Err(format!("entries[{i}]: startFrame must be >= 0"));
+            }
+            let track_index = match e.get("trackIndex").and_then(|v| v.as_i64()) {
+                Some(t) => Some(usize::try_from(t).map_err(|_| {
+                    format!("entries[{i}]: trackIndex must be a non-negative track index")
+                })?),
+                None => None,
+            };
+            let end_frame = e.get("endFrame").and_then(|v| v.as_i64());
+            let source = e.get("source").and_then(|v| v.as_array());
+            if end_frame.is_some() && source.is_some() {
+                return Err(format!(
+                    "entries[{i}]: endFrame and source are mutually exclusive"
+                ));
+            }
+            // The trim/duration resolution below reuses resolve_placement's
+            // #236 symmetric-trim shape (project fps is fixed after settings
+            // auto-detect, so seconds convert there, not here).
+            let placement_args = if let Some(end) = end_frame {
+                if end <= start_frame {
+                    return Err(format!(
+                        "entries[{i}]: endFrame {end} must be > startFrame {start_frame}"
+                    ));
+                }
+                json!({ "durationFrames": end - start_frame })
+            } else if let Some(pair) = source {
+                let s = pair.first().and_then(|v| v.as_f64());
+                let e2 = pair.get(1).and_then(|v| v.as_f64());
+                let (Some(s), Some(e2)) = (s, e2) else {
+                    return Err(format!(
+                        "entries[{i}]: source must be [startSeconds, endSeconds]"
+                    ));
+                };
+                if e2 <= s || s < 0.0 {
+                    return Err(format!(
+                        "entries[{i}]: source must satisfy 0 <= startSeconds < endSeconds"
+                    ));
+                }
+                json!({ "sourceStartSeconds": s, "sourceEndSeconds": e2 })
+            } else {
+                // Frame-exact trims (the #236 symmetric-trim shape) still
+                // resolve when passed per entry.
+                let mut pa = serde_json::Map::new();
+                for key in ["trimStartFrame", "trimEndFrame", "durationFrames"] {
+                    if let Some(v) = e.get(key) {
+                        pa.insert(key.into(), v.clone());
+                    }
+                }
+                Value::Object(pa)
+            };
+            entries.push(AddEntry {
+                media_ref,
+                track_index,
+                start_frame,
+                placement_args,
+            });
+        }
+
+        // v2: trackIndex must be set on every entry or on none.
+        let with_track = entries.iter().filter(|e| e.track_index.is_some()).count();
+        if with_track != 0 && with_track != entries.len() {
+            return Err(
+                "Set trackIndex on every entry or on none — mixing is rejected; split into two calls."
+                    .to_string(),
+            );
+        }
+        let auto_tracks = with_track == 0;
 
         // Auto-detect project settings from the first video the FIRST time clips are
         // added (Swift `checkProjectSettings`): silently adopt its fps/size and mark
@@ -2578,9 +2900,9 @@ impl ToolExecutor {
         // the new clips are placed on the detected timebase.
         let mut settings_note: Option<String> = None;
         if !self.timeline.settings_configured {
-            let detected = media_ids.iter().find_map(|id| {
+            let detected = entries.iter().find_map(|e| {
                 self.media_manifest
-                    .entry_for(id)
+                    .entry_for(&e.media_ref)
                     .filter(|e| e.r#type == ClipType::Video)
                     .map(|e| (e.source_fps, e.source_width, e.source_height))
             });
@@ -2607,8 +2929,11 @@ impl ToolExecutor {
 
         let project_fps = self.timeline.fps;
         let mut warnings: Vec<String> = Vec::new();
-        let mut clips: Vec<Clip> = Vec::with_capacity(media_ids.len());
-        for media_id in &media_ids {
+        // (clip(s) to place, explicit target track) — nest carriers can expand
+        // one entry into a video + linked audio pair.
+        let mut placements: Vec<(Vec<Clip>, Option<usize>)> = Vec::with_capacity(entries.len());
+        for entry_in in &entries {
+            let media_id = &entry_in.media_ref;
             // NESTING (#255): a mediaRef that is a sibling timeline's id places a
             // live nested clip (sequence carrier) + a linked audio carrier when
             // the child has audio. Cycles and empty timelines are rejected.
@@ -2619,23 +2944,39 @@ impl ToolExecutor {
                     .find(|t| t.id == *media_id)
                     .cloned()
                 {
-                    clips.extend(self.nest_carrier_clips(&child, args)?);
+                    // source-seconds windows convert to child frames here
+                    // (nest_window reads trimStartFrame/durationFrames).
+                    let src_s = entry_in.placement_args.get("sourceStartSeconds").and_then(Value::as_f64);
+                    let src_e = entry_in.placement_args.get("sourceEndSeconds").and_then(Value::as_f64);
+                    let nest_args = if let (Some(s), Some(e)) = (src_s, src_e) {
+                        json!({
+                            "trimStartFrame": ((s * project_fps as f64).round() as i64).max(0),
+                            "durationFrames": (((e - s) * project_fps as f64).round() as i64).max(1),
+                        })
+                    } else {
+                        entry_in.placement_args.clone()
+                    };
+                    let mut carriers = self.nest_carrier_clips(&child, &nest_args)?;
+                    for c in &mut carriers {
+                        c.start_frame = entry_in.start_frame;
+                    }
+                    placements.push((carriers, entry_in.track_index));
                     continue;
                 }
             }
             let entry = self.media_manifest.entry_for(media_id);
-            let placement = resolve_placement(entry, args, project_fps)?;
+            let placement = resolve_placement(entry, &entry_in.placement_args, project_fps)?;
             if let Some(warning) = placement.fps_warning {
                 if !warnings.contains(&warning) {
                     warnings.push(warning);
                 }
             }
-            clips.push(Clip {
+            placements.push((vec![Clip {
                 id: Uuid::new_v4().to_string(),
                 media_ref: media_id.clone(),
                 media_type: placement.media_type.clone(),
                 source_clip_type: placement.media_type,
-                start_frame: 0,
+                start_frame: entry_in.start_frame,
                 duration_frames: placement.duration_frames,
                 trim_start_frame: placement.trim_start_frame,
                 trim_end_frame: placement.trim_end_frame,
@@ -2667,72 +3008,108 @@ impl ToolExecutor {
                 multicam_group_id: None,
                 text_animation: None,
                 word_timings: None,
-            });
+            }], entry_in.track_index));
         }
 
-        // Place the clips and collect the placed ids of the VISUAL clips (the only
-        // ones that can carry linked audio).
-        let (placed_count, placed_visual_ids): (usize, Vec<String>) = match track_index_opt {
-            Some(track_index) => {
-                if track_index >= self.timeline.tracks.len() {
-                    return Err(format!("Track index {track_index} out of bounds"));
-                }
-                // Reject type-incompatible placement before mutating anything.
-                let track = &self.timeline.tracks[track_index];
-                for clip in &clips {
+        // Validate every explicit target track before mutating anything.
+        // Only the entry's PRIMARY clip must match its track — a nest's
+        // implicit audio carrier routes to an audio track automatically.
+        if !auto_tracks {
+            for (clips, track_index) in &placements {
+                let ti = track_index.expect("with_track == entries.len()");
+                let track = self
+                    .timeline
+                    .tracks
+                    .get(ti)
+                    .ok_or_else(|| format!("Track index {ti} out of bounds"))?;
+                if let Some(clip) = clips.first() {
                     if !track.is_compatible_with(clip.media_type) {
                         return Err(format!(
-                            "media type {:?} is not compatible with track {track_index} ({:?})",
+                            "media type {:?} is not compatible with track {ti} ({:?})",
                             clip.media_type, track.r#type
                         ));
                     }
                 }
-                let placed = timeline_core::place_clips(&mut self.timeline, track_index, 0, &clips);
-                (placed.len(), placed)
             }
-            None => {
-                // Auto-create: visual clips share a video track, audio clips share an
-                // audio track (creating either if absent).
-                let visual: Vec<Clip> =
-                    clips.iter().filter(|c| c.media_type.is_visual()).cloned().collect();
-                let audio: Vec<Clip> =
-                    clips.iter().filter(|c| !c.media_type.is_visual()).cloned().collect();
-                let mut visual_ids = Vec::new();
-                if !visual.is_empty() {
-                    let vti = match self
-                        .timeline
+        }
+
+        // Place each clip at its own startFrame; same-track overlap is
+        // resolved by place_clips (trim/split/remove — the UI's drag-onto-track
+        // overwrite, #124). Auto mode shares one video track for visual
+        // entries and one audio track for audio entries (created if absent).
+        let mut placed_visual_ids: Vec<String> = Vec::new();
+        let mut auto_video_track: Option<usize> = None;
+        let mut auto_audio_track: Option<usize> = None;
+        for (clips, track_index) in placements {
+            for clip in clips {
+                // An explicit track only takes type-compatible clips; a nest's
+                // audio carrier falls through to the shared audio track.
+                let explicit = track_index.filter(|ti| {
+                    self.timeline
                         .tracks
-                        .iter()
-                        .position(|t| t.r#type != ClipType::Audio)
-                    {
+                        .get(*ti)
+                        .is_some_and(|t| t.is_compatible_with(clip.media_type))
+                });
+                let ti = match explicit {
+                    Some(ti) => ti,
+                    None if clip.media_type.is_visual() => match auto_video_track {
                         Some(ti) => ti,
                         None => {
-                            let at = self.timeline.tracks.len();
-                            timeline_core::insert_track_at(&mut self.timeline, at, ClipType::Video)
-                                .map_err(|_| "Failed to create video track".to_string())?
+                            let ti = match self
+                                .timeline
+                                .tracks
+                                .iter()
+                                .position(|t| t.r#type != ClipType::Audio)
+                            {
+                                Some(ti) => ti,
+                                None => {
+                                    let at = self.timeline.tracks.len();
+                                    timeline_core::insert_track_at(
+                                        &mut self.timeline,
+                                        at,
+                                        ClipType::Video,
+                                    )
+                                    .map_err(|_| "Failed to create video track".to_string())?
+                                }
+                            };
+                            auto_video_track = Some(ti);
+                            ti
                         }
-                    };
-                    visual_ids = timeline_core::place_clips(&mut self.timeline, vti, 0, &visual);
-                }
-                if !audio.is_empty() {
-                    let ati = match self
-                        .timeline
-                        .tracks
-                        .iter()
-                        .position(|t| t.r#type == ClipType::Audio)
-                    {
+                    },
+                    None => match auto_audio_track {
                         Some(ti) => ti,
                         None => {
-                            let at = self.timeline.tracks.len();
-                            timeline_core::insert_track_at(&mut self.timeline, at, ClipType::Audio)
-                                .map_err(|_| "Failed to create audio track".to_string())?
+                            let ti = match self
+                                .timeline
+                                .tracks
+                                .iter()
+                                .position(|t| t.r#type == ClipType::Audio)
+                            {
+                                Some(ti) => ti,
+                                None => {
+                                    let at = self.timeline.tracks.len();
+                                    timeline_core::insert_track_at(
+                                        &mut self.timeline,
+                                        at,
+                                        ClipType::Audio,
+                                    )
+                                    .map_err(|_| "Failed to create audio track".to_string())?
+                                }
+                            };
+                            auto_audio_track = Some(ti);
+                            ti
                         }
-                    };
-                    let _ = timeline_core::place_clips(&mut self.timeline, ati, 0, &audio);
+                    },
+                };
+                let is_visual = clip.media_type.is_visual();
+                let start = clip.start_frame;
+                let placed =
+                    timeline_core::place_clips(&mut self.timeline, ti, start, &[clip]);
+                if is_visual {
+                    placed_visual_ids.extend(placed);
                 }
-                (visual.len() + audio.len(), visual_ids)
             }
-        };
+        }
 
         // CLP-007/008: auto-link video-with-audio. Detect from each placed visual
         // clip's own media_ref (works whichever placement path ran).
@@ -2752,36 +3129,75 @@ impl ToolExecutor {
             })
             .cloned()
             .collect();
-        let linked_audio_count = self.auto_link_placed_audio(&video_with_audio)?;
+        let _linked_audio_count = self.auto_link_placed_audio(&video_with_audio)?;
 
-        let mut text = format!("Added {placed_count} clip(s)");
-        if let Some(note) = &settings_note {
-            text.push('\n');
-            text.push_str(note);
+        let mut notes: Vec<String> = Vec::new();
+        if let Some(note) = settings_note {
+            notes.push(note);
         }
-        if linked_audio_count > 0 {
-            text.push_str(&format!("\n(+{linked_audio_count} linked audio clip(s))"));
+        notes.extend(warnings);
+        let mut extras = json!({});
+        if !notes.is_empty() {
+            extras["notes"] = json!(notes);
         }
-        for warning in &warnings {
-            text.push('\n');
-            text.push_str(warning);
-        }
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": text
-            }]
-        }))
+        Ok(extras)
     }
 
     fn cmd_insert_clips(&mut self, args: &Value) -> Result<Value, String> {
-        let media_ids: Vec<String> = args
-            .get("mediaIds")
+        // v2 shape: trackIndex + atFrame + entries: [{mediaRef, source? |
+        // durationFrames?}], laid end-to-end from atFrame.
+        let entries_val = args
+            .get("entries")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| "Missing mediaIds".to_string())?
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| "Missing entries array".to_string())?;
+        let mut media_ids: Vec<String> = Vec::with_capacity(entries_val.len());
+        let mut entry_args: Vec<Value> = Vec::with_capacity(entries_val.len());
+        for (i, e) in entries_val.iter().enumerate() {
+            let media_ref = e
+                .get("mediaRef")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("entries[{i}]: missing mediaRef"))?;
+            let duration = e.get("durationFrames").and_then(|v| v.as_i64());
+            let source = e.get("source").and_then(|v| v.as_array());
+            if duration.is_some() && source.is_some() {
+                return Err(format!(
+                    "entries[{i}]: durationFrames and source are mutually exclusive"
+                ));
+            }
+            let pa = if let Some(pair) = source {
+                let s = pair.first().and_then(|v| v.as_f64());
+                let e2 = pair.get(1).and_then(|v| v.as_f64());
+                let (Some(s), Some(e2)) = (s, e2) else {
+                    return Err(format!(
+                        "entries[{i}]: source must be [startSeconds, endSeconds]"
+                    ));
+                };
+                if e2 <= s || s < 0.0 {
+                    return Err(format!(
+                        "entries[{i}]: source must satisfy 0 <= startSeconds < endSeconds"
+                    ));
+                }
+                json!({ "sourceStartSeconds": s, "sourceEndSeconds": e2 })
+            } else {
+                if let Some(d) = duration {
+                    if d < 1 {
+                        return Err(format!("entries[{i}]: durationFrames must be >= 1"));
+                    }
+                }
+                // Frame-exact trims (the #236 symmetric-trim shape) still
+                // resolve when passed per entry.
+                let mut pa = serde_json::Map::new();
+                for key in ["trimStartFrame", "trimEndFrame", "durationFrames"] {
+                    if let Some(v) = e.get(key) {
+                        pa.insert(key.into(), v.clone());
+                    }
+                }
+                Value::Object(pa)
+            };
+            media_ids.push(media_ref.to_string());
+            entry_args.push(pa);
+        }
 
         let track_index = args
             .get("trackIndex")
@@ -2789,9 +3205,9 @@ impl ToolExecutor {
             .ok_or_else(|| "Missing trackIndex".to_string())? as usize;
 
         let frame = args
-            .get("frame")
+            .get("atFrame")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| "Missing frame".to_string())?;
+            .ok_or_else(|| "Missing atFrame".to_string())?;
 
         if track_index >= self.timeline.tracks.len() {
             return Err(format!("Track index {track_index} out of bounds"));
@@ -2801,7 +3217,7 @@ impl ToolExecutor {
         let mut warnings: Vec<String> = Vec::new();
         let mut clip_specs: Vec<timeline_core::RippleInsertClipSpec> =
             Vec::with_capacity(media_ids.len());
-        for media_id in &media_ids {
+        for (media_id, e_args) in media_ids.iter().zip(entry_args.iter()) {
             // NESTING (#255): as in add_clips, mediaRef may be a sibling
             // timeline's id — splice it in as a sequence carrier.
             if self.media_manifest.entry_for(media_id).is_none() {
@@ -2811,7 +3227,17 @@ impl ToolExecutor {
                     .find(|t| t.id == *media_id)
                     .cloned()
                 {
-                    let (trim_start, duration) = self.nest_window(&child, args)?;
+                    let src_s = e_args.get("sourceStartSeconds").and_then(Value::as_f64);
+                    let src_e = e_args.get("sourceEndSeconds").and_then(Value::as_f64);
+                    let nest_args = if let (Some(s), Some(e2)) = (src_s, src_e) {
+                        json!({
+                            "trimStartFrame": ((s * project_fps as f64).round() as i64).max(0),
+                            "durationFrames": (((e2 - s) * project_fps as f64).round() as i64).max(1),
+                        })
+                    } else {
+                        e_args.clone()
+                    };
+                    let (trim_start, duration) = self.nest_window(&child, &nest_args)?;
                     clip_specs.push(timeline_core::RippleInsertClipSpec {
                         asset_id: media_id.clone(),
                         duration_frames: duration,
@@ -2822,7 +3248,7 @@ impl ToolExecutor {
                 }
             }
             let entry = self.media_manifest.entry_for(media_id);
-            let placement = resolve_placement(entry, args, project_fps)?;
+            let placement = resolve_placement(entry, e_args, project_fps)?;
             if let Some(warning) = placement.fps_warning {
                 if !warnings.contains(&warning) {
                     warnings.push(warning);
@@ -3031,33 +3457,16 @@ impl ToolExecutor {
                     }
                 }
 
-                let mut text = format!(
-                    "Inserted {} clip(s) at track {} frame {}",
-                    placed.len(),
-                    plan.insert.track_index,
-                    plan.insert.insert_frame
-                );
-                if linked_audio_count > 0 {
-                    text.push_str(&format!("\n(+{linked_audio_count} linked audio clip(s))"));
+                let _ = (placed, linked_audio_count);
+                let mut extras = json!({});
+                if !warnings.is_empty() {
+                    extras["notes"] = json!(warnings);
                 }
-                for warning in &warnings {
-                    text.push('\n');
-                    text.push_str(warning);
-                }
-                Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": text
-                    }]
-                }))
+                Ok(extras)
             }
-            timeline_core::RippleInsertWithSplitOutcome::Refused(msg) => Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!("Insert refused: {msg}")
-                }],
-                "isError": true,
-            })),
+            timeline_core::RippleInsertWithSplitOutcome::Refused(msg) => {
+                Err(format!("Insert refused: {msg}"))
+            }
         }
     }
 
@@ -3899,12 +4308,7 @@ impl ToolExecutor {
                 json!(["Active timeline changed — re-read get_timeline."]),
             );
         }
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&Value::Object(out)).unwrap_or_default()
-            }]
-        }))
+        Ok(Value::Object(out))
     }
 
     /// IMPORT_MEDIA (tool-surface-v2): 'source' sets exactly one of url /
@@ -4453,15 +4857,9 @@ impl ToolExecutor {
         if sections == 0 {
             if clip_id.is_some() {
                 return Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": serde_json::to_string(&json!({
-                            "sectionsRemoved": 0,
-                            "removedFrames": 0,
-                            "message": "No silent regions matched the threshold and minimum duration."
-                        }))
-                        .unwrap_or_default()
-                    }]
+                    "sectionsRemoved": 0,
+                    "removedFrames": 0,
+                    "notes": ["No silent regions matched the threshold and minimum duration."],
                 }));
             }
             return Err(
@@ -4473,7 +4871,7 @@ impl ToolExecutor {
         let mut payload = json!({
             "sectionsRemoved": sections,
             "removedFrames": removed_frames,
-            "note": "Removed dead air and closed the gaps. Frames have shifted - re-read get_timeline or get_transcript before further edits.",
+            "notes": ["Removed dead air and closed the gaps. Frames have shifted - re-read get_timeline or get_transcript before further edits."],
         });
         if let Some(p) = partial {
             payload["partial"] = json!(p);
@@ -4481,12 +4879,7 @@ impl ToolExecutor {
         if let Some(id) = clip_id {
             payload["clipId"] = json!(id);
         }
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string(&payload).unwrap_or_default()
-            }]
-        }))
+        Ok(payload)
     }
 
     /// Detect dead-air frame ranges on ONE track against the CURRENT timeline
@@ -4723,13 +5116,7 @@ impl ToolExecutor {
             }
         }
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string(&json!({ "synced": synced, "skipped": skipped }))
-                    .unwrap_or_default()
-            }]
-        }))
+        Ok(json!({ "synced": synced, "skipped": skipped }))
     }
 
     /// DENOISE_AUDIO (upstream #251): toggle the `audio.denoise` effect on audio
@@ -4789,15 +5176,7 @@ impl ToolExecutor {
             clip.effects = if stack.is_empty() { None } else { Some(stack) };
         }
 
-        let count = clip_ids.len();
-        let noun = if count == 1 { "clip" } else { "clips" };
-        let text = if enabled {
-            let pct = (clamped.unwrap_or(DEFAULT_AMOUNT) * 100.0).round() as i64;
-            format!("Denoise enabled at {pct}% on {count} {noun}.")
-        } else {
-            format!("Disabled denoise on {count} {noun}.")
-        };
-        Ok(json!({ "content": [{ "type": "text", "text": text }] }))
+        Ok(json!({}))
     }
 
     /// CREATE_TIMELINE (#255): new empty timeline inheriting the active one's
@@ -5120,6 +5499,24 @@ impl ToolExecutor {
             flip_vertical: None,
         });
 
+        // v2 flattened style additions: isBold/isItalic/borderColor/backgroundColor.
+        let is_bold = args.get("isBold").and_then(|v| v.as_bool());
+        let is_italic = args.get("isItalic").and_then(|v| v.as_bool());
+        let border_color = match args.get("borderColor").and_then(|v| v.as_str()) {
+            Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+                format!("invalid borderColor '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
+            })?),
+            None => None,
+        };
+        let background_color = match args.get("backgroundColor").and_then(|v| v.as_str()) {
+            Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+                format!(
+                    "invalid backgroundColor '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'"
+                )
+            })?),
+            None => None,
+        };
+
         for id in &ids {
             let loc = timeline_core::find_clip(&self.timeline, id).expect("validated above");
             let clip = &mut self.timeline.tracks[loc.track_index].clips[loc.clip_index];
@@ -5131,6 +5528,10 @@ impl ToolExecutor {
                 || font_weight.is_some()
                 || color.is_some()
                 || alignment.is_some()
+                || is_bold.is_some()
+                || is_italic.is_some()
+                || border_color.is_some()
+                || background_color.is_some()
             {
                 let style = clip.text_style.get_or_insert_with(TextStyle::default);
                 if let Some(f) = font_name {
@@ -5142,11 +5543,25 @@ impl ToolExecutor {
                 if let Some(w) = font_weight {
                     style.font_weight = w;
                 }
+                if let Some(b) = is_bold {
+                    style.font_weight = if b { 700.0 } else { 400.0 };
+                }
+                if let Some(i) = is_italic {
+                    style.is_italic = i;
+                }
                 if let Some(c) = color {
                     style.color = c;
                 }
                 if let Some(a) = alignment {
                     style.alignment = a;
+                }
+                if let Some(bc) = &border_color {
+                    style.border.enabled = true;
+                    style.border.color = *bc;
+                }
+                if let Some(bg) = &background_color {
+                    style.background.enabled = true;
+                    style.background.color = *bg;
                 }
             }
             if let Some(pt) = &partial_transform {
@@ -5159,11 +5574,8 @@ impl ToolExecutor {
             }
         }
 
-        let count = ids.len();
-        let noun = if count == 1 { "clip" } else { "clips" };
-        Ok(json!({ "content": [{ "type": "text", "text": format!(
-            "Updated {count} text {noun}."
-        )}]}))
+        let _ = ids;
+        Ok(json!({}))
     }
 
     /// EXPORT_PROJECT: validate the request and hand it to the host exporter.
@@ -5512,13 +5924,19 @@ impl ToolExecutor {
     }
 
     fn cmd_add_texts(&mut self, args: &Value) -> Result<Value, String> {
+        // v2 shape: entries with per-entry startFrame/endFrame; the legacy
+        // 'texts' array (durationFrames) still parses for older callers.
         let texts_val = args
-            .get("texts")
+            .get("entries")
+            .or_else(|| args.get("texts"))
             .and_then(|v| v.as_array())
-            .ok_or_else(|| "Missing texts array".to_string())?;
+            .ok_or_else(|| "Missing entries array".to_string())?;
 
+        // v2: per-entry trackIndex (all entries must agree today — one track
+        // per call); top-level trackIndex still accepted.
         let track_index = args
             .get("trackIndex")
+            .or_else(|| texts_val.first().and_then(|e| e.get("trackIndex")))
             .and_then(|v| v.as_i64())
             .unwrap_or(-1) as usize;
 
@@ -5566,9 +5984,12 @@ impl ToolExecutor {
                 .get("startFrame")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(current_frame);
+            // v2: endFrame (exclusive); legacy durationFrames still parses.
             let duration_frames = t_val
-                .get("durationFrames")
+                .get("endFrame")
                 .and_then(|v| v.as_i64())
+                .map(|end| end - start_frame)
+                .or_else(|| t_val.get("durationFrames").and_then(|v| v.as_i64()))
                 .unwrap_or(150);
             crate::mutation::require_frame_in_bounds(start_frame, "startFrame")?;
             crate::mutation::require_frame_in_bounds(duration_frames, "durationFrames")?;
@@ -5590,6 +6011,12 @@ impl ToolExecutor {
             if let Some(w) = t_val.get("fontWeight").and_then(|v| v.as_f64()) {
                 style.font_weight = w;
             }
+            if let Some(b) = t_val.get("isBold").and_then(|v| v.as_bool()) {
+                style.font_weight = if b { 700.0 } else { 400.0 };
+            }
+            if let Some(i) = t_val.get("isItalic").and_then(|v| v.as_bool()) {
+                style.is_italic = i;
+            }
             if let Some(hex) = t_val.get("color").and_then(|v| v.as_str()) {
                 style.color = core_model::TextRgba::from_hex(hex).ok_or_else(|| {
                     format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
@@ -5598,6 +6025,18 @@ impl ToolExecutor {
             if let Some(a) = t_val.get("alignment").and_then(|v| v.as_str()) {
                 style.alignment = core_model::TextAlignment::from_name(a).ok_or_else(|| {
                     format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
+                })?;
+            }
+            if let Some(hex) = t_val.get("borderColor").and_then(|v| v.as_str()) {
+                style.border.enabled = true;
+                style.border.color = core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+                    format!("invalid borderColor '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
+                })?;
+            }
+            if let Some(hex) = t_val.get("backgroundColor").and_then(|v| v.as_str()) {
+                style.background.enabled = true;
+                style.background.color = core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+                    format!("invalid backgroundColor '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
                 })?;
             }
 
@@ -5670,13 +6109,8 @@ impl ToolExecutor {
         }
 
         let created_ids = self.place_clips_at_own_starts(ti, &clips)?;
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Added {} text clip(s) to track {}: {:?}", created_ids.len(), ti, created_ids)
-            }]
-        }))
+        let _ = created_ids;
+        Ok(json!({}))
     }
 
     fn cmd_add_shapes(&mut self, args: &Value) -> Result<Value, String> {
@@ -5874,12 +6308,7 @@ impl ToolExecutor {
             Self::upsert_effect_param(effects, "color.temperature", "amount", v);
         }
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Applied color adjustments to clip '{}'", clip_id)
-            }]
-        }))
+        Ok(json!({}))
     }
 
     fn upsert_effect_param(
@@ -5967,13 +6396,7 @@ impl ToolExecutor {
             }
         }
 
-        let action = if remove { "Removed" } else { "Applied" };
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("{} effect '{}' on clip '{}'", action, effect_type, clip_id)
-            }]
-        }))
+        Ok(json!({}))
     }
 
     fn cmd_set_chroma_key(&mut self, args: &Value) -> Result<Value, String> {
@@ -6223,48 +6646,15 @@ impl ToolExecutor {
 
     // ── Captions (stub — needs transcription engine) ───────────────────────
 
+    /// ADD_CAPTIONS (v2: no targeting — transcribes the timeline's spoken
+    /// audio itself). The transcription engine is a host concern; report the
+    /// limitation honestly until it lands.
     fn cmd_add_captions(&mut self, args: &Value) -> Result<Value, String> {
-        let clip_ids: Vec<String> = args
-            .get("clipIds")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        if clip_ids.is_empty() {
-            return Err("clipIds must be non-empty".to_string());
-        }
-
-        // Verify all clips exist
-        for cid in &clip_ids {
-            if timeline_core::find_clip(&self.timeline, cid).is_none() {
-                return Err(format!("Clip '{}' not found", cid));
-            }
-        }
-
-        let language = args
-            .get("language")
-            .and_then(|v| v.as_str())
-            .unwrap_or("en");
-        let words_per_caption = args
-            .get("wordsPerCaption")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(6)
-            .clamp(1, 12);
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!(
-                    "Caption generation requested for {} clip(s) (language: {}, wordsPerCaption: {}). Actual transcription requires a remote API.",
-                    clip_ids.len(), language, words_per_caption
-                )
-            }],
-            "isError": true,
-        }))
+        let _ = args;
+        Err(
+            "add_captions is unavailable: timeline transcription requires the host transcriber (run it from the app)."
+                .to_string(),
+        )
     }
 
     fn cmd_apply_animation(&mut self, args: &Value) -> Result<Value, String> {
@@ -6536,7 +6926,7 @@ mod tests {
         manifest.entries.push(video_media("v4k", 3840, 2160, 24.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         assert!(!exec.timeline().settings_configured);
-        let res = exec.execute("add_clips", &json!({"mediaIds": ["v4k"]})).unwrap();
+        let res = exec.execute("add_clips", &json!({"entries": [{"mediaRef": "v4k", "startFrame": 0}]})).unwrap();
         assert_eq!(exec.timeline().fps, 24);
         assert_eq!(exec.timeline().width, 3840);
         assert_eq!(exec.timeline().height, 2160);
@@ -6556,10 +6946,10 @@ mod tests {
         manifest.entries.push(video_media("a24", 1920, 1080, 24.0));
         manifest.entries.push(video_media("b60", 1920, 1080, 60.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"mediaIds": ["a24"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "a24", "startFrame": 0}]})).unwrap();
         assert_eq!(exec.timeline().fps, 24, "first clip sets project to 24fps");
         // A later 60fps clip must NOT re-detect: project fps stays fixed (#233).
-        let res = exec.execute("add_clips", &json!({"mediaIds": ["b60"]})).unwrap();
+        let res = exec.execute("add_clips", &json!({"entries": [{"mediaRef": "b60", "startFrame": 0}]})).unwrap();
         assert_eq!(exec.timeline().fps, 24, "settings stay fixed after the first clip");
         let text = res["content"][0]["text"].as_str().unwrap();
         assert!(!text.contains("Set project"), "no re-detect on later adds: {text}");
@@ -6572,7 +6962,7 @@ mod tests {
         let mut exec = make_executor_with_media();
         let fps = exec.timeline().fps;
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
         let clip = &exec.timeline().tracks[0].clips[0];
         assert!(matches!(clip.media_type, ClipType::Video));
@@ -6612,7 +7002,7 @@ mod tests {
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         let err = exec
-            .execute("add_clips", &json!({"mediaIds": ["aud"], "trackIndex": 0}))
+            .execute("add_clips", &json!({"entries": [{"mediaRef": "aud", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap_err();
         assert!(err.contains("not compatible"), "got: {err}");
         assert!(
@@ -6652,7 +7042,7 @@ mod tests {
         });
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "vid", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
 
         let video = exec.timeline().tracks[0].clips[0].clone();
@@ -6704,7 +7094,7 @@ mod tests {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(media_entry("vid", ClipType::Video, false, 3.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest); // zero tracks
-        exec.execute("add_clips", &json!({"mediaIds": ["vid"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "vid", "startFrame": 0}]})).unwrap();
         assert_eq!(exec.timeline().tracks.len(), 1, "one track auto-created");
         assert!(matches!(exec.timeline().tracks[0].r#type, ClipType::Video));
         assert_eq!(exec.timeline().tracks[0].clips.len(), 1);
@@ -6718,7 +7108,7 @@ mod tests {
         manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
         manifest.entries.push(media_entry("aud", ClipType::Audio, true, 2.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"mediaIds": ["vid", "aud"]}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "vid", "startFrame": 0}, {"mediaRef": "aud", "startFrame": 0}]}))
             .unwrap();
         let video_track = exec
             .timeline()
@@ -6748,11 +7138,11 @@ mod tests {
         manifest.entries.push(media_entry("new", ClipType::Video, true, 1.0)); // 30f
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["existing"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "existing", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
         assert_eq!(exec.timeline().tracks.len(), 2, "V + linked A placed");
 
-        exec.execute("add_clips", &json!({"mediaIds": ["new"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "new", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
 
         assert_eq!(
@@ -6793,7 +7183,7 @@ mod tests {
         let err = exec
             .execute(
                 "add_clips",
-                &json!({"mediaIds": ["i1", "i2"], "trackIndex": 0, "durationFrames": i64::MAX}),
+                &json!({"entries": [{"mediaRef": "i1", "trackIndex": 0, "startFrame": 0, "durationFrames": i64::MAX}, {"mediaRef": "i2", "trackIndex": 0, "startFrame": 0, "durationFrames": i64::MAX}]}),
             )
             .unwrap_err();
         assert!(err.contains("exceeds the maximum supported frame"), "err={err}");
@@ -6808,7 +7198,7 @@ mod tests {
         let err = exec
             .execute(
                 "insert_clips",
-                &json!({"mediaIds": ["vid"], "trackIndex": 0, "frame": i64::MAX}),
+                &json!({"entries": [{"mediaRef": "vid"}], "trackIndex": 0, "atFrame": i64::MAX}),
             )
             .unwrap_err();
         assert!(err.contains("exceeds the maximum supported frame"), "err={err}");
@@ -6820,7 +7210,7 @@ mod tests {
         manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "vid", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
         let err = exec
@@ -6838,7 +7228,7 @@ mod tests {
         manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "vid", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
         let err = exec
@@ -6856,7 +7246,7 @@ mod tests {
         manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "vid", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
         for key in ["durationFrames", "trimStartFrame", "trimEndFrame"] {
@@ -6913,7 +7303,7 @@ mod tests {
         manifest.entries.push(media_entry("vid", ClipType::Video, false, 5.0)); // 150f
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "vid", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
         exec.execute(
@@ -6935,7 +7325,7 @@ mod tests {
         manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "vid", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
         for bad in [0.0, -1.0] {
@@ -7048,10 +7438,10 @@ mod tests {
         let err = exec
             .execute(
                 "insert_clips",
-                &json!({"mediaIds": [], "trackIndex": 0, "frame": 0}),
+                &json!({"entries": [], "trackIndex": 0, "atFrame": 0}),
             )
             .unwrap_err();
-        assert!(err.contains("mediaIds"), "got: {err}");
+        assert!(err.contains("entries"), "got: {err}");
     }
 
     #[test]
@@ -7137,7 +7527,7 @@ mod tests {
         // Pre-existing music spanning the whole target region.
         exec.timeline_mut().tracks[audio_ti].clips.push(only_clip_helper_music());
 
-        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "vid", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
 
         // The music clip must still exist somewhere untouched.
@@ -7180,10 +7570,8 @@ mod tests {
         exec.execute(
             "add_clips",
             &json!({
-                "mediaIds": ["media-001"],
-                "trackIndex": 0,
-                "trimStartFrame": 10,
-                "durationFrames": 50
+                "entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0,
+                             "trimStartFrame": 10, "durationFrames": 50}]
             }),
         )
         .unwrap();
@@ -7202,10 +7590,8 @@ mod tests {
             .execute(
                 "add_clips",
                 &json!({
-                    "mediaIds": ["media-001"],
-                    "trackIndex": 0,
-                    "durationFrames": 50,
-                    "trimEndFrame": 10
+                    "entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0,
+                                 "durationFrames": 50, "trimEndFrame": 10}]
                 }),
             )
             .unwrap_err();
@@ -7222,7 +7608,7 @@ mod tests {
         exec.timeline_mut().settings_configured = true;
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         let result = exec
-            .execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 0}))
+            .execute("add_clips", &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Source fps"), "text={text}");
@@ -7275,7 +7661,7 @@ mod tests {
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         exec.execute(
             "add_clips",
-            &json!({"mediaIds": ["media-001"], "trackIndex": 0, "durationFrames": 50}),
+            &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0, "durationFrames": 50}]}),
         )
         .unwrap();
         assert_eq!(exec.timeline().tracks[0].clips[0].duration_frames, 50);
@@ -7305,7 +7691,7 @@ mod tests {
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         exec.execute(
             "add_clips",
-            &json!({"mediaIds": ["media-001"], "trackIndex": 0, "durationFrames": 100}),
+            &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0, "durationFrames": 100}]}),
         )
         .unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
@@ -7326,7 +7712,7 @@ mod tests {
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         exec.execute(
             "add_clips",
-            &json!({"mediaIds": ["media-001"], "trackIndex": 0, "durationFrames": 100}),
+            &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0, "durationFrames": 100}]}),
         )
         .unwrap();
         // Duplicate cut points must dedup to a single split.
@@ -7341,7 +7727,7 @@ mod tests {
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         exec.execute(
             "add_clips",
-            &json!({"mediaIds": ["media-001"], "trackIndex": 0, "durationFrames": 100}),
+            &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0, "durationFrames": 100}]}),
         )
         .unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
@@ -7406,9 +7792,9 @@ mod tests {
         // One clip per track, both starting at frame 0 → co-visible for side_by_side.
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
-        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 1}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 1, "startFrame": 0}]}))
             .unwrap();
         let id0 = exec.timeline().tracks[0].clips[0].id.clone();
         let id1 = exec.timeline().tracks[1].clips[0].id.clone();
@@ -7449,10 +7835,10 @@ mod tests {
         // Two sequential takes in the left region (same track), one clip on the right.
         exec.execute(
             "add_clips",
-            &json!({"mediaIds": ["media-001", "media-001"], "trackIndex": 0}),
+            &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0}, {"mediaRef": "media-001", "trackIndex": 0, "startFrame": 300}]}),
         )
         .unwrap();
-        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 1}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 1, "startFrame": 0}]}))
             .unwrap();
         let a = exec.timeline().tracks[0].clips[0].id.clone();
         let b = exec.timeline().tracks[0].clips[1].id.clone();
@@ -7490,7 +7876,7 @@ mod tests {
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         exec.execute(
             "add_clips",
-            &json!({"mediaIds": ["media-001", "media-001"], "trackIndex": 0}),
+            &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0}, {"mediaRef": "media-001", "trackIndex": 0, "startFrame": 300}]}),
         )
         .unwrap();
         // Force the two clips to overlap in time on the SAME track.
@@ -7517,9 +7903,9 @@ mod tests {
         let mut exec = make_executor_with_media();
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
-        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 0}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 0, "startFrame": 0}]}))
             .unwrap();
-        exec.execute("add_clips", &json!({"mediaIds": ["media-001"], "trackIndex": 1}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "media-001", "trackIndex": 1, "startFrame": 0}]}))
             .unwrap();
         // Right clip starts only after the left one ends → never co-visible.
         let left_end = {
@@ -7656,8 +8042,14 @@ mod tests {
         );
         assert_eq!(left.duration_frames, 60);
         assert_eq!(left.start_frame, 0);
-        let text = res["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Created 2 video track"), "note: {text}");
+        let env: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            env["createdTracks"].as_array().unwrap().len(),
+            2,
+            "envelope reports the two created tracks: {env}"
+        );
+        assert_eq!(env["layout"], json!("side_by_side"));
     }
 
     #[test]
@@ -8957,7 +9349,11 @@ mod tests {
         let body: Value =
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["status"], json!("ready"));
-        assert_eq!(body["mediaRef"], json!(exec.media_manifest.entries[0].id));
+        let short = body["mediaRef"].as_str().unwrap();
+        assert!(
+            exec.media_manifest.entries[0].id.starts_with(short) && short.len() >= 8,
+            "mediaRef is the asset id's short prefix (C-3): {body}"
+        );
     }
 
     #[test]
@@ -9081,8 +9477,10 @@ mod tests {
         let result = exec
             .execute("add_texts", &json!({"texts": [{"text": "Hello"}]}))
             .unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("text clip"));
+        let env: serde_json::Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(env["clips"][0]["content"], json!("Hello"));
+        assert_eq!(env["clips"][0]["mediaType"], json!("text"));
         assert_eq!(exec.timeline.tracks[0].clips.len(), 1);
     }
 
@@ -9125,19 +9523,17 @@ mod tests {
             .expect("head clip must not be clobbered");
         assert_eq!((head.start_frame, head.duration_frames), (0, 90));
 
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(
-            text.contains(&text_clip.id),
-            "reported id must be the placed clip's id: {text}"
-        );
-        // The reported id must resolve on the timeline via find_clip.
-        let reported = text.split('"').nth(1).expect("response lists the created id");
-        let loc = timeline_core::find_clip(exec.timeline(), reported)
-            .expect("reported id must exist on the timeline");
-        assert_eq!(
-            exec.timeline().tracks[loc.track_index].clips[loc.clip_index].start_frame,
-            120
-        );
+        // The C-4 envelope lists the created clip in get_timeline shape.
+        let env: serde_json::Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let row = env["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| text_clip.id.starts_with(c["id"].as_str().unwrap()))
+            .expect("envelope lists the placed clip");
+        assert_eq!(row["frames"], json!([120, 180]));
+        assert_eq!(row["track"], json!(0));
     }
 
     #[test]
@@ -9188,10 +9584,18 @@ mod tests {
         assert_eq!(b.start_frame, 300);
         assert_eq!(a.start_frame, 0);
 
-        let text = result["content"][0]["text"].as_str().unwrap();
-        let b_pos = text.find(&b.id).expect("B id reported");
-        let a_pos = text.find(&a.id).expect("A id reported");
-        assert!(b_pos < a_pos, "ids reported in entry order: {text}");
+        // The C-4 envelope lists changed clips sorted by (track, startFrame).
+        let env: serde_json::Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let ids: Vec<&str> = env["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert!(a.id.starts_with(ids[0]), "first row is A (short id)");
+        assert!(b.id.starts_with(ids[1]), "second row is B (short id)");
     }
 
     #[test]
@@ -9396,15 +9800,19 @@ mod tests {
         assert_eq!((head.start_frame, head.duration_frames), (0, 90));
 
         let text = result["content"][0]["text"].as_str().unwrap();
+        let reported_short = text.split('"').nth(1).expect("response lists the created id");
         assert!(
-            text.contains(&shape.id),
-            "reported id must be the placed clip's id: {text}"
+            shape.id.starts_with(reported_short),
+            "reported id must be the placed clip's short id (C-3): {text}"
         );
-        // The reported id must resolve on the timeline via find_clip.
-        let reported = text.split('"').nth(1).expect("response lists the created id");
+        // The short prefix must resolve back to a timeline clip (C-3 round trip).
         assert!(
-            timeline_core::find_clip(exec.timeline(), reported).is_some(),
-            "reported id must exist on the timeline"
+            exec.timeline()
+                .tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .any(|c| c.id.starts_with(reported_short)),
+            "reported short id must resolve on the timeline"
         );
     }
 
@@ -9472,10 +9880,9 @@ mod tests {
                 &json!({"clipId": clip_id, "effectType": "blur"}),
             )
             .unwrap();
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Applied"));
+        let env: serde_json::Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(env["clips"][0]["effects"][0]["type"], json!("blur"));
     }
 
     #[test]
@@ -9565,20 +9972,18 @@ mod tests {
         let clip = crate::test_helpers::make_clip(0, 150);
         let placed = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[clip]);
         let clip_id = placed.first().expect("place_clips returned empty");
-        let result = exec
-            .execute("add_captions", &json!({"clipIds": [clip_id]}))
-            .unwrap();
-        assert_eq!(result["isError"], true);
+        let _ = clip_id;
+        let err = exec.execute("add_captions", &json!({})).unwrap_err();
+        assert!(err.contains("unavailable"), "honest host-gap error: {err}");
     }
 
     #[test]
-    fn exec_046_add_captions_empty_clip_ids() {
+    fn exec_046_add_captions_v2_takes_no_targeting() {
+        // v2: add_captions finds spoken content itself; clipIds is not part of
+        // the schema and its absence must not be the reported failure.
         let mut exec = make_executor();
-        let err = exec
-            .execute("add_captions", &json!({"clipIds": []}))
-            .unwrap_err();
-        // wire-mutation-validators: MUT-021 gate message.
-        assert!(err.contains("at least one valid string"), "got: {err}");
+        let err = exec.execute("add_captions", &json!({})).unwrap_err();
+        assert!(err.contains("unavailable"), "got: {err}");
     }
 
     #[test]
@@ -9925,7 +10330,7 @@ mod tests {
         let err = exec
             .execute("ripple_delete_ranges", &json!({}))
             .unwrap_err();
-        assert!(err.contains("Missing trackIndex"));
+        assert!(err.contains("exactly one of 'trackIndex' or 'clipId'"), "{err}");
     }
 
     #[test]
@@ -9962,7 +10367,7 @@ mod tests {
         let mut exec = ToolExecutor::new(timeline, manifest);
         exec.execute(
             "insert_clips",
-            &json!({"mediaIds": ["vid"], "trackIndex": 0, "frame": 40}),
+            &json!({"entries": [{"mediaRef": "vid"}], "trackIndex": 0, "atFrame": 40}),
         )
         .unwrap();
 
@@ -9996,7 +10401,7 @@ mod tests {
         let mut exec = executor_with_clip(); // track 0, clip "c" span [0,100)
         exec.execute(
             "insert_clips",
-            &json!({"mediaIds": ["new-media"], "trackIndex": 0, "frame": 40, "durationFrames": 50}),
+            &json!({"entries": [{"mediaRef": "new-media", "durationFrames": 50}], "trackIndex": 0, "atFrame": 40}),
         )
         .unwrap();
         let clips = &exec.timeline().tracks[0].clips;
@@ -10057,7 +10462,7 @@ mod tests {
 
     #[test]
     fn ripple_delete_207_ignored_sync_locked_track_left_in_place() {
-        // #207: a sync-locked track listed in ignoreSyncLockTrackIndices is treated as
+        // #207: a sync-locked track listed in ignoreSyncLockedTracks is treated as
         // unlocked — neither cut nor shifted. Its clips stay exactly where they were.
         let mut exec = ripple_207_two_track_exec();
         let before = track_spans(&exec, 1);
@@ -10066,7 +10471,7 @@ mod tests {
             &json!({
                 "trackIndex": 0,
                 "ranges": [{"start": 25, "end": 50}],
-                "ignoreSyncLockTrackIndices": [1]
+                "ignoreSyncLockedTracks": [1]
             }),
         )
         .unwrap();
@@ -10510,7 +10915,10 @@ mod tests {
         assert_eq!(e.source_width, Some(1080));
         assert_eq!(e.source_height, Some(1080));
         let text = out["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains(&e.id), "result carries the mediaRef: {text}");
+        assert!(
+            text.contains(&e.id[..8]),
+            "result carries the mediaRef's short prefix: {text}"
+        );
     }
 
     #[test]
@@ -10697,7 +11105,7 @@ mod tests {
         manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
         manifest.entries.push(video_media("m2", 1920, 1080, 30.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"mediaIds": ["m1", "m2"]}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "m1", "startFrame": 0}, {"mediaRef": "m2", "startFrame": 90}]}))
             .unwrap();
         let track0 = &exec.timeline().tracks[0];
         assert_eq!(track0.clips.len(), 2, "two clips placed on one track");
@@ -10759,7 +11167,7 @@ mod tests {
         manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
         manifest.entries.push(video_media("m2", 1920, 1080, 30.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"mediaIds": ["m1", "m2"]}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "m1", "startFrame": 0}, {"mediaRef": "m2", "startFrame": 90}]}))
             .unwrap();
         let ids: Vec<String> = exec
             .timeline()
@@ -10875,15 +11283,16 @@ mod tests {
         manifest.entries.push(audio_media("a1", 4.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         exec.set_audio_source(std::sync::Arc::new(MockAudio));
-        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "a1", "startFrame": 0}]})).unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
 
         let res = exec
             .execute("remove_silence", &json!({"clipId": clip_id}))
             .unwrap();
-        let text = res["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("\"sectionsRemoved\":1"), "one silent region: {text}");
-        assert!(!text.contains("\"removedFrames\":0"), "frames removed: {text}");
+        let v: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["sectionsRemoved"], json!(1), "one silent region: {v}");
+        assert!(v["removedFrames"].as_i64().unwrap() > 0, "frames removed: {v}");
     }
 
     struct MockLoudAudio;
@@ -10905,15 +11314,16 @@ mod tests {
         manifest.entries.push(audio_media("a1", 4.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         exec.set_audio_source(std::sync::Arc::new(MockLoudAudio));
-        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "a1", "startFrame": 0}]})).unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
         let before = exec.timeline().tracks[0].clips.len();
 
         let res = exec
             .execute("remove_silence", &json!({"clipId": clip_id}))
             .unwrap();
-        let text = res["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("\"sectionsRemoved\":0"), "no cut: {text}");
+        let v: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["sectionsRemoved"], json!(0), "no cut: {v}");
         assert_eq!(
             exec.timeline().tracks[0].clips.len(),
             before,
@@ -10926,7 +11336,7 @@ mod tests {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(audio_media("a1", 4.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "a1", "startFrame": 0}]})).unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
         let err = exec
             .execute("remove_silence", &json!({"clipId": clip_id}))
@@ -10958,7 +11368,7 @@ mod tests {
             start_seconds: 0.0,
             end_seconds: 2.0,
         }]))));
-        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "a1", "startFrame": 0}]})).unwrap();
         let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
 
         let res = exec
@@ -10983,7 +11393,7 @@ mod tests {
             if with_none_analyzer {
                 exec.set_speech_analyzer(std::sync::Arc::new(MockSpeech(None)));
             }
-            exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+            exec.execute("add_clips", &json!({"entries": [{"mediaRef": "a1", "startFrame": 0}]})).unwrap();
             let res = exec.execute("remove_silence", &json!({})).unwrap();
             let payload = res["content"][0]["text"].as_str().unwrap().to_string();
             let spans: Vec<(i64, i64)> = exec
@@ -10997,7 +11407,18 @@ mod tests {
         };
         let (base_payload, base_spans) = run(false);
         let (none_payload, none_spans) = run(true);
-        assert_eq!(base_payload, none_payload, "fallback payload identical");
+        // The envelope's clip rows carry per-run uuids; compare the payloads
+        // with ids stripped so the check stays about the DETECTION result.
+        let strip = |p: &str| -> serde_json::Value {
+            let mut v: serde_json::Value = serde_json::from_str(p).unwrap();
+            if let Some(clips) = v.get_mut("clips").and_then(|c| c.as_array_mut()) {
+                for c in clips {
+                    c.as_object_mut().unwrap().remove("id");
+                }
+            }
+            v
+        };
+        assert_eq!(strip(&base_payload), strip(&none_payload), "fallback payload identical");
         assert_eq!(base_spans, none_spans, "fallback timeline identical");
     }
 
@@ -11047,7 +11468,7 @@ mod tests {
         manifest.entries.push(audio_media("tgt", 1.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         exec.set_audio_source(std::sync::Arc::new(MockSyncAudio));
-        exec.execute("add_clips", &json!({"mediaIds": ["ref", "tgt"]}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "ref", "startFrame": 0}, {"mediaRef": "tgt", "startFrame": 30}]}))
             .unwrap();
         // Dual-system layout: ref and tgt each on their own audio track, both
         // anchored at frame 100 so delta == -offset (clean sign check). Moving
@@ -11108,13 +11529,13 @@ mod tests {
         assert!(moved < 100, "delayed target moves earlier, not later");
         // move_clips re-inserts under a NEW id; the tool reports it as newClipId.
         let new_id = synced[0]["newClipId"].as_str().unwrap();
-        assert_ne!(new_id, tgt_id, "moved clip gets a fresh id");
+        assert!(!tgt_id.starts_with(new_id), "moved clip gets a fresh id");
         let tgt = exec
             .timeline()
             .tracks
             .iter()
             .flat_map(|t| &t.clips)
-            .find(|c| c.id == new_id)
+            .find(|c| c.id.starts_with(new_id))
             .unwrap();
         assert_eq!(tgt.start_frame, moved, "clip actually moved");
     }
@@ -11126,7 +11547,7 @@ mod tests {
         manifest.entries.push(audio_media("tgt", 1.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         exec.set_audio_source(std::sync::Arc::new(MockSyncAudio));
-        exec.execute("add_clips", &json!({"mediaIds": ["ref", "tgt"]}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "ref", "startFrame": 0}, {"mediaRef": "tgt", "startFrame": 30}]}))
             .unwrap();
         let find_by_ref = |exec: &ToolExecutor, r: &str| {
             exec.timeline().tracks.iter().flat_map(|t| &t.clips).find(|c| c.media_ref == r).unwrap().id.clone()
@@ -11157,7 +11578,7 @@ mod tests {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(audio_media("ref", 1.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"mediaIds": ["ref"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "ref", "startFrame": 0}]})).unwrap();
         let ref_id = exec.timeline().tracks[0].clips[0].id.clone();
         let err = exec
             .execute(
@@ -11173,7 +11594,7 @@ mod tests {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(audio_media("a1", 4.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "a1", "startFrame": 0}]})).unwrap();
         let id = exec.timeline().tracks[0].clips[0].id.clone();
         (exec, id)
     }
@@ -11196,7 +11617,9 @@ mod tests {
         let res = exec
             .execute("denoise_audio", &json!({"clipIds": [id], "strength": 80}))
             .unwrap();
-        assert!(res["content"][0]["text"].as_str().unwrap().contains("80%"));
+        let env: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(env["clips"][0]["effects"][0]["type"], json!("audio.denoise"));
         assert_eq!(denoise_amount_of(&exec, &id), Some(0.8));
     }
 
@@ -11228,7 +11651,7 @@ mod tests {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(video_media("v1", 1920, 1080, 30.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"mediaIds": ["v1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "v1", "startFrame": 0}]})).unwrap();
         let vid = exec.timeline().tracks[0].clips[0].id.clone();
         let err = exec
             .execute("denoise_audio", &json!({"clipIds": [vid]}))
@@ -11257,7 +11680,8 @@ mod tests {
             serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(payload["name"], json!("Cutdown"));
         assert_eq!(payload["active"], json!(true));
-        assert_eq!(payload["timelineId"], json!(exec.timeline().id));
+        let tid_short = payload["timelineId"].as_str().unwrap();
+        assert!(exec.timeline().id.starts_with(tid_short), "short timelineId (C-3)");
         assert!(payload["note"].as_str().unwrap().contains("empty"), "{payload}");
         assert_eq!(exec.timeline().name, "Cutdown");
         assert_eq!(exec.timeline().fps, 24, "settings inherited");
@@ -11271,7 +11695,7 @@ mod tests {
             serde_json::from_str(gt["content"][0]["text"].as_str().unwrap()).unwrap();
         let list = tj["timelines"].as_array().expect("timelines listed when >1");
         assert_eq!(list.len(), 2);
-        assert_eq!(list[0]["timelineId"], json!(new_id));
+        assert!(new_id.starts_with(list[0]["timelineId"].as_str().unwrap()), "short id (C-3)");
         assert_eq!(list[0]["active"], json!(true));
 
         // set_active_timeline switches back; already-active early-exits.
@@ -11294,7 +11718,7 @@ mod tests {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(video_media("m1", 1920, 1080, 24.0));
         exec.media_manifest_mut().entries = manifest.entries;
-        exec.execute("add_clips", &json!({"mediaIds": ["m1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "m1", "startFrame": 0}]})).unwrap();
         let src_clip_id = exec.timeline().tracks[0].clips[0].id.clone();
         let res = exec
             .execute("create_timeline", &json!({"from": original_id}))
@@ -11326,11 +11750,11 @@ mod tests {
         let root_id = exec.timeline().id.clone();
         exec.execute("create_timeline", &json!({"name": "Insert"})).unwrap();
         let child_id = exec.timeline().id.clone();
-        exec.execute("add_clips", &json!({"mediaIds": ["m1", "a1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "m1", "startFrame": 0}, {"mediaRef": "a1", "startFrame": 0}]})).unwrap();
         exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
 
         // Nest it by mediaRef = timelineId: a sequence carrier + linked audio carrier.
-        exec.execute("add_clips", &json!({"mediaIds": [child_id]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": child_id, "startFrame": 0}]})).unwrap();
         let all: Vec<Clip> = exec
             .timeline()
             .tracks
@@ -11351,7 +11775,7 @@ mod tests {
         let empty_id = exec.timeline().id.clone();
         exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
         let err = exec
-            .execute("add_clips", &json!({"mediaIds": [empty_id]}))
+            .execute("add_clips", &json!({"entries": [{"mediaRef": empty_id, "startFrame": 0}]}))
             .unwrap_err();
         assert!(err.contains("empty"), "{err}");
 
@@ -11359,7 +11783,7 @@ mod tests {
         // inside the child (root reaches child... child would reach root) refuses.
         exec.execute("set_active_timeline", &json!({"timelineId": child_id})).unwrap();
         let err = exec
-            .execute("add_clips", &json!({"mediaIds": [root_id]}))
+            .execute("add_clips", &json!({"entries": [{"mediaRef": root_id, "startFrame": 0}]}))
             .unwrap_err();
         assert!(err.contains("cycle"), "{err}");
     }
@@ -11373,11 +11797,11 @@ mod tests {
 
         // Root gets one video clip; the child gets video+audio.
         let root_id = exec.timeline().id.clone();
-        exec.execute("add_clips", &json!({"mediaIds": ["m1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "m1", "startFrame": 0}]})).unwrap();
         let root_clip_start_before = exec.timeline().tracks[0].clips[0].start_frame;
         exec.execute("create_timeline", &json!({"name": "Chunk"})).unwrap();
         let child_id = exec.timeline().id.clone();
-        exec.execute("add_clips", &json!({"mediaIds": ["m1", "a1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "m1", "startFrame": 0}, {"mediaRef": "a1", "startFrame": 0}]})).unwrap();
         let child_total =
             timeline_core::TimelineMathExt::total_frames(exec.timeline());
         exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
@@ -11386,7 +11810,7 @@ mod tests {
         // ripples right and a linked A/V carrier pair lands at 0.
         exec.execute(
             "insert_clips",
-            &json!({"mediaIds": [child_id], "trackIndex": 0, "frame": 0}),
+            &json!({"entries": [{"mediaRef": child_id}], "trackIndex": 0, "atFrame": 0}),
         )
         .unwrap();
         let all: Vec<Clip> = exec
@@ -11483,9 +11907,9 @@ mod tests {
         let root_id = exec.timeline().id.clone();
         exec.execute("create_timeline", &json!({"name": "Insert"})).unwrap();
         let child_id = exec.timeline().id.clone();
-        exec.execute("add_clips", &json!({"mediaIds": ["m1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "m1", "startFrame": 0}]})).unwrap();
         exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
-        exec.execute("add_clips", &json!({"mediaIds": [child_id.clone()]}))
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": child_id.clone(), "startFrame": 0}]}))
             .unwrap();
 
         let res = exec
@@ -11507,7 +11931,7 @@ mod tests {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
-        exec.execute("add_clips", &json!({"mediaIds": ["m1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "m1", "startFrame": 0}]})).unwrap();
         assert!(!exec.undo_stack().is_empty(), "edit recorded");
 
         // Switching timelines clears the stack: an undo here would otherwise
@@ -11713,14 +12137,14 @@ mod tests {
         manifest.entries.push(audio_media("a1", 4.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         exec.set_audio_source(std::sync::Arc::new(MockAudio));
-        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "a1", "startFrame": 0}]})).unwrap();
 
         let res = exec.execute("remove_silence", &json!({})).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(v["sectionsRemoved"], 1, "{v}");
         assert!(v["removedFrames"].as_i64().unwrap() > 0);
-        assert!(v["note"].as_str().unwrap().contains("re-read"));
+        assert!(v["notes"][0].as_str().unwrap().contains("re-read"));
 
         // All-loud timeline: the no-arg form reports dead-air absence as an
         // error (upstream throws), unlike the clip-scoped zero payload.
@@ -11728,7 +12152,7 @@ mod tests {
         manifest.entries.push(audio_media("a1", 4.0));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
         exec.set_audio_source(std::sync::Arc::new(MockLoudAudio));
-        exec.execute("add_clips", &json!({"mediaIds": ["a1"]})).unwrap();
+        exec.execute("add_clips", &json!({"entries": [{"mediaRef": "a1", "startFrame": 0}]})).unwrap();
         let err = exec.execute("remove_silence", &json!({})).unwrap_err();
         assert!(err.contains("No dead air"), "{err}");
     }
@@ -11822,10 +12246,12 @@ mod tests {
                 &json!({"clipId": clip_id, "effectType": "blur", "remove": true}),
             )
             .unwrap();
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Removed"));
+        let env: serde_json::Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(
+            env["clips"][0].get("effects").is_none(),
+            "resulting clip state has no effects: {env}"
+        );
     }
 
     // ── Missing-media helpers (#135) ────────────────────────────────

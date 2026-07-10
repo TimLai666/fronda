@@ -254,14 +254,15 @@ impl TimelineView {
             Some(track) => Self::run_shared_tool(
                 "insert_clips",
                 serde_json::json!({
-                    "mediaIds": [asset_id],
+                    "entries": [{ "mediaRef": asset_id }],
                     "trackIndex": track,
-                    "frame": frame,
+                    "atFrame": frame,
                 }),
             ),
-            None => {
-                Self::run_shared_tool("add_clips", serde_json::json!({ "mediaIds": [asset_id] }))
-            }
+            None => Self::run_shared_tool(
+                "add_clips",
+                serde_json::json!({ "entries": [{ "mediaRef": asset_id, "startFrame": 0 }] }),
+            ),
         }
         cx.notify();
     }

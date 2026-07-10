@@ -79,6 +79,163 @@ pub fn resolve_id(input: &str, all_ids: &[String]) -> Result<String, IdResolutio
     }
 }
 
+/// Input arg keys holding a single id (tool-surface-v2 C-3).
+pub const SCALAR_ID_KEYS: &[&str] = &[
+    "clipId",
+    "sourceClipId",
+    "referenceClipId",
+    "targetClipId",
+    "mediaRef",
+    "startFrameMediaRef",
+    "endFrameMediaRef",
+    "sourceVideoMediaRef",
+    "videoSourceMediaRef",
+    "captionGroupId",
+    "timelineId",
+    "item",
+    "from",
+    "reference",
+    "groupId",
+    "memberId",
+];
+
+/// Input arg keys holding arrays of ids (tool-surface-v2 C-3).
+pub const ARRAY_ID_KEYS: &[&str] = &[
+    "clipIds",
+    "targetClipIds",
+    "items",
+    "ids",
+    "deletes",
+    "referenceMediaRefs",
+    "referenceImageMediaRefs",
+    "referenceVideoMediaRefs",
+    "referenceAudioMediaRefs",
+];
+
+/// C-3 input expansion: a value under a known id key that is a >= 8-char
+/// prefix of exactly one universe id expands to the full id. Ambiguous
+/// prefixes hard-fail; unknown values pass through so the tool reports
+/// not-found itself.
+fn expand_one(value: &str, all_ids: &[String]) -> Result<Option<String>, String> {
+    if value.len() < 8 || all_ids.iter().any(|id| id == value) {
+        return Ok(None);
+    }
+    let matches: Vec<&String> = all_ids.iter().filter(|id| id.starts_with(value)).collect();
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(Some(matches[0].clone())),
+        n => Err(format!(
+            "Ambiguous id '{value}' matches {n} items; re-read with get_timeline or get_media for current ids."
+        )),
+    }
+}
+
+/// Recursively expand short id prefixes in tool arguments (C-3): known scalar
+/// keys and known array-of-string keys at any depth.
+pub fn expand_input_ids(
+    args: &serde_json::Value,
+    all_ids: &[String],
+) -> Result<serde_json::Value, String> {
+    match args {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (k, v) in map {
+                let expanded = if SCALAR_ID_KEYS.contains(&k.as_str()) {
+                    match v.as_str() {
+                        Some(s) => match expand_one(s, all_ids)? {
+                            Some(full) => serde_json::Value::String(full),
+                            None => v.clone(),
+                        },
+                        None => expand_input_ids(v, all_ids)?,
+                    }
+                } else if ARRAY_ID_KEYS.contains(&k.as_str()) {
+                    match v.as_array() {
+                        Some(arr) => {
+                            let mut items = Vec::with_capacity(arr.len());
+                            for item in arr {
+                                match item.as_str() {
+                                    Some(s) => match expand_one(s, all_ids)? {
+                                        Some(full) => items.push(serde_json::Value::String(full)),
+                                        None => items.push(item.clone()),
+                                    },
+                                    None => items.push(expand_input_ids(item, all_ids)?),
+                                }
+                            }
+                            serde_json::Value::Array(items)
+                        }
+                        None => expand_input_ids(v, all_ids)?,
+                    }
+                } else {
+                    expand_input_ids(v, all_ids)?
+                };
+                out.insert(k.clone(), expanded);
+            }
+            Ok(serde_json::Value::Object(out))
+        }
+        serde_json::Value::Array(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for item in arr {
+                out.push(expand_input_ids(item, all_ids)?);
+            }
+            Ok(serde_json::Value::Array(out))
+        }
+        other => Ok(other.clone()),
+    }
+}
+
+fn is_uuid_shaped(s: &[u8]) -> bool {
+    if s.len() != 36 {
+        return false;
+    }
+    s.iter().enumerate().all(|(i, &b)| match i {
+        8 | 13 | 18 | 23 => b == b'-',
+        _ => b.is_ascii_hexdigit(),
+    })
+}
+
+/// Replace every known full UUID embedded in `text` with its short prefix.
+pub fn shorten_uuids_in_text(text: &str, map: &HashMap<String, String>) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 36 <= bytes.len() && is_uuid_shaped(&bytes[i..i + 36]) {
+            let candidate = &text[i..i + 36];
+            if let Some(short) = map.get(candidate) {
+                out.push_str(short);
+                i += 36;
+                continue;
+            }
+        }
+        // Advance one full UTF-8 character.
+        let ch_len = text[i..].chars().next().map(char::len_utf8).unwrap_or(1);
+        out.push_str(&text[i..i + ch_len]);
+        i += ch_len;
+    }
+    out
+}
+
+/// Recursively shorten every known full id in a tool output value (C-3):
+/// applies to whole-string ids and to ids embedded in longer strings
+/// (e.g. JSON serialized into MCP text content).
+pub fn shorten_output_ids(
+    value: &serde_json::Value,
+    map: &HashMap<String, String>,
+) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) => serde_json::Value::String(shorten_uuids_in_text(s, map)),
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(|v| shorten_output_ids(v, map)).collect())
+        }
+        serde_json::Value::Object(obj) => serde_json::Value::Object(
+            obj.iter()
+                .map(|(k, v)| (k.clone(), shorten_output_ids(v, map)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IdResolutionError {
     NotFound {
@@ -173,5 +330,82 @@ mod tests {
         let ids: Vec<String> = vec!["abcdef01-1234-5678-9abc-def012345678".to_string()];
         let result = resolve_id("zzzzzzzz", &ids);
         assert!(matches!(result, Err(IdResolutionError::NotFound { .. })));
+    }
+
+    fn uni() -> Vec<String> {
+        vec![
+            "aaaa1111-0000-4000-8000-000000000001".to_string(),
+            "bbbb2222-0000-4000-8000-000000000002".to_string(),
+            "bbbb2222-0000-4000-8000-000000000003".to_string(),
+        ]
+    }
+
+    #[test]
+    fn expand_scalar_key_prefix_to_full_id() {
+        let args = serde_json::json!({"clipId": "aaaa1111", "other": "aaaa1111"});
+        let out = expand_input_ids(&args, &uni()).unwrap();
+        assert_eq!(out["clipId"], "aaaa1111-0000-4000-8000-000000000001");
+        assert_eq!(out["other"], "aaaa1111", "non-id keys untouched");
+    }
+
+    #[test]
+    fn expand_nested_array_keys() {
+        let args = serde_json::json!({
+            "moves": [{"items": ["aaaa1111"], "into": "B-roll"}],
+        });
+        let out = expand_input_ids(&args, &uni()).unwrap();
+        assert_eq!(out["moves"][0]["items"][0], "aaaa1111-0000-4000-8000-000000000001");
+        assert_eq!(out["moves"][0]["into"], "B-roll");
+    }
+
+    #[test]
+    fn expand_ambiguous_prefix_hard_fails_with_contract_message() {
+        let args = serde_json::json!({"clipId": "bbbb2222"});
+        let err = expand_input_ids(&args, &uni()).unwrap_err();
+        assert_eq!(
+            err,
+            "Ambiguous id 'bbbb2222' matches 2 items; re-read with get_timeline or get_media for current ids."
+        );
+    }
+
+    #[test]
+    fn expand_short_or_unknown_values_pass_through() {
+        let args = serde_json::json!({"clipId": "aaaa", "mediaRef": "zzzz9999"});
+        let out = expand_input_ids(&args, &uni()).unwrap();
+        assert_eq!(out["clipId"], "aaaa", "< 8 chars pass through");
+        assert_eq!(out["mediaRef"], "zzzz9999", "no-match passes through");
+    }
+
+    #[test]
+    fn shorten_uuids_embedded_in_text() {
+        let map: HashMap<String, String> = [(
+            "aaaa1111-0000-4000-8000-000000000001".to_string(),
+            "aaaa1111".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let text = r#"{"id": "aaaa1111-0000-4000-8000-000000000001", "n": 1}"#;
+        assert_eq!(
+            shorten_uuids_in_text(text, &map),
+            r#"{"id": "aaaa1111", "n": 1}"#
+        );
+        // Unknown uuids stay intact.
+        let other = "cccc3333-0000-4000-8000-000000000009";
+        assert_eq!(shorten_uuids_in_text(other, &map), other);
+    }
+
+    #[test]
+    fn shorten_output_walks_the_value_tree() {
+        let map: HashMap<String, String> = [(
+            "aaaa1111-0000-4000-8000-000000000001".to_string(),
+            "aaaa1111".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let v = serde_json::json!({
+            "content": [{"type": "text", "text": "clip aaaa1111-0000-4000-8000-000000000001 moved"}]
+        });
+        let out = shorten_output_ids(&v, &map);
+        assert_eq!(out["content"][0]["text"], "clip aaaa1111 moved");
     }
 }

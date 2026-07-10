@@ -125,6 +125,8 @@ pub fn validate_set_clip_properties(
         }
     };
 
+    // v2: property fields are flat at the top level; the legacy nested
+    // 'properties' object still validates for older callers.
     let properties = match input.get("properties") {
         Some(v) if v.is_object() => v.clone(),
         Some(_) => {
@@ -132,11 +134,7 @@ pub fn validate_set_clip_properties(
                 "set_clip_properties: 'properties' must be a JSON object".into(),
             )
         }
-        None => {
-            return ValidationResult::Error(
-                "set_clip_properties: missing 'properties' object".into(),
-            )
-        }
+        None => input.clone(),
     };
 
     let mut text_only_fields: Vec<String> = Vec::new();
@@ -339,33 +337,67 @@ pub fn validate_remove_clips(input: &Value) -> ValidationResult<RemoveClipsInput
     ValidationResult::Ok(RemoveClipsInput { clip_ids, ripple })
 }
 
+/// One parsed `add_clips` entry (tool-surface-v2 shape).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddClipEntryInput {
+    pub media_ref: String,
+    pub track_index: Option<usize>,
+    pub start_frame: i64,
+}
+
 /// Parsed and validated `add_clips` input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AddClipsInput {
-    pub media_ids: Vec<String>,
-    pub track_index: Option<usize>,
+    pub entries: Vec<AddClipEntryInput>,
 }
 
 /// MUT-002: mixed explicit/omitted trackIndex rejected.
 /// MUT-003: auto-create tracks when all entries omit trackIndex.
+/// tool-surface-v2: entries carry mediaRef + startFrame; endFrame and source
+/// are mutually exclusive.
 pub fn validate_add_clips(input: &Value) -> ValidationResult<AddClipsInput> {
-    let media_ids = match input.get("mediaIds").and_then(|v| v.as_array()) {
-        Some(arr) if !arr.is_empty() => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect(),
-        _ => return ValidationResult::Error("add_clips: missing or empty 'mediaIds'".into()),
+    let Some(arr) = input.get("entries").and_then(|v| v.as_array()).filter(|a| !a.is_empty())
+    else {
+        return ValidationResult::Error("add_clips: missing or empty 'entries'".into());
     };
-
-    let track_index = input
-        .get("trackIndex")
-        .and_then(|v| v.as_u64())
-        .map(|i| i as usize);
-
-    ValidationResult::Ok(AddClipsInput {
-        media_ids,
-        track_index,
-    })
+    let mut entries: Vec<AddClipEntryInput> = Vec::with_capacity(arr.len());
+    for (i, e) in arr.iter().enumerate() {
+        let Some(media_ref) = e.get("mediaRef").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        else {
+            return ValidationResult::Error(format!("add_clips: entries[{i}] missing 'mediaRef'"));
+        };
+        let Some(start_frame) = e.get("startFrame").and_then(|v| v.as_i64()) else {
+            return ValidationResult::Error(format!(
+                "add_clips: entries[{i}] missing 'startFrame'"
+            ));
+        };
+        if start_frame < 0 {
+            return ValidationResult::Error(format!(
+                "add_clips: entries[{i}].startFrame must be >= 0"
+            ));
+        }
+        if let Err(err) = require_frame_in_bounds(start_frame, "startFrame") {
+            return ValidationResult::Error(format!("add_clips: entries[{i}]: {err}"));
+        }
+        if e.get("endFrame").is_some() && e.get("source").is_some() {
+            return ValidationResult::Error(format!(
+                "add_clips: entries[{i}]: endFrame and source are mutually exclusive"
+            ));
+        }
+        let track_index = e.get("trackIndex").and_then(|v| v.as_u64()).map(|i| i as usize);
+        entries.push(AddClipEntryInput {
+            media_ref: media_ref.to_string(),
+            track_index,
+            start_frame,
+        });
+    }
+    let with_track = entries.iter().filter(|e| e.track_index.is_some()).count();
+    if with_track != 0 && with_track != entries.len() {
+        return ValidationResult::Error(
+            "add_clips: set trackIndex on every entry or on none — mixing is rejected".into(),
+        );
+    }
+    ValidationResult::Ok(AddClipsInput { entries })
 }
 
 /// Validate hex color strings (MUT-023).
@@ -385,41 +417,56 @@ pub fn validate_hex_color(input: &str) -> ValidationResult<String> {
 /// Parsed and validated `insert_clips` input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InsertClipsInput {
-    pub media_ids: Vec<String>,
+    pub media_refs: Vec<String>,
     pub track_index: usize,
-    pub frame: i64,
+    pub at_frame: i64,
 }
 
-/// MUT-004: Validate `insert_clips` input.
+/// MUT-004 (tool-surface-v2 shape): trackIndex + atFrame + entries laid
+/// end-to-end; durationFrames and source are mutually exclusive per entry.
 pub fn validate_insert_clips(input: &Value) -> ValidationResult<InsertClipsInput> {
     let track_index = match input.get("trackIndex").and_then(|v| v.as_u64()) {
         Some(idx) => idx as usize,
         None => return ValidationResult::Error("insert_clips: missing 'trackIndex'".into()),
     };
 
-    let media_ids = match input.get("mediaIds").and_then(|v| v.as_array()) {
-        Some(arr) if !arr.is_empty() => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect(),
-        _ => return ValidationResult::Error("insert_clips: missing or empty 'mediaIds'".into()),
+    let Some(arr) = input.get("entries").and_then(|v| v.as_array()).filter(|a| !a.is_empty())
+    else {
+        return ValidationResult::Error("insert_clips: missing or empty 'entries'".into());
     };
+    let mut media_refs: Vec<String> = Vec::with_capacity(arr.len());
+    for (i, e) in arr.iter().enumerate() {
+        let Some(media_ref) = e.get("mediaRef").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        else {
+            return ValidationResult::Error(format!(
+                "insert_clips: entries[{i}] missing 'mediaRef'"
+            ));
+        };
+        if e.get("durationFrames").is_some() && e.get("source").is_some() {
+            return ValidationResult::Error(format!(
+                "insert_clips: entries[{i}]: durationFrames and source are mutually exclusive"
+            ));
+        }
+        media_refs.push(media_ref.to_string());
+    }
 
-    let frame = match input.get("frame").and_then(|v| v.as_i64()) {
+    let at_frame = match input.get("atFrame").and_then(|v| v.as_i64()) {
         Some(f) if f >= 0 => f,
         Some(_) => {
-            return ValidationResult::Error("insert_clips: 'frame' must be non-negative".into())
+            return ValidationResult::Error("insert_clips: 'atFrame' must be non-negative".into())
         }
-        None => return ValidationResult::Error("insert_clips: missing or invalid 'frame'".into()),
+        None => {
+            return ValidationResult::Error("insert_clips: missing or invalid 'atFrame'".into())
+        }
     };
-    if let Err(e) = require_frame_in_bounds(frame, "frame") {
+    if let Err(e) = require_frame_in_bounds(at_frame, "atFrame") {
         return ValidationResult::Error(format!("insert_clips: {e}"));
     }
 
     ValidationResult::Ok(InsertClipsInput {
-        media_ids,
+        media_refs,
         track_index,
-        frame,
+        at_frame,
     })
 }
 
@@ -534,14 +581,48 @@ pub struct MoveClipsInput {
 }
 
 /// MUT-007: Requires at least one of `toTrack` or `toFrame`.
+/// tool-surface-v2: the primary shape is `moves: [{clipId, toTrack?,
+/// toFrame?}]`; the legacy clipIds/toTrack/toFrame shape still validates.
 pub fn validate_move_clips(input: &Value) -> ValidationResult<MoveClipsInput> {
+    if let Some(arr) = input.get("moves").and_then(|v| v.as_array()) {
+        if arr.is_empty() {
+            return ValidationResult::Error("move_clips: 'moves' must be non-empty".into());
+        }
+        for (i, m) in arr.iter().enumerate() {
+            if m.get("clipId").and_then(|v| v.as_str()).is_none() {
+                return ValidationResult::Error(format!(
+                    "move_clips: moves[{i}] missing 'clipId'"
+                ));
+            }
+            let to_track = m.get("toTrack").and_then(|v| v.as_i64());
+            let to_frame = m.get("toFrame").and_then(|v| v.as_i64());
+            if to_track.is_none() && to_frame.is_none() {
+                return ValidationResult::Error(format!(
+                    "move_clips: moves[{i}] requires at least one of 'toTrack' or 'toFrame'"
+                ));
+            }
+            if let Some(f) = to_frame {
+                if let Err(e) = require_frame_in_bounds(f, "toFrame") {
+                    return ValidationResult::Error(format!("move_clips: moves[{i}]: {e}"));
+                }
+            }
+        }
+        return ValidationResult::Ok(MoveClipsInput {
+            clip_ids: arr
+                .iter()
+                .filter_map(|m| m.get("clipId").and_then(|v| v.as_str()).map(String::from))
+                .collect(),
+            to_track: None,
+            to_frame: None,
+        });
+    }
     let clip_ids = match input.get("clipIds").and_then(|v| v.as_array()) {
         Some(arr) if !arr.is_empty() => arr
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect(),
         _ => {
-            return ValidationResult::Error("move_clips: missing or empty 'clipIds'".into());
+            return ValidationResult::Error("move_clips: missing or empty 'moves'".into());
         }
     };
 
@@ -1415,7 +1496,7 @@ mod tests {
             .unwrap()
             .contains("exceeds the maximum supported frame"));
         assert!(validate_insert_clips(
-            &json!({"trackIndex": 0, "mediaIds": ["m1"], "frame": i64::MAX})
+            &json!({"trackIndex": 0, "entries": [{"mediaRef": "m1"}], "atFrame": i64::MAX})
         )
         .into_error()
         .unwrap()
@@ -1483,10 +1564,11 @@ mod tests {
     }
 
     #[test]
-    fn mut_009_set_clip_properties_missing_properties() {
-        let input = json!({"clipIds": ["c1"]});
+    fn mut_009_set_clip_properties_flat_v2_shape_accepted() {
+        // v2: fields sit at the top level; no 'properties' object required.
+        let input = json!({"clipIds": ["c1"], "opacity": 0.5});
         let result = validate_set_clip_properties(&input, None);
-        assert!(result.into_error().is_some());
+        assert!(result.into_ok().is_some());
     }
 
     // ---- MUT-013/014/015: set_keyframes ----------------------------------
@@ -1577,25 +1659,48 @@ mod tests {
 
     #[test]
     fn mut_002_add_clips_valid_with_track() {
-        let input = json!({"mediaIds": ["m1", "m2"], "trackIndex": 0});
+        let input = json!({"entries": [
+            {"mediaRef": "m1", "trackIndex": 0, "startFrame": 0},
+            {"mediaRef": "m2", "trackIndex": 0, "startFrame": 60},
+        ]});
         let result = validate_add_clips(&input);
         let parsed = result.into_ok().expect("MUT-002: valid with track");
-        assert_eq!(parsed.track_index, Some(0));
+        assert_eq!(parsed.entries[0].track_index, Some(0));
+        assert_eq!(parsed.entries[1].start_frame, 60);
     }
 
     #[test]
     fn mut_002_add_clips_valid_without_track() {
-        let input = json!({"mediaIds": ["m1"]});
+        let input = json!({"entries": [{"mediaRef": "m1", "startFrame": 0}]});
         let result = validate_add_clips(&input);
         let parsed = result.into_ok().expect("MUT-002: valid without track");
-        assert_eq!(parsed.track_index, None);
+        assert_eq!(parsed.entries[0].track_index, None);
     }
 
     #[test]
     fn mut_002_add_clips_rejects_empty() {
-        let input = json!({"mediaIds": []});
+        let input = json!({"entries": []});
         let result = validate_add_clips(&input);
         assert!(result.into_error().is_some());
+    }
+
+    #[test]
+    fn mut_002_add_clips_rejects_mixed_track_index() {
+        let input = json!({"entries": [
+            {"mediaRef": "m1", "trackIndex": 0, "startFrame": 0},
+            {"mediaRef": "m2", "startFrame": 60},
+        ]});
+        let err = validate_add_clips(&input).into_error().expect("mixed rejected");
+        assert!(err.contains("mixing"), "{err}");
+    }
+
+    #[test]
+    fn mut_002_add_clips_rejects_end_frame_with_source() {
+        let input = json!({"entries": [
+            {"mediaRef": "m1", "startFrame": 0, "endFrame": 60, "source": [0.0, 2.0]},
+        ]});
+        let err = validate_add_clips(&input).into_error().expect("exclusive");
+        assert!(err.contains("mutually exclusive"), "{err}");
     }
 
     // ---- MUT-023: hex color ---------------------------------------------
@@ -1642,27 +1747,27 @@ mod tests {
     fn mut_004_insert_clips_valid() {
         let input = json!({
             "trackIndex": 1,
-            "mediaIds": ["m1", "m2"],
-            "frame": 120
+            "entries": [{"mediaRef": "m1"}, {"mediaRef": "m2"}],
+            "atFrame": 120
         });
         let result = validate_insert_clips(&input);
         let parsed = result.into_ok().expect("MUT-004: valid");
         assert_eq!(parsed.track_index, 1);
-        assert_eq!(parsed.media_ids, vec!["m1", "m2"]);
-        assert_eq!(parsed.frame, 120);
+        assert_eq!(parsed.media_refs, vec!["m1", "m2"]);
+        assert_eq!(parsed.at_frame, 120);
     }
 
     #[test]
     fn mut_004_insert_clips_requires_track_index() {
-        let input = json!({"mediaIds": ["m1"], "frame": 0});
+        let input = json!({"entries": [{"mediaRef": "m1"}], "atFrame": 0});
         let result = validate_insert_clips(&input);
         let err = result.into_error().expect("MUT-004: missing trackIndex");
         assert!(err.contains("trackIndex"));
     }
 
     #[test]
-    fn mut_004_insert_clips_requires_media_ids() {
-        let input = json!({"trackIndex": 0, "frame": 0});
+    fn mut_004_insert_clips_requires_entries() {
+        let input = json!({"trackIndex": 0, "atFrame": 0});
         let result = validate_insert_clips(&input);
         assert!(result.into_error().is_some());
     }
