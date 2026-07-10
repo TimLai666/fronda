@@ -82,6 +82,8 @@ pub struct MultiTimelineState {
     pub view_states: Option<HashMap<String, TimelineViewState>>,
     /// Opaque speaker registry (upstream #261), preserved across saves.
     pub speakers: Option<serde_json::Value>,
+    /// Opaque multicam groups (upstream #283), preserved across saves.
+    pub multicam_groups: Option<serde_json::Value>,
 }
 
 impl MultiTimelineState {
@@ -98,6 +100,7 @@ impl MultiTimelineState {
             open_timeline_ids: self.open_timeline_ids.clone(),
             view_states: self.view_states.clone(),
             speakers: self.speakers.clone(),
+            multicam_groups: self.multicam_groups.clone(),
         }
     }
 
@@ -113,6 +116,7 @@ impl MultiTimelineState {
                 open_timeline_ids: file.open_timeline_ids,
                 view_states: file.view_states,
                 speakers: file.speakers,
+                multicam_groups: file.multicam_groups,
             },
         )
     }
@@ -272,15 +276,17 @@ pub fn save_project_state_with_siblings(
 ) -> Result<(), BundleError> {
     ensure_directory(root)?;
     let path = root.join(TIMELINE_FILENAME);
-    let (disk_order, open_ids, view_states, speakers) = match read_project_file(&path) {
-        Ok(f) => (
-            f.timelines.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
-            f.open_timeline_ids,
-            f.view_states,
-            f.speakers,
-        ),
-        Err(_) => (Vec::new(), None, None, None),
-    };
+    let (disk_order, open_ids, view_states, speakers, multicam_groups) =
+        match read_project_file(&path) {
+            Ok(f) => (
+                f.timelines.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
+                f.open_timeline_ids,
+                f.view_states,
+                f.speakers,
+                f.multicam_groups,
+            ),
+            Err(_) => (Vec::new(), None, None, None, None),
+        };
 
     let mut by_id: HashMap<&str, &Timeline> =
         siblings.iter().map(|t| (t.id.as_str(), t)).collect();
@@ -318,6 +324,7 @@ pub fn save_project_state_with_siblings(
             })
             .filter(|vs| !vs.is_empty()),
         speakers,
+        multicam_groups,
     };
     write_project_file_json(&path, &file)?;
     write_json(&root.join(MANIFEST_FILENAME), manifest)?;

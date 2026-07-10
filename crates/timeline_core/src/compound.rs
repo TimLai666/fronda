@@ -161,6 +161,7 @@ pub fn nest_clips(
         compound_timeline_id: None,
         blend_mode: Default::default(),
         chroma_key: None,
+        multicam_group_id: None,
     };
     let carrier_id = carrier.id.clone();
 
@@ -372,6 +373,7 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+        multicam_group_id: None,
         }
     }
 

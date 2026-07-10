@@ -42,6 +42,15 @@ pub struct ProjectFile {
     /// and dropping the field on save would erase Swift-computed registries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speakers: Option<serde_json::Value>,
+    /// Multicam source groups (upstream #283: id/name/members/sync/master).
+    /// Round-tripped opaquely — Fronda has no multicam engine yet, and
+    /// dropping the field on save would erase Swift-built groups.
+    #[serde(
+        default,
+        rename = "multicamGroups",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub multicam_groups: Option<serde_json::Value>,
 }
 
 impl ProjectFile {
@@ -54,6 +63,7 @@ impl ProjectFile {
             open_timeline_ids: Some(vec![id]),
             view_states: None,
             speakers: None,
+            multicam_groups: None,
         }
     }
 
@@ -129,6 +139,10 @@ mod tests {
             )])),
             speakers: Some(serde_json::json!([{"id": 1, "name": "Alex",
                 "color": [0.1, 0.2, 0.3], "centroid": [0.5]}])),
+            multicam_groups: Some(serde_json::json!([{"id": "mc1", "name": "Cam Group",
+                "members": [{"mediaRef": "m1", "kind": "angle",
+                    "sync": {"offsetSeconds": 0.5, "confidence": 0.9, "locked": true}}],
+                "masterMemberId": "m1"}])),
         };
         let bytes = serde_json::to_vec(&file).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -138,7 +152,7 @@ mod tests {
         assert_eq!(json["viewStates"]["tl-a"]["scrollOffsetX"], 250.0);
 
         let decoded = ProjectFile::decode(&bytes).unwrap();
-        assert_eq!(decoded, file, "incl. the opaque speakers registry (#261)");
+        assert_eq!(decoded, file, "incl. opaque speakers (#261) + multicamGroups (#283)");
         assert_eq!(decoded.active_index(), 1);
         assert_eq!(decoded.active_timeline().unwrap().name, "B-roll");
     }

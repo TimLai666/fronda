@@ -40,6 +40,7 @@ fn clip(id: &str, media_type: ClipType, start_frame: i64, duration_frames: i64) 
         compound_timeline_id: None,
         blend_mode: Default::default(),
         chroma_key: None,
+        multicam_group_id: None,
         text_animation: None,
         word_timings: None,
     }

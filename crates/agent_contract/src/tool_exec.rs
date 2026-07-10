@@ -2273,6 +2273,7 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                multicam_group_id: None,
                 text_animation: None,
                 word_timings: None,
             };
@@ -2452,6 +2453,7 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                multicam_group_id: None,
                 text_animation: None,
                 word_timings: None,
             });
@@ -2769,6 +2771,7 @@ impl ToolExecutor {
                         compound_timeline_id: None,
                         blend_mode: Default::default(),
                         chroma_key: None,
+                        multicam_group_id: None,
                         text_animation: None,
                         word_timings: None,
                         }
@@ -4475,6 +4478,7 @@ impl ToolExecutor {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+            multicam_group_id: None,
         };
         let mut out = vec![base.clone()];
         if has_audio {
@@ -5103,6 +5107,7 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                multicam_group_id: None,
                 text_animation,
                 word_timings: None,
             };
@@ -5253,6 +5258,7 @@ impl ToolExecutor {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                multicam_group_id: None,
                 text_animation: None,
                 word_timings: None,
             };
@@ -7483,6 +7489,7 @@ mod tests {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                multicam_group_id: None,
                 text_animation: None,
                 word_timings: None,
             }],
@@ -8237,6 +8244,7 @@ mod tests {
                 compound_timeline_id: None,
                 blend_mode: Default::default(),
                 chroma_key: None,
+                multicam_group_id: None,
                 text_animation: None,
                 word_timings: None,
             }],

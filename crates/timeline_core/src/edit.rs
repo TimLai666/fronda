@@ -513,6 +513,7 @@ pub fn link_audio_for_placed_clips(
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
+        multicam_group_id: None,
             text_animation: None,
             word_timings: None,
         });

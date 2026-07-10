@@ -780,6 +780,15 @@ pub struct Clip {
     /// Chroma-key / green-screen removal config (Issue #97).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chroma_key: Option<ChromaKey>,
+    /// Multicam group membership (upstream #283). INERT passthrough — Fronda
+    /// has no multicam engine yet; dropping it on save would strip Swift
+    /// multicam clips out of their group.
+    #[serde(
+        default,
+        rename = "multicamGroupId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub multicam_group_id: Option<String>,
 }
 
 impl Track {
@@ -1223,6 +1232,7 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: BlendMode::Multiply,
             chroma_key: None,
+            multicam_group_id: None,
             text_animation: None,
             word_timings: None,
         };
