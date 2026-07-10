@@ -1,4 +1,5 @@
-//! Host writer for the `create_matte` agent tool (#242): renders a solid-colour PNG and writes it
+//! Host writer for `import_media` matte imports (#242, formerly the
+//! create_matte tool): renders a solid-colour PNG and writes it
 //! into the open project's `media/` directory, returning a project-relative [`MediaSource`].
 //! Implements [`agent_contract::MatteWriter`] so the pure executor stays FS-free.
 

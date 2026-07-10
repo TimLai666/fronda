@@ -1148,25 +1148,51 @@ impl MediaPanelView {
         }
     }
 
-    /// Batch delete: every selected asset through delete_media.
+    /// Display path of a folder id — organize_media addresses folders by
+    /// path, never by id.
+    fn folder_path_of(&self, id: &str) -> String {
+        agent_contract::organize::folder_path(&self.manifest.folders, id)
+    }
+
+    /// Batch delete: the whole selection in ONE organize_media call.
     fn delete_selection(&mut self, cx: &mut Context<Self>) {
-        for id in std::mem::take(&mut self.library.selection) {
-            Self::run_shared_tool("delete_media", serde_json::json!({ "mediaId": id }));
+        let ids = std::mem::take(&mut self.library.selection);
+        if !ids.is_empty() {
+            Self::run_shared_tool("organize_media", serde_json::json!({ "deletes": ids }));
         }
         self.library.clear_selection();
         cx.notify();
     }
 
     /// New Folder in the current folder; opens the inline rename on it
-    /// (Swift createNewFolderInCurrent).
+    /// (Swift createNewFolderInCurrent). organize_media createFolders is
+    /// ensure-exist, so the name is uniquified among siblings first.
     fn create_folder_in_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut args = serde_json::json!({ "name": "New Folder" });
-        if let Some(parent) = &self.library.current_folder {
-            args["parentFolderId"] = serde_json::Value::String(parent.clone());
+        let parent = self.library.current_folder.clone();
+        let siblings: Vec<String> = self
+            .manifest
+            .folders
+            .iter()
+            .filter(|f| f.parent_folder_id == parent)
+            .map(|f| f.name.trim().to_lowercase())
+            .collect();
+        let mut name = "New Folder".to_string();
+        let mut n = 1usize;
+        while siblings.contains(&name.to_lowercase()) {
+            n += 1;
+            name = format!("New Folder {n}");
         }
+        let path = match parent.as_deref().map(|id| self.folder_path_of(id)) {
+            Some(p) if !p.is_empty() => format!("{p}/{name}"),
+            _ => name.clone(),
+        };
         let executor = crate::editor_state_hub::EditorStateHub::global().executor();
         let new_id = executor.lock().ok().and_then(|mut exec| {
-            exec.execute("create_folder", &args).ok()?;
+            exec.execute(
+                "organize_media",
+                &serde_json::json!({ "createFolders": [path] }),
+            )
+            .ok()?;
             exec.media_manifest().folders.last().map(|f| f.id.clone())
         });
         if let Some(id) = new_id {
@@ -1177,7 +1203,7 @@ impl MediaPanelView {
             self.search_field.update(cx, |field, cx| field.set_text("", cx));
             self.folder_editing = Some(id);
             self.folder_rename_field.update(cx, |field, cx| {
-                field.set_text("New Folder", cx);
+                field.set_text(name, cx);
             });
             window.focus(&self.folder_rename_field.focus_handle(cx), cx);
         }
@@ -1185,14 +1211,16 @@ impl MediaPanelView {
     }
 
     /// Commit an in-progress folder rename (Enter or click-away; Swift
-    /// commits on focus loss). An empty name cancels.
+    /// commits on focus loss). An empty name cancels. organize_media
+    /// addresses folders by path, so the id resolves to its path first.
     fn commit_folder_rename(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = self.folder_editing.take() {
             let name = self.folder_rename_field.read(cx).text().trim().to_string();
-            if !name.is_empty() {
+            let path = self.folder_path_of(&id);
+            if !name.is_empty() && !path.is_empty() {
                 Self::run_shared_tool(
-                    "rename_folder",
-                    serde_json::json!({ "folderId": id, "name": name }),
+                    "organize_media",
+                    serde_json::json!({ "renames": [{ "item": path, "name": name }] }),
                 );
             }
         }
@@ -1247,8 +1275,8 @@ impl MediaPanelView {
             let name = self.asset_rename_field.read(cx).text().trim().to_string();
             if !name.is_empty() {
                 Self::run_shared_tool(
-                    "rename_media",
-                    serde_json::json!({ "mediaId": id, "name": name }),
+                    "organize_media",
+                    serde_json::json!({ "renames": [{ "item": id, "name": name }] }),
                 );
             }
         }
@@ -1306,7 +1334,7 @@ impl MediaPanelView {
         if self.library.selection.iter().any(|s| s == id) {
             self.delete_selection(cx);
         } else {
-            Self::run_shared_tool("delete_media", serde_json::json!({ "mediaId": id }));
+            Self::run_shared_tool("organize_media", serde_json::json!({ "deletes": [id] }));
             cx.notify();
         }
     }
@@ -1342,12 +1370,16 @@ impl MediaPanelView {
                     }
                     "rename" => self.begin_folder_rename(&id, &name, window, cx),
                     "delete" => {
-                        // Executor semantics: direct child assets move to the
-                        // library root; subfolders are not re-parented.
-                        Self::run_shared_tool(
-                            "delete_folder",
-                            serde_json::json!({ "folderId": id }),
-                        );
+                        // v2 semantics (organize_media): the folder, its
+                        // subfolders, and the assets inside are deleted;
+                        // timelines inside move to the library root.
+                        let path = self.folder_path_of(&id);
+                        if !path.is_empty() {
+                            Self::run_shared_tool(
+                                "organize_media",
+                                serde_json::json!({ "deletes": [path] }),
+                            );
+                        }
                     }
                     _ => {}
                 },

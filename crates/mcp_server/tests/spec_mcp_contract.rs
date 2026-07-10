@@ -26,12 +26,14 @@ fn mcp_002_server_version() {
 // ── MCP-003: Exposes the same tool set as the in-app agent ───────────────────
 
 #[test]
-fn mcp_003_exposes_54_tools() {
+fn mcp_003_exposes_57_tools() {
+    // Interim tool-surface-v2 count: 64 + 3 new − 10 retired = 57 (tools.rs
+    // header history).
     let tools = agent_contract::all_tools();
     assert_eq!(
         tools.len(),
-        64,
-        "MCP-003: 64 tools (see agent_contract tools.rs header history)"
+        57,
+        "MCP-003: 57 tools (see agent_contract tools.rs header history)"
     );
 }
 
@@ -60,7 +62,7 @@ fn mcp_003_all_tool_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 64, "all 64 tool names must be unique");
+    assert_eq!(names.len(), 57, "all 57 tool names must be unique");
 }
 
 #[test]
@@ -230,7 +232,7 @@ fn json_rpc_tools_list_response_format() {
         .pointer("/result/tools")
         .and_then(|v| v.as_array())
         .unwrap();
-    assert_eq!(tools_arr.len(), 64);
+    assert_eq!(tools_arr.len(), 57);
 
     // Each tool entry has required fields
     for tool_val in tools_arr {

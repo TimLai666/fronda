@@ -1,4 +1,4 @@
-//! All 64 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 57 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -17,6 +17,14 @@
 //! v0.6.1 nav port: open_project implemented + new_project added via ProjectNavigator;
 //! the speculative create_project/delete_project stubs removed (64 → 63).
 //! Upstream #152: added send_feedback via the FeedbackSender seam (63 → 64).
+//! tool-surface-v2 phases 2-3 (upstream #263 @141c69b): added organize_media,
+//! manage_tracks, close_project (+3); retired create_folder, rename_folder,
+//! delete_folder, move_to_folder, rename_media, delete_media (→ organize_media),
+//! remove_tracks (→ manage_tracks), create_matte + import_folder (→ import_media
+//! source.matte/source.path-directory), duplicate_timeline (→ create_timeline
+//! 'from') (−10). 64 + 3 − 10 = 57. Interim count — phases 4-5 retire
+//! list_folders/set_blend_mode/set_chroma_key/set_color_grade/generate_music
+//! and land the host split toward the final v2 surface (design.md C-1).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -32,18 +40,18 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Returns all 64 tools exposed to the agent.
+/// Returns all 57 tools exposed to the agent.
 ///
-/// TDEF-001: tool set (42 original + Issues #172/174/157/165/#158/155/154 additions).
+/// TDEF-001: tool set (see the header history; interim v2 count).
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         add_captions(),
         add_clips(),
         apply_layout(),
+        close_project(),
         create_compound_clip(),
         create_timeline(),
         dissolve_compound_clip(),
-        duplicate_timeline(),
         set_active_timeline(),
         add_shapes(),
         add_texts(),
@@ -52,10 +60,6 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         apply_clip_preset(),
         apply_color(),
         apply_effect(),
-        create_folder(),
-        create_matte(),
-        delete_folder(),
-        delete_media(),
         duplicate_project(),
         list_clip_presets(),
         generate_audio(),
@@ -67,7 +71,6 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         get_projects(),
         get_timeline(),
         get_transcript(),
-        import_folder(),
         import_media(),
         insert_clips(),
         inspect_color(),
@@ -75,17 +78,15 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         inspect_timeline(),
         list_folders(),
         list_models(),
+        manage_tracks(),
         move_clips(),
-        move_to_folder(),
         new_project(),
         open_project(),
+        organize_media(),
         remove_clips(),
         remove_silence(),
         sync_audio(),
-        remove_tracks(),
         remove_words(),
-        rename_folder(),
-        rename_media(),
         ripple_delete_ranges(),
         search_media(),
         send_feedback(),
@@ -143,13 +144,13 @@ Edits are undoable and effectively free — make them directly rather than askin
 # Compositing, text, and graphics
 - add_texts / add_shapes: overlay titles and captions (text), or rectangles, ovals, circles, arrows, and lines (shapes), on a video track.
 - update_text: change existing text clips (or a whole captionGroupId) in place — content, typography, color, animation, or text-box transform; only the fields you pass change.
-- create_matte: add a solid-colour image to the library — backgrounds, lower-thirds, letterbox bars. Pass a hex colour and an optional aspect ratio, then place it with add_clips.
+- import_media (source.matte with hex): add a solid-colour matte image to the library — backgrounds, lower-thirds, letterbox bars — then place it with add_clips.
 - apply_color: grade a clip's colour (merge semantics — only the params you pass change).
 - apply_effect / set_chroma_key / set_blend_mode: add a blur or vignette, key out a green screen, or change how a clip composites over the layers beneath it.
 - save_clip_preset / apply_clip_preset / list_clip_presets: capture one clip's grade (transform, crop, opacity, volume, speed, effects, blend, chroma) as a named preset, then stamp it onto other clips.
 
 # Media library
-- create_folder / move_to_folder / rename_media organize the library; import_media registers an external video, audio, or image file.
+- organize_media reorganizes the library in one call — create folders (paths like 'B-roll/Sunset', never ids), move items into them, rename, delete; import_media registers an external video, audio, or image file (source.path may be a directory, imported recursively).
 
 # Feedback
 - send_feedback: relay a bug report or feature request to the Fronda team in the user's own words — only when the user asks.
@@ -279,31 +280,49 @@ fn add_texts() -> ToolDefinition {
     }
 }
 
-fn create_folder() -> ToolDefinition {
+/// tool-surface-v2 (#263): path-addressed library reorganisation, replacing
+/// create_folder / rename_folder / delete_folder / move_to_folder /
+/// rename_media / delete_media. Description verbatim from upstream@141c69b.
+fn organize_media() -> ToolDefinition {
     ToolDefinition {
-        name: "create_folder",
-        description: "Create a new media folder.",
-        input_schema: object(&[("name", string("Folder name"))]),
-    }
-}
-
-fn delete_folder() -> ToolDefinition {
-    ToolDefinition {
-        name: "delete_folder",
-        description: "Delete a media folder and its contents.",
-        input_schema: object(&[("folderId", string("Folder id to delete"))]),
-    }
-}
-
-fn delete_media() -> ToolDefinition {
-    ToolDefinition {
-        name: "delete_media",
-        description: "Deletes a media asset or a timeline. mediaId accepts an asset id from \
-            get_media or a timelineId from get_timeline. Deleting a timeline leaves nest clips \
-            referencing it rendering black (remove those clips too, or don't delete a timeline \
-            that's still nested); deleting the active timeline switches to another first. The \
-            last remaining timeline can't be deleted.",
-        input_schema: object(&[("mediaId", string("Media asset id or timelineId to delete"))]),
+        name: "organize_media",
+        description: "Reorganizes the library in one undoable action: create folders, move items into folders, rename items, delete items. An item is a media asset id (from get_media), a timelineId, or a folder path like 'B-roll/Sunset' — the tool tells them apart. Folders are always addressed by path, never by id; destination paths are created if missing. Arrays apply in order (createFolders, moves, renames, deletes), but item references resolve against the library as it was before the call — only 'into' destinations may name folders the same call creates.\n\nDeleting an asset also removes every clip referencing it (reported as clipsRemoved). Deleting a folder deletes its subfolders and assets; timelines inside move to the root instead. Deleting a timeline leaves nest clips referencing it rendering black (a warning reports how many); the last remaining timeline can't be deleted. Returns only what actually happened — createdFolders, moved, renamed, deleted, clipsRemoved, warnings.",
+        input_schema: object_optional(&[
+            (
+                "createFolders",
+                array("Folder paths to ensure exist, e.g. ['Hero shots/Takes']. Existing folders are left alone. Rarely needed — moves and generation 'folder' params create folders on their own."),
+            ),
+            (
+                "moves",
+                array_of(
+                    "Each entry files items into one destination folder.",
+                    object_schema(
+                        &[
+                            ("items", array("Asset ids, timeline ids, and/or folder paths to move.")),
+                            ("into", string("Destination folder path; created if missing. Omit to move to the project root.")),
+                        ],
+                        &["items"],
+                    ),
+                ),
+            ),
+            (
+                "renames",
+                array_of(
+                    "Renames, applied to assets, timelines, or folders.",
+                    object_schema(
+                        &[
+                            ("item", string("Asset id, timeline id, or folder path.")),
+                            ("name", string("New display name (a name, not a path — renaming never moves).")),
+                        ],
+                        &["item", "name"],
+                    ),
+                ),
+            ),
+            (
+                "deletes",
+                array("Asset ids, timeline ids, and/or folder paths to delete."),
+            ),
+        ]),
     }
 }
 
@@ -401,11 +420,61 @@ fn get_transcript() -> ToolDefinition {
     }
 }
 
+/// tool-surface-v2 (#263): source-object import absorbing create_matte
+/// (source.matte) and import_folder (source.path may be a directory).
+/// Description verbatim from upstream@141c69b.
 fn import_media() -> ToolDefinition {
     ToolDefinition {
         name: "import_media",
-        description: "Import a media file into the project. Supported extensions: .mov .mp4 .m4v (video), .mp3 .wav .aac .m4a .aiff .aif .aifc .flac (audio), .png .jpg .jpeg .tiff .heic .webp (image), .json .lottie (animation).",
-        input_schema: object(&[("path", string("File path to import"))]),
+        description: "Imports external media into the project's library — the bridge for assets coming from other MCP servers (stock libraries, music services, web search) or local files the user already has. The 'source' object must set exactly one of: url (HTTPS only — downloaded in the background, the dominant case; max 1 GB), path (absolute local file path — copied into the project in the background; may also be a directory, which is imported recursively, mirroring its subfolder structure as media folders), bytes (base64-encoded inline data — max ~15 MB of base64 ≈ 11 MB binary; use url/path for anything larger), or matte (a generated solid-color PNG). For url, type is inferred from the URL path's file extension unless source.mimeType is set as an override (needed for signed URLs whose path has no usable extension). For bytes, source.mimeType is required.\n\nSupported types and extensions: video (mov, mp4, m4v), audio (mp3, wav, aac, m4a, aiff, aifc, flac), image (png, jpg, jpeg, tiff, heic). Anything else is rejected — the caller must transcode externally.\n\nurl and file-path imports run in the background and return {mediaRef, status:'downloading'} — poll get_media with ids:[mediaRef] until generationStatus clears, then the asset is usable in add_clips. Directory, bytes, and matte imports finish inline with status:'ready'. Costs nothing.",
+        input_schema: {
+            let source = object_schema(
+                &[
+                    ("url", string("HTTPS URL. Pre-signed URLs are fine but must not expire mid-download.")),
+                    ("path", string("Absolute local file or directory path, readable by the Palmier process. A directory is imported recursively — every openable file is pulled in and the folder structure is replicated as media folders.")),
+                    ("bytes", string("Base64-encoded media data. Prefer url or path for anything over ~10MB.")),
+                    (
+                        "matte",
+                        object_schema(
+                            &[
+                                ("hex", string("Hex color, e.g. '#000000' or '#FFFFFF'.")),
+                                (
+                                    "aspectRatio",
+                                    string_enum(
+                                        "Defaults to Project (timeline resolution). Other values use the project's short edge.",
+                                        &["Project", "16:9", "9:16", "1:1", "4:3", "9:14", "2.4:1"],
+                                    ),
+                                ),
+                            ],
+                            &["hex"],
+                        ),
+                    ),
+                    ("mimeType", string("Required when bytes is set. Optional override for url when its path has no usable extension (e.g. signed URLs). Accepted: video/mp4, video/quicktime, audio/mpeg, audio/wav, audio/aac, audio/mp4, image/png, image/jpeg, image/tiff, image/heic.")),
+                ],
+                &[],
+            );
+            let mut props = serde_json::Map::new();
+            props.insert("source".to_string(), {
+                let mut s = source;
+                s["description"] = Value::String(
+                    "Exactly one of url, path, bytes, or matte must be set. mimeType is required when bytes is set; for url it acts as a type-inference override.".to_string(),
+                );
+                s
+            });
+            props.insert(
+                "name".to_string(),
+                string("Display name in the library. Defaults to the filename derived from url/path, or 'Imported asset' for bytes."),
+            );
+            props.insert(
+                "folder".to_string(),
+                string("Optional destination folder path, e.g. 'B-roll/Sunset'. Created if missing. Omit for the project root."),
+            );
+            serde_json::json!({
+                "type": "object",
+                "required": ["source"],
+                "properties": Value::Object(props),
+            })
+        },
     }
 }
 
@@ -568,13 +637,45 @@ fn move_clips() -> ToolDefinition {
     }
 }
 
-fn move_to_folder() -> ToolDefinition {
+/// tool-surface-v2 (#263): multi-action track management, replacing
+/// remove_tracks. Description verbatim from upstream@141c69b.
+fn manage_tracks() -> ToolDefinition {
     ToolDefinition {
-        name: "move_to_folder",
-        description: "Move a media asset to a folder.",
-        input_schema: object(&[
-            ("mediaId", string("Media asset id to move")),
-            ("folderId", string("Destination folder id")),
+        name: "manage_tracks",
+        description: "Track-level operations in one undoable action: reorder (stacking order — index 0 renders on top; a video track can only move within the video zone, audio within audio), set flags (muted silences an audio track; hidden excludes a video track from the render; syncLocked controls whether ripple edits shift it), and remove (deletes tracks with every clip on them; linked partners on OTHER tracks stay). Arrays run reorder → set → remove; every index refers to the track order at call time (resolved up front). Returns the resulting track order — remaining indexes shift after reorder/remove. Tracks holding multicam clips can't be removed or sync-unlocked (mute/hide stay free).",
+        input_schema: object_optional(&[
+            (
+                "reorder",
+                array_of(
+                    "Moves, applied in order. Use to fix stacking, e.g. bring a PIP inset's track to index 0.",
+                    object_schema(
+                        &[
+                            ("index", integer("Track to move (0-based, current order).")),
+                            ("to", integer("Destination index; clamped to the track's type zone.")),
+                        ],
+                        &["index", "to"],
+                    ),
+                ),
+            ),
+            (
+                "set",
+                array_of(
+                    "Flag changes, applied per track.",
+                    object_schema(
+                        &[
+                            ("index", integer("Track to change (0-based, current order).")),
+                            ("muted", boolean("Silence/unsilence the track's audio.")),
+                            ("hidden", boolean("Exclude/include a video track in the render.")),
+                            ("syncLocked", boolean("Whether ripple edits shift this track along.")),
+                        ],
+                        &["index"],
+                    ),
+                ),
+            ),
+            (
+                "remove",
+                array("Track indexes to remove, with all their clips."),
+            ),
         ]),
     }
 }
@@ -590,33 +691,19 @@ fn remove_clips() -> ToolDefinition {
     }
 }
 
-fn remove_tracks() -> ToolDefinition {
+/// tool-surface-v2 (#263): save-and-close via the ProjectNavigator seam.
+/// Description verbatim from upstream@141c69b.
+fn close_project() -> ToolDefinition {
     ToolDefinition {
-        name: "remove_tracks",
-        description: "Remove tracks from the timeline.",
-        input_schema: object(&[("trackIds", array("Track ids to remove"))]),
-    }
-}
-
-fn rename_folder() -> ToolDefinition {
-    ToolDefinition {
-        name: "rename_folder",
-        description: "Rename a media folder.",
-        input_schema: object(&[
-            ("folderId", string("Folder id to rename")),
-            ("name", string("New folder name")),
-        ]),
-    }
-}
-
-fn rename_media() -> ToolDefinition {
-    ToolDefinition {
-        name: "rename_media",
-        description: "Renames a media asset or a timeline. mediaId accepts either an asset id \
-            from get_media or a timelineId from get_timeline.",
-        input_schema: object(&[
-            ("mediaId", string("Media asset id or timelineId to rename")),
-            ("name", string("New display name")),
+        name: "close_project",
+        description: "Save and close an open project. Omit all arguments to close the active project; or identify one by name, id (from get_projects), or path. Unsaved changes are saved first. When the active project closes, the next open project becomes active (returned as `active`) — with none left, the Home window shows and editing tools need open_project/new_project again.",
+        input_schema: object_optional(&[
+            (
+                "name",
+                string("Project name, matched case-insensitively. Omit everything to close the active project."),
+            ),
+            ("id", string("Project id from get_projects.")),
+            ("path", string("Filesystem path to a .palmier package.")),
         ]),
     }
 }
@@ -679,26 +766,6 @@ fn remove_words() -> ToolDefinition {
                     The removed words' own frames always go regardless.",
                 ),
             ),
-        ]),
-    }
-}
-
-fn create_matte() -> ToolDefinition {
-    ToolDefinition {
-        name: "create_matte",
-        description: "Add a solid-colour image (matte) to the media library — a plain colour fill \
-            for backgrounds, lower-thirds, or letterbox bars. `hex` is required (e.g. '#000000'). \
-            `aspectRatio` sets the size: 'Project' (default, matches the timeline) or a fixed ratio \
-            (16:9, 9:16, 1:1, 4:3, 9:14, 2.4:1) fit to the timeline's short edge. Returns the new \
-            mediaRef; place it with add_clips.",
-        input_schema: object_optional(&[
-            ("hex", string("Fill colour as '#RGB' / '#RRGGBB' (required).")),
-            (
-                "aspectRatio",
-                string("Optional: 'Project' (default) or 16:9 / 9:16 / 1:1 / 4:3 / 9:14 / 2.4:1."),
-            ),
-            ("name", string("Optional asset name (default 'Matte').")),
-            ("folderId", string("Optional folder id to place the asset in.")),
         ]),
     }
 }
@@ -806,20 +873,6 @@ fn upscale_media() -> ToolDefinition {
         name: "upscale_media",
         description: "Upscale a media asset.",
         input_schema: object(&[("mediaId", string("Media asset id to upscale"))]),
-    }
-}
-
-fn import_folder() -> ToolDefinition {
-    ToolDefinition {
-        name: "import_folder",
-        description: "Recursively import all supported media files from a directory.",
-        input_schema: object(&[
-            ("path", string("Directory path to import from")),
-            (
-                "recursive",
-                boolean("If true, recursively scan subdirectories"),
-            ),
-        ]),
     }
 }
 
@@ -1041,6 +1094,49 @@ fn array(items_desc: &str) -> Value {
     Value::Object(map)
 }
 
+/// String schema with an `enum` value list (tool-surface-v2 schemas).
+fn string_enum(description: &str, values: &[&str]) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("type".to_string(), Value::String("string".to_string()));
+    map.insert(
+        "description".to_string(),
+        Value::String(description.to_string()),
+    );
+    map.insert(
+        "enum".to_string(),
+        Value::Array(values.iter().map(|v| Value::String(v.to_string())).collect()),
+    );
+    Value::Object(map)
+}
+
+/// Array schema with a typed `items` schema (tool-surface-v2 schemas).
+fn array_of(description: &str, items: Value) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("type".to_string(), Value::String("array".to_string()));
+    map.insert(
+        "description".to_string(),
+        Value::String(description.to_string()),
+    );
+    map.insert("items".to_string(), items);
+    Value::Object(map)
+}
+
+/// Nested object schema with an explicit `required` list (tool-surface-v2).
+fn object_schema(props: &[(&str, Value)], required: &[&str]) -> Value {
+    let mut properties = serde_json::Map::new();
+    for (name, schema) in props {
+        properties.insert(name.to_string(), schema.clone());
+    }
+    let mut map = serde_json::Map::new();
+    map.insert("type".to_string(), Value::String("object".to_string()));
+    map.insert(
+        "required".to_string(),
+        Value::Array(required.iter().map(|r| Value::String(r.to_string())).collect()),
+    );
+    map.insert("properties".to_string(), Value::Object(properties));
+    Value::Object(map)
+}
+
 fn object_any(description: &str) -> Value {
     let mut map = serde_json::Map::new();
     map.insert("type".to_string(), Value::String("object".to_string()));
@@ -1053,16 +1149,22 @@ fn object_any(description: &str) -> Value {
 
 // ── Upstream #255: multi-timeline MCP tools ─────────────────────────────────
 
+/// tool-surface-v2 (#263): absorbs duplicate_timeline via 'from'.
+/// Description verbatim from upstream@141c69b.
 fn create_timeline() -> ToolDefinition {
     ToolDefinition {
         name: "create_timeline",
-        description: "Creates a new empty timeline in the project and switches to it — every read             and edit tool now targets it. Settings (fps, resolution) are inherited from the             previously active timeline. Returns the new timelineId. Undoable.
-
-Use timelines to             organize a project: alternate versions, sections assembled separately, or reusable             groups. A timeline can be placed inside another as a single clip (the user drops it             from the media panel); it then appears as a clip with mediaType 'sequence' whose             mediaRef is the timelineId.",
-        input_schema: object(&[(
-            "name",
-            string("Optional display name. Defaults to 'Timeline N'."),
-        )]),
+        description: "Creates a timeline and switches to it — every read and edit tool now targets it. Without 'from', the new timeline is empty and inherits fps/resolution from the previously active one. With 'from', it's a full copy of that timeline — the versioning primitive: copy, then edit the copy (\"a tighter cut\", \"a 9:16 version\") while the original stays intact; every clip and track id in the copy is NEW, so re-read get_timeline before editing. Undoable.\n\nUse timelines to organize a project: alternate versions, sections assembled separately, or reusable groups. A timeline can be placed inside another as a single clip (add_clips with the timelineId as mediaRef); it then appears as a clip with mediaType 'sequence'.",
+        input_schema: object_optional(&[
+            (
+                "name",
+                string("Optional display name. Defaults to 'Timeline N', or '<source> copy' when duplicating."),
+            ),
+            (
+                "from",
+                string("Optional timelineId to duplicate instead of creating empty."),
+            ),
+        ]),
     }
 }
 
@@ -1076,20 +1178,6 @@ To edit the             contents of a nested timeline (a clip with mediaType 'se
             "timelineId",
             string("Timeline id from get_timeline's timelines list (or a sequence clip's mediaRef)."),
         )]),
-    }
-}
-
-fn duplicate_timeline() -> ToolDefinition {
-    ToolDefinition {
-        name: "duplicate_timeline",
-        description: "Duplicates a timeline — the versioning primitive: copy, then edit the copy             (\"a tighter cut\", \"a 9:16 version\") while the original stays intact. Copies all             tracks, clips, and settings, switches to the copy, and returns its timelineId. Every             clip and track id in the copy is NEW — re-read get_timeline before editing. Undoable.",
-        input_schema: object(&[
-            (
-                "timelineId",
-                string("Timeline to duplicate. Defaults to the active timeline."),
-            ),
-            ("name", string("Optional name for the copy. Defaults to '<name> copy'.")),
-        ]),
     }
 }
 
@@ -1282,12 +1370,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_54_tools() {
+    fn tdef_001_exactly_57_tools() {
+        // Interim tool-surface-v2 count: 64 + 3 new (organize_media,
+        // manage_tracks, close_project) − 10 retired = 57 (header history).
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            64,
-            "TDEF-001: 64 tools (see the header history)"
+            57,
+            "TDEF-001: 57 tools (see the header history)"
         );
     }
 
@@ -1316,7 +1406,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 64, "all 64 tool names must be unique");
+        assert_eq!(names.len(), 57, "all 57 tool names must be unique");
     }
 
     #[test]
