@@ -1,4 +1,41 @@
+use core_model::ClipType;
 use std::fmt;
+
+/// A media-library asset dragged across panels (timeline tracks, generation
+/// reference tiles). Used as the typed in-app drag payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetDrag {
+    pub asset_id: String,
+    pub media_type: ClipType,
+}
+
+impl AssetDrag {
+    /// DRAG-001 string form (`palmier-asset://<id>`), for pasteboard bridges.
+    pub fn payload_string(&self) -> String {
+        format!("palmier-asset://{}", self.asset_id)
+    }
+}
+
+/// Pick the track a dragged asset lands on (drag-drop spec: asset→timeline):
+/// the hovered track when type-compatible, else the first compatible track,
+/// else None (caller falls back to auto-create placement).
+pub fn asset_drop_track(
+    track_types: &[ClipType],
+    hovered: Option<usize>,
+    media_type: ClipType,
+) -> Option<usize> {
+    if let Some(idx) = hovered {
+        if track_types
+            .get(idx)
+            .is_some_and(|t| crate::is_track_compatible(*t, media_type))
+        {
+            return Some(idx);
+        }
+    }
+    track_types
+        .iter()
+        .position(|t| crate::is_track_compatible(*t, media_type))
+}
 
 /// A parsed internal drag payload item
 #[derive(Debug, Clone, PartialEq)]
@@ -301,5 +338,55 @@ mod tests {
     #[test]
     fn is_internal_drag_payload_false_for_http() {
         assert!(!is_internal_drag_payload("https://example.com"));
+    }
+
+    // AssetDrag string form round-trips through the DRAG-001 parser.
+    #[test]
+    fn asset_drag_payload_string_round_trips() {
+        let drag = AssetDrag {
+            asset_id: "abc123".into(),
+            media_type: ClipType::Video,
+        };
+        assert_eq!(drag.payload_string(), "palmier-asset://abc123");
+        assert_eq!(
+            parse_drag_payload(&drag.payload_string()).items,
+            vec![DragItem::Asset("abc123".into())]
+        );
+        assert!(is_internal_drag_payload(&drag.payload_string()));
+    }
+
+    // Asset drop targeting: hovered track wins when compatible.
+    #[test]
+    fn asset_drop_track_prefers_hovered_when_compatible() {
+        let tracks = [ClipType::Video, ClipType::Audio];
+        assert_eq!(asset_drop_track(&tracks, Some(0), ClipType::Video), Some(0));
+        assert_eq!(asset_drop_track(&tracks, Some(1), ClipType::Audio), Some(1));
+        // Image is visual → compatible with the video track.
+        assert_eq!(asset_drop_track(&tracks, Some(0), ClipType::Image), Some(0));
+    }
+
+    // Asset drop targeting: incompatible hover falls back to the first compatible track.
+    #[test]
+    fn asset_drop_track_falls_back_on_type_mismatch() {
+        let tracks = [ClipType::Video, ClipType::Audio];
+        assert_eq!(asset_drop_track(&tracks, Some(0), ClipType::Audio), Some(1));
+        assert_eq!(asset_drop_track(&tracks, Some(1), ClipType::Video), Some(0));
+        // No hover at all → first compatible.
+        assert_eq!(asset_drop_track(&tracks, None, ClipType::Image), Some(0));
+    }
+
+    // Asset drop targeting: no compatible track → None (caller auto-creates).
+    #[test]
+    fn asset_drop_track_none_without_compatible_track() {
+        assert_eq!(asset_drop_track(&[], Some(0), ClipType::Video), None);
+        assert_eq!(
+            asset_drop_track(&[ClipType::Video], Some(0), ClipType::Audio),
+            None
+        );
+        // Out-of-range hover index is ignored, not a panic.
+        assert_eq!(
+            asset_drop_track(&[ClipType::Audio], Some(9), ClipType::Audio),
+            Some(0)
+        );
     }
 }

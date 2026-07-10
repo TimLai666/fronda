@@ -36,7 +36,8 @@ pub use compound::{
     decompose_nest, flatten_nests, nest_clips, timeline_resolver, NestResult, NEST_MAX_DEPTH,
 };
 pub use drag_payload::{
-    is_internal_drag_payload, parse_asset_segment, parse_drag_payload, DragItem, DragPayload,
+    asset_drop_track, is_internal_drag_payload, parse_asset_segment, parse_drag_payload, AssetDrag,
+    DragItem, DragPayload,
 };
 pub use edit::{
     apply_clip_speed, clear_region, find_clip, link_audio_for_placed_clips, move_clips,

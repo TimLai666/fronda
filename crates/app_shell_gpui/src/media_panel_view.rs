@@ -6,15 +6,36 @@
 use crate::generation_view::GenerationView;
 use crate::media_panel_model::{MediaPanelState, MediaPanelTab};
 use crate::theme::{
-    Accent, Background, BorderColors, BorderWidth, FontSize, IconSize, Layout, MediaPanel,
-    Opacity, Radius, Spacing, Text,
+    Accent, Background, BorderColors, BorderWidth, DropZone, FontSize, IconSize, Layout,
+    MediaPanel, Opacity, Radius, Spacing, Text,
 };
 use core_model::{ClipType, MediaFolder, MediaManifest, MediaManifestEntry};
 use gpui::{
-    div, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
+    div, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, ExternalPaths, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
     SharedString, Styled, Window,
 };
+use timeline_core::AssetDrag;
+
+/// Floating name chip shown while dragging a media asset between panels.
+struct AssetDragPreview {
+    name: String,
+}
+
+impl Render for AssetDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(Spacing::SM))
+            .py(px(Spacing::XXS))
+            .rounded(px(Radius::SM))
+            .bg(Background::RAISED)
+            .border_1()
+            .border_color(BorderColors::PRIMARY)
+            .text_size(px(FontSize::XS))
+            .text_color(Text::PRIMARY)
+            .child(self.name.clone())
+    }
+}
 
 // ── Library view state (pure logic; media-library-ui spec) ──────────────────
 
@@ -811,7 +832,8 @@ impl MediaPanelView {
         }
     }
 
-    /// Asset tile with selection mouse handling.
+    /// Asset tile with selection mouse handling; draggable onto timeline
+    /// tracks and generation reference tiles (AssetDrag payload).
     fn render_asset_tile(
         &self,
         e: &MediaManifestEntry,
@@ -819,13 +841,25 @@ impl MediaPanelView {
     ) -> impl IntoElement {
         let data = self.asset_tile_data(e);
         let id = data.id.clone();
-        asset_tile(&data).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                this.handle_asset_click(&id, ev, cx);
-            }),
-        )
+        let drag_name = data.name.clone();
+        asset_tile(&data)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.handle_asset_click(&id, ev, cx);
+                }),
+            )
+            .on_drag(
+                AssetDrag {
+                    asset_id: e.id.clone(),
+                    media_type: e.r#type,
+                },
+                move |_, _, _, cx| {
+                    let name = drag_name.clone();
+                    cx.new(|_| AssetDragPreview { name })
+                },
+            )
     }
 
     /// Folder tile: div-drawn folder glyph, count badge, double-click to
@@ -1499,6 +1533,19 @@ impl MediaPanelView {
             .flex_col()
             .size_full()
             .on_key_down(cx.listener(Self::handle_key_down))
+            // External file drop → the same import flow as the menu (Swift
+            // MediaPanelDropArea). Unknown extensions are skipped with a log.
+            .on_drop::<ExternalPaths>(cx.listener(|_, paths: &ExternalPaths, _, cx| {
+                crate::media_import::import_files_into_shared_state(paths.paths());
+                cx.notify();
+            }))
+            .drag_over::<ExternalPaths>(|style, _, _, _| {
+                style
+                    .rounded(px(Radius::MD))
+                    .border_2()
+                    .border_color(DropZone::BORDER)
+                    .bg(DropZone::FILL)
+            })
             .child(self.render_toolbar(cx))
             .child(self.render_body(cx))
             // GenerationView anchored to BOTTOM with padding (Swift:
