@@ -57,6 +57,13 @@ pub enum ActiveScreen {
 struct ProjectMenuTarget {
     registry_id: String,
     path: std::path::PathBuf,
+    /// Whether the package existed on disk at render time.
+    accessible: bool,
+}
+
+/// Frames for the default 3-second text clip (Swift: Defaults.textDurationSeconds).
+fn default_text_duration_frames(fps: i64) -> i64 {
+    ((3.0 * fps.max(1) as f64).round() as i64).max(1)
 }
 
 /// Root view that switches between Home and Editor.
@@ -86,6 +93,11 @@ pub struct AppRoot {
     update_overlay: Entity<UpdateOverlayView>,
     /// Right-click menu on recent-project cards.
     project_menu: crate::context_menu::ContextMenuState<ProjectMenuTarget>,
+    /// Registry id of the recent-project card under the pointer.
+    hovered_project: Option<String>,
+    /// Registry id whose hover trash button is armed for delete confirmation
+    /// (context-menu arm-then-confirm pattern).
+    armed_delete: Option<String>,
 }
 
 impl AppRoot {
@@ -111,6 +123,8 @@ impl AppRoot {
             timeline_height: 200.0,
             timeline_resize_drag: None,
             project_menu: crate::context_menu::ContextMenuState::new(),
+            hovered_project: None,
+            armed_delete: None,
         }
     }
 
@@ -121,11 +135,43 @@ impl AppRoot {
         if self.chat_view.is_none() {
             self.titlebar_view = Some(cx.new(|cx| TitleBarView::new(cx)));
             self.chat_view = Some(cx.new(|cx| ChatView::new(cx)));
-            self.toolbar_view = Some(cx.new(|cx| ToolbarView::new(cx)));
+            let toolbar = cx.new(|cx| ToolbarView::new(cx));
+            cx.subscribe(&toolbar, |this, _, event, cx| match event {
+                crate::toolbar_view::ToolbarEvent::AddText => this.add_text_at_playhead(cx),
+            })
+            .detach();
+            self.toolbar_view = Some(toolbar);
             self.media_panel_view = Some(cx.new(|cx| MediaPanelView::new(cx)));
             self.preview_view = Some(cx.new(|cx| PreviewView::new(cx)));
             self.timeline_view = Some(cx.new(|cx| TimelineView::new(cx)));
             self.inspector_view = Some(cx.new(|cx| InspectorView::new(cx)));
+        }
+        cx.notify();
+    }
+
+    /// Toolbar "T": insert a default text clip at the timeline playhead via
+    /// the shared add_texts tool (undoable; every view syncs on the revision).
+    fn add_text_at_playhead(&mut self, cx: &mut Context<Self>) {
+        let playhead = self
+            .timeline_view
+            .as_ref()
+            .map(|tv| tv.read(cx).state.playhead_frame)
+            .unwrap_or(0)
+            .max(0);
+        let executor = crate::editor_state_hub::EditorStateHub::global().executor();
+        let guard = executor.lock();
+        if let Ok(mut exec) = guard {
+            let duration = default_text_duration_frames(exec.timeline().fps);
+            let args = serde_json::json!({
+                "texts": [{
+                    "content": "Text",
+                    "startFrame": playhead,
+                    "durationFrames": duration,
+                }]
+            });
+            if let Err(reason) = exec.execute("add_texts", &args) {
+                eprintln!("add_texts failed: {reason}");
+            }
         }
         cx.notify();
     }
@@ -387,6 +433,28 @@ impl AppRoot {
         cx.notify();
     }
 
+    /// Capsule button for the welcome overlay (Swift: .capsule button style).
+    fn welcome_button(id: &'static str, label: &str, prominent: bool) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .px(px(Spacing::LG))
+            .py(px(Spacing::SM))
+            .rounded_full()
+            .cursor_pointer()
+            .text_size(px(FontSize::SM))
+            .when(prominent, |el| {
+                el.bg(crate::theme::Accent::PRIMARY)
+                    .text_color(Background::BASE)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+            })
+            .when(!prominent, |el| {
+                el.border_1()
+                    .border_color(BorderColors::PRIMARY)
+                    .text_color(Text::SECONDARY)
+            })
+            .child(label.to_string())
+    }
+
     /// A sidebar navigation button row.
     fn sidebar_row_svg(
         id: &str,
@@ -427,21 +495,29 @@ impl AppRoot {
     }
 
     /// Project-card context menu entries (order defines activation indices).
-    fn project_card_menu_entries() -> Vec<crate::context_menu::MenuEntry> {
+    /// Open/Reveal are omitted for a missing package (Swift: entry.isAccessible).
+    fn project_card_menu_entries(accessible: bool) -> Vec<crate::context_menu::MenuEntry> {
         use crate::context_menu::MenuEntry;
-        vec![
-            MenuEntry::item("open", "Open"),
-            MenuEntry::item("reveal", "Reveal in File Manager"),
-            MenuEntry::separator(),
-            MenuEntry::item("remove-recents", "Remove from Recents"),
-            MenuEntry::separator(),
-            MenuEntry::destructive_confirm("delete", "Delete Project", "Confirm Delete"),
-        ]
+        let mut entries = Vec::new();
+        if accessible {
+            entries.push(MenuEntry::item("open", "Open"));
+            entries.push(MenuEntry::item("reveal", "Reveal in File Manager"));
+            entries.push(MenuEntry::separator());
+        }
+        entries.push(MenuEntry::item("remove-recents", "Remove from Recents"));
+        entries.push(MenuEntry::separator());
+        entries.push(MenuEntry::destructive_confirm(
+            "delete",
+            "Delete Project",
+            "Confirm Delete",
+        ));
+        entries
     }
 
     fn activate_project_menu_item(&mut self, index: usize, cx: &mut Context<Self>) {
         let target = self.project_menu.target().cloned();
-        let entries = Self::project_card_menu_entries();
+        let entries =
+            Self::project_card_menu_entries(target.as_ref().map_or(true, |t| t.accessible));
         if let crate::context_menu::Activation::Perform(id) =
             self.project_menu.activate(index, &entries)
         {
@@ -494,12 +570,15 @@ impl AppRoot {
             &crate::project_registry_store::default_registry_path(),
         );
         let now = chrono::Utc::now();
+        // Accessibility (file-missing) is a Path::exists snapshot taken here,
+        // once per render (Swift: ProjectEntry.isAccessible).
         let recent_projects: Vec<(
             String,
             String,
             String,
             Option<std::path::PathBuf>,
             std::path::PathBuf,
+            bool,
         )> = registry
             .sorted_entries()
             .iter()
@@ -511,11 +590,15 @@ impl AppRoot {
                     crate::home_model::relative_time_label(entry.last_opened_date, now),
                     thumb.is_file().then_some(thumb),
                     entry.url.clone(),
+                    entry.url.exists(),
                 )
             })
             .collect();
 
-        // Sample project card data (Swift: SampleProjectsStrip items)
+        // Sample project card data (Swift: SampleProjectsStrip items).
+        // Placeholder titles/colors only: real samples come from
+        // SampleProjectService (network backend, gated) — posters, download
+        // progress, and open-on-click are wired when that service lands.
         let sample_cards: &[(&str, f32)] = &[
             ("Short Film", 0.60),
             ("Commercial", 0.75),
@@ -524,6 +607,8 @@ impl AppRoot {
 
         let welcome_dismissed = self.welcome_dismissed;
         let project_menu_open = self.project_menu.open_menu().cloned();
+        let hovered_project = self.hovered_project.clone();
+        let armed_delete = self.armed_delete.clone();
 
         div()
             .id("fronda-home")
@@ -578,8 +663,8 @@ impl AppRoot {
                             "icons/folder.svg",
                             "Open Project",
                         )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_editor(cx);
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.perform_menu_action(menu::MenuAction::OpenProject, window, cx);
                         })),
                     )
                     .child(div().flex_1())
@@ -822,12 +907,18 @@ impl AppRoot {
                             )
                             // Recent projects (from registry)
                             .children(recent_projects.into_iter().map(
-                                |(id, name, time_label, thumb, path)| {
+                                |(id, name, time_label, thumb, path, accessible)| {
                                     let hue = crate::media_panel_model::tile_hue(&name);
                                     let menu_target = ProjectMenuTarget {
                                         registry_id: id.clone(),
                                         path: path.clone(),
+                                        accessible,
                                     };
+                                    let hovered = hovered_project.as_deref() == Some(id.as_str());
+                                    let armed = armed_delete.as_deref() == Some(id.as_str());
+                                    let hover_id = id.clone();
+                                    let trash_id = id.clone();
+                                    let trash_path = path.clone();
                                     let thumb_area = if let Some(thumb) = thumb {
                                         div()
                                             .flex_1()
@@ -864,16 +955,53 @@ impl AppRoot {
                                         .id(format!("recent-{id}"))
                                         .flex()
                                         .flex_col()
+                                        .relative()
                                         .w(px(HomeLayout::CARD_WIDTH as f32))
                                         .h(px(HomeLayout::CARD_HEIGHT as f32))
                                         .bg(Background::RAISED)
                                         .rounded(px(Radius::MD_LG))
                                         .border_1()
-                                        .border_color(BorderColors::SUBTLE)
+                                        .border_color(if hovered {
+                                            gpui::Hsla {
+                                                h: 0.0,
+                                                s: 0.0,
+                                                l: 1.0,
+                                                a: crate::theme::Opacity::MUTED,
+                                            }
+                                        } else {
+                                            BorderColors::SUBTLE
+                                        })
                                         .overflow_hidden()
                                         .cursor_pointer()
+                                        .when(hovered, |el| el.shadow_lg())
+                                        .when(!accessible, |el| {
+                                            el.opacity(crate::theme::Opacity::STRONG)
+                                        })
+                                        .on_hover(cx.listener(
+                                            move |this, entered: &bool, _, cx| {
+                                                if *entered {
+                                                    this.hovered_project = Some(hover_id.clone());
+                                                } else {
+                                                    if this.hovered_project.as_deref()
+                                                        == Some(hover_id.as_str())
+                                                    {
+                                                        this.hovered_project = None;
+                                                    }
+                                                    if this.armed_delete.as_deref()
+                                                        == Some(hover_id.as_str())
+                                                    {
+                                                        this.armed_delete = None;
+                                                    }
+                                                }
+                                                cx.notify();
+                                            },
+                                        ))
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.open_project_at(&path.clone(), cx);
+                                            // Missing package: the overlay explains why
+                                            // opening is unavailable (Swift guards the tap).
+                                            if accessible {
+                                                this.open_project_at(&path.clone(), cx);
+                                            }
                                         }))
                                         .on_mouse_down(
                                             MouseButton::Right,
@@ -900,7 +1028,11 @@ impl AppRoot {
                                                 .child(
                                                     div()
                                                         .text_size(px(FontSize::SM))
-                                                        .text_color(Text::PRIMARY)
+                                                        .text_color(if accessible {
+                                                            Text::PRIMARY
+                                                        } else {
+                                                            Text::MUTED
+                                                        })
                                                         .overflow_hidden()
                                                         .child(name),
                                                 )
@@ -911,11 +1043,103 @@ impl AppRoot {
                                                         .child(time_label),
                                                 ),
                                         )
+                                        // File-missing overlay (Swift: questionmark.folder + dim)
+                                        .when(!accessible, |el| {
+                                            el.child(
+                                                div()
+                                                    .absolute()
+                                                    .top_0()
+                                                    .left_0()
+                                                    .size_full()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .gap(px(Spacing::XS))
+                                                    .bg(gpui::Hsla {
+                                                        h: 0.0,
+                                                        s: 0.0,
+                                                        l: 0.0,
+                                                        a: crate::theme::Opacity::STRONG,
+                                                    })
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(FontSize::TITLE_1))
+                                                            .text_color(Text::TERTIARY)
+                                                            .child("?"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(FontSize::XS))
+                                                            .text_color(Text::TERTIARY)
+                                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                                            .child("File missing"),
+                                                    ),
+                                            )
+                                        })
+                                        // Hover trash button — arm-then-confirm, mirroring
+                                        // the context menu's destructive confirm step.
+                                        .when(hovered, |el| {
+                                            el.child(
+                                                div()
+                                                    .id(format!("recent-trash-{id}"))
+                                                    .absolute()
+                                                    .top(px(Spacing::SM_MD))
+                                                    .right(px(Spacing::SM_MD))
+                                                    // No occlude: it would un-hover the
+                                                    // card and flicker the button away;
+                                                    // stop_propagation guards the open.
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .h(px(crate::theme::IconSize::LG_XL))
+                                                    .when(!armed, |b| {
+                                                        b.w(px(crate::theme::IconSize::LG_XL))
+                                                    })
+                                                    .when(armed, |b| b.px(px(Spacing::SM_MD)))
+                                                    .rounded_full()
+                                                    .bg(Background::RAISED)
+                                                    .border_1()
+                                                    .border_color(BorderColors::SUBTLE)
+                                                    .cursor_pointer()
+                                                    .text_size(px(FontSize::SM_MD))
+                                                    .text_color(crate::theme::Status::ERROR)
+                                                    .when(armed, |b| {
+                                                        b.font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    })
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            cx.stop_propagation();
+                                                            if this.armed_delete.as_deref()
+                                                                == Some(trash_id.as_str())
+                                                            {
+                                                                Self::delete_project(
+                                                                    &trash_id,
+                                                                    &trash_path,
+                                                                );
+                                                                this.armed_delete = None;
+                                                                this.hovered_project = None;
+                                                            } else {
+                                                                this.armed_delete =
+                                                                    Some(trash_id.clone());
+                                                            }
+                                                            cx.notify();
+                                                        },
+                                                    ))
+                                                    .child(if armed {
+                                                        "Confirm Delete".to_string()
+                                                    } else {
+                                                        "\u{1f5d1}".to_string()
+                                                    }),
+                                            )
+                                        })
                                 },
                             )),
                     ),
             )
-            // WelcomeOverlay — shown on first launch until dismissed (Swift: WelcomeOverlayView)
+            // WelcomeOverlay — first-launch welcome over Home, structured after
+            // Swift WelcomeOverlay: 520pt leading-aligned card, title + subtitle,
+            // hero image area, Skip / Watch Tutorial / Get started.
             .when(!welcome_dismissed, |el| {
                 el.child(
                     div()
@@ -931,56 +1155,119 @@ impl AppRoot {
                             h: 0.0,
                             s: 0.0,
                             l: 0.0,
-                            a: 0.60,
+                            a: crate::theme::Opacity::STRONG,
                         })
                         .child(
                             div()
                                 .id("welcome-card")
                                 .flex()
                                 .flex_col()
-                                .items_center()
-                                .gap(px(Spacing::MD))
-                                .px(px(48.0))
-                                .py(px(40.0))
-                                .rounded(px(Radius::LG))
+                                .gap(px(Spacing::LG))
+                                .w(px(520.0))
+                                .p(px(Spacing::XXL))
+                                .rounded(px(Radius::MD_LG))
                                 .bg(Background::SURFACE)
                                 .border_1()
-                                .border_color(BorderColors::SUBTLE)
+                                .border_color(BorderColors::PRIMARY)
+                                .shadow_lg()
                                 .child(
                                     div()
-                                        .text_size(px(FontSize::TITLE_2))
-                                        .text_color(Text::PRIMARY)
-                                        .child("Welcome to Fronda"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(FontSize::SM))
-                                        .text_color(Text::SECONDARY)
-                                        .child("The cross-platform video editor."),
-                                )
-                                .child(
-                                    div()
-                                        .id("welcome-get-started")
-                                        .px(px(Spacing::XL))
-                                        .py(px(Spacing::SM))
-                                        .rounded(px(Radius::SM))
-                                        .bg(gpui::Hsla {
-                                            h: 0.56,
-                                            s: 1.0,
-                                            l: 0.55,
-                                            a: 1.0,
-                                        })
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.welcome_dismissed = true;
-                                            cx.notify();
-                                        }))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(Spacing::SM))
                                         .child(
                                             div()
-                                                .text_size(px(FontSize::SM))
+                                                .text_size(px(FontSize::TITLE_2))
+                                                .font_weight(gpui::FontWeight::LIGHT)
                                                 .text_color(Text::PRIMARY)
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .child("Get Started"),
+                                                .child("Welcome to Fronda"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(FontSize::SM_MD))
+                                                .text_color(Text::SECONDARY)
+                                                .child(
+                                                    "A video editor built for AI. Generate, \
+                                                     and edit all in one place.",
+                                                ),
+                                        ),
+                                )
+                                // Hero image area (Swift: welcome-butterfly.jpg,
+                                // gradient fallback — no bundled hero asset yet).
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .h(px(240.0))
+                                        .rounded(px(Radius::MD))
+                                        .bg(gpui::linear_gradient(
+                                            135.0,
+                                            gpui::linear_color_stop(
+                                                gpui::Hsla {
+                                                    h: 0.78,
+                                                    s: 0.45,
+                                                    l: 0.30,
+                                                    a: 1.0,
+                                                },
+                                                0.0,
+                                            ),
+                                            gpui::linear_color_stop(
+                                                gpui::Hsla {
+                                                    h: 0.55,
+                                                    s: 0.55,
+                                                    l: 0.35,
+                                                    a: 1.0,
+                                                },
+                                                1.0,
+                                            ),
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(Spacing::SM))
+                                        .pt(px(Spacing::LG))
+                                        .child(
+                                            Self::welcome_button("welcome-skip", "Skip", false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.welcome_dismissed = true;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(div().flex_1())
+                                        // Swift opens a downloaded sample with the tour;
+                                        // samples are network-gated, so this starts the
+                                        // tour in a new project.
+                                        .child(
+                                            Self::welcome_button(
+                                                "welcome-tutorial",
+                                                "Watch Tutorial",
+                                                false,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _, _, cx| {
+                                                    this.welcome_dismissed = true;
+                                                    this.open_editor(cx);
+                                                    this.tour_overlay.update(cx, |tour, cx| {
+                                                        tour.start(cx);
+                                                    });
+                                                    cx.notify();
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            Self::welcome_button(
+                                                "welcome-get-started",
+                                                "Get started",
+                                                true,
+                                            )
+                                            .on_click(cx.listener(
+                                                |this, _, _, cx| {
+                                                    this.welcome_dismissed = true;
+                                                    cx.notify();
+                                                },
+                                            )),
                                         ),
                                 ),
                         ),
@@ -990,7 +1277,7 @@ impl AppRoot {
             .when_some(project_menu_open, |el, open| {
                 el.child(crate::context_menu::render_context_menu(
                     gpui::point(px(open.x), px(open.y)),
-                    Self::project_card_menu_entries(),
+                    Self::project_card_menu_entries(open.target.accessible),
                     open.confirming,
                     cx,
                     |this: &mut AppRoot, index, _window, cx| {
@@ -1238,5 +1525,35 @@ mod tests {
     fn active_screen_starts_at_home() {
         assert_eq!(ActiveScreen::Home, ActiveScreen::Home);
         assert_ne!(ActiveScreen::Home, ActiveScreen::Editor);
+    }
+
+    #[test]
+    fn text_duration_is_three_seconds_in_frames() {
+        assert_eq!(default_text_duration_frames(30), 90);
+        assert_eq!(default_text_duration_frames(24), 72);
+        assert_eq!(default_text_duration_frames(0), 3, "fps clamps to 1");
+        assert_eq!(default_text_duration_frames(-5), 3);
+    }
+
+    fn entry_ids(entries: &[crate::context_menu::MenuEntry]) -> Vec<&'static str> {
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                crate::context_menu::MenuEntry::Item(item) => Some(item.id),
+                crate::context_menu::MenuEntry::Separator => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn accessible_card_menu_has_open_and_reveal() {
+        let ids = entry_ids(&AppRoot::project_card_menu_entries(true));
+        assert_eq!(ids, vec!["open", "reveal", "remove-recents", "delete"]);
+    }
+
+    #[test]
+    fn missing_card_menu_drops_open_and_reveal() {
+        let ids = entry_ids(&AppRoot::project_card_menu_entries(false));
+        assert_eq!(ids, vec!["remove-recents", "delete"]);
     }
 }
