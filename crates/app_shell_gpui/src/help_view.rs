@@ -91,6 +91,7 @@ const SHORTCUT_GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("Cmd + S", "Save"),
             ("Cmd + Shift + S", "Save As"),
             ("Cmd + I", "Import Media"),
+            ("Cmd + Shift + I", "Import Timeline (XML/FCPXML)"),
             ("Cmd + E", "Export"),
         ],
     ),

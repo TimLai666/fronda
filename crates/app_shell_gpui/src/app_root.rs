@@ -285,6 +285,24 @@ impl AppRoot {
         }
     }
 
+    /// Import an FCP7 XMEML / FCPXML file as a new active timeline (the current
+    /// one becomes a sibling — import never overwrites open work). Media relinks
+    /// to the library by filename. Refreshes the timeline view on success.
+    pub fn import_timeline_at(&mut self, path: &std::path::PathBuf, cx: &mut Context<Self>) {
+        match crate::timeline_import::import_timeline_file_into_shared_state(path) {
+            Ok(out) => {
+                for note in &out.notes {
+                    eprintln!("Import note: {note}");
+                }
+                if let Some(tv) = self.timeline_view.as_ref() {
+                    tv.update(cx, |_, cx| cx.notify());
+                }
+                cx.notify();
+            }
+            Err(reason) => eprintln!("Import timeline failed for {}: {reason}", path.display()),
+        }
+    }
+
     /// Navigate back to Home (e.g., close project).
     pub fn show_home(&mut self, cx: &mut Context<Self>) {
         // Autosave before leaving the editor (#211, Swift saves on close);
@@ -425,6 +443,23 @@ impl AppRoot {
                 cx.spawn(async move |_, _| {
                     if let Ok(Ok(Some(paths))) = rx.await {
                         crate::media_import::import_files_into_shared_state(&paths);
+                    }
+                })
+                .detach();
+            }
+            menu::MenuAction::ImportTimeline => {
+                let rx = cx.prompt_for_paths(PathPromptOptions {
+                    files: true,
+                    directories: false,
+                    multiple: false,
+                    prompt: Some("Import Timeline".into()),
+                });
+                cx.spawn(async move |this, cx| {
+                    if let Ok(Ok(Some(paths))) = rx.await {
+                        if let Some(path) = paths.first() {
+                            let path = path.clone();
+                            let _ = this.update(cx, |root, cx| root.import_timeline_at(&path, cx));
+                        }
                     }
                 })
                 .detach();

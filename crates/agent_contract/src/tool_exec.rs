@@ -1005,6 +1005,22 @@ impl ToolExecutor {
         self.revision += 1;
     }
 
+    /// Adopt an externally-produced timeline (e.g. an XMEML/FCPXML import) as
+    /// the new active timeline; the previously active one becomes a sibling.
+    /// Assigns a fresh id when the incoming timeline has none. Mirrors the
+    /// create_timeline switch (clears undo, bumps the revision). Returns the id.
+    pub fn adopt_timeline(&mut self, mut timeline: Timeline) -> String {
+        if timeline.id.trim().is_empty() {
+            timeline.id = Uuid::new_v4().to_string();
+        }
+        let id = timeline.id.clone();
+        let prev = std::mem::replace(&mut self.timeline, timeline);
+        self.sibling_timelines.push(prev);
+        self.undo_stack.clear();
+        self.revision += 1;
+        id
+    }
+
     pub fn media_manifest(&self) -> &MediaManifest {
         &self.media_manifest
     }
@@ -14116,6 +14132,39 @@ mod tests {
         assert_eq!(exec.revision(), before + 1);
         assert_eq!(exec.timeline().fps, 60);
         assert!(exec.media_manifest().folders.is_empty());
+        assert!(exec.undo_stack().is_empty());
+    }
+
+    #[test]
+    fn adopt_timeline_switches_active_and_keeps_prev_as_sibling() {
+        let original = Timeline {
+            id: "root".into(),
+            name: "Root".into(),
+            fps: 30,
+            ..Default::default()
+        };
+        let mut exec = ToolExecutor::new(original, MediaManifest::default());
+        exec.execute("organize_media", &json!({"createFolders": ["B-roll"]}))
+            .unwrap();
+        let before = exec.revision();
+
+        // Imported timeline with no id gets a fresh one; it becomes active.
+        let imported = Timeline {
+            id: String::new(),
+            name: "Imported".into(),
+            fps: 24,
+            ..Default::default()
+        };
+        let id = exec.adopt_timeline(imported);
+
+        assert!(!id.is_empty(), "adopt assigns an id");
+        assert_eq!(exec.timeline().id, id);
+        assert_eq!(exec.timeline().name, "Imported");
+        assert_eq!(exec.timeline().fps, 24);
+        // Old active is preserved as a sibling — import never drops open work.
+        assert_eq!(exec.sibling_timelines().len(), 1);
+        assert_eq!(exec.sibling_timelines()[0].id, "root");
+        assert_eq!(exec.revision(), before + 1);
         assert!(exec.undo_stack().is_empty());
     }
 

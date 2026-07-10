@@ -22,6 +22,8 @@ pub enum MenuAction {
     SaveProject,
     SaveProjectAs,
     ImportMedia,
+    /// Import a timeline from an FCP7 XMEML / FCPXML file (#154).
+    ImportTimeline,
     Export,
     // Edit menu (MENU-004)
     Undo,
@@ -170,6 +172,7 @@ pub fn all_menus() -> Vec<(MenuGroup, Vec<MenuAction>)> {
                 MenuAction::SaveProject,
                 MenuAction::SaveProjectAs,
                 MenuAction::ImportMedia,
+                MenuAction::ImportTimeline,
                 MenuAction::Export,
             ],
         ),
@@ -225,6 +228,7 @@ pub fn all_shortcuts() -> Vec<Shortcut> {
         Shortcut::cmd("s", MenuAction::SaveProject),
         Shortcut::cmd_shift("s", MenuAction::SaveProjectAs),
         Shortcut::cmd("i", MenuAction::ImportMedia),
+        Shortcut::cmd_shift("i", MenuAction::ImportTimeline),
         Shortcut::cmd("e", MenuAction::Export),
         // Edit menu (MENU-004)
         Shortcut::cmd("z", MenuAction::Undo),
@@ -386,6 +390,7 @@ mod tests {
         assert!(items.contains(&MenuAction::SaveProject));
         assert!(items.contains(&MenuAction::SaveProjectAs));
         assert!(items.contains(&MenuAction::ImportMedia));
+        assert!(items.contains(&MenuAction::ImportTimeline));
         assert!(items.contains(&MenuAction::Export));
     }
 
@@ -439,7 +444,8 @@ mod tests {
     fn menu_008_shortcuts_count() {
         let shortcuts = all_shortcuts();
         // 44 prior + 3 Swift-parity aliases ([ / ] trim, ⇧⌫ ripple) (Issue #164)
-        assert_eq!(shortcuts.len(), 47);
+        // + 1 Import Timeline (⌘⇧I, #154)
+        assert_eq!(shortcuts.len(), 48);
     }
 
     #[test]
