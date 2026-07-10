@@ -251,7 +251,11 @@ impl GenerationState {
     }
 
     /// Swift `onChange(selectedType)`: re-derive settings, clear references.
+    /// Re-selecting the active tab is a no-op — it must not wipe state (F3).
     pub fn select_type(&mut self, t: GenerationType) {
+        if t == self.selected_type {
+            return;
+        }
         self.selected_type = t;
         self.params.sanitize_for(self.selected_model());
         self.clear_references();
@@ -259,23 +263,34 @@ impl GenerationState {
         self.close_popovers();
     }
 
-    /// Swift `onChange(selectedModelIndex)`: re-derive settings; video model
-    /// switches reset the frames/refs mode and the reference pool.
+    /// Swift `onChange(selectedModelIndex)`: re-derive settings; model
+    /// switches reset the refs mode/pool. Re-selecting the current model is
+    /// a no-op (F3); image models that don't accept references drop them (F1).
     pub fn select_model(&mut self, id: &str) {
         let Some(model) = model_catalog::model_by_id(id) else {
             return;
         };
-        match model.kind() {
-            ModelKind::Video => self.video_model_id = id.to_string(),
-            ModelKind::Image => self.image_model_id = id.to_string(),
-            ModelKind::Audio => self.audio_model_id = id.to_string(),
+        let slot = match model.kind() {
+            ModelKind::Video => &mut self.video_model_id,
+            ModelKind::Image => &mut self.image_model_id,
+            ModelKind::Audio => &mut self.audio_model_id,
             ModelKind::Upscale => return,
+        };
+        if slot.as_str() == id {
+            return;
         }
+        *slot = id.to_string();
         if model.kind() == self.selected_type.kind() {
             self.params.sanitize_for(model);
-            if matches!(model.caps, ModelCaps::Video(_)) {
-                self.use_first_last = true;
-                self.references.clear();
+            match &model.caps {
+                ModelCaps::Video(_) => {
+                    self.use_first_last = true;
+                    self.references.clear();
+                }
+                ModelCaps::Image(c) if !c.supports_image_reference => {
+                    self.references.clear();
+                }
+                _ => {}
             }
         }
     }
@@ -856,10 +871,20 @@ pub fn settings_summary(state: &GenerationState) -> String {
 pub fn build_generation_input(state: &GenerationState) -> GenerationInput {
     let model = state.selected_model();
     let p = &state.params;
+    // Only models that actually offer aspect ratios transmit one (review F5).
+    let has_aspect = match &model.caps {
+        ModelCaps::Video(c) => !c.aspect_ratios.is_empty(),
+        ModelCaps::Image(c) => !c.aspect_ratios.is_empty(),
+        _ => false,
+    };
     let mut input = GenerationInput {
         prompt: state.prompt.clone(),
         model: model.id.to_string(),
-        aspect_ratio: p.aspect_ratio.clone(),
+        aspect_ratio: if has_aspect {
+            p.aspect_ratio.clone()
+        } else {
+            String::new()
+        },
         resolution: effective_resolution(state),
         ..GenerationInput::default()
     };
@@ -908,9 +933,12 @@ pub fn build_generation_input(state: &GenerationState) -> GenerationInput {
                     input.num_images = Some(clamped);
                 }
             }
-            let ids: Vec<String> = state.references.iter().map(|r| r.id.clone()).collect();
-            if !ids.is_empty() {
-                input.image_url_asset_ids = Some(ids);
+            // References only for models that accept them (review F1).
+            if c.supports_image_reference {
+                let ids: Vec<String> = state.references.iter().map(|r| r.id.clone()).collect();
+                if !ids.is_empty() {
+                    input.image_url_asset_ids = Some(ids);
+                }
             }
         }
         ModelCaps::Audio(c) => {
@@ -2429,8 +2457,12 @@ mod tests {
         st.select_model("veo3.1-lite");
         assert_eq!(st.params.duration, 8, "8 valid for Veo → kept");
         st.params.resolution = "4k".into();
+        // Re-selecting the SAME model is a no-op (F3) — switching to a
+        // different model without 4k re-derives.
         st.select_model("veo3.1-lite");
-        assert_eq!(st.params.resolution, "720p", "4k unsupported → first");
+        assert_eq!(st.params.resolution, "4k", "same-model reselect is a no-op");
+        st.select_model("seedance-2");
+        assert_eq!(st.params.resolution, "480p", "4k unsupported → first");
     }
 
     #[test]

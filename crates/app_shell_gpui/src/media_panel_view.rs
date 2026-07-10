@@ -11,9 +11,9 @@ use crate::theme::{
 };
 use core_model::{ClipType, MediaFolder, MediaManifest, MediaManifestEntry};
 use gpui::{
-    div, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
-    SharedString, Styled, Window,
+    deferred, div, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
+    Render, SharedString, Styled, Window,
 };
 
 // ── Library view state (pure logic; media-library-ui spec) ──────────────────
@@ -472,6 +472,11 @@ impl MediaPanelView {
             exec.media_manifest().folders.last().map(|f| f.id.clone())
         });
         if let Some(id) = new_id {
+            // The rename field only mounts on folder tiles — jump to the view
+            // where the new folder is visible (review M2).
+            self.library.view_mode = LibraryViewMode::Folders;
+            self.library.search_query.clear();
+            self.search_field.update(cx, |field, cx| field.set_text("", cx));
             self.folder_editing = Some(id);
             self.folder_rename_field.update(cx, |field, cx| {
                 field.set_text("New Folder", cx);
@@ -1487,7 +1492,16 @@ impl MediaPanelView {
                 })),
             ),
         };
-        Some(panel.into_any_element())
+        // Occlude + deferred + outside-click dismiss (context_menu.rs
+        // pattern): the menu owns its hit area so a click on it can't bleed
+        // into the grid, and the first outside click only dismisses (M1).
+        let panel = panel
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                this.open_menu = None;
+                cx.notify();
+            }));
+        Some(deferred(panel).with_priority(1).into_any_element())
     }
 
     /// The whole Media tab: toolbar + body + generation strip + menu overlay.

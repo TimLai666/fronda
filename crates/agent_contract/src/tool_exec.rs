@@ -5757,64 +5757,13 @@ impl ToolExecutor {
             )?
             .id;
 
-        let entry_id = Uuid::new_v4().to_string();
-        let entry = core_model::MediaManifestEntry {
-            id: entry_id.clone(),
-            name: format!("Generated video: {}", &prompt[..prompt.len().min(40)]),
-            r#type: core_model::ClipType::Video,
-            source: MediaSource::External {
-                absolute_path: String::new(),
-            },
-            duration,
-            generation_input: Some(GenerationInput {
-                prompt: prompt.to_string(),
-                model: model.to_string(),
-                duration: (duration * 30.0) as i64,
-                aspect_ratio: "16:9".to_string(),
-                resolution: None,
-                quality: None,
-                image_urls: None,
-                num_images: None,
-                voice: None,
-                lyrics: None,
-                style_instructions: None,
-                instrumental: None,
-                generate_audio: None,
-                reference_image_urls: None,
-                reference_video_urls: None,
-                reference_audio_urls: None,
-                image_url_asset_ids: None,
-                reference_image_asset_ids: None,
-                reference_video_asset_ids: None,
-                reference_audio_asset_ids: None,
-                created_at: None,
-                backend_job_id: None,
-                output_index: None,
-                result_urls: None,
-            }),
-            source_width: None,
-            source_height: None,
-            source_fps: None,
-            has_audio: None,
-            folder_id: None,
-            cached_remote_url: None,
-            cached_remote_url_expires_at: None,
-            source_timecode_frame: None,
-            source_timecode_quanta: None,
-            source_timecode_drop_frame: None,
-            ai_tags: None,
-            ai_description: None,
-            ai_label_status: None,
-            generation_status: None,
-        };
-        self.media_manifest.entries.push(entry);
 
         Ok(json!({
             "content": [{
                 "type": "text",
                 "text": format!(
-                    "Video generation queued (model: {}, duration: {:.1}s, prompt: '{}'). Media id: {}. Actual generation requires a remote API.",
-                    model, duration, prompt, entry_id
+                    "Video generation queued (model: {}, duration: {:.1}s, prompt: '{}'). Actual generation requires a remote API.",
+                    model, duration, prompt
                 )
             }],
             "isError": true,
@@ -5833,64 +5782,13 @@ impl ToolExecutor {
             )?
             .id;
 
-        let entry_id = Uuid::new_v4().to_string();
-        let entry = core_model::MediaManifestEntry {
-            id: entry_id.clone(),
-            name: format!("Generated image: {}", &prompt[..prompt.len().min(40)]),
-            r#type: core_model::ClipType::Image,
-            source: MediaSource::External {
-                absolute_path: String::new(),
-            },
-            duration: 10.0,
-            generation_input: Some(GenerationInput {
-                prompt: prompt.to_string(),
-                model: model.to_string(),
-                duration: 0,
-                aspect_ratio: "16:9".to_string(),
-                resolution: None,
-                quality: None,
-                image_urls: None,
-                num_images: None,
-                voice: None,
-                lyrics: None,
-                style_instructions: None,
-                instrumental: None,
-                generate_audio: None,
-                reference_image_urls: None,
-                reference_video_urls: None,
-                reference_audio_urls: None,
-                image_url_asset_ids: None,
-                reference_image_asset_ids: None,
-                reference_video_asset_ids: None,
-                reference_audio_asset_ids: None,
-                created_at: None,
-                backend_job_id: None,
-                output_index: None,
-                result_urls: None,
-            }),
-            source_width: None,
-            source_height: None,
-            source_fps: None,
-            has_audio: None,
-            folder_id: None,
-            cached_remote_url: None,
-            cached_remote_url_expires_at: None,
-            source_timecode_frame: None,
-            source_timecode_quanta: None,
-            source_timecode_drop_frame: None,
-            ai_tags: None,
-            ai_description: None,
-            ai_label_status: None,
-            generation_status: None,
-        };
-        self.media_manifest.entries.push(entry);
 
         Ok(json!({
             "content": [{
                 "type": "text",
                 "text": format!(
-                    "Image generation queued (model: {}, prompt: '{}'). Media id: {}. Actual generation requires a remote API.",
-                    model, prompt, entry_id
+                    "Image generation queued (model: {}, prompt: '{}'). Actual generation requires a remote API.",
+                    model, prompt
                 )
             }],
             "isError": true,
@@ -5910,39 +5808,13 @@ impl ToolExecutor {
             self.resolve_generation_model(generation_core::ModelKind::Audio, Some(id))?;
         }
 
-        let entry_id = Uuid::new_v4().to_string();
-        let entry = core_model::MediaManifestEntry {
-            id: entry_id.clone(),
-            name: format!("Generated audio: {}", &prompt[..prompt.len().min(40)]),
-            r#type: core_model::ClipType::Audio,
-            source: MediaSource::External {
-                absolute_path: String::new(),
-            },
-            duration,
-            generation_input: None,
-            source_width: None,
-            source_height: None,
-            source_fps: None,
-            has_audio: Some(true),
-            folder_id: None,
-            cached_remote_url: None,
-            cached_remote_url_expires_at: None,
-            source_timecode_frame: None,
-            source_timecode_quanta: None,
-            source_timecode_drop_frame: None,
-            ai_tags: None,
-            ai_description: None,
-            ai_label_status: None,
-            generation_status: None,
-        };
-        self.media_manifest.entries.push(entry);
 
         Ok(json!({
             "content": [{
                 "type": "text",
                 "text": format!(
-                    "Audio generation queued ({:.1}s, prompt: '{}'). Media id: {}. Actual generation requires a remote API.",
-                    duration, prompt, entry_id
+                    "Audio generation queued ({:.1}s, prompt: '{}'). Actual generation requires a remote API.",
+                    duration, prompt
                 )
             }],
             "isError": true,
@@ -5978,64 +5850,13 @@ impl ToolExecutor {
             }
         };
 
-        let entry_id = Uuid::new_v4().to_string();
-        let entry = core_model::MediaManifestEntry {
-            id: entry_id.clone(),
-            name: format!("Generated music: {}", &prompt[..prompt.len().min(40)]),
-            r#type: core_model::ClipType::Audio,
-            source: MediaSource::External {
-                absolute_path: String::new(),
-            },
-            duration,
-            generation_input: Some(GenerationInput {
-                prompt: prompt.to_string(),
-                model: model.id.to_string(),
-                duration: (duration * 30.0) as i64,
-                aspect_ratio: String::new(),
-                resolution: None,
-                quality: None,
-                image_urls: None,
-                num_images: None,
-                voice: None,
-                lyrics: None,
-                style_instructions: style.map(String::from),
-                instrumental: None,
-                generate_audio: None,
-                reference_image_urls: None,
-                reference_video_urls: None,
-                reference_audio_urls: None,
-                image_url_asset_ids: None,
-                reference_image_asset_ids: None,
-                reference_video_asset_ids: None,
-                reference_audio_asset_ids: None,
-                created_at: None,
-                backend_job_id: None,
-                output_index: None,
-                result_urls: None,
-            }),
-            source_width: None,
-            source_height: None,
-            source_fps: None,
-            has_audio: Some(true),
-            folder_id: None,
-            cached_remote_url: None,
-            cached_remote_url_expires_at: None,
-            source_timecode_frame: None,
-            source_timecode_quanta: None,
-            source_timecode_drop_frame: None,
-            ai_tags: None,
-            ai_description: None,
-            ai_label_status: None,
-            generation_status: None,
-        };
-        self.media_manifest.entries.push(entry);
 
         Ok(json!({
             "content": [{
                 "type": "text",
                 "text": format!(
-                    "Music generation queued (model: {}, {:.1}s, style: {:?}, prompt: '{}'). Media id: {}. Actual generation requires a remote API.",
-                    model.id, duration, style, prompt, entry_id
+                    "Music generation queued (model: {}, {:.1}s, style: {:?}, prompt: '{}'). Actual generation requires a remote API.",
+                    model.id, duration, style, prompt
                 )
             }],
             "isError": true,
@@ -7503,11 +7324,8 @@ mod tests {
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("seedance-2"), "default is first available");
         assert!(!text.contains("gen-3"));
-        let entry = exec.media_manifest().entries.last().unwrap();
-        assert_eq!(
-            entry.generation_input.as_ref().unwrap().model,
-            "seedance-2"
-        );
+        // No backend: the stub must not register ghost assets (review F4).
+        assert!(exec.media_manifest().entries.is_empty());
     }
 
     #[test]
@@ -7521,11 +7339,7 @@ mod tests {
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("nano-banana-2"));
-        let entry = exec.media_manifest().entries.last().unwrap();
-        assert_eq!(
-            entry.generation_input.as_ref().unwrap().model,
-            "nano-banana-2"
-        );
+        assert!(exec.media_manifest().entries.is_empty());
     }
 
     #[test]
@@ -7536,11 +7350,7 @@ mod tests {
             .unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("minimax-music-v2.6"), "got: {text}");
-        let entry = exec.media_manifest().entries.last().unwrap();
-        assert_eq!(
-            entry.generation_input.as_ref().unwrap().model,
-            "minimax-music-v2.6"
-        );
+        assert!(exec.media_manifest().entries.is_empty());
     }
 
     #[test]
@@ -8273,7 +8083,8 @@ mod tests {
             .execute("generate_video", &json!({"prompt": "A cat walking"}))
             .unwrap();
         assert_eq!(result["isError"], true);
-        assert!(exec.media_manifest.entries.len() == 1);
+        // Unavailable submits are side-effect-free (review F4).
+        assert!(exec.media_manifest.entries.is_empty());
     }
 
     #[test]
