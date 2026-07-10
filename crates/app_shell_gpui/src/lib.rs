@@ -30,6 +30,8 @@ pub mod export_view;
 #[cfg(feature = "desktop-app")]
 pub mod feedback_view;
 #[cfg(feature = "desktop-app")]
+pub mod field_components;
+#[cfg(feature = "desktop-app")]
 pub mod generation_view;
 #[cfg(feature = "desktop-app")]
 pub mod help_view;
