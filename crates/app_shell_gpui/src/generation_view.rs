@@ -7,8 +7,8 @@
 
 use crate::text_area::{TextArea, TextAreaEvent};
 use crate::theme::{
-    Accent, Background, BorderColors, FontSize, GenerationPanel, Opacity, Radius, Spacing, Status,
-    Text, TrackColor,
+    Accent, Background, BorderColors, DropZone, FontSize, GenerationPanel, Opacity, Radius,
+    Spacing, Status, Text, TrackColor,
 };
 use core_model::{ClipType, GenerationInput};
 use generation_core::model_catalog::{self, AudioCategory, ModelCaps, ModelConfig};
@@ -17,6 +17,7 @@ use gpui::{
     div, prelude::*, px, svg, App, ClickEvent, Context, Entity, FocusHandle, Focusable, Hsla,
     InteractiveElement, ParentElement, Render, SharedString, Styled, Window,
 };
+use timeline_core::AssetDrag;
 
 /// AI generation type (matches Swift GenerationType).
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -518,6 +519,32 @@ pub fn accepted_kinds(state: &GenerationState, slot: RefSlot) -> Vec<ClipType> {
             _ => Vec::new(),
         },
     }
+}
+
+/// Kind gate for dropping an asset on a reference slot (Swift
+/// `validatedDropZone`): None = accepted, Some(msg) = rejection status line.
+/// Cap rules still apply afterwards via `can_add_reference`.
+pub fn drop_rejection_message(
+    state: &GenerationState,
+    slot: RefSlot,
+    kind: ClipType,
+) -> Option<String> {
+    let accepted = accepted_kinds(state, slot);
+    if accepted.contains(&kind) {
+        return None;
+    }
+    if accepted.is_empty() {
+        return Some(format!(
+            "{} doesn't accept references.",
+            state.selected_model().display_name
+        ));
+    }
+    let kinds = accepted
+        .iter()
+        .map(|k| kind_label(*k))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    Some(format!("Drop {kinds} here."))
 }
 
 /// Per-model reference cap check (Swift `addRefAsset` + `isRefCapReached`).
@@ -1202,6 +1229,22 @@ impl GenerationView {
         cx.notify();
     }
 
+    /// Drop path into a reference slot — same type and cap rules as
+    /// click-to-pick (`accepted_kinds` gate, then `assign_reference`).
+    fn handle_asset_drop(
+        &mut self,
+        slot: RefSlot,
+        id: &str,
+        kind: ClipType,
+        cx: &mut Context<Self>,
+    ) {
+        match drop_rejection_message(&self.state, slot, kind) {
+            Some(reason) => self.state.status = Some(reason),
+            None => self.state.assign_reference(slot, id, kind),
+        }
+        cx.notify();
+    }
+
     // ── Render helpers ──────────────────────────────────────────────
 
     /// An empty reference tile ("+") that opens the asset picker.
@@ -1234,6 +1277,14 @@ impl GenerationView {
                         cx.stop_propagation();
                         this.open_asset_picker(slot, cx);
                     }))
+                    // Second assignment path: drop a media asset on the slot.
+                    .on_drop::<AssetDrag>(cx.listener(move |this, drag: &AssetDrag, _, cx| {
+                        let id = drag.asset_id.clone();
+                        this.handle_asset_drop(slot, &id, drag.media_type, cx);
+                    }))
+                    .drag_over::<AssetDrag>(|style, _, _, _| {
+                        style.border_color(DropZone::BORDER).bg(DropZone::FILL)
+                    })
                     .child(
                         div()
                             .text_color(Text::MUTED)
@@ -2781,6 +2832,44 @@ mod tests {
         assert_eq!(accepted_kinds(&kst, RefSlot::Reference), vec![ClipType::Image]);
         let ist = image_state("recraft-v4");
         assert!(accepted_kinds(&ist, RefSlot::Reference).is_empty());
+    }
+
+    // ── drop validation (drag-drop; mirrors click-to-pick rules) ────
+
+    #[test]
+    fn drop_rejection_matches_accepted_kinds() {
+        let st = video_state("seedance-2");
+        // Frame slots take images only.
+        assert_eq!(
+            drop_rejection_message(&st, RefSlot::FirstFrame, ClipType::Image),
+            None
+        );
+        assert_eq!(
+            drop_rejection_message(&st, RefSlot::FirstFrame, ClipType::Audio),
+            Some("Drop image here.".to_string())
+        );
+        // Seedance references take image/video/audio.
+        assert_eq!(
+            drop_rejection_message(&st, RefSlot::Reference, ClipType::Video),
+            None
+        );
+        // Image-only reference model names the accepted kind.
+        let kst = video_state("kling-v3");
+        assert_eq!(
+            drop_rejection_message(&kst, RefSlot::Reference, ClipType::Audio),
+            Some("Drop image here.".to_string())
+        );
+    }
+
+    #[test]
+    fn drop_rejection_on_refless_model() {
+        // A model with no reference support rejects every kind by name.
+        let ist = image_state("recraft-v4");
+        let msg = drop_rejection_message(&ist, RefSlot::Reference, ClipType::Image);
+        assert!(
+            msg.as_deref().is_some_and(|m| m.contains("doesn't accept")),
+            "msg={msg:?}"
+        );
     }
 
     // ── reference layout ────────────────────────────────────────────

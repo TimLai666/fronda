@@ -240,6 +240,24 @@ impl Accent {
     };
 }
 
+/// Drop-target highlight (Swift MediaTab `dropHighlight`: accent 0.6 border +
+/// subtle accent fill; gpui has no dashed borders so the border is solid).
+pub struct DropZone;
+impl DropZone {
+    pub const BORDER: Hsla = Hsla {
+        h: 36.0 / 360.0,
+        s: 0.52,
+        l: 0.93,
+        a: 0.6,
+    };
+    pub const FILL: Hsla = Hsla {
+        h: 36.0 / 360.0,
+        s: 0.52,
+        l: 0.93,
+        a: Opacity::SUBTLE,
+    };
+}
+
 /// Layout constants (matching Swift `Layout` enum).
 pub struct Layout;
 impl Layout {

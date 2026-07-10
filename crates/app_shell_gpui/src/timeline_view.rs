@@ -13,6 +13,7 @@ use gpui::{
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use timeline_core::{asset_drop_track, AssetDrag};
 
 /// Drag token for clip moves.
 #[derive(Debug, Clone)]
@@ -46,6 +47,9 @@ pub struct TimelineView {
     tab_editing: Option<String>,
     /// IME-capable field the editing tab embeds.
     tab_rename_field: gpui::Entity<crate::text_field::TextField>,
+    /// Media-asset drag hovering the clip canvas: (pointer frame, target
+    /// track; None track = no compatible track, drop auto-creates one).
+    asset_drop_hover: Option<(i64, Option<usize>)>,
 }
 
 impl TimelineView {
@@ -75,6 +79,7 @@ impl TimelineView {
             ticker_running: false,
             tab_editing: None,
             tab_rename_field,
+            asset_drop_hover: None,
         };
         view.sync_from_shared_state();
         view
@@ -201,6 +206,62 @@ impl TimelineView {
             return;
         };
         self.apply_trim(&clip_id, edge, frame);
+        cx.notify();
+    }
+
+    /// Track a media-asset drag over the clip canvas: pointer frame + target
+    /// track (hovered when type-compatible, else first compatible).
+    fn update_asset_drop_hover(&mut self, e: &DragMoveEvent<AssetDrag>, cx: &mut Context<Self>) {
+        let next = if e.bounds.contains(&e.event.position) {
+            let content_x = e.event.position.x.as_f32() - e.bounds.origin.x.as_f32();
+            let content_y = e.event.position.y.as_f32() - e.bounds.origin.y.as_f32();
+            let frame = self
+                .state
+                .frame_for_x(self.state.scroll_x + content_x)
+                .max(0);
+            let hovered = self.state.track_index_at_y(self.state.scroll_y + content_y);
+            let track_types: Vec<core_model::ClipType> = self
+                .state
+                .tracks
+                .iter()
+                .map(|t| match t.kind {
+                    TrackKind::Video => core_model::ClipType::Video,
+                    TrackKind::Audio => core_model::ClipType::Audio,
+                })
+                .collect();
+            let media_type = e.drag(cx).media_type;
+            Some((frame, asset_drop_track(&track_types, hovered, media_type)))
+        } else {
+            None
+        };
+        if next != self.asset_drop_hover {
+            self.asset_drop_hover = next;
+            cx.notify();
+        }
+    }
+
+    /// Place a dropped media asset at the pointer frame. With a compatible
+    /// track this is a ripple insert at that frame (linked A/V and fps
+    /// warnings come from the shared tool); without one, add_clips
+    /// auto-creates a track (first-clip settings detect, placed at 0).
+    fn commit_asset_drop(&mut self, asset_id: &str, cx: &mut Context<Self>) {
+        let Some((frame, target)) = self.asset_drop_hover.take() else {
+            cx.notify();
+            return;
+        };
+        match target {
+            Some(track) => Self::run_shared_tool(
+                "insert_clips",
+                serde_json::json!({
+                    "mediaIds": [asset_id],
+                    "trackIndex": track,
+                    "frame": frame,
+                }),
+            ),
+            None => {
+                Self::run_shared_tool("add_clips", serde_json::json!({ "mediaIds": [asset_id] }))
+            }
+        }
         cx.notify();
     }
 
@@ -363,6 +424,10 @@ impl Render for TimelineView {
         if self.sync_from_shared_state() {
             cx.notify();
         }
+        // Drop a stale hover indicator when the asset drag ended elsewhere.
+        if self.asset_drop_hover.is_some() && !cx.has_active_drag() {
+            self.asset_drop_hover = None;
+        }
         // Timeline tabs (#255): active first, then siblings. Read fresh each
         // render; clicks run the shared timeline tools so every view refreshes
         // through the revision bump.
@@ -419,7 +484,15 @@ impl Render for TimelineView {
         let scroll_x = self.state.scroll_x;
 
         let playhead_x = playhead_frame as f32 * zoom - scroll_x;
-        let snap_x = self.state.snap_x_frame.map(|f| f as f32 * zoom - scroll_x);
+        // One indicator slot: clip-drag snap line, or the asset-drop
+        // insertion line while a media asset hovers the canvas.
+        let snap_x = self
+            .state
+            .snap_x_frame
+            .map(|f| f as f32 * zoom - scroll_x)
+            .or(self
+                .asset_drop_hover
+                .map(|(f, _)| f as f32 * zoom - scroll_x));
         let has_video = tracks.iter().any(|t| t.kind == TrackKind::Video);
         let has_audio = tracks.iter().any(|t| t.kind == TrackKind::Audio);
         let show_zone_divider = has_video && has_audio;
@@ -741,6 +814,17 @@ impl Render for TimelineView {
                             .on_drop::<TrimDragToken>(cx.listener(|this, _, _, cx| {
                                 this.commit_trim_drag(cx);
                             }))
+                            .on_drag_move::<AssetDrag>(cx.listener(
+                                |this, e: &DragMoveEvent<AssetDrag>, _, cx| {
+                                    this.update_asset_drop_hover(e, cx);
+                                },
+                            ))
+                            .on_drop::<AssetDrag>(cx.listener(
+                                |this, drag: &AssetDrag, _, cx| {
+                                    let asset_id = drag.asset_id.clone();
+                                    this.commit_asset_drop(&asset_id, cx);
+                                },
+                            ))
                             .child(
                                 div()
                                     .absolute()
