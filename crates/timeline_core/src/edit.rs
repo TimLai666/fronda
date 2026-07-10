@@ -180,9 +180,10 @@ pub fn clear_region(
     }
 }
 
-fn split_single_clip(timeline: &mut Timeline, clip_id: &str, at_frame: i64) -> Option<String> {
-    let location = find_clip(timeline, clip_id)?;
-    let clip = timeline.tracks[location.track_index].clips[location.clip_index].clone();
+/// Split math only (Swift `EditorViewModel.splitValues`): the left/right clip
+/// values for cutting `clip` at `at_frame`, or `None` when the frame isn't
+/// strictly inside. The right clip gets a fresh id; nothing is placed.
+pub(crate) fn split_values(clip: &Clip, at_frame: i64) -> Option<(Clip, Clip)> {
     if at_frame <= clip.start_frame || at_frame >= clip.end_frame() {
         return None;
     }
@@ -191,7 +192,7 @@ fn split_single_clip(timeline: &mut Timeline, clip_id: &str, at_frame: i64) -> O
     let left_source = ((split_offset as f64) * clip.speed).round() as i64;
     let right_source = (((clip.duration_frames - split_offset) as f64) * clip.speed).round() as i64;
 
-    let (mut left, mut right) = split_all_clip_keyframe_tracks(&clip, split_offset);
+    let (mut left, mut right) = split_all_clip_keyframe_tracks(clip, split_offset);
     left.duration_frames = split_offset;
     left.trim_end_frame = clip.trim_end_frame + right_source;
     left.fade_out_frames = 0;
@@ -203,6 +204,14 @@ fn split_single_clip(timeline: &mut Timeline, clip_id: &str, at_frame: i64) -> O
     right.trim_start_frame = clip.trim_start_frame + left_source;
     right.fade_in_frames = 0;
     clamp_clip_fades_to_duration(&mut right);
+
+    Some((left, right))
+}
+
+fn split_single_clip(timeline: &mut Timeline, clip_id: &str, at_frame: i64) -> Option<String> {
+    let location = find_clip(timeline, clip_id)?;
+    let clip = timeline.tracks[location.track_index].clips[location.clip_index].clone();
+    let (left, right) = split_values(&clip, at_frame)?;
 
     timeline.tracks[location.track_index].clips[location.clip_index] = left;
     timeline.tracks[location.track_index]

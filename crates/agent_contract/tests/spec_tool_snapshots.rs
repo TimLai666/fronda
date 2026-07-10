@@ -10,29 +10,31 @@ use core_model::{MediaManifest, Timeline, ToolResultBlock};
 // ── TDEF-001: Exactly the right number of tools ──────────────────────────────
 
 #[test]
-fn tdef_001_exactly_53_tools() {
+fn tdef_001_exactly_56_tools() {
     // Final tool-surface-v2 count (design.md C-1): 57 − 5 absorbed
     // (list_folders, set_blend_mode, set_chroma_key, set_color_grade,
-    // generate_music) + 1 new (detect_beats) = 53
-    // = 45 upstream (48 − 3 deferred multicam) + 8 Rust extensions.
+    // generate_music) + 1 new (detect_beats) = 53; multicam-engine landed the
+    // 3 reserved slots (manage_multicam, change_cam, get_multicam) = 56
+    // = 48 upstream + 8 Rust extensions.
     let tools = all_tools();
     assert_eq!(
         tools.len(),
-        53,
-        "TDEF-001: 53 tools (see the tools.rs header history)"
+        56,
+        "TDEF-001: 56 tools (see the tools.rs header history)"
     );
 }
 
 #[test]
 fn tdef_001_host_surfaces() {
-    // C-1: shared 48; MCP 52 (+4 project tools); in-app 49 (+read_skill).
+    // C-1 (post-multicam): shared 51; MCP 55 (+4 project tools);
+    // in-app 52 (+read_skill).
     let shared = all_tools()
         .iter()
         .filter(|t| tool_host(t.name) == ToolHost::Shared)
         .count();
-    assert_eq!(shared, 48);
-    assert_eq!(mcp_tools().len(), 52);
-    assert_eq!(in_app_tools().len(), 49);
+    assert_eq!(shared, 51);
+    assert_eq!(mcp_tools().len(), 55);
+    assert_eq!(in_app_tools().len(), 52);
 }
 
 // ── TDEF-002: All tool names are snake_case ──────────────────────────────────
@@ -62,7 +64,7 @@ fn tdef_002_all_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 53, "all 53 tool names must be unique");
+    assert_eq!(names.len(), 56, "all 56 tool names must be unique");
 }
 
 // ── TDEF-003: Each tool has a valid JSON schema ──────────────────────────────

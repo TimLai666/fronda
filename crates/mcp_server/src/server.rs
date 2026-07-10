@@ -1003,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_52_tools() {
+    fn tools_list_returns_55_tools() {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: json!(1),
@@ -1016,8 +1016,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            52,
-            "MCP-003: 52 MCP-surface tools (see agent_contract tools.rs header history)"
+            55,
+            "MCP-003: 55 MCP-surface tools (see agent_contract tools.rs header history)"
         );
     }
 

@@ -82,8 +82,8 @@ pub struct MultiTimelineState {
     pub view_states: Option<HashMap<String, TimelineViewState>>,
     /// Opaque speaker registry (upstream #261), preserved across saves.
     pub speakers: Option<serde_json::Value>,
-    /// Opaque multicam groups (upstream #283), preserved across saves.
-    pub multicam_groups: Option<serde_json::Value>,
+    /// Typed multicam groups (upstream #283), preserved across saves.
+    pub multicam_groups: Option<Vec<core_model::MulticamSource>>,
 }
 
 impl MultiTimelineState {
@@ -274,9 +274,23 @@ pub fn save_project_state_with_siblings(
     siblings: &[Timeline],
     manifest: &MediaManifest,
 ) -> Result<(), BundleError> {
+    save_project_state_with_siblings_and_groups(root, timeline, siblings, manifest, None)
+}
+
+/// [`save_project_state_with_siblings`] for a caller that also owns the
+/// multicam groups (upstream #283): `Some(groups)` replaces the on-disk
+/// `multicamGroups` (empty → key omitted, Swift `savedMulticamGroups`
+/// semantics); `None` preserves whatever is on disk.
+pub fn save_project_state_with_siblings_and_groups(
+    root: &Path,
+    timeline: &Timeline,
+    siblings: &[Timeline],
+    manifest: &MediaManifest,
+    multicam_groups: Option<Vec<core_model::MulticamSource>>,
+) -> Result<(), BundleError> {
     ensure_directory(root)?;
     let path = root.join(TIMELINE_FILENAME);
-    let (disk_order, open_ids, view_states, speakers, multicam_groups) =
+    let (disk_order, open_ids, view_states, speakers, disk_multicam_groups) =
         match read_project_file(&path) {
             Ok(f) => (
                 f.timelines.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
@@ -287,6 +301,10 @@ pub fn save_project_state_with_siblings(
             ),
             Err(_) => (Vec::new(), None, None, None, None),
         };
+    let multicam_groups = match multicam_groups {
+        Some(groups) => (!groups.is_empty()).then_some(groups),
+        None => disk_multicam_groups,
+    };
 
     let mut by_id: HashMap<&str, &Timeline> =
         siblings.iter().map(|t| (t.id.as_str(), t)).collect();

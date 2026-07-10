@@ -89,6 +89,9 @@ fn clone_clips(copied: &[CopiedClip]) -> Vec<Clip> {
         .map(|c| {
             let mut cloned = c.clip.clone();
             cloned.id = Uuid::new_v4().to_string();
+            // A duplicate is an ordinary clip — it leaves the multicam group
+            // (Swift Clipboard: `clone.multicamGroupId = nil`).
+            cloned.multicam_group_id = None;
             // Remap link group: multi-clip groups get new shared id, single clip groups become unlinked
             if let Some(ref old_gid) = cloned.link_group_id {
                 if let Some(new_gid) = remap.get(old_gid) {

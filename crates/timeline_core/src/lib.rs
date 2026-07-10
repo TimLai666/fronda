@@ -14,6 +14,7 @@ pub use keyframes::{
 
 mod keyframes;
 mod linking;
+mod multicam;
 mod overwrite;
 mod range_selection;
 mod ripple;
@@ -54,6 +55,17 @@ pub use inspector::{
 pub use linking::{
     build_link_index, expand_to_link_group, link_clips, link_group_offsets, linked_partner_ids,
     partner_moves_for_move_of, unlink_clips, LinkIndex, LinkedPartnerMove,
+};
+pub use multicam::{
+    apply as multicam_apply, atomicity_violation as multicam_atomicity_violation, create_group,
+    fit_transform, live_groups, manual_ripple_violation as multicam_manual_ripple_violation,
+    max_lag_hops, move_violation as multicam_move_violation, multicam_audio_bearers,
+    multicam_clip_locations, multicam_group_offsets, multicam_track_indexes,
+    program_rows as multicam_program_rows, referenced_group_ids, resolve_member,
+    rewrite as multicam_rewrite, source_durations as multicam_source_durations,
+    source_frames_consumed, strip_group_stamps, switch_angles, switch_segment,
+    trim_bounds as multicam_trim_bounds, AngleSwitchRequest, MulticamAsset, MulticamClamp,
+    MulticamEntry, MulticamMemberSpec, MulticamOutcome,
 };
 pub use overwrite::{compute_overwrite, OverwriteAction};
 pub use project_presets::{

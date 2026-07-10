@@ -3,6 +3,7 @@
 //! Legacy (pre-0.6.1) files stored a bare `Timeline`; [`ProjectFile::decode`]
 //! falls back and wraps, mirroring Swift `ProjectFile.decode` exactly.
 
+use crate::multicam::MulticamSource;
 use crate::Timeline;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -43,14 +44,14 @@ pub struct ProjectFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speakers: Option<serde_json::Value>,
     /// Multicam source groups (upstream #283: id/name/members/sync/master).
-    /// Round-tripped opaquely — Fronda has no multicam engine yet, and
-    /// dropping the field on save would erase Swift-built groups.
+    /// Typed since the multicam-engine change; a Swift-shaped JSON still
+    /// round-trips losslessly (all member/sync keys serialize).
     #[serde(
         default,
         rename = "multicamGroups",
         skip_serializing_if = "Option::is_none"
     )]
-    pub multicam_groups: Option<serde_json::Value>,
+    pub multicam_groups: Option<Vec<MulticamSource>>,
 }
 
 impl ProjectFile {
@@ -139,10 +140,14 @@ mod tests {
             )])),
             speakers: Some(serde_json::json!([{"id": 1, "name": "Alex",
                 "color": [0.1, 0.2, 0.3], "centroid": [0.5]}])),
-            multicam_groups: Some(serde_json::json!([{"id": "mc1", "name": "Cam Group",
-                "members": [{"mediaRef": "m1", "kind": "angle",
-                    "sync": {"offsetSeconds": 0.5, "confidence": 0.9, "locked": true}}],
-                "masterMemberId": "m1"}])),
+            multicam_groups: Some(
+                serde_json::from_value(serde_json::json!([{"id": "mc1", "name": "Cam Group",
+                    "members": [{"id": "m1-member", "mediaRef": "m1", "kind": "angle",
+                        "angleLabel": "cam-1",
+                        "sync": {"offsetSeconds": 0.5, "confidence": 0.9, "locked": true}}],
+                    "masterMemberId": "m1"}]))
+                .unwrap(),
+            ),
         };
         let bytes = serde_json::to_vec(&file).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -150,11 +155,43 @@ mod tests {
         assert_eq!(json["activeTimelineId"], "tl-b");
         assert_eq!(json["viewStates"]["tl-a"]["playheadFrame"], 42);
         assert_eq!(json["viewStates"]["tl-a"]["scrollOffsetX"], 250.0);
+        // Typed multicam groups keep Swift's on-disk keys verbatim.
+        assert_eq!(json["multicamGroups"][0]["members"][0]["mediaRef"], "m1");
+        assert_eq!(
+            json["multicamGroups"][0]["members"][0]["sync"]["offsetSeconds"],
+            0.5
+        );
+        assert_eq!(json["multicamGroups"][0]["masterMemberId"], "m1");
 
         let decoded = ProjectFile::decode(&bytes).unwrap();
-        assert_eq!(decoded, file, "incl. opaque speakers (#261) + multicamGroups (#283)");
+        assert_eq!(decoded, file, "incl. opaque speakers (#261) + typed multicamGroups (#283)");
         assert_eq!(decoded.active_index(), 1);
         assert_eq!(decoded.active_timeline().unwrap().name, "B-roll");
+    }
+
+    #[test]
+    fn swift_shaped_multicam_groups_round_trip_losslessly() {
+        // Upstream MulticamEngineTests `groupMetadataRoundTripsThroughProjectFile`:
+        // a Swift-encoded ProjectFile with multicamGroups decodes and re-encodes
+        // to the identical JSON (every member/sync key preserved).
+        let fixture = serde_json::json!({
+            "timelines": [{"id": "tl", "fps": 30, "width": 1920, "height": 1080,
+                           "settingsConfigured": true, "tracks": []}],
+            "multicamGroups": [{
+                "id": "G-1", "name": "Pod",
+                "members": [{
+                    "id": "M-1", "mediaRef": "a", "kind": "both", "angleLabel": "host",
+                    "sync": {"offsetSeconds": 1.5, "confidence": 0.91, "locked": false}
+                }],
+                "masterMemberId": "M-1"
+            }]
+        });
+        let decoded = ProjectFile::decode(fixture.to_string().as_bytes()).unwrap();
+        let groups = decoded.multicam_groups.as_ref().unwrap();
+        assert_eq!(groups[0].members[0].angle_label, "host");
+        assert_eq!(groups[0].master().unwrap().id, "M-1");
+        let reencoded = serde_json::to_value(&decoded).unwrap();
+        assert_eq!(reencoded["multicamGroups"], fixture["multicamGroups"]);
     }
 
     #[test]

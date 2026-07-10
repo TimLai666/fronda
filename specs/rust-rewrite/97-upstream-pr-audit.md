@@ -472,7 +472,13 @@ Fronda saves, same class as #261 speakers).
 
 **(b) merged-unported, ranked:** #283 multicam ENGINE (MulticamEngine,
 manage_multicam/change_cam/get_multicam tools, XL — after tool-surface
-decision); #263 tool-surface v2 (48 consolidated tools: organize_media,
+decision) — **PORTED 2026-07-10**, change `multicam-engine`: typed
+MulticamSource in ProjectFile, `timeline_core::multicam` (engine + creation
++ guards; MulticamEngineTests transplanted), the three reserved tools
+(53 → 56 = 48 upstream + 8 extensions), move/timing/sync/track/ripple
+guards wired; audio-correlation sync maps deferred (pinned offsets /
+shared timecode / master-zero only — correlator seam is a follow-up);
+#263 tool-surface v2 (48 consolidated tools: organize_media,
 manage_tracks, close_project, mutation envelopes, relationship-first
 get_timeline — XL, **USER DECIDED 2026-07-10: FOLLOW upstream v2**;
 Rust-native extensions kept on top of the 48; spectra change

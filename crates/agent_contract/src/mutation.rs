@@ -1342,6 +1342,237 @@ pub fn validate_import_media(input: &Value) -> ValidationResult<ImportMediaInput
     })
 }
 
+// === multicam-engine (upstream #283): manage_multicam / change_cam =========
+
+/// One parsed `manage_multicam.create.members[]` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MulticamMemberInput {
+    pub media_ref: String,
+    pub kind: core_model::MulticamMemberKind,
+    pub angle_label: Option<String>,
+    pub offset_seconds: Option<f64>,
+}
+
+/// Parsed `manage_multicam.create`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManageMulticamCreate {
+    pub members: Vec<MulticamMemberInput>,
+    pub name: Option<String>,
+    pub master: Option<String>,
+    pub start_frame: Option<i64>,
+    pub search_window_seconds: Option<f64>,
+}
+
+/// Parsed and validated `manage_multicam` input (create wins when both
+/// sections are present, mirroring the Swift executor's order).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManageMulticamInput {
+    pub create: Option<ManageMulticamCreate>,
+    pub ungroup_group_id: Option<String>,
+}
+
+/// Shape-validate `manage_multicam`: `create.members` needs >= 2 entries with
+/// mediaRef + a valid kind and no duplicate mediaRefs; `ungroup` needs groupId.
+pub fn validate_manage_multicam(input: &Value) -> ValidationResult<ManageMulticamInput> {
+    if let Some(raw) = input.get("create") {
+        let Some(body) = raw.as_object() else {
+            return ValidationResult::Error("manage_multicam.create must be an object.".into());
+        };
+        let Some(raw_members) = body.get("members").and_then(|v| v.as_array()) else {
+            return ValidationResult::Error(
+                "create.members requires at least two entries (cameras and mics).".into(),
+            );
+        };
+        if raw_members.len() < 2 {
+            return ValidationResult::Error(
+                "create.members requires at least two entries (cameras and mics).".into(),
+            );
+        }
+        let mut members = Vec::with_capacity(raw_members.len());
+        let mut seen_refs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (i, raw) in raw_members.iter().enumerate() {
+            let Some(media_ref) = raw
+                .get("mediaRef")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            else {
+                return ValidationResult::Error(format!(
+                    "create.members[{i}]: mediaRef is required."
+                ));
+            };
+            let Some(kind) = raw
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .and_then(core_model::MulticamMemberKind::from_str)
+            else {
+                return ValidationResult::Error(format!(
+                    "create.members[{i}]: kind must be angle, mic, or both."
+                ));
+            };
+            if !seen_refs.insert(media_ref.to_string()) {
+                return ValidationResult::Error(format!(
+                    "create.members[{i}]: duplicate mediaRef {media_ref}"
+                ));
+            }
+            members.push(MulticamMemberInput {
+                media_ref: media_ref.to_string(),
+                kind,
+                angle_label: raw
+                    .get("angleLabel")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                offset_seconds: raw.get("offsetSeconds").and_then(|v| v.as_f64()),
+            });
+        }
+        return ValidationResult::Ok(ManageMulticamInput {
+            create: Some(ManageMulticamCreate {
+                members,
+                name: body.get("name").and_then(|v| v.as_str()).map(String::from),
+                master: body
+                    .get("master")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                start_frame: body.get("startFrame").and_then(|v| v.as_i64()),
+                search_window_seconds: body
+                    .get("searchWindowSeconds")
+                    .and_then(|v| v.as_f64()),
+            }),
+            ungroup_group_id: None,
+        });
+    }
+    if let Some(raw) = input.get("ungroup") {
+        let Some(body) = raw.as_object() else {
+            return ValidationResult::Error("manage_multicam.ungroup must be an object.".into());
+        };
+        let Some(group_id) = body
+            .get("groupId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        else {
+            return ValidationResult::Error("groupId is required.".into());
+        };
+        return ValidationResult::Ok(ManageMulticamInput {
+            create: None,
+            ungroup_group_id: Some(group_id.to_string()),
+        });
+    }
+    ValidationResult::Error("Pass create or ungroup.".into())
+}
+
+/// One parsed `change_cam.entries[]` row: full-frame (`angle`) or a layout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChangeCamEntry {
+    pub range: (i64, i64),
+    pub angle: Option<String>,
+    pub layout: Option<core_model::VideoLayout>,
+    pub angles: Vec<String>,
+}
+
+/// Parsed and validated `change_cam` input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChangeCamInput {
+    pub group_id: Option<String>,
+    pub clip_id: Option<String>,
+    pub entries: Vec<ChangeCamEntry>,
+}
+
+/// Shape-validate `change_cam`: non-empty entries, each with a [start, end)
+/// integer range (start < end) and EITHER angle OR layout + angles.
+pub fn validate_change_cam(input: &Value) -> ValidationResult<ChangeCamInput> {
+    let Some(raw_entries) = input
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
+    else {
+        return ValidationResult::Error(
+            "entries requires at least one {range, angle} entry.".into(),
+        );
+    };
+    let mut entries = Vec::with_capacity(raw_entries.len());
+    for (i, raw) in raw_entries.iter().enumerate() {
+        let path = format!("entries[{i}]");
+        let range = raw.get("range").and_then(|v| v.as_array()).and_then(|r| {
+            if r.len() != 2 {
+                return None;
+            }
+            let a = r[0].as_i64()?;
+            let b = r[1].as_i64()?;
+            (a < b).then_some((a, b))
+        });
+        let Some(range) = range else {
+            return ValidationResult::Error(format!(
+                "{path}: range must be [startFrame, endFrame) with start < end."
+            ));
+        };
+        let angle = raw.get("angle").and_then(|v| v.as_str()).map(String::from);
+        if let Some(layout_raw) = raw.get("layout").and_then(|v| v.as_str()) {
+            if angle.is_some() {
+                return ValidationResult::Error(format!(
+                    "{path}: pass angle for a full-frame switch OR layout + angles, not both."
+                ));
+            }
+            let layout = core_model::VideoLayout::from_str(layout_raw)
+                .filter(|l| *l != core_model::VideoLayout::Full);
+            let Some(layout) = layout else {
+                let valid: Vec<&str> = core_model::VideoLayout::ALL
+                    .iter()
+                    .filter(|l| **l != core_model::VideoLayout::Full)
+                    .map(|l| l.as_str())
+                    .collect();
+                return ValidationResult::Error(format!(
+                    "{path}: unknown layout '{layout_raw}'. Valid: {}. For full frame, pass angle instead.",
+                    valid.join(", ")
+                ));
+            };
+            let angles: Vec<String> = raw
+                .get("angles")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if angles.is_empty() {
+                let slots: Vec<&str> = layout.slots().iter().map(|s| s.id).collect();
+                return ValidationResult::Error(format!(
+                    "{path}: layout needs angles — angleLabels in slot order ({}); fewer than slots leaves cells empty.",
+                    slots.join(", ")
+                ));
+            }
+            entries.push(ChangeCamEntry {
+                range,
+                angle: None,
+                layout: Some(layout),
+                angles,
+            });
+        } else {
+            let Some(angle) = angle else {
+                return ValidationResult::Error(format!(
+                    "{path}: angle is required for a full-frame switch."
+                ));
+            };
+            entries.push(ChangeCamEntry {
+                range,
+                angle: Some(angle),
+                layout: None,
+                angles: Vec::new(),
+            });
+        }
+    }
+    ValidationResult::Ok(ChangeCamInput {
+        group_id: input
+            .get("groupId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        clip_id: input
+            .get("clipId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        entries,
+    })
+}
+
 // === Upstream #99: set_chroma_key ===========================================
 
 /// Parsed and validated `set_chroma_key` input.
