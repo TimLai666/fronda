@@ -74,3 +74,8 @@
 - `exec_034_add_texts_missing_texts`：`Missing texts array` → `missing or empty 'texts' array`
 - `exec_023_create_folder_missing_name`：`Missing name` → `missing or empty 'name'`
 - mutation.rs 的 `mut_006_*`（改字串 id）與 `mut_019_*`（欄位改 Option）隨對齊更新
+
+> Resolution (coordinator, 2026-07-10): the inspector dB-boost conflict is
+> resolved by widening the volume ceiling to VOLUME_CEILING_LINEAR (+15 dB
+> = 5.6234, Swift inspector limit) - the tool layer accepts the whole
+> UI-reachable range; values beyond it still reject.

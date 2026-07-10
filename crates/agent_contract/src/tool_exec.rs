@@ -6494,16 +6494,25 @@ mod tests {
     // live path); these pin them e2e through executor.execute.
 
     #[test]
-    fn set_clip_properties_rejects_volume_above_one() {
+    fn set_clip_properties_volume_ceiling_is_the_db_boost_limit() {
+        // Ceiling widened to Swift's +15 dB inspector limit: 1.5 (a boost)
+        // is VALID here because the Rust inspector writes through this tool
+        // layer; values past the +15 dB linear ceiling reject.
         let mut exec = executor_with_clip();
+        exec.execute(
+            "set_clip_properties",
+            &json!({"clipIds": ["c"], "properties": {"volume": 1.5}}),
+        )
+        .unwrap();
+        assert_eq!(exec.timeline().tracks[0].clips[0].volume, 1.5);
         let err = exec
             .execute(
                 "set_clip_properties",
-                &json!({"clipIds": ["c"], "properties": {"volume": 1.5}}),
+                &json!({"clipIds": ["c"], "properties": {"volume": 6.0}}),
             )
             .unwrap_err();
         assert!(err.contains("volume"), "got: {err}");
-        assert_eq!(exec.timeline().tracks[0].clips[0].volume, 1.0);
+        assert_eq!(exec.timeline().tracks[0].clips[0].volume, 1.5);
     }
 
     #[test]
@@ -6584,7 +6593,7 @@ mod tests {
         let _ = exec
             .execute(
                 "set_clip_properties",
-                &json!({"clipIds": ["c"], "properties": {"volume": 1.5}}),
+                &json!({"clipIds": ["c"], "properties": {"volume": 9.9}}),
             )
             .unwrap_err();
         assert_eq!(exec.revision(), before, "rejected call must not bump revision");
