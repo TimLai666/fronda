@@ -61,9 +61,10 @@ impl TimelineView {
                 if let Some(id) = this.tab_editing.take() {
                     let name = field.read(cx).text().trim().to_string();
                     if !name.is_empty() {
+                        // Timeline renames live in organize_media (#255 tabs).
                         Self::run_shared_tool(
-                            "rename_media",
-                            serde_json::json!({ "mediaId": id, "name": name }),
+                            "organize_media",
+                            serde_json::json!({ "renames": [{ "item": id, "name": name }] }),
                         );
                     }
                     cx.notify();
@@ -589,8 +590,8 @@ impl Render for TimelineView {
                                     .child("×")
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         Self::run_shared_tool(
-                                            "delete_media",
-                                            serde_json::json!({ "mediaId": close_id }),
+                                            "organize_media",
+                                            serde_json::json!({ "deletes": [close_id] }),
                                         );
                                         cx.notify();
                                     })),

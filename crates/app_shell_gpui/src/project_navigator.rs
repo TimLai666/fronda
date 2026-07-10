@@ -1,9 +1,12 @@
-//! Host `ProjectNavigator` for open_project/new_project: loads or creates a
-//! `.palmier` package and returns the full replacement state. Runs INSIDE the
-//! executor lock, so it must never touch the executor — it updates the hub's
-//! shared project-root handle directly and hands back freshly-built seams.
+//! Host `ProjectNavigator` for open_project/new_project/close_project: loads,
+//! creates, or saves-and-closes a `.palmier` package and returns the full
+//! replacement state. Runs INSIDE the executor lock, so it must never touch
+//! the executor — it updates the hub's shared project-root handle directly
+//! and hands back freshly-built seams.
 
-use agent_contract::{OpenedProject, ProjectNavigator, ProjectSeams};
+use agent_contract::{
+    ActiveProjectState, ClosedProject, OpenedProject, ProjectNavigator, ProjectSeams,
+};
 use core_model::Timeline;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -105,6 +108,88 @@ impl ProjectNavigator for AppProjectNavigator {
         let bundle = project_io::ProjectBundle::open(&root).map_err(|e| e.to_string())?;
         Ok(self.finish(root, bundle))
     }
+
+    /// close_project (tool-surface-v2): Fronda holds ONE open project, so
+    /// "open" means "the active one". Save-first; a save failure leaves the
+    /// project open. No next project takes over — the Home state follows.
+    fn close(
+        &self,
+        name: Option<&str>,
+        id: Option<&str>,
+        path: Option<&str>,
+        active: ActiveProjectState,
+    ) -> Result<ClosedProject, String> {
+        let current = self.project_root.lock().ok().and_then(|g| g.clone());
+        let target: PathBuf = if let Some(p) = path {
+            PathBuf::from(p)
+        } else if let Some(id) = id {
+            let registry = crate::project_registry_store::load_from(&self.registry_path);
+            registry
+                .sorted_entries()
+                .into_iter()
+                .find(|e| e.id == id)
+                .map(|e| e.url.clone())
+                .ok_or_else(|| {
+                    format!("No known project with id '{id}'. get_projects lists them.")
+                })?
+        } else if let Some(name) = name {
+            let wanted = name.trim();
+            let registry = crate::project_registry_store::load_from(&self.registry_path);
+            let matches: Vec<PathBuf> = registry
+                .sorted_entries()
+                .into_iter()
+                .map(|e| e.url.clone())
+                .filter(|url| crate::project_lister::project_name(url).eq_ignore_ascii_case(wanted))
+                .collect();
+            match matches.len() {
+                0 => {
+                    return Err(format!(
+                        "No known project named '{wanted}'. get_projects lists them."
+                    ))
+                }
+                1 => matches.into_iter().next().expect("len checked"),
+                _ => {
+                    let candidates = matches
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(format!(
+                        "Ambiguous project name '{wanted}' — matches: {candidates}. Use id or path."
+                    ));
+                }
+            }
+        } else {
+            current.clone().ok_or_else(|| "No project is open.".to_string())?
+        };
+        let is_open = current
+            .as_deref()
+            .is_some_and(|c| crate::project_lister::same_path(c, &target));
+        if !is_open {
+            return Err(format!("Project at {} isn't open.", target.display()));
+        }
+        let name = crate::project_lister::project_name(&target);
+        project_io::save_project_state_with_siblings(
+            &target,
+            &active.timeline,
+            &active.sibling_timelines,
+            &active.manifest,
+        )
+        .map_err(|e| format!("Couldn't save '{name}' — project left open. {e}"))?;
+        if let Ok(mut cur) = self.project_root.lock() {
+            *cur = None;
+        }
+        Ok(ClosedProject {
+            name,
+            open_count: 0,
+            was_active: true,
+            next_active: None,
+            lister: Some(Arc::new(crate::project_lister::AgentProjectLister::new(
+                self.registry_path.clone(),
+                None,
+            ))),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -152,6 +237,74 @@ mod tests {
         let reopened = nav.open(Some(&id), None).unwrap();
         assert_eq!(reopened.name, "Demo");
         assert!(nav.open(Some("ghost"), None).is_err());
+    }
+
+    fn empty_state() -> ActiveProjectState {
+        ActiveProjectState {
+            timeline: core_model::Timeline {
+                fps: 50,
+                ..Default::default()
+            },
+            sibling_timelines: Vec::new(),
+            manifest: Default::default(),
+        }
+    }
+
+    #[test]
+    fn close_saves_first_then_clears_the_root() {
+        let (dir, root_handle, nav) = temp_env("close");
+        let pkg = dir.join("Demo.palmier");
+        project_io::save_project_state(&pkg, &core_model::Timeline::default(), &Default::default())
+            .unwrap();
+        nav.open(None, Some(&pkg.display().to_string())).unwrap();
+        assert!(root_handle.lock().unwrap().is_some());
+
+        let closed = nav.close(None, None, None, empty_state()).unwrap();
+        assert_eq!(closed.name, "Demo");
+        assert_eq!(closed.open_count, 0);
+        assert!(closed.was_active);
+        assert!(closed.next_active.is_none());
+        assert!(closed.lister.is_some(), "rootless lister for get_projects");
+        assert!(root_handle.lock().unwrap().is_none(), "hub root cleared");
+        // Save-first happened: the package now carries the fps-50 timeline.
+        let bundle = project_io::ProjectBundle::open(&pkg).unwrap();
+        assert_eq!(bundle.timeline.fps, 50);
+    }
+
+    #[test]
+    fn close_refuses_projects_that_are_not_open() {
+        let (dir, _root, nav) = temp_env("close-not-open");
+        // No project open at all.
+        let err = nav.close(None, None, None, empty_state()).unwrap_err();
+        assert!(err.contains("No project is open"), "{err}");
+
+        // Open A, then try to close B by path — B isn't open.
+        let a = dir.join("A.palmier");
+        project_io::save_project_state(&a, &core_model::Timeline::default(), &Default::default())
+            .unwrap();
+        nav.open(None, Some(&a.display().to_string())).unwrap();
+        let b = dir.join("B.palmier");
+        let err = nav
+            .close(None, None, Some(&b.display().to_string()), empty_state())
+            .unwrap_err();
+        assert!(err.contains("isn't open"), "{err}");
+        // Unknown name errors before the open check.
+        let err = nav
+            .close(Some("Ghost"), None, None, empty_state())
+            .unwrap_err();
+        assert!(err.contains("No known project named"), "{err}");
+    }
+
+    #[test]
+    fn close_resolves_name_case_insensitively() {
+        let (dir, root_handle, nav) = temp_env("close-by-name");
+        let pkg = dir.join("Demo.palmier");
+        project_io::save_project_state(&pkg, &core_model::Timeline::default(), &Default::default())
+            .unwrap();
+        nav.open(None, Some(&pkg.display().to_string())).unwrap();
+        let closed = nav.close(Some("demo"), None, None, empty_state()).unwrap();
+        assert_eq!(closed.name, "Demo");
+        assert!(root_handle.lock().unwrap().is_none());
     }
 
     #[test]

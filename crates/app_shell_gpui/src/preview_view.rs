@@ -414,10 +414,8 @@ impl PreviewView {
                         .execute(
                             "import_media",
                             &serde_json::json!({
+                                "source": { "path": out.to_string_lossy() },
                                 "name": format!("Frame {frame}"),
-                                "filePath": out.to_string_lossy(),
-                                "type": "image",
-                                "duration": 5.0,
                             }),
                         )
                         .map(|_| ())

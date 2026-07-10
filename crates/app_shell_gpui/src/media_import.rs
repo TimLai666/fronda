@@ -4,15 +4,6 @@ use std::path::{Path, PathBuf};
 
 use core_model::ClipType;
 
-fn clip_type_keyword(kind: ClipType) -> &'static str {
-    match kind {
-        ClipType::Audio => "audio",
-        ClipType::Image => "image",
-        ClipType::Text => "text",
-        _ => "video",
-    }
-}
-
 /// Import each file into the shared executor. Unrecognized extensions are
 /// skipped (logged) without aborting the remaining files.
 pub fn import_files_into_shared_state(paths: &[PathBuf]) {
@@ -34,7 +25,8 @@ pub fn import_one(exec: &mut agent_contract::ToolExecutor, path: &Path) -> Resul
         .extension()
         .and_then(|e| e.to_str())
         .ok_or_else(|| "no file extension".to_string())?;
-    let kind = ClipType::from_extension(ext).ok_or_else(|| format!("unknown extension .{ext}"))?;
+    // Early skip keeps the log message meaningful; the executor re-checks.
+    ClipType::from_extension(ext).ok_or_else(|| format!("unknown extension .{ext}"))?;
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -42,9 +34,8 @@ pub fn import_one(exec: &mut agent_contract::ToolExecutor, path: &Path) -> Resul
     exec.execute(
         "import_media",
         &serde_json::json!({
+            "source": { "path": path.to_string_lossy() },
             "name": name,
-            "filePath": path.to_string_lossy(),
-            "type": clip_type_keyword(kind),
         }),
     )
     .map(|_| ())

@@ -912,9 +912,9 @@ mod tests {
         // MCP mutation is visible externally.
         let resp = http_rpc(
             port,
-            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_folder","arguments":{"name":"B-roll"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"organize_media","arguments":{"createFolders":["B-roll"]}}}"#,
         );
-        assert!(resp.get("result").is_some(), "create_folder failed: {resp}");
+        assert!(resp.get("result").is_some(), "organize_media failed: {resp}");
         {
             let exec = shared.lock().unwrap();
             assert!(exec
@@ -1001,7 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_54_tools() {
+    fn tools_list_returns_57_tools() {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: json!(1),
@@ -1014,8 +1014,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            64,
-            "MCP-003: 64 tools (see agent_contract tools.rs header history)"
+            57,
+            "MCP-003: 57 tools (see agent_contract tools.rs header history)"
         );
     }
 

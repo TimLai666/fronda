@@ -20,14 +20,14 @@ impl AgentProjectLister {
 
 /// Same-path check tolerant of Windows case/separator differences: compare
 /// canonical forms when both resolve, else fall back to direct equality.
-fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+pub(crate) fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => a == b,
     }
 }
 
-fn project_name(path: &std::path::Path) -> String {
+pub(crate) fn project_name(path: &std::path::Path) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Project")

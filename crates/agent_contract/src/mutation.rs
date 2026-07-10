@@ -422,36 +422,104 @@ pub fn validate_insert_clips(input: &Value) -> ValidationResult<InsertClipsInput
     })
 }
 
-// === MUT-006: remove_tracks ===============================================
+// === MUT-006 (tool-surface-v2): manage_tracks ==============================
 
-/// Parsed and validated `remove_tracks` input.
+/// One parsed `manage_tracks` set entry.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RemoveTracksInput {
-    pub track_ids: Vec<String>,
+pub struct ManageTrackSetInput {
+    pub index: i64,
+    pub muted: Option<bool>,
+    pub hidden: Option<bool>,
+    pub sync_locked: Option<bool>,
 }
 
-/// MUT-006: Dedup repeated track ids. The live tool takes string track IDs
-/// (executor + schema), not the integer indexes Swift's `trackIndexes` uses.
-pub fn validate_remove_tracks(input: &Value) -> ValidationResult<RemoveTracksInput> {
-    let track_ids = match input.get("trackIds").and_then(|v| v.as_array()) {
-        Some(arr) if !arr.is_empty() => {
-            let mut ids: Vec<String> = arr
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
-            if ids.is_empty() {
-                return ValidationResult::Error(
-                    "remove_tracks: 'trackIds' must contain at least one valid track id".into(),
-                );
-            }
-            let mut seen = std::collections::HashSet::new();
-            ids.retain(|id| seen.insert(id.clone()));
-            ids
-        }
-        _ => return ValidationResult::Error("remove_tracks: missing or empty 'trackIds'".into()),
-    };
+/// Parsed and validated `manage_tracks` input (replaces remove_tracks).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManageTracksInput {
+    /// (index, to) pairs, applied in order against the live track list.
+    pub reorder: Vec<(i64, i64)>,
+    pub set: Vec<ManageTrackSetInput>,
+    pub remove: Vec<i64>,
+}
 
-    ValidationResult::Ok(RemoveTracksInput { track_ids })
+/// MUT-006 (v2): shape-validate manage_tracks. Indexes must be non-negative
+/// integers; every set entry needs at least one flag; an empty call (all
+/// three arrays absent/empty) is refused.
+pub fn validate_manage_tracks(input: &Value) -> ValidationResult<ManageTracksInput> {
+    let mut reorder: Vec<(i64, i64)> = Vec::new();
+    if let Some(arr) = input.get("reorder").and_then(|v| v.as_array()) {
+        for (i, entry) in arr.iter().enumerate() {
+            let (Some(index), Some(to)) = (
+                entry.get("index").and_then(|v| v.as_i64()),
+                entry.get("to").and_then(|v| v.as_i64()),
+            ) else {
+                return ValidationResult::Error(format!(
+                    "manage_tracks: reorder[{i}] needs integer 'index' and 'to'."
+                ));
+            };
+            if index < 0 || to < 0 {
+                return ValidationResult::Error(format!(
+                    "manage_tracks: reorder[{i}] indexes must be non-negative."
+                ));
+            }
+            reorder.push((index, to));
+        }
+    }
+    let mut set: Vec<ManageTrackSetInput> = Vec::new();
+    if let Some(arr) = input.get("set").and_then(|v| v.as_array()) {
+        for (i, entry) in arr.iter().enumerate() {
+            let Some(index) = entry.get("index").and_then(|v| v.as_i64()) else {
+                return ValidationResult::Error(format!(
+                    "manage_tracks: set[{i}] needs an integer 'index'."
+                ));
+            };
+            if index < 0 {
+                return ValidationResult::Error(format!(
+                    "manage_tracks: set[{i}].index must be non-negative."
+                ));
+            }
+            let muted = entry.get("muted").and_then(|v| v.as_bool());
+            let hidden = entry.get("hidden").and_then(|v| v.as_bool());
+            let sync_locked = entry.get("syncLocked").and_then(|v| v.as_bool());
+            if muted.is_none() && hidden.is_none() && sync_locked.is_none() {
+                return ValidationResult::Error(format!(
+                    "manage_tracks: set[{i}] needs at least one of muted, hidden, or syncLocked."
+                ));
+            }
+            set.push(ManageTrackSetInput {
+                index,
+                muted,
+                hidden,
+                sync_locked,
+            });
+        }
+    }
+    let mut remove: Vec<i64> = Vec::new();
+    if let Some(arr) = input.get("remove").and_then(|v| v.as_array()) {
+        for (i, entry) in arr.iter().enumerate() {
+            let Some(index) = entry.as_i64() else {
+                return ValidationResult::Error(format!(
+                    "manage_tracks: remove[{i}] must be an integer track index."
+                ));
+            };
+            if index < 0 {
+                return ValidationResult::Error(format!(
+                    "manage_tracks: remove[{i}] must be non-negative."
+                ));
+            }
+            remove.push(index);
+        }
+    }
+    if reorder.is_empty() && set.is_empty() && remove.is_empty() {
+        return ValidationResult::Error(
+            "manage_tracks: pass at least one of reorder, set, or remove.".into(),
+        );
+    }
+    ValidationResult::Ok(ManageTracksInput {
+        reorder,
+        set,
+        remove,
+    })
 }
 
 // === MUT-007: move_clips ==================================================
@@ -919,113 +987,253 @@ pub fn validate_inspect_color(input: &Value) -> ValidationResult<InspectColorInp
     })
 }
 
-// === MUT-022: folder/media tools ==========================================
+// === MUT-022 (tool-surface-v2): organize_media =============================
 
-/// Parsed and validated `create_folder` input.
+/// One parsed `organize_media` move entry.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CreateFolderInput {
+pub struct OrganizeMoveInput {
+    pub items: Vec<String>,
+    pub into: Option<String>,
+}
+
+/// One parsed `organize_media` rename entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrganizeRenameInput {
+    pub item: String,
     pub name: String,
 }
 
-/// Parsed and validated `rename_folder` input.
+/// Parsed and validated `organize_media` input (replaces create_folder,
+/// rename_folder, delete_folder, move_to_folder, rename_media, delete_media).
 #[derive(Debug, Clone, PartialEq)]
-pub struct RenameFolderInput {
-    pub folder_id: String,
-    pub name: String,
+pub struct OrganizeMediaInput {
+    pub create_folders: Vec<String>,
+    pub moves: Vec<OrganizeMoveInput>,
+    pub renames: Vec<OrganizeRenameInput>,
+    pub deletes: Vec<String>,
 }
 
-/// Parsed and validated `delete_folder` input.
+/// MUT-022 (v2): shape-validate organize_media. Items and paths must be
+/// non-empty strings; every move needs items; every rename needs item + name;
+/// an all-empty call is refused. Library resolution (asset id vs timeline id
+/// vs folder path, ambiguity, cycles) happens in the executor.
+pub fn validate_organize_media(input: &Value) -> ValidationResult<OrganizeMediaInput> {
+    fn string_list(input: &Value, key: &str) -> Result<Vec<String>, String> {
+        let Some(arr) = input.get(key).and_then(|v| v.as_array()) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for (i, v) in arr.iter().enumerate() {
+            match v.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(s) => out.push(s.to_string()),
+                None => {
+                    return Err(format!(
+                        "organize_media: {key}[{i}] must be a non-empty string."
+                    ))
+                }
+            }
+        }
+        Ok(out)
+    }
+    let create_folders = match string_list(input, "createFolders") {
+        Ok(v) => v,
+        Err(e) => return ValidationResult::Error(e),
+    };
+    let deletes = match string_list(input, "deletes") {
+        Ok(v) => v,
+        Err(e) => return ValidationResult::Error(e),
+    };
+    let mut moves: Vec<OrganizeMoveInput> = Vec::new();
+    if let Some(arr) = input.get("moves").and_then(|v| v.as_array()) {
+        for (i, entry) in arr.iter().enumerate() {
+            let items: Vec<String> = entry
+                .get("items")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::trim))
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if items.is_empty() {
+                return ValidationResult::Error(format!(
+                    "organize_media: moves[{i}] needs a non-empty 'items' array."
+                ));
+            }
+            let into = entry
+                .get("into")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            moves.push(OrganizeMoveInput { items, into });
+        }
+    }
+    let mut renames: Vec<OrganizeRenameInput> = Vec::new();
+    if let Some(arr) = input.get("renames").and_then(|v| v.as_array()) {
+        for (i, entry) in arr.iter().enumerate() {
+            let item = entry
+                .get("item")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let name = entry
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let (Some(item), Some(name)) = (item, name) else {
+                return ValidationResult::Error(format!(
+                    "organize_media: renames[{i}] needs non-empty 'item' and 'name'."
+                ));
+            };
+            renames.push(OrganizeRenameInput {
+                item: item.to_string(),
+                name: name.to_string(),
+            });
+        }
+    }
+    if create_folders.is_empty() && moves.is_empty() && renames.is_empty() && deletes.is_empty() {
+        return ValidationResult::Error(
+            "organize_media: pass at least one of createFolders, moves, renames, or deletes."
+                .into(),
+        );
+    }
+    ValidationResult::Ok(OrganizeMediaInput {
+        create_folders,
+        moves,
+        renames,
+        deletes,
+    })
+}
+
+// === tool-surface-v2: close_project =========================================
+
+/// Parsed and validated `close_project` input.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DeleteFolderInput {
-    pub folder_id: String,
+pub struct CloseProjectInput {
+    pub name: Option<String>,
+    pub id: Option<String>,
+    pub path: Option<String>,
 }
 
-/// Parsed and validated `rename_media` input.
+/// Validate `close_project` input: name/id/path must be non-empty strings
+/// when present; all-absent means "close the active project".
+pub fn validate_close_project(input: &Value) -> ValidationResult<CloseProjectInput> {
+    fn opt_string(input: &Value, key: &str) -> Result<Option<String>, String> {
+        match input.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.trim().to_string())),
+            Some(_) => Err(format!(
+                "close_project: '{key}' must be a non-empty string when present."
+            )),
+        }
+    }
+    let name = match opt_string(input, "name") {
+        Ok(v) => v,
+        Err(e) => return ValidationResult::Error(e),
+    };
+    let id = match opt_string(input, "id") {
+        Ok(v) => v,
+        Err(e) => return ValidationResult::Error(e),
+    };
+    let path = match opt_string(input, "path") {
+        Ok(v) => v,
+        Err(e) => return ValidationResult::Error(e),
+    };
+    ValidationResult::Ok(CloseProjectInput { name, id, path })
+}
+
+// === tool-surface-v2: import_media ==========================================
+
+/// Parsed and validated `import_media` input (absorbs create_matte and
+/// import_folder via source.matte / source.path-as-directory).
 #[derive(Debug, Clone, PartialEq)]
-pub struct RenameMediaInput {
-    pub media_id: String,
-    pub name: String,
+pub struct ImportMediaInput {
+    pub url: Option<String>,
+    pub path: Option<String>,
+    pub bytes: Option<String>,
+    pub matte_hex: Option<String>,
+    pub matte_aspect: Option<String>,
+    pub mime_type: Option<String>,
+    pub name: Option<String>,
+    pub folder: Option<String>,
 }
 
-/// Parsed and validated `delete_media` input.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DeleteMediaInput {
-    pub media_id: String,
-}
-
-/// Parsed and validated `move_to_folder` input.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MoveToFolderInput {
-    pub media_id: String,
-    pub folder_id: String,
-}
-
-/// MUT-022: Validate `create_folder` input.
-pub fn validate_create_folder(input: &Value) -> ValidationResult<CreateFolderInput> {
-    let name = match input.get("name").and_then(|v| v.as_str()) {
-        Some(n) if !n.is_empty() => n.to_string(),
-        _ => return ValidationResult::Error("create_folder: missing or empty 'name'".into()),
+/// Validate `import_media` input: `source` must set exactly one of url, path,
+/// bytes, or matte; matte needs `hex`; bytes needs `mimeType`.
+pub fn validate_import_media(input: &Value) -> ValidationResult<ImportMediaInput> {
+    let Some(source) = input.get("source").and_then(|v| v.as_object()) else {
+        return ValidationResult::Error(
+            "import_media: 'source' object is required — set exactly one of url, path, bytes, or matte."
+                .into(),
+        );
     };
-    ValidationResult::Ok(CreateFolderInput { name })
-}
-
-/// MUT-022: Validate `rename_folder` input.
-pub fn validate_rename_folder(input: &Value) -> ValidationResult<RenameFolderInput> {
-    let folder_id = match input.get("folderId").and_then(|v| v.as_str()) {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => return ValidationResult::Error("rename_folder: missing or empty 'folderId'".into()),
+    let get = |key: &str| {
+        source
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
     };
-    let name = match input.get("name").and_then(|v| v.as_str()) {
-        Some(n) if !n.is_empty() => n.to_string(),
-        _ => return ValidationResult::Error("rename_folder: missing or empty 'name'".into()),
+    let url = get("url");
+    let path = get("path");
+    let bytes = get("bytes");
+    let matte = source.get("matte").and_then(|v| v.as_object());
+    let set_count = [url.is_some(), path.is_some(), bytes.is_some(), matte.is_some()]
+        .iter()
+        .filter(|b| **b)
+        .count();
+    if set_count != 1 {
+        return ValidationResult::Error(
+            "import_media: source must set exactly one of url, path, bytes, or matte.".into(),
+        );
+    }
+    let (matte_hex, matte_aspect) = match matte {
+        Some(m) => {
+            let hex = m
+                .get("hex")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            if hex.is_none() {
+                return ValidationResult::Error(
+                    "import_media: source.matte requires 'hex' (e.g. '#000000').".into(),
+                );
+            }
+            (
+                hex,
+                m.get("aspectRatio")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+            )
+        }
+        None => (None, None),
     };
-    ValidationResult::Ok(RenameFolderInput { folder_id, name })
-}
-
-/// MUT-022: Validate `delete_folder` input.
-pub fn validate_delete_folder(input: &Value) -> ValidationResult<DeleteFolderInput> {
-    let folder_id = match input.get("folderId").and_then(|v| v.as_str()) {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => return ValidationResult::Error("delete_folder: missing or empty 'folderId'".into()),
-    };
-    ValidationResult::Ok(DeleteFolderInput { folder_id })
-}
-
-/// MUT-022: Validate `rename_media` input.
-pub fn validate_rename_media(input: &Value) -> ValidationResult<RenameMediaInput> {
-    let media_id = match input.get("mediaId").and_then(|v| v.as_str()) {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => return ValidationResult::Error("rename_media: missing or empty 'mediaId'".into()),
-    };
-    let name = match input.get("name").and_then(|v| v.as_str()) {
-        Some(n) if !n.is_empty() => n.to_string(),
-        _ => return ValidationResult::Error("rename_media: missing or empty 'name'".into()),
-    };
-    ValidationResult::Ok(RenameMediaInput { media_id, name })
-}
-
-/// MUT-022: Validate `delete_media` input.
-pub fn validate_delete_media(input: &Value) -> ValidationResult<DeleteMediaInput> {
-    let media_id = match input.get("mediaId").and_then(|v| v.as_str()) {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => return ValidationResult::Error("delete_media: missing or empty 'mediaId'".into()),
-    };
-    ValidationResult::Ok(DeleteMediaInput { media_id })
-}
-
-/// MUT-022: Validate `move_to_folder` input.
-pub fn validate_move_to_folder(input: &Value) -> ValidationResult<MoveToFolderInput> {
-    let media_id = match input.get("mediaId").and_then(|v| v.as_str()) {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => return ValidationResult::Error("move_to_folder: missing or empty 'mediaId'".into()),
-    };
-    let folder_id = match input.get("folderId").and_then(|v| v.as_str()) {
-        Some(id) if !id.is_empty() => id.to_string(),
-        _ => return ValidationResult::Error("move_to_folder: missing or empty 'folderId'".into()),
-    };
-    ValidationResult::Ok(MoveToFolderInput {
-        media_id,
-        folder_id,
+    let mime_type = get("mimeType");
+    if bytes.is_some() && mime_type.is_none() {
+        return ValidationResult::Error(
+            "import_media: source.mimeType is required when bytes is set.".into(),
+        );
+    }
+    ValidationResult::Ok(ImportMediaInput {
+        url,
+        path,
+        bytes,
+        matte_hex,
+        matte_aspect,
+        mime_type,
+        name: input.get("name").and_then(|v| v.as_str()).map(String::from),
+        folder: input
+            .get("folder")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from),
     })
 }
 
@@ -1110,31 +1318,6 @@ pub fn validate_set_color_grade(input: &Value) -> ValidationResult<SetColorGrade
         saturation: input.get("saturation").and_then(|v| v.as_f64()),
         temperature: input.get("temperature").and_then(|v| v.as_f64()),
     })
-}
-
-// === Upstream #47: import_folder ============================================
-
-/// Parsed and validated `import_folder` input.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ImportFolderInput {
-    pub path: String,
-    pub recursive: bool,
-}
-
-/// Validate `import_folder` input.
-///
-/// UNWIRED: matches the schema (`path`), but the stub executor still reads
-/// `folderName` — wire once the executor is fixed to the schema shape.
-pub fn validate_import_folder(input: &Value) -> ValidationResult<ImportFolderInput> {
-    let path = match input.get("path").and_then(|v| v.as_str()) {
-        Some(p) if !p.is_empty() => p.to_string(),
-        _ => return ValidationResult::Error("import_folder: missing or empty 'path'".into()),
-    };
-    let recursive = input
-        .get("recursive")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    ValidationResult::Ok(ImportFolderInput { path, recursive })
 }
 
 // === Upstream #6: generate_music ============================================
@@ -1490,29 +1673,56 @@ mod tests {
         assert!(result.into_error().is_some());
     }
 
-    // ---- MUT-006: remove_tracks -----------------------------------------
+    // ---- MUT-006 (v2): manage_tracks -------------------------------------
 
     #[test]
-    fn mut_006_remove_tracks_valid() {
-        let input = json!({"trackIds": ["t0", "t2", "t4"]});
-        let result = validate_remove_tracks(&input);
-        let parsed = result.into_ok().expect("MUT-006: valid");
-        assert_eq!(parsed.track_ids, vec!["t0", "t2", "t4"]);
+    fn mut_006_manage_tracks_valid_all_actions() {
+        let input = json!({
+            "reorder": [{"index": 2, "to": 0}],
+            "set": [{"index": 1, "muted": true, "syncLocked": false}],
+            "remove": [3],
+        });
+        let parsed = validate_manage_tracks(&input)
+            .into_ok()
+            .expect("MUT-006: valid");
+        assert_eq!(parsed.reorder, vec![(2, 0)]);
+        assert_eq!(parsed.set[0].index, 1);
+        assert_eq!(parsed.set[0].muted, Some(true));
+        assert_eq!(parsed.set[0].hidden, None);
+        assert_eq!(parsed.set[0].sync_locked, Some(false));
+        assert_eq!(parsed.remove, vec![3]);
     }
 
     #[test]
-    fn mut_006_remove_tracks_dedup() {
-        let input = json!({"trackIds": ["t3", "t1", "t3", "t2", "t1"]});
-        let result = validate_remove_tracks(&input);
-        let parsed = result.into_ok().expect("MUT-006: dedup");
-        assert_eq!(parsed.track_ids, vec!["t3", "t1", "t2"]);
+    fn mut_006_manage_tracks_empty_call_rejected() {
+        let err = validate_manage_tracks(&json!({}))
+            .into_error()
+            .expect("empty call refused");
+        assert!(err.contains("at least one of"), "{err}");
+        assert!(validate_manage_tracks(&json!({"reorder": [], "set": [], "remove": []}))
+            .into_error()
+            .is_some());
     }
 
     #[test]
-    fn mut_006_remove_tracks_empty_rejected() {
-        let input = json!({"trackIds": []});
-        let result = validate_remove_tracks(&input);
-        assert!(result.into_error().is_some());
+    fn mut_006_manage_tracks_set_needs_a_flag() {
+        let err = validate_manage_tracks(&json!({"set": [{"index": 0}]}))
+            .into_error()
+            .expect("flagless set refused");
+        assert!(err.contains("at least one of muted"), "{err}");
+    }
+
+    #[test]
+    fn mut_006_manage_tracks_negative_index_rejected() {
+        assert!(validate_manage_tracks(&json!({"remove": [-1]}))
+            .into_error()
+            .is_some());
+        assert!(validate_manage_tracks(&json!({"reorder": [{"index": -1, "to": 0}]}))
+            .into_error()
+            .is_some());
+        assert!(validate_manage_tracks(&json!({"reorder": [{"index": 0}]}))
+            .into_error()
+            .is_some());
     }
 
     // ---- MUT-007: move_clips --------------------------------------------
@@ -2039,120 +2249,141 @@ mod tests {
         assert_eq!(parsed.language, None);
     }
 
-    // ---- MUT-022: folder/media tools ------------------------------------
+    // ---- MUT-022 (v2): organize_media ------------------------------------
 
     #[test]
-    fn mut_022_create_folder_valid() {
-        let input = json!({"name": "My Folder"});
-        let result = validate_create_folder(&input);
-        let parsed = result.into_ok().expect("MUT-022: create_folder");
-        assert_eq!(parsed.name, "My Folder");
+    fn mut_022_organize_media_valid_full_combo() {
+        let input = json!({
+            "createFolders": ["Hero shots/Takes"],
+            "moves": [{"items": ["m1", "B-roll"], "into": "Archive"}, {"items": ["m2"]}],
+            "renames": [{"item": "m1", "name": "Best take"}],
+            "deletes": ["m3", "Old/Scraps"],
+        });
+        let parsed = validate_organize_media(&input)
+            .into_ok()
+            .expect("MUT-022: valid");
+        assert_eq!(parsed.create_folders, vec!["Hero shots/Takes"]);
+        assert_eq!(parsed.moves.len(), 2);
+        assert_eq!(parsed.moves[0].into.as_deref(), Some("Archive"));
+        assert_eq!(parsed.moves[1].into, None, "omitted into = project root");
+        assert_eq!(parsed.renames[0].item, "m1");
+        assert_eq!(parsed.renames[0].name, "Best take");
+        assert_eq!(parsed.deletes, vec!["m3", "Old/Scraps"]);
     }
 
     #[test]
-    fn mut_022_create_folder_missing_name() {
-        let input = json!({});
-        let result = validate_create_folder(&input);
-        assert!(result.into_error().is_some());
+    fn mut_022_organize_media_empty_call_rejected() {
+        let err = validate_organize_media(&json!({}))
+            .into_error()
+            .expect("empty call refused");
+        assert!(err.contains("at least one of"), "{err}");
+        assert!(validate_organize_media(
+            &json!({"createFolders": [], "moves": [], "renames": [], "deletes": []})
+        )
+        .into_error()
+        .is_some());
     }
 
     #[test]
-    fn mut_022_rename_folder_valid() {
-        let input = json!({"folderId": "f1", "name": "Renamed"});
-        let result = validate_rename_folder(&input);
-        let parsed = result.into_ok().expect("MUT-022: rename_folder");
-        assert_eq!(parsed.folder_id, "f1");
-        assert_eq!(parsed.name, "Renamed");
+    fn mut_022_organize_media_move_needs_items() {
+        let err = validate_organize_media(&json!({"moves": [{"into": "X"}]}))
+            .into_error()
+            .expect("itemless move refused");
+        assert!(err.contains("items"), "{err}");
     }
 
     #[test]
-    fn mut_022_rename_folder_missing_folder_id() {
-        let input = json!({"name": "Renamed"});
-        let result = validate_rename_folder(&input);
-        assert!(result.into_error().is_some());
+    fn mut_022_organize_media_rename_needs_item_and_name() {
+        assert!(validate_organize_media(&json!({"renames": [{"item": "m1"}]}))
+            .into_error()
+            .is_some());
+        assert!(validate_organize_media(&json!({"renames": [{"name": "X"}]}))
+            .into_error()
+            .is_some());
+        assert!(
+            validate_organize_media(&json!({"renames": [{"item": "m1", "name": "  "}]}))
+                .into_error()
+                .is_some(),
+            "blank name refused"
+        );
+    }
+
+    // ---- tool-surface-v2: close_project -----------------------------------
+
+    #[test]
+    fn close_project_all_absent_means_active() {
+        let parsed = validate_close_project(&json!({}))
+            .into_ok()
+            .expect("no-arg close is valid");
+        assert_eq!(parsed, CloseProjectInput { name: None, id: None, path: None });
     }
 
     #[test]
-    fn mut_022_rename_folder_missing_name() {
-        let input = json!({"folderId": "f1"});
-        let result = validate_rename_folder(&input);
-        assert!(result.into_error().is_some());
+    fn close_project_accepts_name_id_path_strings() {
+        let parsed = validate_close_project(&json!({"name": "Demo"}))
+            .into_ok()
+            .unwrap();
+        assert_eq!(parsed.name.as_deref(), Some("Demo"));
+        assert!(validate_close_project(&json!({"id": 3}))
+            .into_error()
+            .is_some());
+        assert!(validate_close_project(&json!({"path": ""}))
+            .into_error()
+            .is_some());
+    }
+
+    // ---- tool-surface-v2: import_media -------------------------------------
+
+    #[test]
+    fn import_media_requires_source_object() {
+        let err = validate_import_media(&json!({"path": "/x.mp4"}))
+            .into_error()
+            .expect("bare path refused — source object required");
+        assert!(err.contains("source"), "{err}");
     }
 
     #[test]
-    fn mut_022_delete_folder_valid() {
-        let input = json!({"folderId": "f1"});
-        let result = validate_delete_folder(&input);
-        let parsed = result.into_ok().expect("MUT-022: delete_folder");
-        assert_eq!(parsed.folder_id, "f1");
+    fn import_media_exactly_one_source_kind() {
+        assert!(validate_import_media(&json!({"source": {}}))
+            .into_error()
+            .is_some());
+        assert!(validate_import_media(
+            &json!({"source": {"path": "/x.mp4", "url": "https://x/y.mp4"}})
+        )
+        .into_error()
+        .is_some());
+        let parsed = validate_import_media(&json!({"source": {"path": "/x.mp4"}}))
+            .into_ok()
+            .expect("single path valid");
+        assert_eq!(parsed.path.as_deref(), Some("/x.mp4"));
     }
 
     #[test]
-    fn mut_022_delete_folder_missing_id() {
-        let input = json!({});
-        let result = validate_delete_folder(&input);
-        assert!(result.into_error().is_some());
+    fn import_media_matte_requires_hex() {
+        assert!(validate_import_media(&json!({"source": {"matte": {}}}))
+            .into_error()
+            .is_some());
+        let parsed = validate_import_media(
+            &json!({"source": {"matte": {"hex": "#000", "aspectRatio": "1:1"}}, "name": "Black"}),
+        )
+        .into_ok()
+        .expect("matte valid");
+        assert_eq!(parsed.matte_hex.as_deref(), Some("#000"));
+        assert_eq!(parsed.matte_aspect.as_deref(), Some("1:1"));
+        assert_eq!(parsed.name.as_deref(), Some("Black"));
     }
 
     #[test]
-    fn mut_022_rename_media_valid() {
-        let input = json!({"mediaId": "m1", "name": "New Name"});
-        let result = validate_rename_media(&input);
-        let parsed = result.into_ok().expect("MUT-022: rename_media");
-        assert_eq!(parsed.media_id, "m1");
-        assert_eq!(parsed.name, "New Name");
-    }
-
-    #[test]
-    fn mut_022_rename_media_missing_media_id() {
-        let input = json!({"name": "New Name"});
-        let result = validate_rename_media(&input);
-        assert!(result.into_error().is_some());
-    }
-
-    #[test]
-    fn mut_022_rename_media_missing_name() {
-        let input = json!({"mediaId": "m1"});
-        let result = validate_rename_media(&input);
-        assert!(result.into_error().is_some());
-    }
-
-    #[test]
-    fn mut_022_delete_media_valid() {
-        let input = json!({"mediaId": "m1"});
-        let result = validate_delete_media(&input);
-        let parsed = result.into_ok().expect("MUT-022: delete_media");
-        assert_eq!(parsed.media_id, "m1");
-    }
-
-    #[test]
-    fn mut_022_delete_media_missing_id() {
-        let input = json!({});
-        let result = validate_delete_media(&input);
-        assert!(result.into_error().is_some());
-    }
-
-    #[test]
-    fn mut_022_move_to_folder_valid() {
-        let input = json!({"mediaId": "m1", "folderId": "f1"});
-        let result = validate_move_to_folder(&input);
-        let parsed = result.into_ok().expect("MUT-022: move_to_folder");
-        assert_eq!(parsed.media_id, "m1");
-        assert_eq!(parsed.folder_id, "f1");
-    }
-
-    #[test]
-    fn mut_022_move_to_folder_missing_media_id() {
-        let input = json!({"folderId": "f1"});
-        let result = validate_move_to_folder(&input);
-        assert!(result.into_error().is_some());
-    }
-
-    #[test]
-    fn mut_022_move_to_folder_missing_folder_id() {
-        let input = json!({"mediaId": "m1"});
-        let result = validate_move_to_folder(&input);
-        assert!(result.into_error().is_some());
+    fn import_media_bytes_requires_mime_type() {
+        assert!(validate_import_media(&json!({"source": {"bytes": "aGk="}}))
+            .into_error()
+            .is_some());
+        let parsed = validate_import_media(
+            &json!({"source": {"bytes": "aGk=", "mimeType": "image/png"}}),
+        )
+        .into_ok()
+        .expect("bytes + mimeType valid");
+        assert_eq!(parsed.mime_type.as_deref(), Some("image/png"));
     }
 
     // ---- Upstream #99: set_chroma_key ------------------------------------
@@ -2261,41 +2492,6 @@ mod tests {
             .into_error()
             .expect("set_color_grade: missing clipId");
         assert!(err.contains("clipId"));
-    }
-
-    // ---- Upstream #47: import_folder -------------------------------------
-
-    #[test]
-    fn upstream_047_import_folder_valid() {
-        let input = json!({"path": "/media/videos", "recursive": true});
-        let result = validate_import_folder(&input);
-        let parsed = result.into_ok().expect("import_folder: valid");
-        assert_eq!(parsed.path, "/media/videos");
-        assert!(parsed.recursive);
-    }
-
-    #[test]
-    fn upstream_047_import_folder_default_recursive() {
-        let input = json!({"path": "/media/videos"});
-        let result = validate_import_folder(&input);
-        let parsed = result.into_ok().expect("import_folder: default recursive");
-        assert!(parsed.recursive, "default recursive=true");
-    }
-
-    #[test]
-    fn upstream_047_import_folder_not_recursive() {
-        let input = json!({"path": "/media/videos", "recursive": false});
-        let result = validate_import_folder(&input);
-        let parsed = result.into_ok().expect("import_folder: non-recursive");
-        assert!(!parsed.recursive);
-    }
-
-    #[test]
-    fn upstream_047_import_folder_missing_path() {
-        let input = json!({"recursive": true});
-        let result = validate_import_folder(&input);
-        let err = result.into_error().expect("import_folder: missing path");
-        assert!(err.contains("path"));
     }
 
     // ---- Upstream #6: generate_music -------------------------------------

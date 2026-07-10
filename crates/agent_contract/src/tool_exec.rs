@@ -177,6 +177,53 @@ pub struct ProjectSeams {
 pub trait ProjectNavigator: Send + Sync {
     fn open(&self, id: Option<&str>, path: Option<&str>) -> Result<OpenedProject, String>;
     fn create(&self, name: Option<&str>) -> Result<OpenedProject, String>;
+    /// close_project (tool-surface-v2): resolve the target (all-None = the
+    /// active project), refuse projects that aren't open, save `active` to the
+    /// target's package FIRST (save failure leaves the project open), then
+    /// close it. Must NOT take the executor lock.
+    fn close(
+        &self,
+        name: Option<&str>,
+        id: Option<&str>,
+        path: Option<&str>,
+        active: ActiveProjectState,
+    ) -> Result<ClosedProject, String>;
+}
+
+/// Snapshot of the executor's project state, handed to the navigator so
+/// close_project can save unsaved changes before closing.
+pub struct ActiveProjectState {
+    pub timeline: Timeline,
+    pub sibling_timelines: Vec<Timeline>,
+    pub manifest: MediaManifest,
+}
+
+/// Outcome of `ProjectNavigator::close`.
+pub struct ClosedProject {
+    /// Display name of the closed project.
+    pub name: String,
+    /// Open projects remaining after the close.
+    pub open_count: usize,
+    /// Whether the closed project was the active one.
+    pub was_active: bool,
+    /// Replacement state when the active project closed and another open
+    /// project takes over; None → the executor resets to the no-project state.
+    pub next_active: Option<OpenedProject>,
+    /// Replacement `get_projects` lister for the no-project state (keeps
+    /// project discovery working after the last project closes).
+    pub lister: Option<Arc<dyn ProjectLister>>,
+}
+
+impl std::fmt::Debug for ClosedProject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClosedProject")
+            .field("name", &self.name)
+            .field("open_count", &self.open_count)
+            .field("was_active", &self.was_active)
+            .field("next_active", &self.next_active.as_ref().map(|o| &o.name))
+            .field("lister", &self.lister.is_some())
+            .finish()
+    }
 }
 
 /// Diagnostics-bearing feedback submission (upstream #152). Built by the executor,
@@ -630,6 +677,35 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "get_projects",
 ];
 
+/// A resolved organize_media item (resolution happens before any mutation).
+enum OrganizeItem {
+    Asset(String),
+    Timeline(String),
+    /// Folder, resolved from its path to the pre-call folder id.
+    Folder(String),
+}
+
+/// Track display label (tool-surface-v2 C-4/C-5): visual tracks are
+/// V-numbered bottom-up (V1 = the bottom-most visual track — the XMEML
+/// export's V1, NLE convention), audio tracks A-numbered top-down within the
+/// audio zone (A1 = the first audio track below the videos).
+pub fn track_label(timeline: &Timeline, index: usize) -> String {
+    let is_audio = timeline.tracks[index].r#type == ClipType::Audio;
+    if is_audio {
+        let n = timeline.tracks[..=index]
+            .iter()
+            .filter(|t| t.r#type == ClipType::Audio)
+            .count();
+        format!("A{n}")
+    } else {
+        let n = timeline.tracks[index..]
+            .iter()
+            .filter(|t| t.r#type != ClipType::Audio)
+            .count();
+        format!("V{n}")
+    }
+}
+
 impl ToolExecutor {
     pub fn new(timeline: Timeline, media_manifest: MediaManifest) -> Self {
         Self {
@@ -971,7 +1047,7 @@ impl ToolExecutor {
             "move_clips" | "move_clips_linked" => gate(m::validate_move_clips(args)),
             "add_clips" => gate(m::validate_add_clips(args)),
             "insert_clips" => gate(m::validate_insert_clips(args)),
-            "remove_tracks" => gate(m::validate_remove_tracks(args)),
+            "manage_tracks" => gate(m::validate_manage_tracks(args)),
             "add_texts" => {
                 // Mirror cmd_add_texts targeting: an in-range explicit
                 // trackIndex targets that track; anything else auto-picks.
@@ -988,12 +1064,9 @@ impl ToolExecutor {
             "apply_animation" => gate(m::validate_apply_animation(args)),
             "apply_color" => gate(m::validate_apply_color(args)),
             "apply_effect" => gate(m::validate_apply_effect(args)),
-            "create_folder" => gate(m::validate_create_folder(args)),
-            "rename_folder" => gate(m::validate_rename_folder(args)),
-            "delete_folder" => gate(m::validate_delete_folder(args)),
-            "rename_media" => gate(m::validate_rename_media(args)),
-            "delete_media" => gate(m::validate_delete_media(args)),
-            "move_to_folder" => gate(m::validate_move_to_folder(args)),
+            "organize_media" => gate(m::validate_organize_media(args)),
+            "close_project" => gate(m::validate_close_project(args)),
+            "import_media" => gate(m::validate_import_media(args)),
             "set_chroma_key" => gate(m::validate_set_chroma_key(args)),
             "set_blend_mode" => gate(m::validate_set_blend_mode(args)),
             "set_color_grade" => gate(m::validate_set_color_grade(args)),
@@ -1023,7 +1096,7 @@ impl ToolExecutor {
                 self.exec_mut(tool_name, ToolExecutor::cmd_ripple_delete_ranges, args)
             }
             "remove_words" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_words, args),
-            "remove_tracks" => self.exec_mut(tool_name, ToolExecutor::cmd_remove_tracks, args),
+            "manage_tracks" => self.exec_mut(tool_name, ToolExecutor::cmd_manage_tracks, args),
             "add_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_add_clips, args),
             "insert_clips" => self.exec_mut(tool_name, ToolExecutor::cmd_insert_clips, args),
             "apply_layout" => self.exec_mut(tool_name, ToolExecutor::cmd_apply_layout, args),
@@ -1041,15 +1114,8 @@ impl ToolExecutor {
             "redo" => self.cmd_redo(),
 
             // ── Media mutation tools (no undo yet) ───────────────────────
-            "create_folder" => self.cmd_create_folder(args),
-            "rename_folder" => self.cmd_rename_folder(args),
-            "delete_folder" => self.cmd_delete_folder(args),
-            "rename_media" => self.cmd_rename_media(args),
-            "delete_media" => self.cmd_delete_media(args),
-            "move_to_folder" => self.cmd_move_to_folder(args),
+            "organize_media" => self.cmd_organize_media(args),
             "import_media" => self.cmd_import_media(args),
-            "import_folder" => self.cmd_import_folder(args),
-            "create_matte" => self.cmd_create_matte(args),
             "duplicate_project" => self.cmd_duplicate_project(),
             // #238 (half-ported): these tools are advertised but their full behaviour switches the
             // whole app's active project, which needs an app-navigation seam (and delete_project is
@@ -1057,6 +1123,7 @@ impl ToolExecutor {
             // misleading "Unknown tool" a bare fallthrough would give.
             "open_project" => self.cmd_open_project(args),
             "new_project" => self.cmd_new_project(args),
+            "close_project" => self.cmd_close_project(args),
             // Advertised-but-not-yet-implemented tools (schemas landed ahead of the executor logic
             // in Issues #154/#155/#157/#158/#165/#174). Report the limitation honestly rather than
             // the misleading "Unknown tool" a fallthrough gives; each needs its own port (some are
@@ -1070,7 +1137,6 @@ impl ToolExecutor {
             "update_text" => self.exec_mut(tool_name, ToolExecutor::cmd_update_text, args),
             "create_timeline" => self.cmd_create_timeline(args),
             "set_active_timeline" => self.cmd_set_active_timeline(args),
-            "duplicate_timeline" => self.cmd_duplicate_timeline(args),
             "dissolve_compound_clip" => {
                 self.exec_mut(tool_name, ToolExecutor::cmd_dissolve_compound_clip, args)
             }
@@ -1870,32 +1936,123 @@ impl ToolExecutor {
         None
     }
 
-    fn cmd_remove_tracks(&mut self, args: &Value) -> Result<Value, String> {
-        let track_ids: Vec<String> = args
-            .get("trackIds")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| "Missing trackIds".to_string())?
+    /// MANAGE_TRACKS (tool-surface-v2, replaces remove_tracks): reorder → set
+    /// → remove in one undoable action. Every index is resolved to a track id
+    /// against the CALL-TIME order up front, so indexes never drift within a
+    /// call; reorder entries then apply live, one after another, with the
+    /// destination clamped to the track's type zone (video moves stay in the
+    /// video zone, audio in audio).
+    fn cmd_manage_tracks(&mut self, args: &Value) -> Result<Value, String> {
+        let parsed = match crate::mutation::validate_manage_tracks(args) {
+            crate::mutation::ValidationResult::Ok(p) => p,
+            crate::mutation::ValidationResult::Error(e) => return Err(e),
+        };
+        let resolve = |index: i64, what: &str| -> Result<String, String> {
+            usize::try_from(index)
+                .ok()
+                .and_then(|i| self.timeline.tracks.get(i))
+                .map(|t| t.id.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "manage_tracks: {what} index {index} is out of range (the timeline has {} tracks).",
+                        self.timeline.tracks.len()
+                    )
+                })
+        };
+        let reorders: Vec<(String, i64)> = parsed
+            .reorder
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-
-        let before_count = self.timeline.tracks.len();
-        let mut indices: Vec<usize> = track_ids
+            .map(|(index, to)| resolve(*index, "reorder").map(|id| (id, *to)))
+            .collect::<Result<_, _>>()?;
+        let sets: Vec<(String, &crate::mutation::ManageTrackSetInput)> = parsed
+            .set
             .iter()
-            .filter_map(|id| self.timeline.tracks.iter().position(|t| t.id == *id))
-            .collect();
-        indices.sort_unstable_by(|a, b| b.cmp(a));
-        indices.dedup();
+            .map(|s| resolve(s.index, "set").map(|id| (id, s)))
+            .collect::<Result<_, _>>()?;
+        let mut remove_ids: Vec<String> = parsed
+            .remove
+            .iter()
+            .map(|i| resolve(*i, "remove"))
+            .collect::<Result<_, _>>()?;
+        remove_ids.dedup();
 
-        for idx in indices {
-            timeline_core::remove_track(&mut self.timeline, idx);
+        for (id, to) in &reorders {
+            let pos = self
+                .timeline
+                .tracks
+                .iter()
+                .position(|t| &t.id == id)
+                .expect("resolved up front");
+            let is_audio = self.timeline.tracks[pos].r#type == ClipType::Audio;
+            let zone: Vec<usize> = self
+                .timeline
+                .tracks
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| (t.r#type == ClipType::Audio) == is_audio)
+                .map(|(i, _)| i)
+                .collect();
+            let (lo, hi) = (*zone.first().expect("own zone"), *zone.last().expect("own zone"));
+            let dest = usize::try_from(*to).unwrap_or(0).clamp(lo, hi);
+            let track = self.timeline.tracks.remove(pos);
+            self.timeline.tracks.insert(dest.min(self.timeline.tracks.len()), track);
+        }
+        for (id, s) in &sets {
+            let track = self
+                .timeline
+                .tracks
+                .iter_mut()
+                .find(|t| &t.id == id)
+                .expect("resolved up front");
+            if let Some(m) = s.muted {
+                track.muted = m;
+            }
+            if let Some(h) = s.hidden {
+                track.hidden = h;
+            }
+            if let Some(l) = s.sync_locked {
+                track.sync_locked = l;
+            }
+        }
+        for id in &remove_ids {
+            if let Some(pos) = self.timeline.tracks.iter().position(|t| &t.id == id) {
+                timeline_core::remove_track(&mut self.timeline, pos);
+            }
         }
 
-        let removed = before_count - self.timeline.tracks.len();
+        let tracks: Vec<Value> = self
+            .timeline
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let mut o = json!({
+                    "index": i,
+                    "label": track_label(&self.timeline, i),
+                    "type": t.r#type.name(),
+                });
+                if t.muted {
+                    o["muted"] = json!(true);
+                }
+                if t.hidden {
+                    o["hidden"] = json!(true);
+                }
+                if !t.sync_locked {
+                    o["syncLocked"] = json!(false);
+                }
+                o
+            })
+            .collect();
+        let mut out = json!({ "tracks": tracks });
+        if !reorders.is_empty() || !remove_ids.is_empty() {
+            out["notes"] = json!([
+                "Track indices changed — 'tracks' is the new order; index 0 renders on top."
+            ]);
+        }
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": format!("Removed {removed} track(s)")
+                "text": serde_json::to_string_pretty(&out).unwrap_or_default()
             }]
         }))
     }
@@ -3391,264 +3548,448 @@ impl ToolExecutor {
         }))
     }
 
-    // ── Media mutation tools ───────────────────────────────────────────────
+    // ── Media mutation tools ─────────────────────────────────────────────
 
-    fn cmd_create_folder(&mut self, args: &Value) -> Result<Value, String> {
-        let name = args
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing name".to_string())?;
-        let parent_folder_id = args.get("parentFolderId").and_then(|v| v.as_str());
+    /// Pre-call item resolution for organize_media: asset id → timeline id →
+    /// folder path, in that order (tool-surface-v2 C-7).
+    fn resolve_organize_item(&self, raw: &str) -> Result<OrganizeItem, String> {
+        if self.media_manifest.entries.iter().any(|e| e.id == raw) {
+            return Ok(OrganizeItem::Asset(raw.to_string()));
+        }
+        if self.timeline.id == raw || self.sibling_timelines.iter().any(|t| t.id == raw) {
+            return Ok(OrganizeItem::Timeline(raw.to_string()));
+        }
+        match crate::organize::resolve_folder(&self.media_manifest.folders, raw)
+            .map_err(|e| format!("organize_media: {e}"))?
+        {
+            Some(id) => Ok(OrganizeItem::Folder(id)),
+            None => Err(format!(
+                "organize_media: '{raw}' is not a media asset id, a timeline id, or an existing folder path."
+            )),
+        }
+    }
 
-        let folder = core_model::MediaFolder {
-            id: Uuid::new_v4().to_string(),
-            name: name.to_string(),
-            parent_folder_id: parent_folder_id.map(String::from),
+    /// ORGANIZE_MEDIA (tool-surface-v2, replaces create_folder, rename_folder,
+    /// delete_folder, move_to_folder, rename_media, delete_media): one call
+    /// for create/move/rename/delete over the library. Arrays apply
+    /// createFolders → moves → renames → deletes, but every item reference is
+    /// resolved against the library as it was BEFORE the call — only 'into'
+    /// destinations may name folders the same call creates. Media-library
+    /// mutations are not undo-tracked yet (same as the tools this replaces).
+    fn cmd_organize_media(&mut self, args: &Value) -> Result<Value, String> {
+        let parsed = match crate::mutation::validate_organize_media(args) {
+            crate::mutation::ValidationResult::Ok(p) => p,
+            crate::mutation::ValidationResult::Error(e) => return Err(e),
         };
-        let folder_id = folder.id.clone();
-        self.media_manifest.folders.push(folder);
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Created folder '{}' with id {}", name, folder_id)
-            }]
-        }))
-    }
-
-    fn cmd_rename_folder(&mut self, args: &Value) -> Result<Value, String> {
-        let folder_id = args
-            .get("folderId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing folderId".to_string())?;
-        let name = args
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing name".to_string())?;
-
-        let folder = self
-            .media_manifest
-            .folders
-            .iter_mut()
-            .find(|f| f.id == folder_id)
-            .ok_or_else(|| format!("Folder '{}' not found", folder_id))?;
-        folder.name = name.to_string();
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Renamed folder '{}' to '{}'", folder_id, name)
-            }]
-        }))
-    }
-
-    fn cmd_delete_folder(&mut self, args: &Value) -> Result<Value, String> {
-        let folder_id = args
-            .get("folderId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing folderId".to_string())?;
-
-        let pos = self
-            .media_manifest
-            .folders
+        // ── parse: resolve every item reference against the pre-call library ──
+        let moves: Vec<(Vec<OrganizeItem>, Option<String>)> = parsed
+            .moves
             .iter()
-            .position(|f| f.id == folder_id)
-            .ok_or_else(|| format!("Folder '{}' not found", folder_id))?;
-        let parent = self.media_manifest.folders[pos].parent_folder_id.clone();
-        self.media_manifest.folders.remove(pos);
+            .map(|mv| {
+                mv.items
+                    .iter()
+                    .map(|raw| self.resolve_organize_item(raw))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|items| (items, mv.into.clone()))
+            })
+            .collect::<Result<_, _>>()?;
+        let renames: Vec<(OrganizeItem, String)> = parsed
+            .renames
+            .iter()
+            .map(|r| self.resolve_organize_item(&r.item).map(|i| (i, r.name.clone())))
+            .collect::<Result<_, _>>()?;
+        let deletes: Vec<OrganizeItem> = parsed
+            .deletes
+            .iter()
+            .map(|raw| self.resolve_organize_item(raw))
+            .collect::<Result<_, _>>()?;
 
-        // Contents move to the deleted folder's parent: entries directly
-        // inside it AND subfolders (previously left with a dangling
-        // parentFolderId, unreachable in Folders view).
-        for entry in self.media_manifest.entries.iter_mut() {
-            if entry.folder_id.as_deref() == Some(folder_id) {
-                entry.folder_id = parent.clone();
+        // A folder's new name is a name, not a path (renaming never moves).
+        for (item, name) in &renames {
+            if matches!(item, OrganizeItem::Folder(_)) && name.contains('/') {
+                return Err(format!(
+                    "organize_media: '{name}' is a path — a rename takes a plain name and never moves the folder."
+                ));
             }
         }
-        for folder in self.media_manifest.folders.iter_mut() {
-            if folder.parent_folder_id.as_deref() == Some(folder_id) {
-                folder.parent_folder_id = parent.clone();
-            }
-        }
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Deleted folder '{}'", folder_id)
-            }]
-        }))
-    }
-
-    fn cmd_rename_media(&mut self, args: &Value) -> Result<Value, String> {
-        let media_id = args
-            .get("mediaId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing mediaId".to_string())?;
-        let name = args
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing name".to_string())?;
-
-        if let Some(entry) = self
-            .media_manifest
-            .entries
-            .iter_mut()
-            .find(|e| e.id == media_id)
-        {
-            entry.name = name.to_string();
-            return Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!("Renamed media '{}' to '{}'", media_id, name)
-                }]
-            }));
-        }
-        // #255: mediaRef may be a timelineId (active or sibling).
-        let renamed = if self.timeline.id == media_id {
-            self.timeline.name = name.to_string();
-            true
-        } else if let Some(t) = self.sibling_timelines.iter_mut().find(|t| t.id == media_id) {
-            t.name = name.to_string();
-            true
-        } else {
-            false
-        };
-        if renamed {
-            return Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!("Renamed timeline '{}' to '{}'", media_id, name)
-                }]
-            }));
-        }
-        Err(format!("Media '{}' not found", media_id))
-    }
-
-    fn cmd_delete_media(&mut self, args: &Value) -> Result<Value, String> {
-        let media_id = args
-            .get("mediaId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing mediaId".to_string())?;
-
-        if let Some(pos) = self
-            .media_manifest
-            .entries
-            .iter()
-            .position(|e| e.id == media_id)
-        {
-            self.media_manifest.entries.remove(pos);
-            return Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!("Deleted media '{}'", media_id)
-                }]
-            }));
-        }
-        // #255: a timelineId deletes that timeline. The last one can't be
-        // deleted; deleting the ACTIVE one switches to the first sibling first.
-        // Nest carriers referencing it are left in place (they render black),
-        // matching Swift's documented behaviour.
-        if self.timeline.id == media_id || self.sibling_timelines.iter().any(|t| t.id == media_id)
-        {
-            if self.timeline.id == media_id {
-                if self.sibling_timelines.is_empty() {
-                    return Err("The last remaining timeline can't be deleted.".to_string());
+        // Cycle guard (parse-time, pre-call paths): a folder can't move into
+        // itself or its own subtree — including subtrees this call creates.
+        for (items, into) in &moves {
+            let Some(into) = into else { continue };
+            let dest = crate::organize::normalize_path(into).to_lowercase();
+            for item in items {
+                if let OrganizeItem::Folder(fid) = item {
+                    let own_path =
+                        crate::organize::folder_path(&self.media_manifest.folders, fid);
+                    let own = own_path.to_lowercase();
+                    if dest == own || dest.starts_with(&format!("{own}/")) {
+                        return Err(format!(
+                            "organize_media: can't move folder '{own_path}' into itself or its own subfolder."
+                        ));
+                    }
                 }
-                let replacement = self.sibling_timelines.remove(0);
-                let name = self.timeline.name.clone();
-                self.timeline = replacement;
-                self.undo_stack.clear();
-                return Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": format!(
-                            "Deleted timeline '{}' and switched to '{}'. Re-read get_timeline before editing.",
-                            name, self.timeline.name
-                        )
-                    }]
-                }));
             }
-            let pos = self
-                .sibling_timelines
-                .iter()
-                .position(|t| t.id == media_id)
-                .expect("checked above");
-            let removed = self.sibling_timelines.remove(pos);
-            return Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!("Deleted timeline '{}'.", removed.name)
-                }]
-            }));
         }
-        Err(format!("Media '{}' not found", media_id))
-    }
-
-    fn cmd_move_to_folder(&mut self, args: &Value) -> Result<Value, String> {
-        let media_id = args
-            .get("mediaId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing mediaId".to_string())?;
-        let folder_id = args
-            .get("folderId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing folderId".to_string())?;
-
-        let entry = self
-            .media_manifest
-            .entries
-            .iter_mut()
-            .find(|e| e.id == media_id)
-            .ok_or_else(|| format!("Media '{}' not found", media_id))?;
-
-        // Verify folder exists
-        if !self
-            .media_manifest
-            .folders
+        // Last-timeline guard: the delete list may not cover every timeline.
+        let timeline_delete_ids: std::collections::HashSet<String> = deletes
             .iter()
-            .any(|f| f.id == folder_id)
+            .filter_map(|i| match i {
+                OrganizeItem::Timeline(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        if !timeline_delete_ids.is_empty()
+            && timeline_delete_ids.len() >= 1 + self.sibling_timelines.len()
         {
-            return Err(format!("Folder '{}' not found", folder_id));
+            return Err("Can't delete every timeline — at least one must remain.".to_string());
         }
 
-        entry.folder_id = Some(folder_id.to_string());
+        // ── apply: createFolders ──
+        let mut created: Vec<String> = Vec::new();
+        for path in &parsed.create_folders {
+            let (_, c) =
+                crate::organize::resolve_or_create_folder(&mut self.media_manifest.folders, path)
+                    .map_err(|e| format!("organize_media: {e}"))?;
+            created.extend(c);
+        }
+
+        // ── apply: moves (destinations may name folders created above) ──
+        let mut moved = 0usize;
+        for (items, into) in &moves {
+            let dest: Option<String> = match into {
+                Some(p) => {
+                    let (id, c) = crate::organize::resolve_or_create_folder(
+                        &mut self.media_manifest.folders,
+                        p,
+                    )
+                    .map_err(|e| format!("organize_media: {e}"))?;
+                    created.extend(c);
+                    Some(id)
+                }
+                None => None,
+            };
+            for item in items {
+                match item {
+                    OrganizeItem::Asset(id) => {
+                        if let Some(entry) =
+                            self.media_manifest.entries.iter_mut().find(|e| &e.id == id)
+                        {
+                            entry.folder_id = dest.clone();
+                        }
+                    }
+                    OrganizeItem::Timeline(id) => {
+                        if self.timeline.id == *id {
+                            self.timeline.folder_id = dest.clone();
+                        } else if let Some(t) =
+                            self.sibling_timelines.iter_mut().find(|t| &t.id == id)
+                        {
+                            t.folder_id = dest.clone();
+                        }
+                    }
+                    OrganizeItem::Folder(id) => {
+                        if dest.as_deref() == Some(id.as_str()) {
+                            return Err(
+                                "organize_media: can't move a folder into itself.".to_string()
+                            );
+                        }
+                        if let Some(f) =
+                            self.media_manifest.folders.iter_mut().find(|f| &f.id == id)
+                        {
+                            f.parent_folder_id = dest.clone();
+                        }
+                    }
+                }
+                moved += 1;
+            }
+        }
+
+        // ── apply: renames (a name, not a path) ──
+        let mut renamed = 0usize;
+        for (item, name) in &renames {
+            match item {
+                OrganizeItem::Asset(id) => {
+                    if let Some(entry) =
+                        self.media_manifest.entries.iter_mut().find(|e| &e.id == id)
+                    {
+                        entry.name = name.clone();
+                    }
+                }
+                OrganizeItem::Timeline(id) => {
+                    if self.timeline.id == *id {
+                        self.timeline.name = name.clone();
+                    } else if let Some(t) =
+                        self.sibling_timelines.iter_mut().find(|t| &t.id == id)
+                    {
+                        t.name = name.clone();
+                    }
+                }
+                OrganizeItem::Folder(id) => {
+                    if let Some(f) = self.media_manifest.folders.iter_mut().find(|f| &f.id == id)
+                    {
+                        f.name = name.clone();
+                    }
+                }
+            }
+            renamed += 1;
+        }
+
+        // ── apply: deletes — assets + folders first, timelines last ──
+        let mut warnings: Vec<String> = Vec::new();
+        let mut asset_delete_ids: std::collections::HashSet<String> = deletes
+            .iter()
+            .filter_map(|i| match i {
+                OrganizeItem::Asset(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        let folder_delete_roots: Vec<String> = deletes
+            .iter()
+            .filter_map(|i| match i {
+                OrganizeItem::Folder(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        // Folder cascade: the folder, its subtree, and every asset inside are
+        // deleted; timelines inside move to the root instead.
+        let mut folders_to_delete: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for root in &folder_delete_roots {
+            let mut queue = vec![root.clone()];
+            while let Some(id) = queue.pop() {
+                if !folders_to_delete.insert(id.clone()) {
+                    continue;
+                }
+                queue.extend(
+                    self.media_manifest
+                        .folders
+                        .iter()
+                        .filter(|f| f.parent_folder_id.as_deref() == Some(id.as_str()))
+                        .map(|f| f.id.clone()),
+                );
+            }
+        }
+        for entry in &self.media_manifest.entries {
+            if entry
+                .folder_id
+                .as_ref()
+                .is_some_and(|f| folders_to_delete.contains(f))
+            {
+                asset_delete_ids.insert(entry.id.clone());
+            }
+        }
+        if self
+            .timeline
+            .folder_id
+            .as_ref()
+            .is_some_and(|f| folders_to_delete.contains(f))
+        {
+            self.timeline.folder_id = None;
+        }
+        for t in &mut self.sibling_timelines {
+            if t.folder_id
+                .as_ref()
+                .is_some_and(|f| folders_to_delete.contains(f))
+            {
+                t.folder_id = None;
+            }
+        }
+        let deleted_folders = folders_to_delete.len();
+        self.media_manifest
+            .folders
+            .retain(|f| !folders_to_delete.contains(&f.id));
+
+        // Assets: drop the entries, then every clip referencing them on every
+        // SURVIVING timeline (clips inside deleted timelines don't count).
+        let deleted_assets = asset_delete_ids.len();
+        self.media_manifest
+            .entries
+            .retain(|e| !asset_delete_ids.contains(&e.id));
+        let mut clips_removed = 0usize;
+        if !asset_delete_ids.is_empty() {
+            let mut sweep = |timeline: &mut Timeline| {
+                for track in &mut timeline.tracks {
+                    let before = track.clips.len();
+                    track
+                        .clips
+                        .retain(|c| !asset_delete_ids.contains(&c.media_ref));
+                    clips_removed += before - track.clips.len();
+                }
+            };
+            if !timeline_delete_ids.contains(&self.timeline.id) {
+                sweep(&mut self.timeline);
+            }
+            for t in &mut self.sibling_timelines {
+                if !timeline_delete_ids.contains(&t.id) {
+                    sweep(t);
+                }
+            }
+        }
+
+        // Timelines last: delete siblings, then switch away from a deleted
+        // active timeline (the guard above ensures a survivor exists).
+        let mut deleted_timeline_names: Vec<(String, String)> = Vec::new();
+        let mut active_switched = false;
+        self.sibling_timelines.retain(|t| {
+            if timeline_delete_ids.contains(&t.id) {
+                deleted_timeline_names.push((t.id.clone(), t.name.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        if timeline_delete_ids.contains(&self.timeline.id) {
+            let replacement = self
+                .sibling_timelines
+                .remove(0);
+            let old = std::mem::replace(&mut self.timeline, replacement);
+            deleted_timeline_names.push((old.id, old.name));
+            self.undo_stack.clear();
+            active_switched = true;
+        }
+        let deleted_timelines = deleted_timeline_names.len();
+        for (tid, tname) in &deleted_timeline_names {
+            let refs = std::iter::once(&self.timeline)
+                .chain(self.sibling_timelines.iter())
+                .flat_map(|t| t.tracks.iter())
+                .flat_map(|t| t.clips.iter())
+                .filter(|c| c.source_clip_type == ClipType::Sequence && &c.media_ref == tid)
+                .count();
+            if refs > 0 {
+                warnings.push(format!(
+                    "{refs} nested clip(s) still reference deleted timeline '{tname}' — they will render black."
+                ));
+            }
+        }
+
+        // ── result: only what actually happened ──
+        let mut out = serde_json::Map::new();
+        if !created.is_empty() {
+            out.insert("createdFolders".into(), json!(created));
+        }
+        if moved > 0 {
+            out.insert("moved".into(), json!(moved));
+        }
+        if renamed > 0 {
+            out.insert("renamed".into(), json!(renamed));
+        }
+        if deleted_assets + deleted_folders + deleted_timelines > 0 {
+            let mut d = serde_json::Map::new();
+            if deleted_assets > 0 {
+                d.insert("assets".into(), json!(deleted_assets));
+            }
+            if deleted_folders > 0 {
+                d.insert("folders".into(), json!(deleted_folders));
+            }
+            if deleted_timelines > 0 {
+                d.insert("timelines".into(), json!(deleted_timelines));
+            }
+            out.insert("deleted".into(), Value::Object(d));
+        }
+        if clips_removed > 0 {
+            out.insert("clipsRemoved".into(), json!(clips_removed));
+        }
+        if !warnings.is_empty() {
+            out.insert("warnings".into(), json!(warnings));
+        }
+        if active_switched {
+            out.insert(
+                "notes".into(),
+                json!(["Active timeline changed — re-read get_timeline."]),
+            );
+        }
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": format!("Moved media '{}' to folder '{}'", media_id, folder_id)
+                "text": serde_json::to_string_pretty(&Value::Object(out)).unwrap_or_default()
             }]
         }))
     }
 
+    /// IMPORT_MEDIA (tool-surface-v2): 'source' sets exactly one of url /
+    /// path / bytes / matte. path may be a directory (recursive import with
+    /// subfolders mirrored as media folders — absorbs import_folder); matte
+    /// renders a solid-colour PNG via the MatteWriter host seam (absorbs
+    /// create_matte, #242). url/bytes need host download/decode services that
+    /// aren't connected on this path and report so honestly.
     fn cmd_import_media(&mut self, args: &Value) -> Result<Value, String> {
-        let name = args
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing name".to_string())?;
-        let file_path = args
-            .get("filePath")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing filePath".to_string())?;
-        let media_type = args.get("type").and_then(|v| v.as_str()).unwrap_or("video");
-        let duration = args
-            .get("duration")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(10.0);
-        let folder_id = args.get("folderId").and_then(|v| v.as_str());
-
-        let clip_type = match media_type.to_lowercase().as_str() {
-            "audio" => core_model::ClipType::Audio,
-            "image" => core_model::ClipType::Image,
-            "text" => core_model::ClipType::Text,
-            _ => core_model::ClipType::Video,
+        let parsed = match crate::mutation::validate_import_media(args) {
+            crate::mutation::ValidationResult::Ok(p) => p,
+            crate::mutation::ValidationResult::Error(e) => return Err(e),
         };
+        let folder_id: Option<String> = match &parsed.folder {
+            Some(p) => Some(
+                crate::organize::resolve_or_create_folder(&mut self.media_manifest.folders, p)
+                    .map_err(|e| format!("import_media: {e}"))?
+                    .0,
+            ),
+            None => None,
+        };
+        if let Some(hex) = &parsed.matte_hex {
+            return self.import_matte(
+                hex,
+                parsed.matte_aspect.as_deref(),
+                parsed.name.as_deref(),
+                folder_id,
+            );
+        }
+        if let Some(path) = &parsed.path {
+            let p = std::path::Path::new(path);
+            if std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false) {
+                return self.import_directory(p, folder_id);
+            }
+            let payload = self.register_import_file(p, parsed.name.as_deref(), folder_id)?;
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string(&payload).unwrap_or_default()
+                }]
+            }));
+        }
+        if parsed.url.is_some() {
+            return Err(
+                "import_media: url imports need the app's background download service, which                  isn't connected in this context. Download the file and pass source.path instead."
+                    .to_string(),
+            );
+        }
+        Err(
+            "import_media: bytes imports aren't supported in this context — write the data to a              file and pass source.path."
+                .to_string(),
+        )
+    }
 
-        let entry = core_model::MediaManifestEntry {
+    /// Register one local file as an external asset. Pure registration — the
+    /// executor references the absolute path (no copy) and can't probe media
+    /// duration, so stills get the 5s default and A/V a 10s placeholder.
+    fn register_import_file(
+        &mut self,
+        path: &std::path::Path,
+        name: Option<&str>,
+        folder_id: Option<String>,
+    ) -> Result<Value, String> {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let kind = ClipType::from_extension(ext).ok_or_else(|| {
+            format!(
+                "import_media: unsupported file type '.{ext}' — supported: video (mov, mp4, m4v),                  audio (mp3, wav, aac, m4a, aiff, aifc, flac), image (png, jpg, jpeg, tiff, heic)."
+            )
+        })?;
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Imported asset");
+        let display = name
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(file_name)
+            .to_string();
+        let duration = if kind == ClipType::Image { 5.0 } else { 10.0 };
+        let entry = MediaManifestEntry {
             id: Uuid::new_v4().to_string(),
-            name: name.to_string(),
-            r#type: clip_type,
+            name: display.clone(),
+            r#type: kind,
             source: MediaSource::External {
-                absolute_path: file_path.to_string(),
+                absolute_path: path.to_string_lossy().into_owned(),
             },
             duration,
             generation_input: None,
@@ -3656,7 +3997,7 @@ impl ToolExecutor {
             source_height: None,
             source_fps: None,
             has_audio: None,
-            folder_id: folder_id.map(String::from),
+            folder_id,
             cached_remote_url: None,
             cached_remote_url_expires_at: None,
             source_timecode_frame: None,
@@ -3667,33 +4008,127 @@ impl ToolExecutor {
             ai_label_status: None,
             generation_status: None,
         };
-        let entry_id = entry.id.clone();
+        let id = entry.id.clone();
         self.media_manifest.entries.push(entry);
+        Ok(json!({
+            "mediaRef": id,
+            "status": "ready",
+            "name": display,
+            "type": kind.name(),
+        }))
+    }
 
+    /// Directory import (absorbs import_folder): the directory becomes a
+    /// media folder; every supported file inside registers recursively with
+    /// the subfolder tree mirrored. Finishes inline.
+    fn import_directory(
+        &mut self,
+        dir: &std::path::Path,
+        parent: Option<String>,
+    ) -> Result<Value, String> {
+        let top_name = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Imported folder")
+            .to_string();
+        let top = core_model::MediaFolder {
+            id: Uuid::new_v4().to_string(),
+            name: top_name,
+            parent_folder_id: parent,
+        };
+        let top_id = top.id.clone();
+        self.media_manifest.folders.push(top);
+        let mut imported = 0usize;
+        let mut skipped = 0usize;
+        let mut folders_created = 1usize;
+        self.import_dir_recursive(dir, &top_id, 0, &mut imported, &mut skipped, &mut folders_created)?;
+        let folder_path = crate::organize::folder_path(&self.media_manifest.folders, &top_id);
+        let mut out = json!({
+            "status": "ready",
+            "imported": imported,
+            "folder": folder_path,
+            "foldersCreated": folders_created,
+        });
+        if skipped > 0 {
+            out["skipped"] = json!(skipped);
+        }
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": format!("Imported '{}' as '{}' (id: {})", file_path, name, entry_id)
+                "text": serde_json::to_string(&out).unwrap_or_default()
             }]
         }))
     }
 
-    /// create_matte (#242): add a solid-colour image to the library. Computes even pixel
-    /// dimensions from the aspect preset + timeline size, then hands the colour + size to the host
-    /// `MatteWriter` (which renders + persists the PNG) and registers the resulting image asset.
-    fn cmd_create_matte(&mut self, args: &Value) -> Result<Value, String> {
-        let hex = args
-            .get("hex")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| "create_matte requires 'hex'.".to_string())?;
+    fn import_dir_recursive(
+        &mut self,
+        dir: &std::path::Path,
+        folder_id: &str,
+        depth: usize,
+        imported: &mut usize,
+        skipped: &mut usize,
+        folders_created: &mut usize,
+    ) -> Result<(), String> {
+        if depth > 32 {
+            return Ok(()); // symlink-loop guard
+        }
+        let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)
+            .map_err(|e| format!("import_media: can't read directory '{}': {e}", dir.display()))?
+            .filter_map(Result::ok)
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Folder")
+                    .to_string();
+                let sub = core_model::MediaFolder {
+                    id: Uuid::new_v4().to_string(),
+                    name,
+                    parent_folder_id: Some(folder_id.to_string()),
+                };
+                let sub_id = sub.id.clone();
+                self.media_manifest.folders.push(sub);
+                *folders_created += 1;
+                self.import_dir_recursive(
+                    &path,
+                    &sub_id,
+                    depth + 1,
+                    imported,
+                    skipped,
+                    folders_created,
+                )?;
+            } else {
+                match self.register_import_file(&path, None, Some(folder_id.to_string())) {
+                    Ok(_) => *imported += 1,
+                    Err(_) => *skipped += 1,
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Matte import (absorbs create_matte, #242): compute even pixel
+    /// dimensions from the aspect preset + timeline size, then hand the colour
+    /// + size to the host `MatteWriter` (which renders + persists the PNG) and
+    /// register the resulting image asset. Finishes inline (status 'ready').
+    fn import_matte(
+        &mut self,
+        hex: &str,
+        aspect_raw: Option<&str>,
+        name: Option<&str>,
+        folder_id: Option<String>,
+    ) -> Result<Value, String> {
         let rgba = TextRgba::from_hex(hex)
-            .ok_or_else(|| format!("create_matte: invalid hex color '{hex}'."))?;
-        let aspect = match args.get("aspectRatio").and_then(|v| v.as_str()) {
+            .ok_or_else(|| format!("import_media: invalid matte hex color '{hex}'."))?;
+        let aspect = match aspect_raw {
             Some(raw) => MatteAspect::parse(raw).ok_or_else(|| {
                 format!(
-                    "create_matte: unknown aspectRatio '{raw}'. Use one of: {}.",
+                    "import_media: unknown matte aspectRatio '{raw}'. Use one of: {}.",
                     MatteAspect::ALL
                         .iter()
                         .map(|a| a.raw_value())
@@ -3704,16 +4139,14 @@ impl ToolExecutor {
             None => MatteAspect::Project,
         };
         let (width, height) = aspect.pixel_size(self.timeline.width, self.timeline.height);
-        let name = args
-            .get("name")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
+        let name = name
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .unwrap_or("Matte")
             .to_string();
-        let folder_id = args.get("folderId").and_then(|v| v.as_str()).map(String::from);
 
         let writer = self.matte_writer.clone().ok_or_else(|| {
-            "create_matte is unavailable: no project is connected to write the matte into."
+            "import_media: matte imports are unavailable — no project is connected to write the matte into."
                 .to_string()
         })?;
         let to_u8 = |c: f64| (c * 255.0).round().clamp(0.0, 255.0) as u8;
@@ -3748,7 +4181,7 @@ impl ToolExecutor {
             "content": [{
                 "type": "text",
                 "text": serde_json::to_string(&json!({
-                    "mediaRef": id, "name": name, "width": width, "height": height
+                    "mediaRef": id, "status": "ready", "name": name, "width": width, "height": height
                 }))
                 .unwrap_or_default()
             }]
@@ -4369,31 +4802,94 @@ impl ToolExecutor {
 
     /// CREATE_TIMELINE (#255): new empty timeline inheriting the active one's
     /// settings; switches to it. Like Swift, the switch itself isn't undoable.
+    /// CREATE_TIMELINE (tool-surface-v2, absorbs duplicate_timeline via
+    /// 'from'): without 'from' creates an empty timeline inheriting
+    /// fps/resolution; with 'from' deep-copies that timeline (all-new
+    /// clip/track/link ids). Both switch the active timeline.
     fn cmd_create_timeline(&mut self, args: &Value) -> Result<Value, String> {
-        let name = args
+        let name_arg = args
             .get("name")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(String::from)
-            .unwrap_or_else(|| format!("Timeline {}", self.sibling_timelines.len() + 2));
-        let new_tl = Timeline {
-            name: name.clone(),
-            fps: self.timeline.fps,
-            width: self.timeline.width,
-            height: self.timeline.height,
-            settings_configured: self.timeline.settings_configured,
-            ..Default::default()
+            .map(String::from);
+        let from = args
+            .get("from")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let (new_tl, note) = match from {
+            Some(source_id) => (
+                self.duplicated_timeline(source_id, name_arg)?,
+                "Every clip and track id in the copy is new — re-read get_timeline before editing.",
+            ),
+            None => (
+                Timeline {
+                    name: name_arg.unwrap_or_else(|| {
+                        format!("Timeline {}", self.sibling_timelines.len() + 2)
+                    }),
+                    fps: self.timeline.fps,
+                    width: self.timeline.width,
+                    height: self.timeline.height,
+                    settings_configured: self.timeline.settings_configured,
+                    ..Default::default()
+                },
+                "The timeline is empty; every read and edit tool now targets it.",
+            ),
         };
         let id = new_tl.id.clone();
+        let name = new_tl.name.clone();
         let prev = std::mem::replace(&mut self.timeline, new_tl);
         self.sibling_timelines.push(prev);
         // Undo snapshots hold the PREVIOUS timeline's state; applying one to the
         // new active timeline would overwrite it wholesale. Clear on switch.
         self.undo_stack.clear();
-        Ok(json!({ "content": [{ "type": "text", "text": format!(
-            "Created and switched to timeline \"{name}\" (timelineId {id}). It is empty; all edit tools now target it."
-        )}]}))
+        Ok(json!({ "content": [{ "type": "text", "text": serde_json::to_string(&json!({
+            "timelineId": id, "name": name, "active": true, "note": note
+        })).unwrap_or_default() }]}))
+    }
+
+    /// Deep-copy a timeline with fresh clip/track ids, keeping link groups
+    /// intact via a per-group remap (create_timeline 'from').
+    fn duplicated_timeline(
+        &self,
+        source_id: &str,
+        name: Option<String>,
+    ) -> Result<Timeline, String> {
+        let source = if self.timeline.id == source_id {
+            self.timeline.clone()
+        } else {
+            self.sibling_timelines
+                .iter()
+                .find(|t| t.id == source_id)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "No timeline with id '{source_id}'. get_timeline lists the project's timelines."
+                    )
+                })?
+        };
+        let source_name = source.name.clone();
+        let mut copy = source;
+        copy.id = Uuid::new_v4().to_string();
+        copy.name = name.unwrap_or_else(|| format!("{source_name} copy"));
+        copy.selected_clip_ids.clear();
+        for track in &mut copy.tracks {
+            track.id = Uuid::new_v4().to_string();
+            let mut group_map: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for clip in &mut track.clips {
+                clip.id = Uuid::new_v4().to_string();
+                if let Some(g) = &clip.link_group_id {
+                    let new_g = group_map
+                        .entry(g.clone())
+                        .or_insert_with(|| Uuid::new_v4().to_string())
+                        .clone();
+                    clip.link_group_id = Some(new_g);
+                }
+            }
+        }
+        Ok(copy)
     }
 
     /// SET_ACTIVE_TIMELINE (#255): swap the active timeline. Exempt from undo
@@ -4423,64 +4919,6 @@ impl ToolExecutor {
         let fps = self.timeline.fps;
         Ok(json!({ "content": [{ "type": "text", "text": format!(
             "Active timeline: \"{name}\" ({frames} frames, {fps} fps). Re-read get_timeline before editing."
-        )}]}))
-    }
-
-    /// DUPLICATE_TIMELINE (#255): copy a timeline (all-new clip/track ids) and
-    /// switch to the copy.
-    fn cmd_duplicate_timeline(&mut self, args: &Value) -> Result<Value, String> {
-        let source_id = args
-            .get("timelineId")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| self.timeline.id.clone());
-        let source = if self.timeline.id == source_id {
-            self.timeline.clone()
-        } else {
-            self.sibling_timelines
-                .iter()
-                .find(|t| t.id == source_id)
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "No timeline with id '{source_id}'. get_timeline lists the project's timelines."
-                    )
-                })?
-        };
-        let source_name = source.name.clone();
-        let mut copy = source;
-        copy.id = Uuid::new_v4().to_string();
-        copy.name = args
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .unwrap_or_else(|| format!("{source_name} copy"));
-        copy.selected_clip_ids.clear();
-        for track in &mut copy.tracks {
-            track.id = Uuid::new_v4().to_string();
-            // Re-id clips, keeping link groups intact via a per-group remap.
-            let mut group_map: std::collections::HashMap<String, String> =
-                std::collections::HashMap::new();
-            for clip in &mut track.clips {
-                clip.id = Uuid::new_v4().to_string();
-                if let Some(g) = &clip.link_group_id {
-                    let new_g = group_map
-                        .entry(g.clone())
-                        .or_insert_with(|| Uuid::new_v4().to_string())
-                        .clone();
-                    clip.link_group_id = Some(new_g);
-                }
-            }
-        }
-        let new_id = copy.id.clone();
-        let new_name = copy.name.clone();
-        let prev = std::mem::replace(&mut self.timeline, copy);
-        self.sibling_timelines.push(prev);
-        self.undo_stack.clear();
-        Ok(json!({ "content": [{ "type": "text", "text": format!(
-            "Duplicated \"{source_name}\" as \"{new_name}\" (timelineId {new_id}) and switched to it. Clip and track ids in the copy are new — re-read get_timeline before editing."
         )}]}))
     }
 
@@ -4972,33 +5410,63 @@ impl ToolExecutor {
         )}]}))
     }
 
-    fn cmd_import_folder(&mut self, args: &Value) -> Result<Value, String> {
-        let folder_name = args
-            .get("folderName")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing folderName".to_string())?;
-        let recursive = args
-            .get("recursive")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        let folder = core_model::MediaFolder {
-            id: Uuid::new_v4().to_string(),
-            name: folder_name.to_string(),
-            parent_folder_id: None,
+    /// CLOSE_PROJECT (tool-surface-v2): save-first close via the navigator.
+    /// The navigator resolves the target (all-None = the active project),
+    /// refuses projects that aren't open, and saves before closing; the
+    /// executor then adopts the next active project or resets to the
+    /// no-project state.
+    fn cmd_close_project(&mut self, args: &Value) -> Result<Value, String> {
+        let nav = self.project_navigator.clone().ok_or_else(|| {
+            "close_project is unavailable: no project navigator is connected (run it from the app)."
+                .to_string()
+        })?;
+        let name = args.get("name").and_then(|v| v.as_str());
+        let id = args.get("id").and_then(|v| v.as_str());
+        let path = args.get("path").and_then(|v| v.as_str());
+        let active = ActiveProjectState {
+            timeline: self.timeline.clone(),
+            sibling_timelines: self.sibling_timelines.clone(),
+            manifest: self.media_manifest.clone(),
         };
-        let folder_id = folder.id.clone();
-        self.media_manifest.folders.push(folder);
-
+        let closed = nav.close(name, id, path, active)?;
+        let mut out = json!({
+            "status": "closed",
+            "name": closed.name,
+            "openCount": closed.open_count,
+        });
+        if closed.was_active {
+            match closed.next_active {
+                Some(opened) => {
+                    out["active"] = json!({ "name": opened.name, "path": opened.root });
+                    self.adopt_project(opened);
+                }
+                None => self.reset_to_no_project(closed.lister),
+            }
+        }
         Ok(json!({
             "content": [{
                 "type": "text",
-                "text": format!(
-                    "Created folder '{}' (id: {}, recursive: {}) — actual file scanning is not yet implemented",
-                    folder_name, folder_id, recursive
-                )
+                "text": serde_json::to_string_pretty(&out).unwrap_or_default()
             }]
         }))
+    }
+
+    /// Clear project-scoped state and seams after the last project closes
+    /// (Home-window state). The account-scoped navigator survives, and the
+    /// navigator may hand back a rootless lister, so get_projects /
+    /// open_project / new_project keep working.
+    fn reset_to_no_project(&mut self, lister: Option<Arc<dyn ProjectLister>>) {
+        self.load_project(Timeline::default(), MediaManifest::default());
+        self.sibling_timelines.clear();
+        self.timeline_words = Vec::new();
+        self.clip_presets.clear();
+        self.search_status = String::new();
+        self.matte_writer = None;
+        self.audio_source = None;
+        self.export_host = None;
+        if let Some(l) = lister {
+            self.project_lister = Some(l);
+        }
     }
 
     fn cmd_duplicate_project(&mut self) -> Result<Value, String> {
@@ -7271,13 +7739,10 @@ mod tests {
     }
 
     #[test]
-    fn exec_009_remove_tracks_empty_ids() {
+    fn exec_009_manage_tracks_empty_call_rejected() {
         let mut exec = make_executor();
-        let err = exec
-            .execute("remove_tracks", &json!({"trackIds": []}))
-            .unwrap_err();
-        // wire-mutation-validators: MUT-006 gate message.
-        assert!(err.contains("missing or empty 'trackIds'"), "got: {err}");
+        let err = exec.execute("manage_tracks", &json!({})).unwrap_err();
+        assert!(err.contains("at least one of reorder, set, or remove"), "got: {err}");
     }
 
     #[test]
@@ -7288,12 +7753,128 @@ mod tests {
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         assert_eq!(exec.timeline().tracks.len(), 1);
 
-        let track_id = exec.timeline().tracks[0].id.clone();
         let result = exec
-            .execute("remove_tracks", &json!({"trackIds": [track_id]}))
+            .execute("manage_tracks", &json!({"remove": [0]}))
             .unwrap();
         assert!(result["isError"].is_null() || result["isError"] == false);
+        assert_eq!(exec.timeline().tracks.len(), 0);
         assert_eq!(exec.undo_stack().len(), 1);
+    }
+
+    #[test]
+    fn manage_tracks_resolves_indexes_up_front() {
+        // set[].index refers to the CALL-TIME order even after reorder moves
+        // tracks around (design C-7: all indexes resolve to ids up front).
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
+        let top_id = exec.timeline().tracks[0].id.clone();
+        let result = exec
+            .execute(
+                "manage_tracks",
+                &json!({
+                    "reorder": [{"index": 0, "to": 1}],
+                    "set": [{"index": 0, "hidden": true}],
+                }),
+            )
+            .unwrap();
+        // The ORIGINAL track 0 moved to index 1 and is the one hidden.
+        assert_eq!(exec.timeline().tracks[1].id, top_id);
+        assert!(exec.timeline().tracks[1].hidden, "pre-call index 0 hidden");
+        assert!(!exec.timeline().tracks[0].hidden);
+        let body: Value = serde_json::from_str(
+            result["content"][0]["text"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["tracks"][1]["hidden"], json!(true));
+        assert!(
+            body["notes"][0].as_str().unwrap().contains("Track indices changed"),
+            "reorder adds the note: {body}"
+        );
+    }
+
+    #[test]
+    fn manage_tracks_reorder_clamps_to_type_zone() {
+        // An audio track can't move into the video zone: 'to' clamps.
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 2, ClipType::Audio);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 3, ClipType::Audio);
+        let audio_id = exec.timeline().tracks[3].id.clone();
+        exec.execute("manage_tracks", &json!({"reorder": [{"index": 3, "to": 0}]}))
+            .unwrap();
+        // Clamped to the top of the AUDIO zone (index 2), not index 0.
+        assert_eq!(exec.timeline().tracks[2].id, audio_id);
+        assert_eq!(exec.timeline().tracks[2].r#type, ClipType::Audio);
+        assert_eq!(exec.timeline().tracks[0].r#type, ClipType::Video);
+    }
+
+    #[test]
+    fn manage_tracks_remove_keeps_partners_and_reports_order() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Audio);
+        // Linked A/V pair across the two tracks.
+        let group = "grp-1".to_string();
+        let mut v = crate::test_helpers::make_clip(0, 100);
+        v.link_group_id = Some(group.clone());
+        let mut a = crate::test_helpers::make_clip(0, 100);
+        a.media_type = ClipType::Audio;
+        a.source_clip_type = ClipType::Audio;
+        a.link_group_id = Some(group);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[v]);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 1, 0, &[a]);
+
+        let result = exec
+            .execute("manage_tracks", &json!({"remove": [0]}))
+            .unwrap();
+        assert_eq!(exec.timeline().tracks.len(), 1);
+        assert_eq!(
+            exec.timeline().tracks[0].clips.len(),
+            1,
+            "linked partner on the OTHER track stays"
+        );
+        let body: Value = serde_json::from_str(
+            result["content"][0]["text"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["tracks"][0]["index"], json!(0));
+        assert_eq!(body["tracks"][0]["type"], json!("audio"));
+        assert_eq!(body["tracks"][0]["label"], json!("A1"));
+        assert!(body["tracks"][0].get("muted").is_none(), "defaults stripped");
+        assert!(body["tracks"][0].get("syncLocked").is_none(), "true stripped");
+    }
+
+    #[test]
+    fn manage_tracks_set_reports_sync_locked_false_only() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Audio);
+        let result = exec
+            .execute(
+                "manage_tracks",
+                &json!({"set": [{"index": 0, "muted": true, "syncLocked": false}]}),
+            )
+            .unwrap();
+        assert!(exec.timeline().tracks[0].muted);
+        assert!(!exec.timeline().tracks[0].sync_locked);
+        let body: Value = serde_json::from_str(
+            result["content"][0]["text"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["tracks"][0]["muted"], json!(true));
+        assert_eq!(body["tracks"][0]["syncLocked"], json!(false));
+        assert!(body.get("notes").is_none(), "set-only call has no reorder note");
+    }
+
+    #[test]
+    fn manage_tracks_out_of_range_index_refused() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute("manage_tracks", &json!({"remove": [5]}))
+            .unwrap_err();
+        assert!(err.contains("out of range"), "got: {err}");
     }
 
     #[test]
@@ -8070,150 +8651,382 @@ mod tests {
     }
 
     #[test]
-    fn exec_022_create_folder() {
+    fn exec_022_organize_media_creates_intermediate_folders() {
         let mut exec = make_executor();
         let result = exec
-            .execute("create_folder", &json!({"name": "New Folder"}))
-            .unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Created folder"));
-        assert_eq!(exec.media_manifest.folders.len(), 1);
-    }
-
-    #[test]
-    fn exec_023_create_folder_missing_name() {
-        let mut exec = make_executor();
-        let err = exec.execute("create_folder", &json!({})).unwrap_err();
-        // wire-mutation-validators: MUT-022 gate message (also rejects "").
-        assert!(err.contains("missing or empty 'name'"), "got: {err}");
-    }
-
-    #[test]
-    fn exec_024_rename_folder() {
-        let mut exec = make_executor_with_media();
-        let _result = exec
             .execute(
-                "rename_folder",
-                &json!({"folderId": "folder-001", "name": "Renamed"}),
+                "organize_media",
+                &json!({"createFolders": ["Hero shots/Takes/Best"]}),
             )
             .unwrap();
+        assert_eq!(exec.media_manifest.folders.len(), 3);
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            body["createdFolders"],
+            json!(["Hero shots", "Hero shots/Takes", "Hero shots/Takes/Best"])
+        );
+        assert!(body.get("moved").is_none(), "only what happened is reported");
+        assert!(body.get("deleted").is_none());
+    }
+
+    #[test]
+    fn exec_023_organize_media_empty_call_rejected() {
+        let mut exec = make_executor();
+        let err = exec.execute("organize_media", &json!({})).unwrap_err();
+        assert!(err.contains("at least one of"), "got: {err}");
+    }
+
+    #[test]
+    fn organize_media_existing_folders_left_alone_case_insensitively() {
+        let mut exec = make_executor_with_media(); // has folder-001 "Footage"
+        let name = exec.media_manifest.folders[0].name.clone();
+        let result = exec
+            .execute(
+                "organize_media",
+                &json!({"createFolders": [name.to_uppercase()]}),
+            )
+            .unwrap();
+        assert_eq!(exec.media_manifest.folders.len(), 1, "no duplicate created");
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(body.get("createdFolders").is_none(), "nothing created: {body}");
+    }
+
+    #[test]
+    fn organize_media_ambiguous_folder_path_refused() {
+        let mut exec = make_executor();
+        for id in ["x", "y"] {
+            exec.media_manifest.folders.push(core_model::MediaFolder {
+                id: id.into(),
+                name: "Take".into(),
+                parent_folder_id: None,
+            });
+        }
+        let err = exec
+            .execute("organize_media", &json!({"deletes": ["take"]}))
+            .unwrap_err();
+        assert!(err.contains("Ambiguous"), "got: {err}");
+    }
+
+    #[test]
+    fn exec_024_organize_media_renames_folder_by_path() {
+        let mut exec = make_executor_with_media();
+        let path = exec.media_manifest.folders[0].name.clone();
+        exec.execute(
+            "organize_media",
+            &json!({"renames": [{"item": path, "name": "Renamed"}]}),
+        )
+        .unwrap();
         assert_eq!(exec.media_manifest.folders[0].name, "Renamed");
     }
 
     #[test]
-    fn exec_025_delete_folder() {
+    fn organize_media_rename_rejects_path_shaped_folder_names() {
         let mut exec = make_executor_with_media();
-        let _result = exec
-            .execute("delete_folder", &json!({"folderId": "folder-001"}))
-            .unwrap();
-        assert!(exec.media_manifest.folders.is_empty());
+        let path = exec.media_manifest.folders[0].name.clone();
+        let err = exec
+            .execute(
+                "organize_media",
+                &json!({"renames": [{"item": path, "name": "A/B"}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("never moves"), "got: {err}");
     }
 
     #[test]
-    fn delete_folder_reparents_contents_to_its_parent() {
-        // Deleting a middle folder must not leave subfolders dangling
-        // (unreachable in Folders view) — contents move to ITS parent.
+    fn exec_025_organize_media_deletes_folder_cascade() {
+        // v2 semantics: deleting a folder deletes its subfolders AND assets;
+        // timelines inside move to the root (design C-7) — unlike the old
+        // delete_folder, which re-parented contents.
         let mut exec = make_executor_with_media();
+        let root_path = exec.media_manifest.folders[0].name.clone();
         exec.media_manifest.folders.push(core_model::MediaFolder {
             id: "mid".into(),
             name: "Mid".into(),
             parent_folder_id: Some("folder-001".into()),
         });
-        exec.media_manifest.folders.push(core_model::MediaFolder {
-            id: "leaf".into(),
-            name: "Leaf".into(),
-            parent_folder_id: Some("mid".into()),
-        });
         exec.media_manifest.entries[0].folder_id = Some("mid".into());
+        exec.timeline_mut().folder_id = Some("mid".into());
 
-        exec.execute("delete_folder", &json!({"folderId": "mid"}))
+        let result = exec
+            .execute("organize_media", &json!({"deletes": [root_path]}))
             .unwrap();
-
-        let leaf = exec
-            .media_manifest
-            .folders
-            .iter()
-            .find(|f| f.id == "leaf")
-            .unwrap();
-        assert_eq!(
-            leaf.parent_folder_id.as_deref(),
-            Some("folder-001"),
-            "subfolder re-parents to the deleted folder's parent"
-        );
-        assert_eq!(
-            exec.media_manifest.entries[0].folder_id.as_deref(),
-            Some("folder-001"),
-            "entry moves to the parent, not the root"
-        );
+        assert!(exec.media_manifest.folders.is_empty(), "subtree deleted");
+        assert!(exec.media_manifest.entries.is_empty(), "contained asset deleted");
+        assert_eq!(exec.timeline().folder_id, None, "timeline moved to root");
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["deleted"]["folders"], json!(2));
+        assert_eq!(body["deleted"]["assets"], json!(1));
+        assert!(body["deleted"].get("timelines").is_none());
     }
 
     #[test]
-    fn exec_026_rename_media() {
+    fn exec_026_organize_media_renames_asset_by_id() {
         let mut exec = make_executor_with_media();
-        let _result = exec
-            .execute(
-                "rename_media",
-                &json!({"mediaId": "media-001", "name": "renamed.mp4"}),
-            )
-            .unwrap();
+        exec.execute(
+            "organize_media",
+            &json!({"renames": [{"item": "media-001", "name": "renamed.mp4"}]}),
+        )
+        .unwrap();
         assert_eq!(exec.media_manifest.entries[0].name, "renamed.mp4");
     }
 
     #[test]
-    fn exec_027_delete_media() {
+    fn exec_027_organize_media_delete_asset_removes_referencing_clips() {
         let mut exec = make_executor_with_media();
-        let _result = exec
-            .execute("delete_media", &json!({"mediaId": "media-001"}))
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let mut clip = crate::test_helpers::make_clip(0, 100);
+        clip.media_ref = "media-001".into();
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[clip]);
+        // A sibling timeline referencing the asset is swept too.
+        let mut sibling = Timeline::default();
+        let _ = timeline_core::insert_track_at(&mut sibling, 0, ClipType::Video);
+        let mut sib_clip = crate::test_helpers::make_clip(0, 50);
+        sib_clip.media_ref = "media-001".into();
+        let _ = timeline_core::place_clips(&mut sibling, 0, 0, &[sib_clip]);
+        exec.set_sibling_timelines(vec![sibling]);
+
+        let result = exec
+            .execute("organize_media", &json!({"deletes": ["media-001"]}))
             .unwrap();
         assert!(exec.media_manifest.entries.is_empty());
+        assert!(exec.timeline().tracks[0].clips.is_empty());
+        assert!(exec.sibling_timelines()[0].tracks[0].clips.is_empty());
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["deleted"]["assets"], json!(1));
+        assert_eq!(body["clipsRemoved"], json!(2));
     }
 
     #[test]
-    fn exec_028_move_to_folder() {
+    fn exec_028_organize_media_moves_asset_into_created_path() {
         let mut exec = make_executor_with_media();
-        let _result = exec
+        let result = exec
             .execute(
-                "move_to_folder",
-                &json!({"mediaId": "media-001", "folderId": "folder-001"}),
+                "organize_media",
+                &json!({"moves": [{"items": ["media-001"], "into": "Archive/2026"}]}),
             )
             .unwrap();
+        let dest = exec
+            .media_manifest
+            .entries[0]
+            .folder_id
+            .clone()
+            .expect("moved into a folder");
         assert_eq!(
-            exec.media_manifest.entries[0].folder_id.as_deref(),
-            Some("folder-001")
+            crate::organize::folder_path(&exec.media_manifest.folders, &dest),
+            "Archive/2026",
+            "destination created on demand"
+        );
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["moved"], json!(1));
+        assert_eq!(body["createdFolders"], json!(["Archive", "Archive/2026"]));
+    }
+
+    #[test]
+    fn exec_029_organize_media_move_without_into_goes_to_root() {
+        let mut exec = make_executor_with_media();
+        exec.media_manifest.entries[0].folder_id = Some("folder-001".into());
+        exec.execute("organize_media", &json!({"moves": [{"items": ["media-001"]}]}))
+            .unwrap();
+        assert_eq!(exec.media_manifest.entries[0].folder_id, None);
+    }
+
+    #[test]
+    fn organize_media_folder_cycle_refused() {
+        let mut exec = make_executor();
+        exec.execute("organize_media", &json!({"createFolders": ["A/B"]}))
+            .unwrap();
+        let err = exec
+            .execute(
+                "organize_media",
+                &json!({"moves": [{"items": ["A"], "into": "A/B"}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("into itself"), "got: {err}");
+        let err = exec
+            .execute(
+                "organize_media",
+                &json!({"moves": [{"items": ["A"], "into": "a"}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("into itself"), "cycle check is case-insensitive: {err}");
+    }
+
+    #[test]
+    fn organize_media_items_resolve_before_mutations_apply() {
+        // Renames apply before deletes, but the delete's item reference was
+        // resolved against the PRE-CALL library, so the old path still works.
+        let mut exec = make_executor();
+        exec.execute("organize_media", &json!({"createFolders": ["Old"]}))
+            .unwrap();
+        let result = exec
+            .execute(
+                "organize_media",
+                &json!({
+                    "renames": [{"item": "Old", "name": "New"}],
+                    "deletes": ["Old"],
+                }),
+            )
+            .unwrap();
+        assert!(exec.media_manifest.folders.is_empty(), "renamed folder deleted");
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["renamed"], json!(1));
+        assert_eq!(body["deleted"]["folders"], json!(1));
+    }
+
+    #[test]
+    fn organize_media_into_may_name_a_folder_created_this_call() {
+        let mut exec = make_executor_with_media();
+        exec.execute(
+            "organize_media",
+            &json!({
+                "createFolders": ["Fresh"],
+                "moves": [{"items": ["media-001"], "into": "Fresh"}],
+            }),
+        )
+        .unwrap();
+        let dest = exec.media_manifest.entries[0].folder_id.clone().unwrap();
+        assert_eq!(
+            crate::organize::folder_path(&exec.media_manifest.folders, &dest),
+            "Fresh"
         );
     }
 
     #[test]
-    fn exec_029_move_to_folder_bad_folder() {
-        let mut exec = make_executor_with_media();
+    fn organize_media_unknown_item_refused() {
+        let mut exec = make_executor();
         let err = exec
-            .execute(
-                "move_to_folder",
-                &json!({"mediaId": "media-001", "folderId": "nonexistent"}),
-            )
+            .execute("organize_media", &json!({"deletes": ["no-such-thing"]}))
             .unwrap_err();
-        assert!(err.contains("not found"));
+        assert!(
+            err.contains("not a media asset id, a timeline id, or an existing folder path"),
+            "got: {err}"
+        );
     }
 
     #[test]
-    fn exec_030_import_media() {
+    fn exec_030_import_media_source_path_file() {
         let mut exec = make_executor();
-        let _result = exec
+        let result = exec
             .execute(
                 "import_media",
-                &json!({"name": "new.mp4", "filePath": "/path/to/new.mp4"}),
+                &json!({"source": {"path": "/path/to/new.mp4"}, "name": "new.mp4"}),
             )
             .unwrap();
         assert_eq!(exec.media_manifest.entries.len(), 1);
+        assert_eq!(exec.media_manifest.entries[0].r#type, ClipType::Video);
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["status"], json!("ready"));
+        assert_eq!(body["mediaRef"], json!(exec.media_manifest.entries[0].id));
     }
 
     #[test]
-    fn exec_031_import_folder() {
+    fn import_media_infers_name_and_type_from_path() {
         let mut exec = make_executor();
-        let _result = exec
-            .execute("import_folder", &json!({"folderName": "New Folder"}))
+        exec.execute("import_media", &json!({"source": {"path": "C:/media/photo.png"}}))
             .unwrap();
-        assert_eq!(exec.media_manifest.folders.len(), 1);
+        let e = &exec.media_manifest.entries[0];
+        assert_eq!(e.name, "photo.png", "name defaults to the filename");
+        assert_eq!(e.r#type, ClipType::Image);
+        assert!((e.duration - 5.0).abs() < 1e-9, "stills get the 5s default");
+    }
+
+    #[test]
+    fn import_media_rejects_unsupported_extension_and_shape() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute("import_media", &json!({"source": {"path": "/notes.txt"}}))
+            .unwrap_err();
+        assert!(err.contains("unsupported file type"), "got: {err}");
+        let err = exec
+            .execute("import_media", &json!({"path": "/a.mp4"}))
+            .unwrap_err();
+        assert!(err.contains("source"), "legacy bare-path shape refused: {err}");
+        let err = exec
+            .execute(
+                "import_media",
+                &json!({"source": {"path": "/a.mp4", "url": "https://x/y.mp4"}}),
+            )
+            .unwrap_err();
+        assert!(err.contains("exactly one"), "got: {err}");
+    }
+
+    #[test]
+    fn import_media_url_and_bytes_report_honest_unavailability() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute("import_media", &json!({"source": {"url": "https://x/y.mp4"}}))
+            .unwrap_err();
+        assert!(err.contains("download"), "got: {err}");
+        let err = exec
+            .execute(
+                "import_media",
+                &json!({"source": {"bytes": "aGk=", "mimeType": "image/png"}}),
+            )
+            .unwrap_err();
+        assert!(err.contains("bytes imports"), "got: {err}");
+    }
+
+    #[test]
+    fn import_media_folder_param_creates_destination_path() {
+        let mut exec = make_executor();
+        exec.execute(
+            "import_media",
+            &json!({"source": {"path": "/b.mp4"}, "folder": "B-roll/Sunset"}),
+        )
+        .unwrap();
+        let dest = exec.media_manifest.entries[0].folder_id.clone().unwrap();
+        assert_eq!(
+            crate::organize::folder_path(&exec.media_manifest.folders, &dest),
+            "B-roll/Sunset"
+        );
+    }
+
+    #[test]
+    fn exec_031_import_media_directory_mirrors_subfolders() {
+        // source.path may be a directory (absorbs import_folder): supported
+        // files register recursively and the tree mirrors as media folders.
+        let dir = std::env::temp_dir()
+            .join("fronda-import-dir-test")
+            .join(format!("run-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("Sub")).unwrap();
+        std::fs::write(dir.join("clip.mp4"), b"x").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+        std::fs::write(dir.join("Sub").join("photo.png"), b"x").unwrap();
+
+        let mut exec = make_executor();
+        let result = exec
+            .execute(
+                "import_media",
+                &json!({"source": {"path": dir.to_string_lossy()}}),
+            )
+            .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["status"], json!("ready"));
+        assert_eq!(body["imported"], json!(2));
+        assert_eq!(body["skipped"], json!(1), "unsupported .txt skipped");
+        assert_eq!(body["foldersCreated"], json!(2), "top dir + Sub");
+        assert_eq!(exec.media_manifest.entries.len(), 2);
+        let photo = exec
+            .media_manifest
+            .entries
+            .iter()
+            .find(|e| e.name == "photo.png")
+            .unwrap();
+        let photo_folder = photo.folder_id.clone().unwrap();
+        assert!(
+            crate::organize::folder_path(&exec.media_manifest.folders, &photo_folder)
+                .ends_with("/Sub"),
+            "subfolder mirrored"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -9641,14 +10454,14 @@ mod tests {
     }
 
     #[test]
-    fn create_matte_writes_and_registers_image() {
+    fn import_media_matte_writes_and_registers_image() {
         let mut exec = make_executor(); // Timeline::default() = 1920x1080
         let writer = std::sync::Arc::new(MockMatte::default());
         exec.set_matte_writer(writer.clone());
         let out = exec
             .execute(
-                "create_matte",
-                &json!({"hex": "#FF0000", "aspectRatio": "1:1", "name": "Red"}),
+                "import_media",
+                &json!({"source": {"matte": {"hex": "#FF0000", "aspectRatio": "1:1"}}, "name": "Red"}),
             )
             .unwrap();
         // 1:1 in 1920x1080 → short edge 1080 → 1080x1080; #FF0000 → [255,0,0,255].
@@ -9667,11 +10480,12 @@ mod tests {
     }
 
     #[test]
-    fn create_matte_defaults_to_project_aspect() {
+    fn import_media_matte_defaults_to_project_aspect() {
         let mut exec = make_executor();
         let writer = std::sync::Arc::new(MockMatte::default());
         exec.set_matte_writer(writer.clone());
-        exec.execute("create_matte", &json!({"hex": "#000"})).unwrap();
+        exec.execute("import_media", &json!({"source": {"matte": {"hex": "#000"}}}))
+            .unwrap();
         let (_, w, h, name) = writer.last.lock().unwrap().clone().unwrap();
         assert_eq!((w, h), (1920, 1080), "default aspect = Project");
         assert_eq!(name, "Matte", "default name");
@@ -9706,9 +10520,141 @@ mod tests {
         assert!(err.contains("unavailable"), "{err}");
         let err = exec.execute("new_project", &json!({})).unwrap_err();
         assert!(err.contains("unavailable"), "{err}");
+        let err = exec.execute("close_project", &json!({})).unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
         // The speculative names were removed with the v0.6.1 alignment.
         let err = exec.execute("create_project", &json!({})).unwrap_err();
         assert!(err.contains("Unknown tool"), "{err}");
+    }
+
+    /// Mock navigator for close_project: records the saved state, returns a
+    /// scripted outcome.
+    struct MockCloseNav {
+        outcome: std::sync::Mutex<Option<Result<ClosedProject, String>>>,
+        saved_fps: std::sync::Mutex<Option<i64>>,
+    }
+
+    impl ProjectNavigator for MockCloseNav {
+        fn open(&self, _id: Option<&str>, _path: Option<&str>) -> Result<OpenedProject, String> {
+            Err("not scripted".into())
+        }
+        fn create(&self, _name: Option<&str>) -> Result<OpenedProject, String> {
+            Err("not scripted".into())
+        }
+        fn close(
+            &self,
+            _name: Option<&str>,
+            _id: Option<&str>,
+            _path: Option<&str>,
+            active: ActiveProjectState,
+        ) -> Result<ClosedProject, String> {
+            *self.saved_fps.lock().unwrap() = Some(active.timeline.fps);
+            self.outcome
+                .lock()
+                .unwrap()
+                .take()
+                .expect("outcome scripted")
+        }
+    }
+
+    struct MockCloseLister;
+    impl ProjectLister for MockCloseLister {
+        fn list(&self) -> Result<(Vec<KnownProject>, Option<(String, String)>), String> {
+            Ok((Vec::new(), None))
+        }
+    }
+
+    #[test]
+    fn close_project_saves_then_resets_to_no_project_state() {
+        let mut exec = make_executor_with_media();
+        exec.timeline_mut().fps = 48;
+        exec.set_matte_writer(std::sync::Arc::new(MockMatte::default()));
+        let nav = std::sync::Arc::new(MockCloseNav {
+            outcome: std::sync::Mutex::new(Some(Ok(ClosedProject {
+                name: "Demo".into(),
+                open_count: 0,
+                was_active: true,
+                next_active: None,
+                lister: Some(std::sync::Arc::new(MockCloseLister)),
+            }))),
+            saved_fps: std::sync::Mutex::new(None),
+        });
+        exec.set_project_navigator(nav.clone());
+
+        let res = exec.execute("close_project", &json!({})).unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["status"], json!("closed"));
+        assert_eq!(body["name"], json!("Demo"));
+        assert_eq!(body["openCount"], json!(0));
+        assert!(body.get("active").is_none(), "no next project: {body}");
+        // The navigator received the live state for the save-first step.
+        assert_eq!(*nav.saved_fps.lock().unwrap(), Some(48));
+        // The executor reset to the no-project state: default timeline, empty
+        // manifest, project-scoped seams gone (matte imports unavailable) —
+        // but get_projects still answers through the replacement lister.
+        assert_eq!(exec.timeline().fps, Timeline::default().fps);
+        assert!(exec.media_manifest().entries.is_empty());
+        let err = exec
+            .execute("import_media", &json!({"source": {"matte": {"hex": "#000"}}}))
+            .unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
+        assert!(exec.execute("get_projects", &json!({})).is_ok());
+    }
+
+    #[test]
+    fn close_project_save_failure_leaves_the_project_open() {
+        let mut exec = make_executor_with_media();
+        exec.timeline_mut().fps = 48;
+        let nav = std::sync::Arc::new(MockCloseNav {
+            outcome: std::sync::Mutex::new(Some(Err(
+                "Couldn't save 'Demo' — project left open. disk full".into(),
+            ))),
+            saved_fps: std::sync::Mutex::new(None),
+        });
+        exec.set_project_navigator(nav);
+        let err = exec.execute("close_project", &json!({})).unwrap_err();
+        assert!(err.contains("project left open"), "{err}");
+        assert_eq!(exec.timeline().fps, 48, "executor untouched on failure");
+        assert_eq!(exec.media_manifest().entries.len(), 1);
+    }
+
+    #[test]
+    fn close_project_adopts_the_next_active_project() {
+        let mut exec = make_executor_with_media();
+        let next = OpenedProject {
+            name: "Next".into(),
+            root: "/tmp/Next.palmier".into(),
+            timeline: Timeline {
+                fps: 60,
+                ..Default::default()
+            },
+            sibling_timelines: Vec::new(),
+            manifest: MediaManifest::default(),
+            seams: ProjectSeams {
+                matte_writer: std::sync::Arc::new(MockMatte::default()),
+                audio_source: std::sync::Arc::new(MockAudio),
+                export_host: std::sync::Arc::new(MockExportHost),
+                project_lister: std::sync::Arc::new(MockCloseLister),
+            },
+        };
+        let nav = std::sync::Arc::new(MockCloseNav {
+            outcome: std::sync::Mutex::new(Some(Ok(ClosedProject {
+                name: "Demo".into(),
+                open_count: 1,
+                was_active: true,
+                next_active: Some(next),
+                lister: None,
+            }))),
+            saved_fps: std::sync::Mutex::new(None),
+        });
+        exec.set_project_navigator(nav);
+        let res = exec.execute("close_project", &json!({})).unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["active"]["name"], json!("Next"));
+        assert_eq!(body["openCount"], json!(1));
+        assert_eq!(exec.timeline().fps, 60, "adopted the next project");
     }
 
     #[test]
@@ -10268,12 +11214,17 @@ mod tests {
         exec.timeline_mut().fps = 24;
         let original_id = exec.timeline().id.clone();
 
-        // create_timeline inherits settings and switches.
+        // create_timeline inherits settings, switches, and returns the v2
+        // payload {timelineId, name, active, note}.
         let res = exec
             .execute("create_timeline", &json!({"name": "Cutdown"}))
             .unwrap();
-        let text = res["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Cutdown"), "{text}");
+        let payload: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["name"], json!("Cutdown"));
+        assert_eq!(payload["active"], json!(true));
+        assert_eq!(payload["timelineId"], json!(exec.timeline().id));
+        assert!(payload["note"].as_str().unwrap().contains("empty"), "{payload}");
         assert_eq!(exec.timeline().name, "Cutdown");
         assert_eq!(exec.timeline().fps, 24, "settings inherited");
         assert!(exec.timeline().tracks.is_empty(), "new timeline is empty");
@@ -10304,15 +11255,23 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("No timeline"), "{err}");
 
-        // duplicate_timeline: fresh ids, switches to the copy.
+        // create_timeline 'from' (absorbed duplicate_timeline): fresh ids,
+        // switches to the copy, note flags the all-new ids.
         let mut manifest = MediaManifest::default();
         manifest.entries.push(video_media("m1", 1920, 1080, 24.0));
         exec.media_manifest_mut().entries = manifest.entries;
         exec.execute("add_clips", &json!({"mediaIds": ["m1"]})).unwrap();
         let src_clip_id = exec.timeline().tracks[0].clips[0].id.clone();
-        let res = exec.execute("duplicate_timeline", &json!({})).unwrap();
-        let text = res["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("copy"), "{text}");
+        let res = exec
+            .execute("create_timeline", &json!({"from": original_id}))
+            .unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(payload["name"].as_str().unwrap().contains("copy"), "{payload}");
+        assert!(
+            payload["note"].as_str().unwrap().contains("re-read get_timeline"),
+            "{payload}"
+        );
         assert_ne!(exec.timeline().id, original_id, "switched to the copy");
         assert_eq!(exec.timeline().tracks[0].clips.len(), 1, "content copied");
         assert_ne!(
@@ -10429,39 +11388,84 @@ mod tests {
     }
 
     #[test]
-    fn rename_and_delete_media_accept_timeline_ids() {
+    fn organize_media_renames_and_deletes_accept_timeline_ids() {
         let mut exec = make_executor();
         let root_id = exec.timeline().id.clone();
 
-        // Rename the active timeline by its id.
-        exec.execute("rename_media", &json!({"mediaId": root_id, "name": "Main cut"}))
-            .unwrap();
+        // Rename the active timeline by its id (#255 tab-rename duty lives
+        // in organize_media renames now).
+        exec.execute(
+            "organize_media",
+            &json!({"renames": [{"item": root_id, "name": "Main cut"}]}),
+        )
+        .unwrap();
         assert_eq!(exec.timeline().name, "Main cut");
 
         // Create a sibling, rename it while it is NOT active, then delete it.
         exec.execute("create_timeline", &json!({"name": "Scrap"})).unwrap();
         let scrap_id = exec.timeline().id.clone();
         exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
-        exec.execute("rename_media", &json!({"mediaId": scrap_id, "name": "Scrap 2"}))
-            .unwrap();
+        exec.execute(
+            "organize_media",
+            &json!({"renames": [{"item": scrap_id, "name": "Scrap 2"}]}),
+        )
+        .unwrap();
         assert_eq!(exec.sibling_timelines()[0].name, "Scrap 2");
-        exec.execute("delete_media", &json!({"mediaId": scrap_id})).unwrap();
+        exec.execute("organize_media", &json!({"deletes": [scrap_id]}))
+            .unwrap();
         assert!(exec.sibling_timelines().is_empty());
 
         // The last remaining timeline can't be deleted.
         let err = exec
-            .execute("delete_media", &json!({"mediaId": root_id}))
+            .execute("organize_media", &json!({"deletes": [root_id.clone()]}))
             .unwrap_err();
-        assert!(err.contains("last remaining"), "{err}");
+        assert!(err.contains("Can't delete every timeline"), "{err}");
 
-        // Deleting the ACTIVE timeline switches to a sibling first.
+        // Deleting the ACTIVE timeline switches to a sibling first and says so.
         exec.execute("create_timeline", &json!({"name": "Other"})).unwrap();
         let other_id = exec.timeline().id.clone();
-        let res = exec.execute("delete_media", &json!({"mediaId": other_id})).unwrap();
-        let text = res["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("switched"), "{text}");
+        let res = exec
+            .execute("organize_media", &json!({"deletes": [other_id]}))
+            .unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["deleted"]["timelines"], json!(1));
+        assert!(
+            body["notes"][0]
+                .as_str()
+                .unwrap()
+                .contains("Active timeline changed"),
+            "{body}"
+        );
         assert_eq!(exec.timeline().id, root_id);
         assert!(exec.sibling_timelines().is_empty());
+    }
+
+    #[test]
+    fn organize_media_warns_when_deleting_a_nested_timeline() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let root_id = exec.timeline().id.clone();
+        exec.execute("create_timeline", &json!({"name": "Insert"})).unwrap();
+        let child_id = exec.timeline().id.clone();
+        exec.execute("add_clips", &json!({"mediaIds": ["m1"]})).unwrap();
+        exec.execute("set_active_timeline", &json!({"timelineId": root_id})).unwrap();
+        exec.execute("add_clips", &json!({"mediaIds": [child_id.clone()]}))
+            .unwrap();
+
+        let res = exec
+            .execute("organize_media", &json!({"deletes": [child_id]}))
+            .unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(
+            body["warnings"][0]
+                .as_str()
+                .unwrap()
+                .contains("render black"),
+            "nest-reference warning present: {body}"
+        );
     }
 
     #[test]
@@ -10733,27 +11737,34 @@ mod tests {
     }
 
     #[test]
-    fn create_matte_requires_writer() {
+    fn import_media_matte_requires_writer() {
         let mut exec = make_executor(); // no writer set
         let err = exec
-            .execute("create_matte", &json!({"hex": "#000000"}))
+            .execute("import_media", &json!({"source": {"matte": {"hex": "#000000"}}}))
             .unwrap_err();
         assert!(err.contains("unavailable"), "{err}");
     }
 
     #[test]
-    fn create_matte_validates_hex_and_aspect() {
+    fn import_media_matte_validates_hex_and_aspect() {
         let mut exec = make_executor();
         exec.set_matte_writer(std::sync::Arc::new(MockMatte::default()));
-        assert!(exec.execute("create_matte", &json!({})).is_err(), "no hex");
         assert!(
-            exec.execute("create_matte", &json!({"hex": "notacolor"}))
+            exec.execute("import_media", &json!({"source": {"matte": {}}}))
+                .is_err(),
+            "no hex"
+        );
+        assert!(
+            exec.execute("import_media", &json!({"source": {"matte": {"hex": "notacolor"}}}))
                 .is_err(),
             "bad hex"
         );
         assert!(
-            exec.execute("create_matte", &json!({"hex": "#000", "aspectRatio": "bogus"}))
-                .is_err(),
+            exec.execute(
+                "import_media",
+                &json!({"source": {"matte": {"hex": "#000", "aspectRatio": "bogus"}}})
+            )
+            .is_err(),
             "bad aspect"
         );
     }
@@ -10919,7 +11930,7 @@ mod tests {
     #[test]
     fn revision_bumped_by_successful_mutation() {
         let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
-        exec.execute("create_folder", &json!({"name": "B-roll"}))
+        exec.execute("organize_media", &json!({"createFolders": ["B-roll"]}))
             .unwrap();
         assert_eq!(exec.revision(), 1);
     }
@@ -10927,7 +11938,7 @@ mod tests {
     #[test]
     fn revision_unchanged_by_failed_mutation() {
         let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
-        exec.execute("create_folder", &json!({"name": "B-roll"}))
+        exec.execute("organize_media", &json!({"createFolders": ["B-roll"]}))
             .unwrap();
         assert!(exec.execute("split_clips", &json!({})).is_err());
         assert_eq!(exec.revision(), 1);
@@ -10936,7 +11947,7 @@ mod tests {
     #[test]
     fn load_project_replaces_state_and_bumps_revision() {
         let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
-        exec.execute("create_folder", &json!({"name": "B-roll"}))
+        exec.execute("organize_media", &json!({"createFolders": ["B-roll"]}))
             .unwrap();
         let before = exec.revision();
         let timeline = Timeline {

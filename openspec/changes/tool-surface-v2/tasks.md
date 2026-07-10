@@ -4,14 +4,14 @@
 
 ## 2. 新工具
 
-- [ ] 2.1 organize_media（path 定位資料夾；對照 Swift 語意含建立中間層級）——取代 create_folder/rename_folder/delete_folder/move_to_folder/rename_media/delete_media 的退場計畫一併在 design 標注
-- [ ] 2.2 manage_tracks（reorder/mute/hide/syncLock/remove 多動作）
-- [ ] 2.3 close_project（ProjectNavigator seam 擴充）
+- [x] 2.1 organize_media（path 定位資料夾；對照 Swift 語意含建立中間層級）——取代 create_folder/rename_folder/delete_folder/move_to_folder/rename_media/delete_media 的退場計畫一併在 design 標注 — 完成：`organize.rs` 純 path 解析（case-insensitive、exact-case 優先、ambiguity 錯誤、中間層級建立）+ `cmd_organize_media`（parse-before-mutate、cycle guard、last-timeline guard、folder cascade、clipsRemoved、nest warning、active-switch notes）；envelope/short-id 依 task 4 再套
+- [x] 2.2 manage_tracks（reorder/mute/hide/syncLock/remove 多動作）— up-front index→id 解析、zone-clamped reorder、idempotent set、remove 保留他軌 linked partners、tracks 新順序輸出（label V 底往上 / A 上往下）+ notes；exec_mut undo 包覆
+- [x] 2.3 close_project（ProjectNavigator seam 擴充）— trait 增 `close(name,id,path,ActiveProjectState)`→`ClosedProject`；save-first（失敗留開）、must-be-open、next-active adopt / no-project reset（清 project seams、換 rootless lister）；AppProjectNavigator 實作 + 測試
 
 ## 3. 吸收合併
 
-- [ ] 3.1 import_media 吸收 create_matte（matte 參數路徑）；create_timeline 吸收 duplicate_timeline（sourceTimelineId 參數）；被吸收工具退場
-- [ ] 3.2 organize_media 六工具退場；media_panel_view 等 UI 呼叫點遷移到新工具
+- [x] 3.1 import_media 吸收 create_matte（source.matte）與 import_folder（source.path 目錄遞迴、鏡射子資料夾）；create_timeline 吸收 duplicate_timeline（`from` 參數，v2 payload {timelineId,name,active,note}）；被吸收工具退場。url/bytes 誠實回報 host 服務未接（follow-up）
+- [x] 3.2 organize_media 六工具退場；UI 呼叫點全數遷移：media_panel_view（批次刪除、New Folder 唯一名+path、folder/asset rename、folder delete cascade）、timeline_view（tab rename/close）、media_import + preview_view（import_media source.path）、editor_state_hub 測試、mcp server 測試。工具數 64+3−10=57（4 檔斷言同步）
 
 ## 4. Envelopes 與讀取面
 
