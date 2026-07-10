@@ -24,3 +24,8 @@
 ## 4. 收尾
 
 - [ ] 4.1 三 gate exit code 全綠；對抗審查一輪；AGENTS.md/97-audit 各項標注 PORTED
+
+> Cross-slice follow-ups CLOSED (coordinator, 2026-07-11): #211 save_now()
+> wired into app_root show_home + a 20s periodic autosave_if_dirty tick in
+> open_editor; #284 aspect_ratio_display_label wired into the generation
+> panel AspectRatio picker labels.

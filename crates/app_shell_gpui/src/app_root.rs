@@ -167,6 +167,16 @@ impl AppRoot {
             self.timeline_view = Some(cx.new(|cx| TimelineView::new(cx)));
             self.inspector_view = Some(cx.new(|cx| InspectorView::new(cx)));
             self.wire_cross_view_state(cx);
+            // Periodic autosave (#211): a coalesced checkpoint every 20s that
+            // no-ops unless a project is open and edited since the last save.
+            // Spawned once per session (guarded by chat_view.is_none()).
+            cx.spawn(async move |_, cx| loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(20))
+                    .await;
+                let _ = crate::editor_state_hub::EditorStateHub::global().autosave_if_dirty();
+            })
+            .detach();
         }
         cx.notify();
     }
@@ -277,6 +287,9 @@ impl AppRoot {
 
     /// Navigate back to Home (e.g., close project).
     pub fn show_home(&mut self, cx: &mut Context<Self>) {
+        // Autosave before leaving the editor (#211, Swift saves on close);
+        // best-effort — a rootless (unsaved) project returns Err and is skipped.
+        let _ = crate::editor_state_hub::EditorStateHub::global().save_now();
         self.active_screen = ActiveScreen::Home;
         cx.notify();
     }

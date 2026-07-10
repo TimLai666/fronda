@@ -770,12 +770,12 @@ pub fn setting_options(state: &GenerationState, field: SettingField) -> Vec<(Str
         (SettingField::AspectRatio, ModelCaps::Video(c)) => c
             .aspect_ratios
             .iter()
-            .map(|a| (a.to_string(), a.to_string()))
+            .map(|a| (a.to_string(), model_catalog::aspect_ratio_display_label(a)))
             .collect(),
         (SettingField::AspectRatio, ModelCaps::Image(c)) => c
             .aspect_ratios
             .iter()
-            .map(|a| (a.to_string(), a.to_string()))
+            .map(|a| (a.to_string(), model_catalog::aspect_ratio_display_label(a)))
             .collect(),
         (SettingField::Resolution, ModelCaps::Video(c)) => c
             .resolutions
