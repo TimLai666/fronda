@@ -105,6 +105,111 @@ impl VideoCaps {
             self.max_reference_images + self.max_reference_videos + self.max_reference_audios,
         )
     }
+
+    /// Audio-off price multiplier for a resolution; `""` key is the default
+    /// (Swift `VideoModelConfig.audioDiscount(for:)`).
+    pub fn audio_discount(&self, resolution: Option<&str>) -> Option<f64> {
+        resolved_rate(self.audio_discount_rate.as_deref()?, resolution)
+    }
+}
+
+// ── Cost estimation (Swift `CostEstimator` at 9dfde8d^, USD) ────
+//
+// The current upstream estimator is credits-based against the server catalog;
+// this catalog carries the Fal-era USD prices, so the USD estimator is the
+// matching math. Same structure, same lookup precedence.
+
+fn resolved_rate(rates: &[(&'static str, f64)], key: Option<&str>) -> Option<f64> {
+    if let Some(k) = key {
+        if let Some((_, v)) = rates.iter().find(|(rk, _)| *rk == k) {
+            return Some(*v);
+        }
+    }
+    rates.iter().find(|(rk, _)| rk.is_empty()).map(|(_, v)| *v)
+}
+
+/// USD estimate for a video generation.
+pub fn video_cost(
+    caps: &VideoCaps,
+    duration_seconds: i64,
+    resolution: Option<&str>,
+    generate_audio: bool,
+) -> Option<f64> {
+    if caps.price_per_second.is_empty() || duration_seconds <= 0 {
+        return None;
+    }
+    let mut rate = resolved_rate(&caps.price_per_second, resolution)?;
+    if !generate_audio {
+        if let Some(discount) = caps.audio_discount(resolution) {
+            rate *= discount;
+        }
+    }
+    Some(rate * duration_seconds as f64)
+}
+
+/// USD estimate for an image generation.
+pub fn image_cost(
+    caps: &ImageCaps,
+    resolution: Option<&str>,
+    quality: Option<&str>,
+    num_images: i64,
+) -> Option<f64> {
+    if caps.price_per_image.is_empty() {
+        return None;
+    }
+    let count = num_images.max(1) as f64;
+    // 2D matrix lookup first (e.g. GPT Image 2 varies on both axes).
+    if let (Some(r), Some(q)) = (resolution, quality) {
+        let key = format!("{r}|{q}");
+        if let Some((_, price)) = caps.price_per_image.iter().find(|(k, _)| *k == key) {
+            return Some(price * count);
+        }
+    }
+    // Quality-only lookup when the model varies on quality but not resolution.
+    if caps.qualities.is_some() {
+        if let Some(q) = quality {
+            if let Some((_, price)) = caps.price_per_image.iter().find(|(k, _)| *k == q) {
+                return Some(price * count);
+            }
+        }
+    }
+    resolved_rate(&caps.price_per_image, resolution).map(|rate| rate * count)
+}
+
+/// USD estimate for an audio generation.
+pub fn audio_cost(caps: &AudioCaps, prompt: &str, duration_seconds: Option<i64>) -> Option<f64> {
+    match caps.pricing {
+        AudioPricing::PerThousandChars(rate) => {
+            let chars = prompt.chars().count();
+            if chars == 0 {
+                return None;
+            }
+            Some(rate * (chars as f64 / 1000.0))
+        }
+        AudioPricing::PerSecond(rate) => {
+            let secs = duration_seconds?;
+            if secs <= 0 {
+                return None;
+            }
+            Some(rate * secs as f64)
+        }
+        AudioPricing::Flat(price) => Some(price),
+        AudioPricing::Unknown => None,
+    }
+}
+
+/// Swift `CostEstimator.format`: "—", "$0.00", "<$0.01", or "$X.XX".
+pub fn format_usd(cost: Option<f64>) -> String {
+    let Some(cost) = cost else {
+        return "—".to_string();
+    };
+    if cost <= 0.0 {
+        return "$0.00".to_string();
+    }
+    if cost < 0.01 {
+        return "<$0.01".to_string();
+    }
+    format!("${cost:.2}")
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -820,5 +925,124 @@ mod tests {
     fn model_by_id_lookup() {
         assert_eq!(model_by_id("veo3.1").unwrap().display_name, "Veo 3.1");
         assert!(model_by_id("gen-3").is_none(), "placeholder ids are gone");
+    }
+
+    // ── Cost estimation (pinned to Swift CostEstimator @ 9dfde8d^) ──
+
+    fn approx(a: Option<f64>, b: f64) {
+        let a = a.expect("cost expected");
+        assert!((a - b).abs() < 1e-9, "expected {b}, got {a}");
+    }
+
+    #[test]
+    fn video_cost_by_resolution() {
+        approx(video_cost(video("seedance-2"), 5, Some("720p"), true), 1.512);
+        approx(video_cost(video("seedance-2"), 5, Some("1080p"), true), 3.40);
+        approx(video_cost(video("veo3.1-lite"), 8, Some("720p"), true), 0.40);
+    }
+
+    #[test]
+    fn video_cost_audio_discount() {
+        // kling-o3: 0.14 * 0.8 * 10
+        approx(video_cost(video("kling-o3"), 10, Some("1080p"), false), 1.12);
+        // no discount entry for 4k and no "" default → full rate
+        approx(video_cost(video("kling-o3"), 10, Some("4k"), false), 4.20);
+        // veo: "" default discount 2/3 applies at any resolution
+        approx(
+            video_cost(video("veo3.1"), 8, Some("4k"), false),
+            0.60 * (2.0 / 3.0) * 8.0,
+        );
+    }
+
+    #[test]
+    fn video_cost_flat_rate_and_guards() {
+        // Edit models price on the "" key regardless of resolution.
+        approx(video_cost(video("kling-o3-edit"), 10, None, true), 1.68);
+        assert_eq!(
+            video_cost(video("kling-o3-edit"), 0, None, true),
+            None,
+            "no duration (no source video) → no estimate"
+        );
+        assert_eq!(
+            video_cost(video("seedance-2"), 5, Some("8k"), true),
+            None,
+            "unknown resolution with no default rate"
+        );
+        let unpriced = VideoCaps::default();
+        assert_eq!(video_cost(&unpriced, 5, None, true), None);
+    }
+
+    #[test]
+    fn image_cost_matrix_and_flat() {
+        // 2D matrix (GPT Image 2).
+        approx(
+            image_cost(image("gpt-image-2"), Some("1024x1024"), Some("high"), 1),
+            0.22,
+        );
+        approx(
+            image_cost(image("gpt-image-2"), Some("3840x2160"), Some("medium"), 1),
+            0.11,
+        );
+        assert_eq!(
+            image_cost(image("gpt-image-2"), Some("1024x1024"), None, 1),
+            None,
+            "quality-priced model without a quality → no estimate"
+        );
+        // Resolution-keyed (Nano Banana Pro), multiplied by count.
+        approx(image_cost(image("nano-banana-pro"), Some("4K"), None, 3), 0.90);
+        // Flat "" key (Grok), count clamped to ≥1.
+        approx(image_cost(image("grok-imagine"), None, None, 4), 0.08);
+        approx(image_cost(image("grok-imagine"), None, None, 0), 0.02);
+        approx(image_cost(image("recraft-v4"), None, None, 2), 0.50);
+    }
+
+    #[test]
+    fn audio_cost_modes() {
+        let prompt_100: String = "x".repeat(100);
+        approx(
+            audio_cost(audio("elevenlabs-tts-v3"), &prompt_100, None),
+            0.01,
+        );
+        approx(
+            audio_cost(audio("gemini-3.1-flash-tts"), &"x".repeat(1000), None),
+            0.03,
+        );
+        assert_eq!(
+            audio_cost(audio("elevenlabs-tts-v3"), "", None),
+            None,
+            "empty prompt → no per-char estimate"
+        );
+        approx(audio_cost(audio("elevenlabs-music"), "beat", Some(60)), 0.12);
+        assert_eq!(
+            audio_cost(audio("elevenlabs-music"), "beat", None),
+            None,
+            "per-second pricing needs a duration"
+        );
+        approx(audio_cost(audio("minimax-music-v2.6"), "lofi hip hop", None), 0.03);
+        let unknown = AudioCaps::default();
+        assert_eq!(audio_cost(&unknown, "prompt", Some(30)), None);
+    }
+
+    #[test]
+    fn format_usd_matches_swift() {
+        assert_eq!(format_usd(None), "—");
+        assert_eq!(format_usd(Some(0.0)), "$0.00");
+        assert_eq!(format_usd(Some(-1.0)), "$0.00");
+        assert_eq!(format_usd(Some(0.005)), "<$0.01");
+        assert_eq!(format_usd(Some(1.512)), "$1.51");
+        assert_eq!(format_usd(Some(3.4)), "$3.40");
+    }
+
+    #[test]
+    fn audio_discount_lookup_precedence() {
+        assert_eq!(video("kling-o3").audio_discount(Some("1080p")), Some(0.8));
+        assert_eq!(video("kling-o3").audio_discount(Some("4k")), None);
+        assert_eq!(video("kling-o3").audio_discount(None), None);
+        assert_eq!(
+            video("veo3.1").audio_discount(Some("anything")),
+            Some(2.0 / 3.0),
+            "\"\" key is the default"
+        );
+        assert_eq!(video("seedance-2").audio_discount(Some("720p")), None);
     }
 }
