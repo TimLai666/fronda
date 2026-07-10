@@ -52,6 +52,13 @@ pub enum ActiveScreen {
     Editor,
 }
 
+/// Recent-project card the context menu acts on.
+#[derive(Debug, Clone)]
+struct ProjectMenuTarget {
+    registry_id: String,
+    path: std::path::PathBuf,
+}
+
 /// Root view that switches between Home and Editor.
 #[derive(Debug, Clone)]
 pub struct AppRoot {
@@ -77,6 +84,8 @@ pub struct AppRoot {
     inspector_view: Option<Entity<InspectorView>>,
     tour_overlay: Entity<TourOverlayView>,
     update_overlay: Entity<UpdateOverlayView>,
+    /// Right-click menu on recent-project cards.
+    project_menu: crate::context_menu::ContextMenuState<ProjectMenuTarget>,
 }
 
 impl AppRoot {
@@ -101,11 +110,13 @@ impl AppRoot {
             update_overlay: cx.new(|cx| UpdateOverlayView::new(cx)),
             timeline_height: 200.0,
             timeline_resize_drag: None,
+            project_menu: crate::context_menu::ContextMenuState::new(),
         }
     }
 
     /// Open the editor for a project.
     pub fn open_editor(&mut self, cx: &mut Context<Self>) {
+        self.project_menu.close();
         self.active_screen = ActiveScreen::Editor;
         if self.chat_view.is_none() {
             self.titlebar_view = Some(cx.new(|cx| TitleBarView::new(cx)));
@@ -140,6 +151,13 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape" && self.project_menu.is_open() {
+            self.project_menu.close();
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+
         let modifiers = menu::Modifiers {
             command: event.keystroke.modifiers.platform,
             shift: event.keystroke.modifiers.shift,
@@ -408,6 +426,65 @@ impl AppRoot {
             )
     }
 
+    /// Project-card context menu entries (order defines activation indices).
+    fn project_card_menu_entries() -> Vec<crate::context_menu::MenuEntry> {
+        use crate::context_menu::MenuEntry;
+        vec![
+            MenuEntry::item("open", "Open"),
+            MenuEntry::item("reveal", "Reveal in File Manager"),
+            MenuEntry::separator(),
+            MenuEntry::item("remove-recents", "Remove from Recents"),
+            MenuEntry::separator(),
+            MenuEntry::destructive_confirm("delete", "Delete Project", "Confirm Delete"),
+        ]
+    }
+
+    fn activate_project_menu_item(&mut self, index: usize, cx: &mut Context<Self>) {
+        let target = self.project_menu.target().cloned();
+        let entries = Self::project_card_menu_entries();
+        if let crate::context_menu::Activation::Perform(id) =
+            self.project_menu.activate(index, &entries)
+        {
+            if let Some(target) = target {
+                match id {
+                    "open" => self.open_project_at(&target.path, cx),
+                    "reveal" => crate::platform_adapter::reveal_in_file_manager(&target.path),
+                    "remove-recents" => Self::remove_from_recents(&target.registry_id),
+                    "delete" => Self::delete_project(&target.registry_id, &target.path),
+                    _ => {}
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Drop a project from the recents registry (the package stays on disk).
+    fn remove_from_recents(registry_id: &str) {
+        let registry_path = crate::project_registry_store::default_registry_path();
+        let mut registry = crate::project_registry_store::load_from(&registry_path);
+        if registry.remove(registry_id) {
+            if let Err(reason) = crate::project_registry_store::save_to(&registry_path, &registry)
+            {
+                eprintln!("Failed to update recents: {reason}");
+            }
+        }
+    }
+
+    /// Delete the .palmier package from disk, then drop the recents entry.
+    fn delete_project(registry_id: &str, path: &std::path::Path) {
+        // Only ever delete .palmier packages, even if the registry is corrupt.
+        if path.extension().and_then(|e| e.to_str()) == Some("palmier") {
+            if path.exists() {
+                if let Err(reason) = std::fs::remove_dir_all(path) {
+                    eprintln!("Failed to delete project {}: {reason}", path.display());
+                }
+            }
+        } else {
+            eprintln!("Refusing to delete non-.palmier path {}", path.display());
+        }
+        Self::remove_from_recents(registry_id);
+    }
+
     /// Render the Home screen: sidebar (220px) + content area.
     fn render_home(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let samples_expanded = self.samples_expanded;
@@ -446,6 +523,7 @@ impl AppRoot {
         ];
 
         let welcome_dismissed = self.welcome_dismissed;
+        let project_menu_open = self.project_menu.open_menu().cloned();
 
         div()
             .id("fronda-home")
@@ -746,6 +824,10 @@ impl AppRoot {
                             .children(recent_projects.into_iter().map(
                                 |(id, name, time_label, thumb, path)| {
                                     let hue = crate::media_panel_model::tile_hue(&name);
+                                    let menu_target = ProjectMenuTarget {
+                                        registry_id: id.clone(),
+                                        path: path.clone(),
+                                    };
                                     let thumb_area = if let Some(thumb) = thumb {
                                         div()
                                             .flex_1()
@@ -793,6 +875,17 @@ impl AppRoot {
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.open_project_at(&path.clone(), cx);
                                         }))
+                                        .on_mouse_down(
+                                            MouseButton::Right,
+                                            cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                                this.project_menu.open_at(
+                                                    e.position.x.as_f32(),
+                                                    e.position.y.as_f32(),
+                                                    menu_target.clone(),
+                                                );
+                                                cx.notify();
+                                            }),
+                                        )
                                         .child(thumb_area)
                                         .child(
                                             div()
@@ -892,6 +985,22 @@ impl AppRoot {
                                 ),
                         ),
                 )
+            })
+            // Project-card context menu (deferred popover, above everything)
+            .when_some(project_menu_open, |el, open| {
+                el.child(crate::context_menu::render_context_menu(
+                    gpui::point(px(open.x), px(open.y)),
+                    Self::project_card_menu_entries(),
+                    open.confirming,
+                    cx,
+                    |this: &mut AppRoot, index, _window, cx| {
+                        this.activate_project_menu_item(index, cx)
+                    },
+                    |this: &mut AppRoot, _window, cx| {
+                        this.project_menu.close();
+                        cx.notify();
+                    },
+                ))
             })
     }
 }

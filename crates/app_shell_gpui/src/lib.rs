@@ -20,6 +20,8 @@ pub mod chat_history_view;
 #[cfg(feature = "desktop-app")]
 pub mod chat_view;
 #[cfg(feature = "desktop-app")]
+pub mod context_menu;
+#[cfg(feature = "desktop-app")]
 pub mod crop_overlay_view;
 pub mod editor_state_hub;
 #[cfg(feature = "desktop-app")]
