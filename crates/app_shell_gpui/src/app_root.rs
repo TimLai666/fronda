@@ -98,7 +98,21 @@ pub struct AppRoot {
     /// Registry id whose hover trash button is armed for delete confirmation
     /// (context-menu arm-then-confirm pattern).
     armed_delete: Option<String>,
+    /// Home card snapshots (registry read + per-card fs stats). Hover-driven
+    /// renders must not re-read the registry file (review F1) — refreshed on
+    /// a short TTL so external changes still surface.
+    home_cards: Vec<HomeCard>,
+    home_cards_loaded_at: Option<std::time::Instant>,
 }
+
+type HomeCard = (
+    String,
+    String,
+    String,
+    Option<std::path::PathBuf>,
+    std::path::PathBuf,
+    bool,
+);
 
 impl AppRoot {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -125,6 +139,8 @@ impl AppRoot {
             project_menu: crate::context_menu::ContextMenuState::new(),
             hovered_project: None,
             armed_delete: None,
+            home_cards: Vec::new(),
+            home_cards_loaded_at: None,
         }
     }
 
@@ -525,8 +541,14 @@ impl AppRoot {
                 match id {
                     "open" => self.open_project_at(&target.path, cx),
                     "reveal" => crate::platform_adapter::reveal_in_file_manager(&target.path),
-                    "remove-recents" => Self::remove_from_recents(&target.registry_id),
-                    "delete" => Self::delete_project(&target.registry_id, &target.path),
+                    "remove-recents" => {
+                        Self::remove_from_recents(&target.registry_id);
+                        self.home_cards_loaded_at = None;
+                    }
+                    "delete" => {
+                        Self::delete_project(&target.registry_id, &target.path);
+                        self.home_cards_loaded_at = None;
+                    }
                     _ => {}
                 }
             }
@@ -565,35 +587,35 @@ impl AppRoot {
     fn render_home(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let samples_expanded = self.samples_expanded;
         let is_signed_in = self.is_signed_in;
-        // Registry-driven recent projects (Home renders rarely; direct read).
-        let registry = crate::project_registry_store::load_from(
-            &crate::project_registry_store::default_registry_path(),
-        );
-        let now = chrono::Utc::now();
-        // Accessibility (file-missing) is a Path::exists snapshot taken here,
-        // once per render (Swift: ProjectEntry.isAccessible).
-        let recent_projects: Vec<(
-            String,
-            String,
-            String,
-            Option<std::path::PathBuf>,
-            std::path::PathBuf,
-            bool,
-        )> = registry
-            .sorted_entries()
-            .iter()
-            .map(|entry| {
-                let thumb = entry.url.join(core_model::THUMBNAIL_FILENAME);
-                (
-                    entry.id.clone(),
-                    entry.name(),
-                    crate::home_model::relative_time_label(entry.last_opened_date, now),
-                    thumb.is_file().then_some(thumb),
-                    entry.url.clone(),
-                    entry.url.exists(),
-                )
-            })
-            .collect();
+        // Registry + fs-stat snapshots on a 2s TTL: hover transitions re-render
+        // Home, and re-reading the registry file per render was a measurable
+        // burst under mouse movement (review F1).
+        let stale = self
+            .home_cards_loaded_at
+            .is_none_or(|t| t.elapsed().as_secs() >= 2);
+        if stale {
+            let registry = crate::project_registry_store::load_from(
+                &crate::project_registry_store::default_registry_path(),
+            );
+            let now = chrono::Utc::now();
+            self.home_cards = registry
+                .sorted_entries()
+                .iter()
+                .map(|entry| {
+                    let thumb = entry.url.join(core_model::THUMBNAIL_FILENAME);
+                    (
+                        entry.id.clone(),
+                        entry.name(),
+                        crate::home_model::relative_time_label(entry.last_opened_date, now),
+                        thumb.is_file().then_some(thumb),
+                        entry.url.clone(),
+                        entry.url.exists(),
+                    )
+                })
+                .collect();
+            self.home_cards_loaded_at = Some(std::time::Instant::now());
+        }
+        let recent_projects: Vec<HomeCard> = self.home_cards.clone();
 
         // Sample project card data (Swift: SampleProjectsStrip items).
         // Placeholder titles/colors only: real samples come from
@@ -1117,6 +1139,8 @@ impl AppRoot {
                                                                     &trash_id,
                                                                     &trash_path,
                                                                 );
+                                                                this.home_cards_loaded_at =
+                                                                    None;
                                                                 this.armed_delete = None;
                                                                 this.hovered_project = None;
                                                             } else {

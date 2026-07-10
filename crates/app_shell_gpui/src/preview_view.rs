@@ -242,8 +242,11 @@ impl PreviewView {
                 .await;
             let _ = this.update(cx, |view, cx| {
                 view.rendering = false;
-                if let Some(path) = rendered {
-                    view.frame_png = Some(path);
+                match rendered {
+                    Some(path) => view.frame_png = Some(path),
+                    // A failed render must not poison the cache key — allow
+                    // a retry on the next paint (review F5).
+                    None => view.rendered_key = None,
                 }
                 cx.notify();
             });
