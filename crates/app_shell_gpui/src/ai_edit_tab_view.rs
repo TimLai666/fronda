@@ -13,7 +13,7 @@
 use crate::generation_view::{interpret_submission, SubmitOutcome};
 use crate::theme::{Accent, Background, BorderColors, FontSize, Spacing, Text};
 use core_model::{ClipType, GenerationInput};
-use generation_core::model_catalog::{self, AudioCategory, ModelCaps};
+use generation_core::model_catalog::{self, ModelCaps};
 use gpui::{
     div, prelude::*, px, App, ClickEvent, Context, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, Styled, Window,

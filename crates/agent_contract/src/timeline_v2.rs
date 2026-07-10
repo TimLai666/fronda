@@ -33,7 +33,7 @@ fn num(v: f64) -> Value {
 
 /// Hex color string from a TextRgba: `#RRGGBB`, `#RRGGBBAA` when alpha < 1.
 pub fn hex_color(c: &core_model::TextRgba) -> String {
-    let ch = |v: f64| ((v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    let ch = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     if c.a < 1.0 {
         format!(
             "#{:02X}{:02X}{:02X}{:02X}",

@@ -11,7 +11,7 @@ use crate::theme::{
     Spacing, Status, Text, TrackColor,
 };
 use core_model::{ClipType, GenerationInput};
-use generation_core::model_catalog::{self, AudioCategory, ModelCaps, ModelConfig};
+use generation_core::model_catalog::{self, ModelCaps, ModelConfig};
 use generation_core::ModelKind;
 use gpui::{
     div, prelude::*, px, svg, App, ClickEvent, Context, Entity, FocusHandle, Focusable, Hsla,

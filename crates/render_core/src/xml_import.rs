@@ -458,14 +458,256 @@ fn parse_clipitem(
     })
 }
 
-/// Import an XML file's content per its detected format. Only XMEML parses;
-/// the others honestly report `NotImplemented`.
+// ── FCPXML parser (Issue #154) ───────────────────────────────────────────────
+//
+// Reverses `fcpxml_export`: resources (<format>/<asset>), the project
+// <sequence>'s fps (from its format's frameDuration), and the <spine>'s single
+// anchoring <gap> holding every clip as a lane-connected <asset-clip>. Lanes
+// map back to tracks exactly as the exporter assigns them — video lanes
+// descend from the top track, audio lanes are negative. v1 targets the common
+// 1× case; retimed (<timeMap>) clips import at 1× with a note, and <ref-clip>
+// nests / <title> overlays are recorded and skipped.
+
+/// Parse a FCPXML rational time (`"N/Ds"` or `"Ns"`, `"0s"`) to seconds.
+fn parse_rational_seconds(s: &str) -> Option<f64> {
+    let t = s.trim().strip_suffix('s')?;
+    if let Some((num, den)) = t.split_once('/') {
+        let n: f64 = num.trim().parse().ok()?;
+        let d: f64 = den.trim().parse().ok()?;
+        if d == 0.0 {
+            return None;
+        }
+        Some(n / d)
+    } else {
+        t.trim().parse().ok()
+    }
+}
+
+/// Seconds → project frames (round to the fps grid).
+fn seconds_to_frames(seconds: f64, fps: i64) -> i64 {
+    (seconds * fps as f64).round() as i64
+}
+
+struct FcpAsset {
+    name: String,
+    src: String,
+    /// The asset's `start` (embedded source-timecode origin) in seconds.
+    timecode_seconds: f64,
+    has_audio: bool,
+}
+
+pub fn parse_fcpxml(content: &str) -> Result<ImportedTimeline, XmlImportError> {
+    let (_, resources) = xml_blocks(content, "resources")
+        .into_iter()
+        .next()
+        .ok_or_else(|| XmlImportError::ParseError {
+            reason: "no <resources>".into(),
+        })?;
+
+    // format id → frameDuration seconds (for fps).
+    let mut format_frame_dur: std::collections::HashMap<String, f64> = Default::default();
+    for (open, _) in xml_blocks(resources, "format") {
+        if let (Some(id), Some(fd)) = (
+            attr(open, "id"),
+            attr(open, "frameDuration").and_then(|s| parse_rational_seconds(&s)),
+        ) {
+            format_frame_dur.insert(id, fd);
+        }
+    }
+
+    // asset id → media info + src (from <media-rep src=…> or a src attr).
+    let mut assets: std::collections::HashMap<String, FcpAsset> = Default::default();
+    for (open, inner) in xml_blocks(resources, "asset") {
+        let Some(id) = attr(open, "id") else { continue };
+        let name = attr(open, "name").unwrap_or_else(|| id.clone());
+        let timecode_seconds = attr(open, "start")
+            .and_then(|s| parse_rational_seconds(&s))
+            .unwrap_or(0.0);
+        let has_audio = attr(open, "hasAudio").as_deref() == Some("1");
+        let src = xml_blocks(inner, "media-rep")
+            .into_iter()
+            .next()
+            .and_then(|(mr, _)| attr(mr, "src"))
+            .or_else(|| attr(open, "src"))
+            .unwrap_or_default();
+        assets.insert(
+            id,
+            FcpAsset {
+                name,
+                src,
+                timecode_seconds,
+                has_audio,
+            },
+        );
+    }
+
+    // Scope to the <project> so nested-media <sequence> blocks in <resources>
+    // (which appear earlier in the document) don't shadow the real timeline.
+    let (project_open, project) =
+        xml_blocks(content, "project")
+            .into_iter()
+            .next()
+            .ok_or_else(|| XmlImportError::ParseError {
+                reason: "no <project>".into(),
+            })?;
+    let name = attr(project_open, "name").unwrap_or_else(|| "Imported Timeline".into());
+    let (seq_open, seq) = xml_blocks(project, "sequence")
+        .into_iter()
+        .next()
+        .ok_or_else(|| XmlImportError::ParseError {
+            reason: "no <sequence>".into(),
+        })?;
+    let fps = attr(seq_open, "format")
+        .and_then(|fid| format_frame_dur.get(&fid).copied())
+        .filter(|fd| *fd > 0.0)
+        .map(|fd| (1.0 / fd).round() as i64)
+        .filter(|f| *f > 0)
+        .unwrap_or(30);
+
+    let spine = first_inner(seq, "spine").ok_or_else(|| XmlImportError::ParseError {
+        reason: "sequence has no <spine>".into(),
+    })?;
+    // Every clip is a lane-connected asset-clip inside the anchoring gap.
+    let gap = first_inner(spine, "gap").unwrap_or(spine);
+
+    let mut files: Vec<ReferencedFile> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    // lane → clips (built in document order; placement comes from `offset`).
+    let mut by_lane: std::collections::BTreeMap<i64, Vec<Clip>> = Default::default();
+
+    for (open, inner) in xml_blocks(gap, "asset-clip") {
+        let lane: i64 = attr(open, "lane").and_then(|l| l.parse().ok()).unwrap_or(0);
+        let is_audio = lane < 0;
+        let kind = if is_audio { ClipType::Audio } else { ClipType::Video };
+        let ref_id = attr(open, "ref").unwrap_or_default();
+        let asset = assets.get(&ref_id);
+        let media_ref = asset.map(|a| a.name.clone()).unwrap_or_else(|| ref_id.clone());
+
+        let start_frame = attr(open, "offset")
+            .and_then(|s| parse_rational_seconds(&s))
+            .map(|sec| seconds_to_frames(sec, fps))
+            .unwrap_or(0)
+            .max(0);
+        let duration_frames = attr(open, "duration")
+            .and_then(|s| parse_rational_seconds(&s))
+            .map(|sec| seconds_to_frames(sec, fps))
+            .unwrap_or(1)
+            .max(1);
+        // 1× in-point = clip start − asset timecode origin. Retimed clips carry
+        // a <timeMap> and a retimed-axis start we don't fully invert in v1.
+        let retimed = xml_blocks(inner, "timeMap").into_iter().next().is_some();
+        if retimed {
+            notes.push(format!(
+                "Clip '{media_ref}' is retimed; imported at 1× (timeMap not inverted)"
+            ));
+        }
+        let clip_start_sec = attr(open, "start")
+            .and_then(|s| parse_rational_seconds(&s))
+            .unwrap_or(0.0);
+        let origin_sec = asset.map(|a| a.timecode_seconds).unwrap_or(0.0);
+        let trim_start_frame = seconds_to_frames((clip_start_sec - origin_sec).max(0.0), fps);
+
+        if let Some(a) = asset {
+            if !a.src.is_empty() && !files.iter().any(|f| f.file_id == ref_id) {
+                files.push(ReferencedFile {
+                    file_id: ref_id.clone(),
+                    name: a.name.clone(),
+                    path: a.src.clone(),
+                });
+            }
+        }
+        let _ = asset.map(|a| a.has_audio);
+
+        by_lane.entry(lane).or_default().push(Clip {
+            id: format!("import-{}-{}-{}", kind.name(), lane, start_frame),
+            media_ref,
+            media_type: kind,
+            source_clip_type: kind,
+            start_frame,
+            duration_frames,
+            trim_start_frame,
+            trim_end_frame: trim_start_frame + duration_frames,
+            speed: 1.0,
+            volume: 1.0,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+            fade_in_interpolation: Interpolation::Linear,
+            fade_out_interpolation: Interpolation::Linear,
+            opacity: 1.0,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            link_group_id: None,
+            caption_group_id: None,
+            text_content: None,
+            text_style: None,
+            text_animation: None,
+            word_timings: None,
+            opacity_track: None,
+            position_track: None,
+            scale_track: None,
+            rotation_track: None,
+            crop_track: None,
+            volume_track: None,
+            effects: None,
+            shape_style: None,
+            stroke_progress_track: None,
+            compound_timeline_id: None,
+            blend_mode: core_model::BlendMode::Normal,
+            chroma_key: None,
+            multicam_group_id: None,
+        });
+    }
+
+    if xml_blocks(gap, "ref-clip").into_iter().next().is_some() {
+        notes.push("Nested-sequence <ref-clip> carriers not imported (v1)".into());
+    }
+    if xml_blocks(gap, "title").into_iter().next().is_some() {
+        notes.push("Text <title> overlays not imported (v1)".into());
+    }
+
+    // Reassemble tracks: video lanes descend from the top (tracks[0] = highest
+    // lane), then audio lanes -1, -2, … in order — exactly the export's mapping.
+    let mut timeline = Timeline {
+        name,
+        fps,
+        ..Default::default()
+    };
+    timeline.tracks.clear();
+    let mut video_lanes: Vec<i64> = by_lane.keys().copied().filter(|l| *l > 0).collect();
+    video_lanes.sort_unstable_by(|a, b| b.cmp(a)); // highest first
+    let mut audio_lanes: Vec<i64> = by_lane.keys().copied().filter(|l| *l < 0).collect();
+    audio_lanes.sort_unstable_by(|a, b| b.cmp(a)); // -1, -2, … (descending)
+    for lane in video_lanes.into_iter().chain(audio_lanes) {
+        let kind = if lane < 0 { ClipType::Audio } else { ClipType::Video };
+        let mut clips = by_lane.remove(&lane).unwrap_or_default();
+        clips.sort_by_key(|c| c.start_frame);
+        timeline.tracks.push(Track {
+            id: format!("import-track-lane{lane}"),
+            r#type: kind,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            display_height: 50.0,
+            clips,
+        });
+    }
+
+    Ok(ImportedTimeline {
+        timeline,
+        files,
+        notes,
+    })
+}
+
+/// Import an XML file's content per its detected format. XMEML and FCPXML
+/// parse; Premiere / Resolve honestly report `NotImplemented`.
 pub fn import_xml(
     content: &str,
     format: XmlImportFormat,
 ) -> Result<ImportedTimeline, XmlImportError> {
     match format {
         XmlImportFormat::Xmeml => parse_xmeml(content),
+        XmlImportFormat::Fcpxml => parse_fcpxml(content),
         other => Err(XmlImportError::NotImplemented { format: other }),
     }
 }
@@ -802,12 +1044,176 @@ mod tests {
     }
 
     #[test]
-    fn import_xml_dispatches_only_xmeml() {
+    fn import_xml_dispatches_parsers_and_stubs() {
+        // Premiere / Resolve still honestly stub out.
         assert!(matches!(
-            import_xml("<html>", XmlImportFormat::Fcpxml),
+            import_xml("<html>", XmlImportFormat::PremiereXml),
             Err(XmlImportError::NotImplemented { .. })
         ));
-        let err = parse_xmeml("<nope/>").unwrap_err();
-        assert!(matches!(err, XmlImportError::ParseError { .. }));
+        // XMEML and FCPXML dispatch to their parsers (bad content → ParseError).
+        assert!(matches!(
+            import_xml("<nope/>", XmlImportFormat::Xmeml),
+            Err(XmlImportError::ParseError { .. })
+        ));
+        assert!(matches!(
+            import_xml("<nope/>", XmlImportFormat::Fcpxml),
+            Err(XmlImportError::ParseError { .. })
+        ));
+    }
+
+    // ── FCPXML parser (Issue #154) ───────────────────────────────────────────
+
+    use crate::fcpxml_export::FcpxmlExport;
+    use core_model::{MediaManifest, MediaManifestEntry, MediaSource};
+
+    fn fcp_entry(id: &str, name: &str, kind: ClipType, dur: f64, path: &str) -> MediaManifestEntry {
+        MediaManifestEntry {
+            id: id.into(),
+            name: name.into(),
+            r#type: kind,
+            source: MediaSource::External {
+                absolute_path: path.into(),
+            },
+            duration: dur,
+            generation_input: None,
+            source_width: Some(1920),
+            source_height: Some(1080),
+            source_fps: Some(30.0),
+            // Distinct audio media, so #206 A/V collapse doesn't fold the audio clip.
+            has_audio: Some(kind == ClipType::Audio),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+            generation_status: None,
+        }
+    }
+
+    #[test]
+    fn fcp_parse_rational_seconds_forms() {
+        assert_eq!(parse_rational_seconds("0s"), Some(0.0));
+        assert_eq!(parse_rational_seconds("5s"), Some(5.0));
+        assert_eq!(parse_rational_seconds("120/30s"), Some(4.0));
+        assert_eq!(parse_rational_seconds("1001/30000s"), Some(1001.0 / 30000.0));
+        assert_eq!(parse_rational_seconds("bad"), None);
+        assert_eq!(parse_rational_seconds("1/0s"), None);
+    }
+
+    #[test]
+    fn fcp_roundtrip_tracks_timing_and_files() {
+        // Two stacked video tracks + one audio track, exported to FCPXML then
+        // re-imported: fps, track order/type, placement, trims, and file refs
+        // must survive the lane round-trip.
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(fcp_entry("vtop", "top.mp4", ClipType::Video, 20.0, "/media/top.mp4"));
+        manifest
+            .entries
+            .push(fcp_entry("vbot", "bot.mp4", ClipType::Video, 20.0, "/media/bot.mp4"));
+        manifest
+            .entries
+            .push(fcp_entry("aud", "music.wav", ClipType::Audio, 20.0, "/media/music.wav"));
+
+        let mut tl = Timeline {
+            name: "FCP RT".into(),
+            fps: 30,
+            ..Default::default()
+        };
+        let mut top = test_clip("cv1", "vtop", ClipType::Video, 0, 100);
+        top.trim_start_frame = 10;
+        top.trim_end_frame = 110;
+        tl.tracks = vec![
+            track("top", ClipType::Video, vec![top]),
+            track(
+                "bot",
+                ClipType::Video,
+                vec![test_clip("cv2", "vbot", ClipType::Video, 120, 60)],
+            ),
+            track(
+                "a1",
+                ClipType::Audio,
+                vec![test_clip("ca1", "aud", ClipType::Audio, 0, 200)],
+            ),
+        ];
+
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        let imported = parse_fcpxml(&xml).expect("parse fcpxml");
+
+        assert_eq!(imported.timeline.fps, 30);
+        assert_eq!(imported.timeline.name, "FCP RT");
+        assert_eq!(imported.timeline.tracks.len(), 3);
+        assert_eq!(imported.timeline.tracks[0].r#type, ClipType::Video);
+        assert_eq!(imported.timeline.tracks[1].r#type, ClipType::Video);
+        assert_eq!(imported.timeline.tracks[2].r#type, ClipType::Audio);
+
+        // Lane order preserved: tracks[0] = top layer (highest video lane).
+        assert_eq!(imported.timeline.tracks[0].clips[0].media_ref, "top.mp4");
+        assert_eq!(imported.timeline.tracks[0].clips[0].start_frame, 0);
+        assert_eq!(imported.timeline.tracks[0].clips[0].trim_start_frame, 10);
+        assert_eq!(imported.timeline.tracks[0].clips[0].duration_frames, 100);
+
+        assert_eq!(imported.timeline.tracks[1].clips[0].media_ref, "bot.mp4");
+        assert_eq!(imported.timeline.tracks[1].clips[0].start_frame, 120);
+        assert_eq!(imported.timeline.tracks[1].clips[0].duration_frames, 60);
+
+        assert_eq!(imported.timeline.tracks[2].clips[0].media_ref, "music.wav");
+        assert_eq!(imported.timeline.tracks[2].clips[0].duration_frames, 200);
+
+        assert!(imported.files.iter().any(|f| f.path.contains("top.mp4")));
+        assert!(imported.files.iter().any(|f| f.path.contains("music.wav")));
+    }
+
+    #[test]
+    fn fcp_roundtrip_reads_source_timecode_origin() {
+        // An embedded source timecode makes the asset `start` non-zero; the
+        // parser must subtract it to recover the true trim in-point.
+        let mut e = fcp_entry("v1", "shot.mp4", ClipType::Video, 20.0, "/media/shot.mp4");
+        e.source_timecode_frame = Some(30);
+        e.source_timecode_quanta = Some(30);
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(e);
+        let mut tl = Timeline {
+            fps: 30,
+            ..Default::default()
+        };
+        let mut c = test_clip("c", "v1", ClipType::Video, 0, 50);
+        c.trim_start_frame = 15;
+        c.trim_end_frame = 65;
+        tl.tracks = vec![track("v", ClipType::Video, vec![c])];
+
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        let imported = parse_fcpxml(&xml).expect("parse");
+        // asset start = tc origin (30) + trim (15) = 45 frames = 1.5s; origin 1.0s
+        // → trim recovered as 15.
+        assert_eq!(imported.timeline.tracks[0].clips[0].trim_start_frame, 15);
+    }
+
+    #[test]
+    fn fcp_retimed_clip_imports_at_1x_with_note() {
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(fcp_entry("v1", "clip.mp4", ClipType::Video, 20.0, "/media/clip.mp4"));
+        let mut tl = Timeline {
+            fps: 30,
+            ..Default::default()
+        };
+        let mut c = test_clip("c", "v1", ClipType::Video, 0, 50);
+        c.speed = 2.0;
+        tl.tracks = vec![track("v", ClipType::Video, vec![c])];
+        let xml = FcpxmlExport::export(&tl, &manifest);
+        let imported = parse_fcpxml(&xml).expect("parse");
+        assert_eq!(imported.timeline.tracks[0].clips.len(), 1);
+        assert!(
+            imported.notes.iter().any(|n| n.contains("retimed")),
+            "expected a retimed note, got {:?}",
+            imported.notes
+        );
     }
 }
