@@ -671,6 +671,9 @@ pub struct ToolExecutor {
     /// The project's OTHER timelines (upstream #255) — nest carriers resolve
     /// their children here by id. The active timeline stays in `timeline`.
     sibling_timelines: Vec<Timeline>,
+    /// The user's playhead frame, reported by get_timeline v2 (C-5
+    /// `currentFrame`). The host app sets it; 0 on the pure/MCP path.
+    current_frame: i64,
 }
 
 /// Read-only tools: successful execution does not bump the revision.
@@ -742,7 +745,13 @@ impl ToolExecutor {
             account_state: None,
             generation_backend: None,
             sibling_timelines: Vec::new(),
+            current_frame: 0,
         }
+    }
+
+    /// Report the user's playhead position (get_timeline v2 `currentFrame`).
+    pub fn set_current_frame(&mut self, frame: i64) {
+        self.current_frame = frame.max(0);
     }
 
     /// Install the host writer for `create_matte` (#242). The app shell provides an implementation
@@ -1125,7 +1134,7 @@ impl ToolExecutor {
         self.validate_args(tool_name, args)?;
         match tool_name {
             // ── Read-only tools ──────────────────────────────────────────
-            "get_timeline" => self.cmd_get_timeline(),
+            "get_timeline" => self.cmd_get_timeline(args),
 
             // ── Mutation tools (undo-tracked, mutation envelope C-4) ─────
             "split_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_split_clips, args),
@@ -1310,9 +1319,148 @@ impl ToolExecutor {
 
     // ── Tool implementations ─────────────────────────────────────────────
 
-    fn cmd_get_timeline(&self) -> Result<Value, String> {
-        let mut timeline_json =
-            serde_json::to_value(&self.timeline).map_err(|e| format!("Serialize error: {e}"))?;
+    /// GET_TIMELINE v2 (tool-surface-v2 C-5): relationship-first view —
+    /// frames [start, end), default-stripping, per-track gaps, A/V link-fold,
+    /// caption-group summaries, optional window + captionDetail.
+    fn cmd_get_timeline(&self, args: &Value) -> Result<Value, String> {
+        use crate::timeline_v2 as v2;
+        use timeline_core::TimelineMathExt;
+
+        let start_frame = args.get("startFrame").and_then(|v| v.as_i64());
+        let end_frame = args.get("endFrame").and_then(|v| v.as_i64());
+        let caption_detail = args
+            .get("captionDetail")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let total_frames = self.timeline.total_frames();
+        let window = match (start_frame, end_frame) {
+            (None, None) => None,
+            (s, e) => Some((s.unwrap_or(0), e.unwrap_or(i64::MAX).min(total_frames))),
+        };
+        let in_window = |start: i64, end: i64| -> bool {
+            match window {
+                Some((ws, we)) => start < we && end > ws,
+                None => true,
+            }
+        };
+
+        let fold = v2::folded_audio_partners(&self.timeline);
+        let folded_audio_ids: std::collections::HashSet<&str> =
+            fold.values().map(|(_, id)| id.as_str()).collect();
+
+        let mut tracks_json: Vec<Value> = Vec::new();
+        for (ti, track) in self.timeline.tracks.iter().enumerate() {
+            let mut tj = serde_json::Map::new();
+            tj.insert("index".into(), json!(ti));
+            tj.insert("label".into(), json!(track_label(&self.timeline, ti)));
+            tj.insert("type".into(), json!(track.r#type.name()));
+            if track.muted {
+                tj.insert("muted".into(), json!(true));
+            }
+            if track.hidden {
+                tj.insert("hidden".into(), json!(true));
+            }
+            if !track.sync_locked {
+                tj.insert("syncLocked".into(), json!(false));
+            }
+            let folded_here = track
+                .clips
+                .iter()
+                .filter(|c| folded_audio_ids.contains(c.id.as_str()))
+                .count();
+            if folded_here > 0 {
+                tj.insert("linkedClips".into(), json!(folded_here));
+            }
+
+            // Gaps span the WHOLE track (non-caption clips; folded partners
+            // included — they occupy the track even when folded).
+            let gap_clips: Vec<&Clip> = track
+                .clips
+                .iter()
+                .filter(|c| c.caption_group_id.is_none())
+                .collect();
+            let gaps = v2::track_gaps(&gap_clips);
+            if !gaps.is_empty() {
+                tj.insert("gaps".into(), json!(gaps));
+            }
+
+            // Caption groups (windowed members).
+            let caption_clips: Vec<&Clip> = track
+                .clips
+                .iter()
+                .filter(|c| c.caption_group_id.is_some())
+                .filter(|c| in_window(c.start_frame, c.start_frame + c.duration_frames))
+                .collect();
+            let groups = v2::caption_groups_v2(&caption_clips, caption_detail);
+            let deviant_ids: std::collections::HashSet<String> = groups
+                .iter()
+                .flat_map(|(g, _)| g.deviant_ids.iter().cloned())
+                .collect();
+            if !groups.is_empty() {
+                tj.insert(
+                    "captionGroups".into(),
+                    json!(groups.into_iter().map(|(g, _)| g.summary).collect::<Vec<_>>()),
+                );
+            }
+
+            // Clips: non-caption (deviant caption clips appear individually),
+            // folded audio partners omitted, window applied.
+            let listable = |c: &&Clip| -> bool {
+                !folded_audio_ids.contains(c.id.as_str())
+                    && (c.caption_group_id.is_none() || deviant_ids.contains(&c.id))
+            };
+            let total_listable = track.clips.iter().filter(listable).count();
+            let mut clip_rows: Vec<(i64, Value)> = Vec::new();
+            for clip in track.clips.iter().filter(listable) {
+                if !in_window(clip.start_frame, clip.start_frame + clip.duration_frames) {
+                    continue;
+                }
+                let row = match fold.get(&clip.id) {
+                    Some((ati, audio_id)) => {
+                        let audio = self.timeline.tracks[*ati]
+                            .clips
+                            .iter()
+                            .find(|c| &c.id == audio_id)
+                            .expect("fold map points at a live clip");
+                        v2::clip_v2_folded(clip, *ati, audio)
+                    }
+                    None => v2::clip_v2(clip),
+                };
+                clip_rows.push((clip.start_frame, Value::Object(row)));
+            }
+            clip_rows.sort_by_key(|(st, _)| *st);
+            if window.is_some() && clip_rows.len() < total_listable {
+                tj.insert("totalClips".into(), json!(total_listable));
+            }
+            if !clip_rows.is_empty() {
+                tj.insert(
+                    "clips".into(),
+                    json!(clip_rows.into_iter().map(|(_, v)| v).collect::<Vec<_>>()),
+                );
+            }
+            tracks_json.push(Value::Object(tj));
+        }
+
+        let mut out = serde_json::Map::new();
+        out.insert("id".into(), json!(self.timeline.id));
+        out.insert("name".into(), json!(self.timeline.name));
+        out.insert("fps".into(), json!(self.timeline.fps));
+        out.insert("width".into(), json!(self.timeline.width));
+        out.insert("height".into(), json!(self.timeline.height));
+        if let Some(lang) = &self.timeline.transcription_language {
+            out.insert("transcriptionLanguage".into(), json!(lang));
+        }
+        out.insert("totalFrames".into(), json!(total_frames));
+        out.insert(
+            "durationSeconds".into(),
+            json!(v2::round3(total_frames as f64 / self.timeline.fps.max(1) as f64)),
+        );
+        out.insert("currentFrame".into(), json!(self.current_frame));
+        out.insert("canGenerate".into(), json!(self.is_paid_account()));
+        if let Some((ws, we)) = window {
+            out.insert("window".into(), json!([ws, we]));
+        }
+        out.insert("tracks".into(), json!(tracks_json));
         // With >1 timeline, list them (Swift #255): {timelineId, name, active?}.
         if !self.sibling_timelines.is_empty() {
             let mut list = vec![json!({
@@ -1321,17 +1469,9 @@ impl ToolExecutor {
             for t in &self.sibling_timelines {
                 list.push(json!({"timelineId": t.id, "name": t.name}));
             }
-            if let Some(obj) = timeline_json.as_object_mut() {
-                obj.insert("timelines".into(), json!(list));
-            }
+            out.insert("timelines".into(), json!(list));
         }
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&timeline_json)
-                    .unwrap_or_else(|_| "{}".into()),
-            }]
-        }))
+        Ok(Self::json_content(&Value::Object(out)))
     }
 
     /// READ_SKILL: return a loaded skill's full SKILL.md body by id (upstream #199).
@@ -3881,80 +4021,153 @@ impl ToolExecutor {
         }))
     }
 
-    fn cmd_get_transcript(&self, args: &Value) -> Result<Value, String> {
-        // READ-021: tolerate legacy wordTimestamps
+    /// GET_TRANSCRIPT v2 (tool-surface-v2 C-6): the timeline's spoken words
+    /// in project frames — global stable 0-based indices, per-clip rows,
+    /// optional segments granularity, 10000-word paging. The words come from
+    /// the host transcriber (`transcribe_timeline` / `set_timeline_words`).
+    fn cmd_get_transcript(&mut self, args: &Value) -> Result<Value, String> {
+        // Executor tolerates the undocumented wordTimestamps key (upstream
+        // allowed-keys residue).
         let _word_timestamps = args.get("wordTimestamps");
-
-        // Look up media
-        let media_id = args.get("mediaId").and_then(|v| v.as_str());
-        if media_id.is_none() {
-            return Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": "Transcript system is not yet connected to the timeline engine. No captions available."
-                }],
-                "isError": true,
-            }));
+        let start_frame = args.get("startFrame").and_then(|v| v.as_i64());
+        let end_frame = args.get("endFrame").and_then(|v| v.as_i64());
+        let clip_scope = args
+            .get("clipId")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let granularity = args
+            .get("granularity")
+            .and_then(|v| v.as_str())
+            .unwrap_or("words");
+        if !matches!(granularity, "words" | "segments") {
+            return Err(format!(
+                "Invalid granularity '{granularity}'. Use 'words' or 'segments'."
+            ));
+        }
+        if let Some(cid) = &clip_scope {
+            if timeline_core::find_clip(&self.timeline, cid).is_none() {
+                return Err(format!("Clip '{cid}' not found"));
+            }
         }
 
-        // Issue #39: resolve language — per-call arg → project setting → None (platform uses system).
-        let language = args
-            .get("language")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .or_else(|| self.timeline.transcription_language.clone());
-
-        // Parse optional pagination
-        let start_frame = args
-            .get("startFrame")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<i64>().ok());
+        // Populate words through the host transcriber when none are stored yet.
+        if self.timeline_words.is_empty() && self.transcription_provider.is_some() {
+            let _ = self.transcribe_timeline();
+        }
+        let has_audio_content = self.timeline.tracks.iter().flat_map(|t| &t.clips).any(|c| {
+            matches!(c.media_type, ClipType::Audio | ClipType::Video)
+        });
+        if self.timeline_words.is_empty() {
+            if has_audio_content && self.transcription_provider.is_none() {
+                return Err(
+                    "get_transcript is unavailable: no transcription provider is connected (run it from the app)."
+                        .to_string(),
+                );
+            }
+        }
 
         let fps = self.timeline.fps.max(1);
+        const WORD_CAP: usize = 10_000;
 
-        // Collect timeline-visible clips for word attribution
-        let clips: Vec<TranscriptClipInput> = self
-            .timeline
-            .tracks
-            .iter()
-            .flat_map(|t| t.clips.iter())
-            .filter(|c| c.media_ref == media_id.unwrap())
-            .map(|c| TranscriptClipInput {
-                id: c.id.clone(),
-                start_frame: c.start_frame,
-                duration_frames: c.duration_frames,
-            })
-            .collect();
-
-        let options = TranscriptFormatOptions {
-            start_frame,
-            language,
-            ..Default::default()
-        };
-
-        // Stored timeline words (set_timeline_words / transcribe_timeline) for this
-        // media's clips feed the formatter; frames → seconds round-trips exactly
-        // through the formatter's fps scaling. Empty storage keeps today's output.
-        let clip_ids: std::collections::HashSet<&str> =
-            clips.iter().map(|c| c.id.as_str()).collect();
-        let words: Vec<TranscriptWordInput> = self
+        // Windowed, optionally clip-scoped selection. Indices stay GLOBAL.
+        let selected: Vec<&timeline_core::TimelineWord> = self
             .timeline_words
             .iter()
-            .filter(|w| clip_ids.contains(w.clip_id.as_str()))
-            .map(|w| TranscriptWordInput {
-                word: w.text.clone(),
-                start_seconds: w.start_frame as f64 / fps as f64,
-                end_seconds: w.end_frame as f64 / fps as f64,
-            })
+            .filter(|w| clip_scope.as_deref().is_none_or(|cid| w.clip_id == cid))
+            .filter(|w| start_frame.is_none_or(|sf| w.end_frame > sf))
+            .filter(|w| end_frame.is_none_or(|ef| w.start_frame < ef))
             .collect();
-        let formatted = format_transcript_json(fps, &words, &clips, &options);
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&formatted)
-                    .unwrap_or_else(|_| "{}".into()),
-            }]
-        }))
+        let total_words = selected.len();
+        let capped = &selected[..total_words.min(WORD_CAP)];
+        let next_start_frame = (total_words > WORD_CAP).then(|| selected[WORD_CAP].start_frame);
+
+        // Group consecutive words by clip (timeline order == index order).
+        let mut clip_rows: Vec<Value> = Vec::new();
+        let mut i = 0usize;
+        while i < capped.len() {
+            let clip_id = &capped[i].clip_id;
+            let mut j = i;
+            while j < capped.len() && &capped[j].clip_id == clip_id {
+                j += 1;
+            }
+            let group = &capped[i..j];
+            let first = group[0];
+            // A word runs to the next word's start; the last to its clip end.
+            let effective_end = |k: usize| -> i64 {
+                group
+                    .get(k + 1)
+                    .map(|w| w.start_frame)
+                    .unwrap_or(first.clip_end_frame)
+            };
+            let mut row = serde_json::Map::new();
+            row.insert("clipId".into(), json!(first.clip_id));
+            row.insert("trackIndex".into(), json!(first.track_index));
+            row.insert("startFrame".into(), json!(first.clip_start_frame));
+            row.insert("endFrame".into(), json!(first.clip_end_frame));
+            if granularity == "words" {
+                let words: Vec<Value> = group
+                    .iter()
+                    .map(|w| json!([w.index, w.text, w.start_frame]))
+                    .collect();
+                row.insert("words".into(), json!(words));
+            } else {
+                // Segment flush rules (C-6): gap > 1s, run >= 48 words, or
+                // sentence-final punctuation. (Speaker changes would flush
+                // too; the host transcriber reports no speakers yet.)
+                let mut segments: Vec<Value> = Vec::new();
+                let mut seg_start = 0usize;
+                for (k, w) in group.iter().enumerate() {
+                    let run = k - seg_start + 1;
+                    let punct = w
+                        .text
+                        .trim_end()
+                        .ends_with(['.', '!', '?']);
+                    let gap_next = group
+                        .get(k + 1)
+                        .map(|next| next.start_frame - w.end_frame > fps)
+                        .unwrap_or(false);
+                    if punct || gap_next || run >= 48 || k + 1 == group.len() {
+                        let text: Vec<&str> =
+                            group[seg_start..=k].iter().map(|w| w.text.as_str()).collect();
+                        segments.push(json!([
+                            group[seg_start].index,
+                            text.join(" "),
+                            group[seg_start].start_frame,
+                            effective_end(k),
+                        ]));
+                        seg_start = k + 1;
+                    }
+                }
+                row.insert("segments".into(), json!(segments));
+            }
+            clip_rows.push(Value::Object(row));
+            i = j;
+        }
+
+        let mut out = serde_json::Map::new();
+        out.insert("fps".into(), json!(fps));
+        out.insert("timing".into(), json!("projectFrames"));
+        out.insert("transcriptionSource".into(), json!("local"));
+        out.insert("clips".into(), json!(clip_rows));
+        if granularity == "words" {
+            out.insert("wordFormat".into(), json!(["index", "text", "start"]));
+        } else {
+            out.insert(
+                "segmentFormat".into(),
+                json!(["firstWordIndex", "text", "start", "end"]),
+            );
+        }
+        if let Some(next) = next_start_frame {
+            out.insert("totalWords".into(), json!(total_words));
+            out.insert("nextStartFrame".into(), json!(next));
+            out.insert(
+                "wordsNote".into(),
+                json!(format!(
+                    "First {WORD_CAP} of {total_words} words. Continue with startFrame = nextStartFrame."
+                )),
+            );
+        }
+        Ok(Self::json_content(&Value::Object(out)))
     }
 
     // ── Media mutation tools ─────────────────────────────────────────────
@@ -8948,10 +9161,15 @@ mod tests {
     }
 
     #[test]
-    fn exec_021_get_transcript_no_media_id() {
+    fn exec_021_get_transcript_empty_timeline_returns_empty_clips() {
+        // v2: no mediaId targeting — an empty timeline yields an empty
+        // transcript payload, not an error.
         let mut exec = make_executor();
         let result = exec.execute("get_transcript", &json!({})).unwrap();
-        assert_eq!(result["isError"], true);
+        let v: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["clips"], json!([]));
+        assert_eq!(v["timing"], json!("projectFrames"));
+        assert_eq!(v["wordFormat"], json!(["index", "text", "start"]));
     }
 
     #[test]
@@ -8992,56 +9210,19 @@ mod tests {
     // ---- Issue #39: language resolution in get_transcript / inspect_media --
 
     #[test]
-    fn issue_039_get_transcript_per_call_language_propagated() {
-        let mut exec = make_executor_with_media();
-        let result = exec
-            .execute(
-                "get_transcript",
-                &json!({"mediaId": "media-001", "language": "fr"}),
-            )
-            .unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        // The formatted output should include the language field
-        assert!(
-            text.contains("\"language\""),
-            "language field in output: {text}"
-        );
-        assert!(text.contains("fr"), "language value in output: {text}");
-    }
-
-    #[test]
-    fn issue_039_get_transcript_project_language_fallback() {
-        // When no per-call language but timeline has transcriptionLanguage
+    fn issue_039_get_transcript_v2_accepts_language_without_echo() {
+        // v2: language feeds the (host) transcriber, and the output carries
+        // transcriptionSource instead of echoing a language field. The #39
+        // language-resolution chain is covered by the transcribe_timeline
+        // tests (transcribe_timeline_threads_transcription_language).
         let mut exec = make_executor_with_media();
         exec.timeline.transcription_language = Some("ja".to_string());
         let result = exec
-            .execute("get_transcript", &json!({"mediaId": "media-001"}))
+            .execute("get_transcript", &json!({"language": "ko"}))
             .unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(
-            text.contains("\"language\""),
-            "project language in output: {text}"
-        );
-        assert!(text.contains("ja"), "language value in output: {text}");
-    }
-
-    #[test]
-    fn issue_039_get_transcript_per_call_overrides_project_language() {
-        let mut exec = make_executor_with_media();
-        exec.timeline.transcription_language = Some("ja".to_string());
-        let result = exec
-            .execute(
-                "get_transcript",
-                &json!({"mediaId": "media-001", "language": "ko"}),
-            )
-            .unwrap();
-        let text = result["content"][0]["text"].as_str().unwrap();
-        // per-call "ko" should win over project "ja"
-        assert!(text.contains("ko"), "per-call language wins: {text}");
-        assert!(
-            !text.contains("\"ja\""),
-            "project language not in output: {text}"
-        );
+        let v: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["transcriptionSource"], json!("local"));
+        assert!(v.get("language").is_none(), "no language echo in v2: {v}");
     }
 
     #[test]
@@ -10752,16 +10933,18 @@ mod tests {
         assert_eq!(words[0].clip_id, "clip-a");
         assert_eq!((words[1].index, words[1].start_frame), (1, 160));
 
-        let out = exec
-            .execute("get_transcript", &json!({"mediaId": "m-audio"}))
-            .unwrap();
+        let out = exec.execute("get_transcript", &json!({})).unwrap();
         let text = out["content"][0]["text"].as_str().unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(payload["clips"][0]["clipId"], "clip-a");
-        assert_eq!(payload["clips"][0]["words"][0]["word"], "hello");
-        assert_eq!(payload["clips"][0]["words"][0]["startFrame"], 130);
-        assert_eq!(payload["clips"][0]["words"][1]["startFrame"], 160);
-        assert_eq!(payload["text"], "hello world");
+        // v2 (C-6): clipId is the C-3 short prefix; word rows are
+        // [index, text, startFrame] with global indices.
+        assert!(payload["clips"][0]["clipId"]
+            .as_str()
+            .map(|s| "clip-a".starts_with(s) || s == "clip-a")
+            .unwrap_or(false));
+        assert_eq!(payload["clips"][0]["words"][0], json!([0, "hello", 130]));
+        assert_eq!(payload["clips"][0]["words"][1], json!([1, "world", 160]));
+        assert_eq!(payload["timing"], json!("projectFrames"));
 
         // Same storage remove_words reads: cutting by match works end-to-end.
         let cut = exec
@@ -10857,18 +11040,15 @@ mod tests {
     }
 
     #[test]
-    fn get_transcript_without_stored_words_unchanged() {
-        // Provider installed but never run: get_transcript stays on today's
-        // empty-transcript output (byte-identical no-provider behavior).
+    fn get_transcript_transcribes_on_demand_when_words_missing() {
+        // v2: with a provider installed and no stored words, get_transcript
+        // runs the transcriber itself instead of returning an empty payload.
         let mut exec = transcribe_exec();
         exec.set_transcription_provider(MockTranscriber::new(vec![stamp("x", 3.0, 3.5)]));
-        let out = exec
-            .execute("get_transcript", &json!({"mediaId": "m-audio"}))
-            .unwrap();
+        let out = exec.execute("get_transcript", &json!({})).unwrap();
         let payload: Value =
             serde_json::from_str(out["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(payload["clips"], json!([]));
-        assert_eq!(payload["text"], "");
+        assert_eq!(payload["clips"][0]["words"][0][1], json!("x"));
     }
 
     // ── create_matte (#242) ──────────────────────────────────────────────────
@@ -12535,5 +12715,208 @@ mod tests {
         exec.set_feedback_sender(std::sync::Arc::new(MockFeedbackSender::default()));
         exec.execute("send_feedback", &json!({"message": "retry me"}))
             .unwrap();
+    }
+
+    // ── get_timeline v2 (tool-surface-v2 C-5) ───────────────────────────────
+
+    fn v2_timeline_exec() -> ToolExecutor {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("va", ClipType::Video, true, 10.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Audio);
+        exec
+    }
+
+    fn get_timeline_v2(exec: &mut ToolExecutor, args: Value) -> Value {
+        let res = exec.execute("get_timeline", &args).unwrap();
+        serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn get_timeline_v2_top_level_and_track_shape() {
+        let mut exec = v2_timeline_exec();
+        exec.execute(
+            "add_clips",
+            &json!({"entries": [{"mediaRef": "va", "trackIndex": 0, "startFrame": 0, "endFrame": 90}]}),
+        )
+        .unwrap();
+        let v = get_timeline_v2(&mut exec, json!({}));
+        assert_eq!(v["totalFrames"], json!(90));
+        assert_eq!(v["durationSeconds"], json!(3.0));
+        assert_eq!(v["currentFrame"], json!(0));
+        assert_eq!(v["canGenerate"], json!(false), "no account seam = free tier");
+        assert!(v.get("window").is_none(), "no window key without a window");
+        assert!(v.get("settingsConfigured").is_none(), "settingsConfigured stripped");
+        let t0 = &v["tracks"][0];
+        assert_eq!(t0["index"], json!(0));
+        assert_eq!(t0["label"], json!("V1"));
+        assert_eq!(t0["type"], json!("video"));
+        assert!(t0.get("muted").is_none(), "default flags stripped");
+        assert!(t0.get("id").is_none(), "track id not exposed");
+        assert!(t0.get("displayHeight").is_none(), "displayHeight not exposed");
+        let clip = &t0["clips"][0];
+        assert_eq!(clip["frames"], json!([0, 90]));
+        assert!(clip.get("startFrame").is_none());
+        assert!(clip.get("durationFrames").is_none());
+        // Linked audio partner folded into the video clip; audio track
+        // reports the folded count instead of repeating the clip.
+        assert!(clip["audio"]["id"].is_string(), "audio partner folded: {clip}");
+        assert_eq!(clip["audio"]["track"], json!(1));
+        let t1 = &v["tracks"][1];
+        assert_eq!(t1["linkedClips"], json!(1));
+        assert!(t1.get("clips").is_none(), "folded partner not repeated: {t1}");
+    }
+
+    #[test]
+    fn get_timeline_v2_gaps_and_window() {
+        let mut exec = v2_timeline_exec();
+        // Two clips with a [30, 60) hole (no linked audio: image media).
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("img", ClipType::Image, false, 0.0));
+        *exec.media_manifest_mut() = manifest;
+        exec.execute(
+            "add_clips",
+            &json!({"entries": [
+                {"mediaRef": "img", "trackIndex": 0, "startFrame": 0, "endFrame": 30},
+                {"mediaRef": "img", "trackIndex": 0, "startFrame": 60, "endFrame": 90},
+            ]}),
+        )
+        .unwrap();
+        let v = get_timeline_v2(&mut exec, json!({}));
+        assert_eq!(v["tracks"][0]["gaps"], json!([[30, 60]]));
+
+        // Window [0, 40): only the first clip is visible; totalClips reports 2.
+        let w = get_timeline_v2(&mut exec, json!({"startFrame": 0, "endFrame": 40}));
+        assert_eq!(w["window"], json!([0, 40]));
+        assert_eq!(w["tracks"][0]["clips"].as_array().unwrap().len(), 1);
+        assert_eq!(w["tracks"][0]["totalClips"], json!(2));
+    }
+
+    #[test]
+    fn get_timeline_v2_caption_groups_fold_and_detail() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        for i in 0..3i64 {
+            let mut c = crate::test_helpers::make_clip(i * 60, 60);
+            c.media_type = ClipType::Text;
+            c.source_clip_type = ClipType::Text;
+            c.caption_group_id = Some("cap-group-1".into());
+            c.text_content = Some(format!("word{i}"));
+            let _ = timeline_core::place_clips(exec.timeline_mut(), 0, i * 60, &[c]);
+        }
+        let v = get_timeline_v2(&mut exec, json!({}));
+        let group = &v["tracks"][0]["captionGroups"][0];
+        assert_eq!(group["clipCount"], json!(3));
+        assert_eq!(group["frameRange"], json!([0, 180]));
+        assert!(group["textPreview"].as_str().unwrap().contains("word0"));
+        assert!(group.get("clips").is_none(), "no rows without captionDetail");
+        assert!(
+            v["tracks"][0].get("clips").is_none(),
+            "caption clips not listed individually: {v}"
+        );
+
+        let d = get_timeline_v2(&mut exec, json!({"captionDetail": true}));
+        let group = &d["tracks"][0]["captionGroups"][0];
+        assert_eq!(
+            group["clipFormat"],
+            json!(["clipId", "startFrame", "endFrame", "text"])
+        );
+        assert_eq!(group["clips"].as_array().unwrap().len(), 3);
+        assert_eq!(group["clips"][0][3], json!("word0"));
+    }
+
+    // ── get_transcript v2 (tool-surface-v2 C-6) ─────────────────────────────
+
+    fn tv2w(index: usize, clip_id: &str, start: i64, end: i64, text: &str) -> timeline_core::TimelineWord {
+        timeline_core::TimelineWord {
+            index,
+            clip_id: clip_id.into(),
+            track_index: 0,
+            clip_start_frame: 0,
+            clip_end_frame: 900,
+            text: text.into(),
+            start_frame: start,
+            end_frame: end,
+        }
+    }
+
+    #[test]
+    fn get_transcript_v2_segments_flush_on_punctuation_and_gap() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Audio);
+        exec.set_timeline_words(vec![
+            tv2w(0, "clip-x", 0, 10, "Hello"),
+            tv2w(1, "clip-x", 12, 20, "there."),
+            // > 1s gap (fps 30) after "there." → next segment
+            tv2w(2, "clip-x", 100, 110, "Second"),
+            tv2w(3, "clip-x", 112, 120, "part"),
+        ]);
+        let res = exec
+            .execute("get_transcript", &json!({"granularity": "segments"}))
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            v["segmentFormat"],
+            json!(["firstWordIndex", "text", "start", "end"])
+        );
+        let segs = v["clips"][0]["segments"].as_array().unwrap();
+        assert_eq!(segs.len(), 2, "punctuation flush splits: {v}");
+        assert_eq!(segs[0][0], json!(0));
+        assert_eq!(segs[0][1], json!("Hello there."));
+        assert_eq!(segs[0][2], json!(0));
+        assert_eq!(segs[1][0], json!(2));
+        assert_eq!(segs[1][1], json!("Second part"));
+    }
+
+    #[test]
+    fn get_transcript_v2_caps_at_10000_words_with_paging() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Audio);
+        let words: Vec<timeline_core::TimelineWord> = (0..10_005)
+            .map(|i| tv2w(i, "clip-x", i as i64 * 2, i as i64 * 2 + 1, "w"))
+            .collect();
+        exec.set_timeline_words(words);
+        let res = exec.execute("get_transcript", &json!({})).unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["totalWords"], json!(10_005));
+        assert_eq!(v["nextStartFrame"], json!(20_000), "10001st word's start");
+        assert_eq!(
+            v["clips"][0]["words"].as_array().unwrap().len(),
+            10_000,
+            "capped at 10000"
+        );
+        assert!(v["wordsNote"].as_str().unwrap().contains("First 10000 of 10005"));
+
+        // Page 2: indices stay global.
+        let res2 = exec
+            .execute("get_transcript", &json!({"startFrame": 20_000}))
+            .unwrap();
+        let v2: Value = serde_json::from_str(res2["content"][0]["text"].as_str().unwrap()).unwrap();
+        let first = &v2["clips"][0]["words"][0];
+        assert_eq!(first[0], json!(10_000), "global index preserved on page 2");
+    }
+
+    #[test]
+    fn get_transcript_v2_clip_scope_keeps_global_indices() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Audio);
+        let mut a = crate::test_helpers::make_clip(0, 100);
+        a.id = "clip-a".into();
+        a.media_type = ClipType::Audio;
+        let mut b = crate::test_helpers::make_clip(100, 100);
+        b.id = "clip-b".into();
+        b.media_type = ClipType::Audio;
+        exec.timeline_mut().tracks[0].clips = vec![a, b];
+        exec.set_timeline_words(vec![
+            tv2w(0, "clip-a", 0, 10, "one"),
+            tv2w(1, "clip-b", 100, 110, "two"),
+        ]);
+        let res = exec
+            .execute("get_transcript", &json!({"clipId": "clip-b"}))
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["clips"].as_array().unwrap().len(), 1);
+        assert_eq!(v["clips"][0]["words"][0], json!([1, "two", 100]));
     }
 }

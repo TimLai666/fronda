@@ -15,7 +15,7 @@
 
 ## 4. Envelopes 與讀取面
 
-- [ ] 4.1 mutation envelope 依抄錄格式套用到全部 clip 工具回傳
+- [x] 4.1 mutation envelope 依抄錄格式套用到全部 clip 工具回傳
 - [ ] 4.2 get_timeline v2 重構（relationship-first）；get_transcript v2
 
 ## 5. Instructions 與收尾
