@@ -24,7 +24,7 @@ pub use tool_exec::{
     AccountState, ActiveProjectState, AgentSkill, ClipAudioSource, ClosedProject, ExportHost,
     ExportOutcome, ExportRequest, FeedbackPayload, FeedbackSender, GenerationBackend,
     GenerationRecoveryRecord, KnownProject, MatteWriter, OpenedProject, ProjectLister,
-    ProjectNavigator, ProjectSeams, ToolExecutor,
+    ProjectNavigator, ProjectSeams, ToolExecutor, FEEDBACK_ISSUES_URL,
 };
 pub use tools::{skill_prompt_index, system_instruction_with_skills};
 pub use undo::{UndoCommand, UndoError, UndoStack};

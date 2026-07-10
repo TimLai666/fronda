@@ -53,6 +53,25 @@ pub fn reveal_in_file_manager(path: &std::path::Path) {
     let _ = std::process::Command::new(program).args(args).spawn();
 }
 
+/// The program + args to open `url` in the OS default browser. `os` is
+/// `std::env::consts::OS`. Pure so the argv is unit-tested per platform; the
+/// spawn is platform I/O.
+pub fn open_url_argv(url: &str, os: &str) -> (String, Vec<String>) {
+    match os {
+        // `explorer <url>` hands http(s) URLs to the default browser (it exits
+        // non-zero even on success, but the spawn result is ignored).
+        "windows" => ("explorer".into(), vec![url.to_string()]),
+        "macos" => ("open".into(), vec![url.to_string()]),
+        _ => ("xdg-open".into(), vec![url.to_string()]),
+    }
+}
+
+/// Open `url` in the OS default browser (best-effort; ignores spawn failure).
+pub fn open_url(url: &str) {
+    let (program, args) = open_url_argv(url, std::env::consts::OS);
+    let _ = std::process::Command::new(program).args(args).spawn();
+}
+
 /// Adapter that performs no platform operations.
 ///
 /// Useful for cross-platform compilation without platform dependencies,
@@ -141,6 +160,20 @@ mod tests {
         assert_eq!(
             reveal_argv(p, "linux"),
             ("xdg-open".into(), vec!["/media".into()])
+        );
+    }
+
+    #[test]
+    fn open_url_argv_per_platform() {
+        let url = "https://github.com/TimLai666/fronda/issues/new";
+        assert_eq!(
+            open_url_argv(url, "windows"),
+            ("explorer".into(), vec![url.into()])
+        );
+        assert_eq!(open_url_argv(url, "macos"), ("open".into(), vec![url.into()]));
+        assert_eq!(
+            open_url_argv(url, "linux"),
+            ("xdg-open".into(), vec![url.into()])
         );
     }
 }

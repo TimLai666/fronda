@@ -269,6 +269,10 @@ const DEFAULT_CLIP_DURATION_FRAMES: i64 = 150;
 /// Upstream #152: at most this many feedback sends per session.
 const FEEDBACK_SESSION_CAP: usize = 8;
 
+/// Product feedback destination: Fronda's GitHub issues (we run no feedback
+/// backend). The app menu opens it; `send_feedback` returns it as guidance.
+pub const FEEDBACK_ISSUES_URL: &str = "https://github.com/TimLai666/fronda/issues/new";
+
 /// Resolved clip placement geometry from optional agent args + manifest entry.
 struct ResolvedPlacement {
     media_type: ClipType,
@@ -6929,10 +6933,15 @@ impl ToolExecutor {
                 "Feedback limit reached: at most {FEEDBACK_SESSION_CAP} messages per session."
             ));
         }
-        let sender = self.feedback_sender.clone().ok_or_else(|| {
-            "send_feedback is unavailable: no feedback backend is connected (run it from the app)."
-                .to_string()
-        })?;
+        // No feedback backend is run for Fronda — direct the user to file a
+        // GitHub issue instead of failing. Nothing is sent, so the dedup/cap
+        // state is untouched. (A host may still install a sender.)
+        let Some(sender) = self.feedback_sender.clone() else {
+            return Ok(json!({ "content": [{ "type": "text", "text": format!(
+                "Fronda has no in-app feedback service. Ask the user to file this at {FEEDBACK_ISSUES_URL} — \
+                 the app's Send Feedback command opens that page."
+            )}]}));
+        };
         let clips: usize = self.timeline.tracks.iter().map(|t| t.clips.len()).sum();
         let payload = FeedbackPayload {
             message: message.to_string(),
@@ -14190,13 +14199,23 @@ mod tests {
     }
 
     #[test]
-    fn send_feedback_unavailable_without_sender() {
+    fn send_feedback_without_sender_points_to_github_issues() {
+        // No feedback backend is run — the tool succeeds and directs the user
+        // to Fronda's GitHub issues rather than failing.
         let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
-        let err = exec
+        let res = exec
             .execute("send_feedback", &json!({"message": "The preview flickers"}))
-            .unwrap_err();
-        assert!(err.contains("unavailable"), "{err}");
-        assert!(err.contains("feedback"), "{err}");
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains(FEEDBACK_ISSUES_URL), "{text}");
+        // Guidance is idempotent — it does not consume dedup/cap budget.
+        let again = exec
+            .execute("send_feedback", &json!({"message": "The preview flickers"}))
+            .unwrap();
+        assert!(again["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains(FEEDBACK_ISSUES_URL));
     }
 
     #[test]

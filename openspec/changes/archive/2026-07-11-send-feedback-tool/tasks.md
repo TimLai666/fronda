@@ -12,4 +12,4 @@
 
 ## 3. Host 後端（gated，留待後端決策）
 
-- [ ] 3.1 app_shell_gpui 端 FeedbackSender 實作：上游走 Convex SDK action feedback:send 帶帳號 session 認證——需決定 Convex Rust client 或自有 API 端點後才能實作；在該決策前本 change 完成至 seam 邊界即可 archive，此任務移入後續 change
+- [x] 3.1 後端決策已定（2026-07-11）：**不建 Convex/自有回饋後端**，改為把「送出回饋」連結到 Fronda 的 GitHub issues。FeedbackSender seam 保留（host 仍可裝），產品路徑改走 GitHub，實作見後續 change `feedback-github-link`（App 選單開 issues 頁面、`send_feedback` 無 sender 時回傳 GitHub 指引）。Convex client 任務取消。

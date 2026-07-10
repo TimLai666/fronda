@@ -516,8 +516,10 @@ impl AppRoot {
             | menu::MenuAction::Settings => {}
             menu::MenuAction::Tutorial
             | menu::MenuAction::KeyboardShortcuts
-            | menu::MenuAction::McpInstructions
-            | menu::MenuAction::SendFeedback => {}
+            | menu::MenuAction::McpInstructions => {}
+            menu::MenuAction::SendFeedback => {
+                crate::platform_adapter::open_url(agent_contract::FEEDBACK_ISSUES_URL);
+            }
             menu::MenuAction::PlayPause => {
                 if let Some(tv) = self.timeline_view.clone() {
                     tv.update(cx, |view, cx| view.transport_toggle_play(cx));
