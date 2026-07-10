@@ -780,9 +780,10 @@ pub struct Clip {
     /// Chroma-key / green-screen removal config (Issue #97).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chroma_key: Option<ChromaKey>,
-    /// Multicam group membership (upstream #283). INERT passthrough — Fronda
-    /// has no multicam engine yet; dropping it on save would strip Swift
-    /// multicam clips out of their group.
+    /// Multicam group membership (upstream #283): the id of a
+    /// `ProjectFile.multicam_groups` entry. Read-write — the multicam engine
+    /// (`timeline_core::multicam`) and the manage_multicam/change_cam tools
+    /// stamp, rewrite, and strip it.
     #[serde(
         default,
         rename = "multicamGroupId",

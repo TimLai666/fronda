@@ -10,8 +10,8 @@ use crate::read_tools::{
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
     AnimPair, Clip, ClipType, Crop, Effect, Interpolation, Keyframe, KeyframeTrack,
-    LayoutFit, MatteAspect, MediaManifest, MediaManifestEntry, MediaSource, TextRgba, TextStyle,
-    Timeline, Transform, VideoLayout,
+    LayoutFit, MatteAspect, MediaManifest, MediaManifestEntry, MediaSource, MulticamMemberKind,
+    MulticamSource, MulticamSyncMap, TextRgba, TextStyle, Timeline, Transform, VideoLayout,
 };
 use generation_core::model_catalog;
 use serde_json::{json, Value};
@@ -159,6 +159,7 @@ pub struct OpenedProject {
     pub timeline: Timeline,
     pub sibling_timelines: Vec<Timeline>,
     pub manifest: MediaManifest,
+    pub multicam_groups: Vec<MulticamSource>,
     pub seams: ProjectSeams,
 }
 
@@ -195,6 +196,8 @@ pub struct ActiveProjectState {
     pub timeline: Timeline,
     pub sibling_timelines: Vec<Timeline>,
     pub manifest: MediaManifest,
+    /// Groups worth persisting (referenced by some timeline).
+    pub multicam_groups: Vec<MulticamSource>,
 }
 
 /// Outcome of `ProjectNavigator::close`.
@@ -676,6 +679,10 @@ pub struct ToolExecutor {
     /// detect_beats analyses cache, keyed by mediaRef — the whole file is
     /// analysed once; windowed calls only trim the response.
     beat_cache: std::collections::HashMap<String, audio_core::beat_detector::BeatAnalysis>,
+    /// Multicam groups (upstream #283), from `ProjectFile.multicam_groups`.
+    /// Unreferenced groups stay in memory (undo can restore their clips) but
+    /// are filtered from saves via `saved_multicam_groups`.
+    multicam_groups: Vec<MulticamSource>,
 }
 
 /// Read-only tools: successful execution does not bump the revision.
@@ -692,6 +699,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "read_skill",
     "list_clip_presets",
     "get_projects",
+    "get_multicam",
 ];
 
 /// A resolved organize_media item (resolution happens before any mutation).
@@ -763,6 +771,7 @@ impl ToolExecutor {
             sibling_timelines: Vec::new(),
             current_frame: 0,
             beat_cache: std::collections::HashMap::new(),
+            multicam_groups: Vec::new(),
         }
     }
 
@@ -852,6 +861,26 @@ impl ToolExecutor {
             self.revision += 1;
         }
         records
+    }
+
+    /// Replace the project's multicam groups (upstream #283). The app shell
+    /// supplies these from the opened `ProjectFile.multicam_groups`.
+    pub fn set_multicam_groups(&mut self, groups: Vec<MulticamSource>) {
+        self.multicam_groups = groups;
+    }
+
+    pub fn multicam_groups(&self) -> &[MulticamSource] {
+        &self.multicam_groups
+    }
+
+    /// Groups worth persisting (Swift `savedMulticamGroups`): referenced by
+    /// some timeline; `None` when empty so the JSON key is omitted.
+    pub fn saved_multicam_groups(&self) -> Option<Vec<MulticamSource>> {
+        let live = timeline_core::live_groups(
+            &self.multicam_groups,
+            std::iter::once(&self.timeline).chain(self.sibling_timelines.iter()),
+        );
+        (!live.is_empty()).then_some(live)
     }
 
     /// Replace the project's sibling timelines (upstream #255). The app shell
@@ -1071,6 +1100,12 @@ impl ToolExecutor {
         for e in &self.media_manifest.entries {
             ids.push(e.id.clone());
         }
+        for g in &self.multicam_groups {
+            ids.push(g.id.clone());
+            for m in &g.members {
+                ids.push(m.id.clone());
+            }
+        }
         ids
     }
 
@@ -1139,6 +1174,8 @@ impl ToolExecutor {
             "organize_media" => gate(m::validate_organize_media(args)),
             "close_project" => gate(m::validate_close_project(args)),
             "import_media" => gate(m::validate_import_media(args)),
+            "manage_multicam" => gate(m::validate_manage_multicam(args)),
+            "change_cam" => gate(m::validate_change_cam(args)),
             _ => Ok(()),
         }
     }
@@ -1169,6 +1206,11 @@ impl ToolExecutor {
             "manage_tracks" => {
                 self.exec_enveloped(tool_name, ToolExecutor::cmd_manage_tracks, args)
             }
+            "manage_multicam" => {
+                self.exec_enveloped(tool_name, ToolExecutor::cmd_manage_multicam, args)
+            }
+            "change_cam" => self.exec_enveloped(tool_name, ToolExecutor::cmd_change_cam, args),
+            "get_multicam" => self.cmd_get_multicam(args),
             "add_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_add_clips, args),
             "insert_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_insert_clips, args),
             "apply_layout" => self.exec_enveloped(tool_name, ToolExecutor::cmd_apply_layout, args),
@@ -1470,6 +1512,25 @@ impl ToolExecutor {
             out.insert("window".into(), json!([ws, we]));
         }
         out.insert("tracks".into(), json!(tracks_json));
+        // Multicam groups referenced by this timeline (C-5, upstream #283):
+        // {groupId, name, angles: [label], mics: [label]}.
+        let referenced = timeline_core::referenced_group_ids([&self.timeline]);
+        let group_rows: Vec<Value> = self
+            .multicam_groups
+            .iter()
+            .filter(|g| referenced.contains(&g.id))
+            .map(|g| {
+                json!({
+                    "groupId": g.id,
+                    "name": g.name,
+                    "angles": g.angles().iter().map(|m| m.angle_label.clone()).collect::<Vec<_>>(),
+                    "mics": g.mics().iter().map(|m| m.angle_label.clone()).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        if !group_rows.is_empty() {
+            out.insert("multicamGroups".into(), json!(group_rows));
+        }
         // With >1 timeline, list them (Swift #255): {timelineId, name, active?}.
         if !self.sibling_timelines.is_empty() {
             let mut list = vec![json!({
@@ -1656,6 +1717,17 @@ impl ToolExecutor {
                     self.timeline.tracks.len()
                 ));
             }
+            let resolved: Vec<(String, usize, i64)> = clip_ids
+                .iter()
+                .map(|id| (id.clone(), to_track, to_frame))
+                .collect();
+            if let Some(reason) = timeline_core::multicam_move_violation(
+                &self.timeline,
+                &self.multicam_groups,
+                &resolved,
+            ) {
+                return Err(reason);
+            }
             let placed =
                 timeline_core::move_clips(&mut self.timeline, &clip_ids, to_track, to_frame);
             let _ = placed;
@@ -1684,6 +1756,28 @@ impl ToolExecutor {
                     ));
                 }
             }
+        }
+
+        // Multicam guard (upstream #283): a group moves whole or not at all,
+        // and camera clips never change lanes.
+        let resolved: Vec<(String, usize, i64)> = moves
+            .iter()
+            .filter_map(|(clip_id, to_track, to_frame)| {
+                let loc = timeline_core::find_clip(&self.timeline, clip_id)?;
+                let clip = &self.timeline.tracks[loc.track_index].clips[loc.clip_index];
+                Some((
+                    clip_id.clone(),
+                    to_track.unwrap_or(loc.track_index),
+                    to_frame.unwrap_or(clip.start_frame),
+                ))
+            })
+            .collect();
+        if let Some(reason) = timeline_core::multicam_move_violation(
+            &self.timeline,
+            &self.multicam_groups,
+            &resolved,
+        ) {
+            return Err(reason);
         }
 
         // Apply sequentially; linked partners follow via the core move
@@ -1728,6 +1822,27 @@ impl ToolExecutor {
         let trim_start = properties.get("trimStartFrame").and_then(|v| v.as_i64());
         let trim_end = properties.get("trimEndFrame").and_then(|v| v.as_i64());
         let speed = properties.get("speed").and_then(|v| v.as_f64());
+
+        // Multicam guard (upstream #283): timing fields would slip a stamped
+        // clip off its group clock; property fields stay editable.
+        let has_timing = duration.is_some()
+            || trim_start.is_some()
+            || trim_end.is_some()
+            || speed.is_some();
+        if has_timing
+            && clip_ids.iter().any(|id| {
+                timeline_core::find_clip(&self.timeline, id).is_some_and(|loc| {
+                    self.timeline.tracks[loc.track_index].clips[loc.clip_index]
+                        .multicam_group_id
+                        .is_some()
+                })
+            })
+        {
+            return Err(
+                "Timing fields would slip a multicam clip out of sync — switch angles with change_cam; split/delete and property fields (volume, opacity, transform) stay editable."
+                    .to_string(),
+            );
+        }
         let volume = properties.get("volume").and_then(|v| v.as_f64());
         let opacity = properties.get("opacity").and_then(|v| v.as_f64());
         let content = properties.get("content").and_then(|v| v.as_str());
@@ -2099,6 +2214,7 @@ impl ToolExecutor {
         ignore_sync_lock_track_indices: std::collections::BTreeSet<usize>,
     ) -> Result<(i64, usize), String> {
         let range_list = ranges.clone();
+        let ignored_for_guard = ignore_sync_lock_track_indices.clone();
         let config = timeline_core::RippleDeleteConfig {
             anchor_track_index: track_index,
             ignore_sync_lock_track_indices,
@@ -2109,6 +2225,22 @@ impl ToolExecutor {
                 let merged = timeline_core::merge_ranges(&range_list);
                 let cleared: std::collections::HashSet<usize> =
                     report.cleared_track_indices.iter().copied().collect();
+
+                // Multicam atomicity (upstream #283): a ripple that would
+                // shift only SOME of a group's tracks desyncs the rest.
+                let mut shifting = cleared.clone();
+                for (ti, track) in self.timeline.tracks.iter().enumerate() {
+                    if track.sync_locked && !ignored_for_guard.contains(&ti) {
+                        shifting.insert(ti);
+                    }
+                }
+                if let Some(reason) = timeline_core::multicam_atomicity_violation(
+                    &self.timeline,
+                    &self.multicam_groups,
+                    &shifting,
+                ) {
+                    return Err(format!("Ripple delete refused: {reason}"));
+                }
 
                 // RPL-004: fragment-cut each range on every cleared track — a clip fully
                 // inside a range is removed, a partial overlap is trimmed/split so only the
@@ -2382,6 +2514,33 @@ impl ToolExecutor {
             .collect::<Result<_, _>>()?;
         remove_ids.dedup();
 
+        // Multicam guard (upstream #283): a group's tracks can't be removed
+        // or sync-unlocked (mute/hide stay free).
+        let multicam_track_ids: std::collections::HashSet<&str> = self
+            .timeline
+            .tracks
+            .iter()
+            .filter(|t| t.clips.iter().any(|c| c.multicam_group_id.is_some()))
+            .map(|t| t.id.as_str())
+            .collect();
+        if remove_ids
+            .iter()
+            .any(|id| multicam_track_ids.contains(id.as_str()))
+        {
+            return Err(
+                "A multicam group's track can't be removed — delete the group's clips first (remove_clips) and the empty track prunes itself."
+                    .to_string(),
+            );
+        }
+        if sets.iter().any(|(id, s)| {
+            multicam_track_ids.contains(id.as_str()) && s.sync_locked == Some(false)
+        }) {
+            return Err(
+                "Sync lock stays on for a multicam group's tracks — unlocking would let ripples shift the group's members apart."
+                    .to_string(),
+            );
+        }
+
         for (id, to) in &reorders {
             let pos = self
                 .timeline
@@ -2456,6 +2615,415 @@ impl ToolExecutor {
             ]);
         }
         Ok(out)
+    }
+
+    // ── Multicam (upstream #283) ─────────────────────────────────────────
+
+    /// Asset facts the multicam engine needs, from the media manifest.
+    fn multicam_assets(&self) -> std::collections::HashMap<String, timeline_core::MulticamAsset> {
+        self.media_manifest
+            .entries
+            .iter()
+            .map(|e| {
+                (
+                    e.id.clone(),
+                    timeline_core::MulticamAsset {
+                        name: e.name.clone(),
+                        clip_type: e.r#type,
+                        duration: e.duration,
+                        has_audio: e.has_audio.unwrap_or(false),
+                        source_width: e.source_width,
+                        source_height: e.source_height,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn multicam_group(&self, id: &str) -> Option<&MulticamSource> {
+        self.multicam_groups.iter().find(|g| g.id == id)
+    }
+
+    fn require_multicam_group(&self, group_id: &str) -> Result<String, String> {
+        if self.multicam_group(group_id).is_none() {
+            return Err(format!(
+                "No multicam group '{group_id}'. get_timeline lists multicamGroups."
+            ));
+        }
+        Ok(group_id.to_string())
+    }
+
+    /// Swift `resolveGroupId`: groupId directly, or any group clip's id.
+    fn resolve_multicam_group_id(&self, args: &Value) -> Result<String, String> {
+        if let Some(group_id) = args.get("groupId").and_then(|v| v.as_str()) {
+            return self.require_multicam_group(group_id);
+        }
+        if let Some(clip_id) = args.get("clipId").and_then(|v| v.as_str()) {
+            let group = timeline_core::find_clip(&self.timeline, clip_id)
+                .and_then(|loc| {
+                    self.timeline.tracks[loc.track_index].clips[loc.clip_index]
+                        .multicam_group_id
+                        .clone()
+                })
+                .and_then(|gid| self.multicam_group(&gid));
+            return match group {
+                Some(g) => Ok(g.id.clone()),
+                None => Err(format!(
+                    "Clip '{clip_id}' is not part of a multicam group."
+                )),
+            };
+        }
+        Err("Pass groupId or clipId.".to_string())
+    }
+
+    fn multicam_member_rows(group: &MulticamSource) -> Vec<Value> {
+        use crate::timeline_v2::round3;
+        group
+            .members
+            .iter()
+            .map(|m| {
+                let mut row = json!({
+                    "angleLabel": m.angle_label,
+                    "kind": m.kind.as_str(),
+                    "mediaRef": m.media_ref,
+                    "offsetSeconds": round3(m.sync.offset_seconds),
+                    "confidence": round3(m.sync.confidence),
+                });
+                if m.id == group.master_member_id {
+                    row["master"] = json!(true);
+                }
+                if m.sync.locked {
+                    row["pinned"] = json!(true);
+                }
+                if !m.usable() {
+                    row["unsynced"] = json!(true);
+                }
+                row
+            })
+            .collect()
+    }
+
+    fn cmd_manage_multicam(&mut self, args: &Value) -> Result<Value, String> {
+        let parsed = match crate::mutation::validate_manage_multicam(args) {
+            crate::mutation::ValidationResult::Ok(p) => p,
+            crate::mutation::ValidationResult::Error(e) => return Err(e),
+        };
+        if let Some(create) = parsed.create {
+            let created = self.multicam_create(&create)?;
+            return Ok(json!({ "created": created }));
+        }
+        let group_id = self.require_multicam_group(
+            parsed
+                .ungroup_group_id
+                .as_deref()
+                .expect("validator guarantees a section"),
+        )?;
+        timeline_core::strip_group_stamps(&mut self.timeline, &group_id);
+        let still_referenced = timeline_core::referenced_group_ids(
+            std::iter::once(&self.timeline).chain(self.sibling_timelines.iter()),
+        )
+        .contains(&group_id);
+        if !still_referenced {
+            self.multicam_groups.retain(|g| g.id != group_id);
+        }
+        Ok(json!({ "ungrouped": group_id }))
+    }
+
+    /// manage_multicam.create (Swift `createSection`). Sync maps come from
+    /// pinned offsets, the master (0), or shared source timecode; audio
+    /// correlation is deferred (sync_clips has the correlator) — members it
+    /// would have resolved land in `needsAttention` instead.
+    fn multicam_create(
+        &mut self,
+        create: &crate::mutation::ManageMulticamCreate,
+    ) -> Result<Value, String> {
+        let assets = self.multicam_assets();
+        for (i, m) in create.members.iter().enumerate() {
+            let path = format!("create.members[{i}]");
+            let Some(asset) = assets.get(&m.media_ref) else {
+                return Err(format!(
+                    "{path}: no media asset '{}'. get_media lists assets.",
+                    m.media_ref
+                ));
+            };
+            match m.kind {
+                MulticamMemberKind::Angle => {
+                    if asset.clip_type != ClipType::Video {
+                        return Err(format!("{path}: angle members must be video."));
+                    }
+                }
+                MulticamMemberKind::Mic => {
+                    if !(asset.clip_type == ClipType::Audio
+                        || (asset.clip_type == ClipType::Video && asset.has_audio))
+                    {
+                        return Err(format!("{path}: mic members need audio."));
+                    }
+                }
+                MulticamMemberKind::Both => {
+                    if !(asset.clip_type == ClipType::Video && asset.has_audio) {
+                        return Err(format!("{path}: 'both' members must be video with audio."));
+                    }
+                }
+            }
+        }
+
+        let master_ref = self.resolve_multicam_master(create)?;
+
+        // Sync maps (Swift `syncMulticamMembers`' no-audio path): pinned →
+        // locked; master → 0; else shared embedded timecode; else unresolved.
+        let tc_seconds = |media_ref: &str| -> Option<f64> {
+            let e = self.media_manifest.entry_for(media_ref)?;
+            let frame = e.source_timecode_frame? as f64;
+            let quanta = e.source_timecode_quanta.filter(|q| *q > 0)? as f64;
+            Some(frame / quanta)
+        };
+        let mut maps: std::collections::HashMap<String, MulticamSyncMap> =
+            std::collections::HashMap::new();
+        let mut failures: Vec<(String, String)> = Vec::new();
+        for m in &create.members {
+            if let Some(pinned) = m.offset_seconds {
+                maps.insert(
+                    m.media_ref.clone(),
+                    MulticamSyncMap {
+                        offset_seconds: pinned,
+                        confidence: 1.0,
+                        locked: true,
+                    },
+                );
+            } else if m.media_ref == master_ref {
+                maps.insert(
+                    m.media_ref.clone(),
+                    MulticamSyncMap {
+                        offset_seconds: 0.0,
+                        confidence: 1.0,
+                        locked: false,
+                    },
+                );
+            }
+        }
+        let master_offset = maps.get(&master_ref).map(|m| m.offset_seconds).unwrap_or(0.0);
+        let master_tc = tc_seconds(&master_ref);
+        for m in &create.members {
+            if maps.contains_key(&m.media_ref) {
+                continue;
+            }
+            match (master_tc, tc_seconds(&m.media_ref)) {
+                (Some(master), Some(tc)) => {
+                    maps.insert(
+                        m.media_ref.clone(),
+                        MulticamSyncMap {
+                            offset_seconds: master_offset + tc - master,
+                            confidence: 1.0,
+                            locked: false,
+                        },
+                    );
+                }
+                _ => {
+                    maps.insert(m.media_ref.clone(), MulticamSyncMap::default());
+                    failures.push((
+                        m.media_ref.clone(),
+                        "No audio to sync with and no shared timecode.".to_string(),
+                    ));
+                }
+            }
+        }
+        // Rebase so the earliest synced member sits at the group zero.
+        let base = maps
+            .values()
+            .filter(|m| m.confidence > 0.0 || m.locked)
+            .map(|m| m.offset_seconds)
+            .fold(f64::INFINITY, f64::min);
+        if base.is_finite() && base != 0.0 {
+            for map in maps.values_mut() {
+                if map.confidence > 0.0 || map.locked {
+                    map.offset_seconds -= base;
+                }
+            }
+        }
+
+        let specs: Vec<timeline_core::MulticamMemberSpec> = create
+            .members
+            .iter()
+            .map(|m| timeline_core::MulticamMemberSpec {
+                media_ref: m.media_ref.clone(),
+                kind: m.kind,
+                angle_label: m.angle_label.clone(),
+                pinned_offset_seconds: m.offset_seconds,
+            })
+            .collect();
+        let existing_names: Vec<String> =
+            self.multicam_groups.iter().map(|g| g.name.clone()).collect();
+        let (group, clip_ids) = timeline_core::create_group(
+            &mut self.timeline,
+            &specs,
+            &maps,
+            &master_ref,
+            create.name.as_deref(),
+            &existing_names,
+            &assets,
+            create.start_frame,
+        )?;
+
+        let mut created = json!({
+            "groupId": group.id,
+            "members": Self::multicam_member_rows(&group),
+            "clipIds": clip_ids,
+        });
+        if !failures.is_empty() {
+            created["needsAttention"] = json!(failures
+                .iter()
+                .map(|(media_ref, reason)| json!({"mediaRef": media_ref, "reason": reason}))
+                .collect::<Vec<_>>());
+        }
+        self.multicam_groups.push(group);
+        Ok(created)
+    }
+
+    /// Swift `resolveMasterRef`: explicit master by angleLabel or mediaRef
+    /// (short-id expanded), else the first mic/both member.
+    fn resolve_multicam_master(
+        &self,
+        create: &crate::mutation::ManageMulticamCreate,
+    ) -> Result<String, String> {
+        if let Some(master) = &create.master {
+            let expanded = crate::id_short::expand_input_ids(
+                &json!({ "mediaRef": master }),
+                &self.id_universe(),
+            )
+            .ok()
+            .and_then(|v| v.get("mediaRef").and_then(|m| m.as_str()).map(String::from))
+            .unwrap_or_else(|| master.clone());
+            let wanted = master.to_lowercase();
+            let Some(spec) = create.members.iter().find(|m| {
+                m.media_ref == expanded
+                    || m.angle_label
+                        .as_deref()
+                        .is_some_and(|l| l.to_lowercase() == wanted)
+            }) else {
+                return Err(format!(
+                    "master '{master}' doesn't match a member's angleLabel or mediaRef."
+                ));
+            };
+            if spec.kind == MulticamMemberKind::Angle {
+                return Err(format!(
+                    "master '{master}' is an angle — its audio is scratch. Pick a mic/both member."
+                ));
+            }
+            return Ok(spec.media_ref.clone());
+        }
+        let pick = create
+            .members
+            .iter()
+            .find(|m| m.kind == MulticamMemberKind::Mic)
+            .or_else(|| {
+                create
+                    .members
+                    .iter()
+                    .find(|m| m.kind == MulticamMemberKind::Both)
+            })
+            .unwrap_or(&create.members[0]);
+        if pick.kind == MulticamMemberKind::Angle {
+            return Err(
+                "No mic member to sync against — mark one member as mic/both, or pin offsets explicitly."
+                    .to_string(),
+            );
+        }
+        Ok(pick.media_ref.clone())
+    }
+
+    fn cmd_change_cam(&mut self, args: &Value) -> Result<Value, String> {
+        let parsed = match crate::mutation::validate_change_cam(args) {
+            crate::mutation::ValidationResult::Ok(p) => p,
+            crate::mutation::ValidationResult::Error(e) => return Err(e),
+        };
+        let group_id = self.resolve_multicam_group_id(args)?;
+        let group = self
+            .multicam_group(&group_id)
+            .cloned()
+            .expect("resolved above");
+
+        let requests: Vec<timeline_core::AngleSwitchRequest> = parsed
+            .entries
+            .iter()
+            .map(|e| match (&e.layout, &e.angle) {
+                (Some(layout), _) => timeline_core::AngleSwitchRequest::with_layout(
+                    e.range.0..e.range.1,
+                    *layout,
+                    e.angles.clone(),
+                ),
+                (None, Some(angle)) => {
+                    timeline_core::AngleSwitchRequest::full(e.range.0..e.range.1, angle)
+                }
+                (None, None) => unreachable!("validator requires angle XOR layout"),
+            })
+            .collect();
+
+        let assets = self.multicam_assets();
+        let outcome =
+            timeline_core::switch_angles(&mut self.timeline, &group, &requests, &assets)?;
+
+        let mut extra = json!({ "groupId": group_id, "switched": outcome.switched });
+        if outcome.merged > 0 {
+            extra["cutsMerged"] = json!(outcome.merged);
+        }
+        if !outcome.overlay_clip_ids.is_empty() {
+            extra["overlayClipIds"] = json!(outcome.overlay_clip_ids);
+        }
+        let lo = outcome.applied.iter().map(|r| r.start).min();
+        let hi = outcome.applied.iter().map(|r| r.end).max();
+        if let (Some(lo), Some(hi)) = (lo, hi) {
+            let rows = timeline_core::multicam_program_rows(&self.timeline, &group, Some(lo..hi));
+            extra["program"] = json!(rows
+                .into_iter()
+                .map(|(label, s, e)| json!([label, s, e]))
+                .collect::<Vec<_>>());
+        }
+        if !outcome.clamped.is_empty() {
+            extra["clamped"] = json!(outcome
+                .clamped
+                .iter()
+                .map(|c| json!({
+                    "requested": [c.requested.start, c.requested.end],
+                    "applied": [c.applied.start, c.applied.end],
+                    "culprit": c.culprit,
+                }))
+                .collect::<Vec<_>>());
+        }
+        if !outcome.skipped.is_empty() {
+            extra["skipped"] = json!(outcome
+                .skipped
+                .iter()
+                .map(|(r, reason)| json!({"range": [r.start, r.end], "reason": reason}))
+                .collect::<Vec<_>>());
+        }
+        Ok(extra)
+    }
+
+    fn cmd_get_multicam(&self, args: &Value) -> Result<Value, String> {
+        let group_id = self.resolve_multicam_group_id(args)?;
+        let group = self
+            .multicam_group(&group_id)
+            .expect("resolved above");
+        let start = args.get("startFrame").and_then(|v| v.as_i64());
+        let end = args.get("endFrame").and_then(|v| v.as_i64());
+        let window = match (start, end) {
+            (None, None) => None,
+            (s, e) => Some(s.unwrap_or(0)..e.unwrap_or(i64::MAX)),
+        };
+        let rows = timeline_core::multicam_program_rows(&self.timeline, group, window);
+        let payload = json!({
+            "groupId": group_id,
+            "name": group.name,
+            "members": Self::multicam_member_rows(group),
+            "program": rows
+                .into_iter()
+                .map(|(label, s, e)| json!([label, s, e]))
+                .collect::<Vec<Value>>(),
+            "trackIndexes": timeline_core::multicam_track_indexes(&self.timeline, &group_id)
+                .into_iter()
+                .collect::<Vec<usize>>(),
+        });
+        Ok(Self::json_content(&payload))
     }
 
     fn cmd_set_project_settings(&mut self, args: &Value) -> Result<Value, String> {
@@ -5321,6 +5889,20 @@ impl ToolExecutor {
         if target_ids.is_empty() {
             return Err("sync_clips requires 'targetClipId' or 'targetClipIds'.".to_string());
         }
+        // Multicam guard (upstream #283).
+        let is_stamped = |id: &str| {
+            timeline_core::find_clip(&self.timeline, id).is_some_and(|loc| {
+                self.timeline.tracks[loc.track_index].clips[loc.clip_index]
+                    .multicam_group_id
+                    .is_some()
+            })
+        };
+        if is_stamped(&ref_id) || target_ids.iter().any(|t| is_stamped(t)) {
+            return Err(
+                "sync_clips: multicam clips are already aligned by their group's sync maps — re-syncing would move them out of the group."
+                    .to_string(),
+            );
+        }
         let min_confidence = args
             .get("minConfidence")
             .and_then(|v| v.as_f64())
@@ -6207,10 +6789,12 @@ impl ToolExecutor {
             timeline,
             sibling_timelines,
             manifest,
+            multicam_groups,
             seams,
         } = opened;
         self.load_project(timeline, manifest);
         self.sibling_timelines = sibling_timelines;
+        self.multicam_groups = multicam_groups;
         self.timeline_words = Vec::new();
         self.clip_presets.clear();
         self.search_status = String::new();
@@ -6269,6 +6853,7 @@ impl ToolExecutor {
             timeline: self.timeline.clone(),
             sibling_timelines: self.sibling_timelines.clone(),
             manifest: self.media_manifest.clone(),
+            multicam_groups: self.saved_multicam_groups().unwrap_or_default(),
         };
         let closed = nav.close(name, id, path, active)?;
         let mut out = json!({
@@ -6300,6 +6885,7 @@ impl ToolExecutor {
     fn reset_to_no_project(&mut self, lister: Option<Arc<dyn ProjectLister>>) {
         self.load_project(Timeline::default(), MediaManifest::default());
         self.sibling_timelines.clear();
+        self.multicam_groups.clear();
         self.timeline_words = Vec::new();
         self.clip_presets.clear();
         self.search_status = String::new();
@@ -11768,6 +12354,7 @@ mod tests {
             },
             sibling_timelines: Vec::new(),
             manifest: MediaManifest::default(),
+            multicam_groups: Vec::new(),
             seams: ProjectSeams {
                 matte_writer: std::sync::Arc::new(MockMatte::default()),
                 audio_source: std::sync::Arc::new(MockAudio),

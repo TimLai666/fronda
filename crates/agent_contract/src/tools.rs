@@ -1,4 +1,4 @@
-//! All 53 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
+//! All 56 agent tool definitions with JSON input schemas (TDEF-001 to TDEF-003).
 //! Issue #172: added create_project, open_project, delete_project (42 → 45).
 //! Issue #174: added remove_silence (45 → 46).
 //! Issue #157: added save_clip_preset, apply_clip_preset, list_clip_presets (46 → 49).
@@ -28,9 +28,11 @@
 //! (→ apply_effect key.chroma), set_color_grade (→ apply_color),
 //! generate_music (→ generate_audio) (−5); added detect_beats (+1);
 //! sync_audio renamed to sync_clips. 57 − 5 + 1 = 53 (design.md C-1:
-//! 45 upstream + 8 Rust extensions). Host split (C-1): shared 48 +
-//! 4 MCP-only project tools + 1 in-app-only read_skill → MCP surface 52,
-//! in-app surface 49.
+//! 45 upstream + 8 Rust extensions).
+//! multicam-engine (upstream #283): the three reserved multicam slots landed —
+//! manage_multicam, change_cam, get_multicam (53 → 56 = 48 upstream + 8 Rust
+//! extensions). Host split (C-1): shared 51 + 4 MCP-only project tools +
+//! 1 in-app-only read_skill → MCP surface 55, in-app surface 52.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -74,7 +76,7 @@ pub fn tool_host(name: &str) -> ToolHost {
     }
 }
 
-/// The MCP server surface (C-1): shared tools + the four project tools (52).
+/// The MCP server surface (C-1): shared tools + the four project tools (55).
 pub fn mcp_tools() -> Vec<ToolDefinition> {
     all_tools()
         .into_iter()
@@ -82,7 +84,7 @@ pub fn mcp_tools() -> Vec<ToolDefinition> {
         .collect()
 }
 
-/// The in-app agent surface (C-1): shared tools + read_skill (49).
+/// The in-app agent surface (C-1): shared tools + read_skill (52).
 pub fn in_app_tools() -> Vec<ToolDefinition> {
     all_tools()
         .into_iter()
@@ -90,7 +92,7 @@ pub fn in_app_tools() -> Vec<ToolDefinition> {
         .collect()
 }
 
-/// Returns all 53 tools across both host surfaces.
+/// Returns all 56 tools across both host surfaces.
 ///
 /// TDEF-001: tool set (see the header history; design.md C-1).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -127,6 +129,9 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         inspect_timeline(),
         list_models(),
         manage_tracks(),
+        manage_multicam(),
+        change_cam(),
+        get_multicam(),
         move_clips(),
         new_project(),
         open_project(),
@@ -935,6 +940,117 @@ fn manage_tracks() -> ToolDefinition {
     }
 }
 
+/// Multicam trio (upstream #283, multicam-engine change): schemas per the
+/// tool-surface-v2 design's reserved slots (A-5), descriptions verbatim.
+fn manage_multicam() -> ToolDefinition {
+    ToolDefinition {
+        name: "manage_multicam",
+        description: "Create or ungroup a multicam group. create syncs session media into ordinary stamped timeline clips: one program video track, one audio track per mic, and angle switches through change_cam. Use member kind angle for scratch-camera audio, mic for program audio, and both for a camera whose audio should play. Pin offsetSeconds when correlation cannot align a member. ungroup strips stamps and leaves clips in place.",
+        input_schema: object_optional(&[
+            (
+                "create",
+                object_schema(
+                    &[
+                        (
+                            "members",
+                            array_of(
+                                "Session source files, at least two.",
+                                object_schema(
+                                    &[
+                                        ("mediaRef", string("Media asset id from get_media.")),
+                                        (
+                                            "kind",
+                                            string_enum(
+                                                "angle = camera scratch audio, mic = audio in the mix, both = camera plus program audio.",
+                                                &["angle", "mic", "both"],
+                                            ),
+                                        ),
+                                        ("angleLabel", string("Handle used by change_cam. Default: file name.")),
+                                        (
+                                            "offsetSeconds",
+                                            number("Pin this member's group-clock offset instead of correlating."),
+                                        ),
+                                    ],
+                                    &["mediaRef", "kind"],
+                                ),
+                            ),
+                        ),
+                        ("name", string("Group name. Default: Multicam N.")),
+                        (
+                            "master",
+                            string("angleLabel or mediaRef whose audio clock defines the group. Default: first mic/both member."),
+                        ),
+                        ("startFrame", integer("Timeline frame to place the group. Default: timeline end.")),
+                        (
+                            "searchWindowSeconds",
+                            number("Max ± audio sync search window, seconds (default 240)."),
+                        ),
+                    ],
+                    &["members"],
+                ),
+            ),
+            (
+                "ungroup",
+                object_schema(
+                    &[("groupId", string("Group to dissolve; its clips stay put, unstamped."))],
+                    &["groupId"],
+                ),
+            ),
+        ]),
+    }
+}
+
+fn change_cam() -> ToolDefinition {
+    ToolDefinition {
+        name: "change_cam",
+        description: "Switch a multicam group's camera angle over timeline frame ranges, full-frame or in a multi-angle layout. Batched entries are one undo step. Ranges where an angle was not recording clamp or skip. Returns switched count, optional clamps/skips/overlayClipIds, and program rows over the touched span.\n\nEach entry is EITHER {range, angle} — full-frame switch — or {range, layout, angles} — PiP/split/grid: angles fill the layout's slots in order (first = the full-frame program slot; fewer angles than slots leaves cells empty), extra angles land as synced overlay clips above the program. A later full-frame entry over the same range clears the layout. Overlay clips are ordinary group clips — restyle with set_clip_properties/apply_layout, remove with remove_clips.",
+        input_schema: object_schema(
+            &[
+                (
+                    "groupId",
+                    string("The multicam group (from manage_multicam create or get_timeline's multicamGroups). Or pass clipId."),
+                ),
+                ("clipId", string("Any clip of the group on the active timeline.")),
+                (
+                    "entries",
+                    array_of(
+                        "Switches to apply, in order. Later entries win on overlap.",
+                        object_schema(
+                            &[
+                                ("range", array("[startFrame, endFrame) in timeline frames.")),
+                                ("angle", string("angleLabel to show full-frame. Omit when using layout.")),
+                                (
+                                    "layout",
+                                    string("Multi-angle layout: side_by_side, top_bottom, pip_bottom_right, pip_bottom_left, pip_top_right, pip_top_left, grid_2x2, main_sidebar, three_up."),
+                                ),
+                                (
+                                    "angles",
+                                    array("angleLabels in slot order for layout; [0] is the program slot."),
+                                ),
+                            ],
+                            &["range"],
+                        ),
+                    ),
+                ),
+            ],
+            &["entries"],
+        ),
+    }
+}
+
+fn get_multicam() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_multicam",
+        description: "Read a multicam group: members (angleLabel, kind, offsetSeconds, confidence, which is master), the current program cut as run-length [angle, startFrame, endFrame) rows in timeline frames, and the track indexes the group occupies. Use it to learn angle labels before change_cam, or to review the cut as one program instead of piecing it together from get_timeline's clips. Window long timelines with startFrame/endFrame.",
+        input_schema: object_optional(&[
+            ("groupId", string("The multicam group id. Or pass clipId.")),
+            ("clipId", string("Any clip of the group on the active timeline.")),
+            ("startFrame", integer("Optional window start for program rows.")),
+            ("endFrame", integer("Optional window end (exclusive).")),
+        ]),
+    }
+}
+
 fn remove_clips() -> ToolDefinition {
     ToolDefinition {
         name: "remove_clips",
@@ -1584,7 +1700,7 @@ fn remove_silence() -> ToolDefinition {
 fn sync_clips() -> ToolDefinition {
     ToolDefinition {
         name: "sync_clips",
-        description: "Align one or more clips to a reference clip by shifting targets on the timeline — use for dual-system sound (camera + external audio) or multicam. Default mode 'auto' aligns by embedded source timecode when both files carry one (exact, confidence 1.0), falling back to audio cross-correlation otherwise; force a method with mode. referenceClipId stays put. Returns offsetFrames, confidence (0–1), and method (timecode|audio) per target; refuses weak audio matches.",
+        description: "Align one or more clips to a reference clip by shifting targets on the timeline — use for dual-system sound (camera + external audio) or multicam. Default mode 'auto' aligns by embedded source timecode when both files carry one (exact, confidence 1.0), falling back to audio cross-correlation otherwise; force a method with mode. referenceClipId stays put. Returns offsetFrames, confidence (0–1), and method (timecode|audio) per target; refuses weak audio matches. Refused on multicam clips — a group's members are already aligned by its sync maps (manage_multicam).",
         input_schema: object(&[
             ("referenceClipId", string("Clip the others align to. Stays put.")),
             ("targetClipId", string("Single clip to align. Use targetClipIds for several.")),
@@ -1721,27 +1837,28 @@ mod tests {
     fn tdef_001_exactly_53_tools() {
         // Final tool-surface-v2 count (design.md C-1): 57 − 5 retired
         // (list_folders, set_blend_mode, set_chroma_key, set_color_grade,
-        // generate_music) + 1 new (detect_beats) = 53
-        // = 45 upstream (48 − 3 deferred multicam) + 8 Rust extensions.
+        // generate_music) + 1 new (detect_beats) = 53; multicam-engine
+        // landed the 3 reserved slots (manage_multicam, change_cam,
+        // get_multicam) = 56 = 48 upstream + 8 Rust extensions.
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            53,
-            "TDEF-001: 53 tools (see the header history)"
+            56,
+            "TDEF-001: 56 tools (see the header history)"
         );
     }
 
     #[test]
     fn tdef_001_host_split_counts() {
-        // C-1 host split: shared 48; MCP = shared + 4 project tools = 52;
-        // in-app = shared + read_skill = 49.
+        // C-1 host split (post-multicam): shared 51; MCP = shared + 4
+        // project tools = 55; in-app = shared + read_skill = 52.
         let shared = all_tools()
             .iter()
             .filter(|t| t.host() == ToolHost::Shared)
             .count();
-        assert_eq!(shared, 48, "shared surface");
-        assert_eq!(mcp_tools().len(), 52, "MCP surface");
-        assert_eq!(in_app_tools().len(), 49, "in-app surface");
+        assert_eq!(shared, 51, "shared surface");
+        assert_eq!(mcp_tools().len(), 55, "MCP surface");
+        assert_eq!(in_app_tools().len(), 52, "in-app surface");
         let mcp_names: Vec<&str> = mcp_tools().iter().map(|t| t.name).collect();
         assert!(!mcp_names.contains(&"read_skill"), "read_skill is in-app only");
         let in_app_names: Vec<&str> = in_app_tools().iter().map(|t| t.name).collect();
@@ -1780,7 +1897,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 53, "all 53 tool names must be unique");
+        assert_eq!(names.len(), 56, "all 56 tool names must be unique");
     }
 
     #[test]

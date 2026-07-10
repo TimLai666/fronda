@@ -76,6 +76,7 @@ impl EditorStateHub {
         if let Ok(mut exec) = self.executor.lock() {
             exec.load_project(bundle.timeline, bundle.manifest.unwrap_or_default());
             exec.set_sibling_timelines(bundle.multi.siblings.clone());
+            exec.set_multicam_groups(bundle.multi.multicam_groups.clone().unwrap_or_default());
         }
         self.record_in_registry(&bundle.root);
         self.install_matte_writer(bundle.root.clone());
@@ -124,8 +125,20 @@ impl EditorStateHub {
         self.project_root.lock().ok().and_then(|r| r.clone())
     }
 
-    /// Snapshot the shared timeline, siblings, and manifest under the lock.
-    fn snapshot(&self) -> Result<(Timeline, Vec<Timeline>, MediaManifest), String> {
+    /// Snapshot the shared timeline, siblings, manifest, and live multicam
+    /// groups under the lock.
+    #[allow(clippy::type_complexity)]
+    fn snapshot(
+        &self,
+    ) -> Result<
+        (
+            Timeline,
+            Vec<Timeline>,
+            MediaManifest,
+            Vec<core_model::MulticamSource>,
+        ),
+        String,
+    > {
         let exec = self
             .executor
             .lock()
@@ -134,6 +147,7 @@ impl EditorStateHub {
             exec.timeline().clone(),
             exec.sibling_timelines().to_vec(),
             exec.media_manifest().clone(),
+            exec.saved_multicam_groups().unwrap_or_default(),
         ))
     }
 
@@ -143,17 +157,29 @@ impl EditorStateHub {
         let Some(root) = self.project_root() else {
             return Err("No project open: nothing to save".into());
         };
-        let (timeline, siblings, manifest) = self.snapshot()?;
-        project_io::save_project_state_with_siblings(&root, &timeline, &siblings, &manifest)
-            .map_err(|e| e.to_string())
+        let (timeline, siblings, manifest, groups) = self.snapshot()?;
+        project_io::save_project_state_with_siblings_and_groups(
+            &root,
+            &timeline,
+            &siblings,
+            &manifest,
+            Some(groups),
+        )
+        .map_err(|e| e.to_string())
     }
 
     /// Write the current state to a new directory and make it the
     /// project root. On write failure the root is left unchanged.
     pub fn save_as(&self, root: &Path) -> Result<(), String> {
-        let (timeline, siblings, manifest) = self.snapshot()?;
-        project_io::save_project_state_with_siblings(root, &timeline, &siblings, &manifest)
-            .map_err(|e| e.to_string())?;
+        let (timeline, siblings, manifest, groups) = self.snapshot()?;
+        project_io::save_project_state_with_siblings_and_groups(
+            root,
+            &timeline,
+            &siblings,
+            &manifest,
+            Some(groups),
+        )
+        .map_err(|e| e.to_string())?;
         self.record_in_registry(root);
         self.install_matte_writer(root.to_path_buf());
         if let Ok(mut current) = self.project_root.lock() {

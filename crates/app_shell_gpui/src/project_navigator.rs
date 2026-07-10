@@ -61,6 +61,7 @@ impl AppProjectNavigator {
             timeline: bundle.timeline,
             sibling_timelines: bundle.multi.siblings,
             manifest: bundle.manifest.unwrap_or_default(),
+            multicam_groups: bundle.multi.multicam_groups.unwrap_or_default(),
             seams,
         }
     }
@@ -169,11 +170,12 @@ impl ProjectNavigator for AppProjectNavigator {
             return Err(format!("Project at {} isn't open.", target.display()));
         }
         let name = crate::project_lister::project_name(&target);
-        project_io::save_project_state_with_siblings(
+        project_io::save_project_state_with_siblings_and_groups(
             &target,
             &active.timeline,
             &active.sibling_timelines,
             &active.manifest,
+            Some(active.multicam_groups),
         )
         .map_err(|e| format!("Couldn't save '{name}' — project left open. {e}"))?;
         if let Ok(mut cur) = self.project_root.lock() {
@@ -247,6 +249,7 @@ mod tests {
             },
             sibling_timelines: Vec::new(),
             manifest: Default::default(),
+            multicam_groups: Vec::new(),
         }
     }
 
