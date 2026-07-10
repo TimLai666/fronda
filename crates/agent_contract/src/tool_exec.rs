@@ -7387,6 +7387,49 @@ impl ToolExecutor {
             );
         }
         let duration = args.get("duration").and_then(|v| v.as_f64());
+        // Upstream #288: validate the video-to-audio span against the model's
+        // caps BEFORE the backend gap — a too-long/short span must fail fast.
+        if has_video_source {
+            let span_seconds = if let Some(mref) = args.get("videoSourceMediaRef").and_then(|v| v.as_str()) {
+                let entry = self
+                    .media_manifest
+                    .entry_for(mref)
+                    .ok_or_else(|| format!("Media '{mref}' was not found in the library."))?;
+                Some(entry.duration)
+            } else {
+                let start = args.get("videoSourceStartFrame").and_then(|v| v.as_i64());
+                let end = args.get("videoSourceEndFrame").and_then(|v| v.as_i64());
+                match (start, end) {
+                    (Some(s0), Some(e0)) if e0 > s0 => {
+                        Some((e0 - s0) as f64 / self.timeline.fps.max(1) as f64)
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(
+                            "videoSourceEndFrame must be greater than videoSourceStartFrame."
+                                .to_string(),
+                        )
+                    }
+                    _ => None,
+                }
+            };
+            if let (Some(span), model_catalog::ModelCaps::Audio(c)) = (span_seconds, &model.caps) {
+                // #288 defaults when the catalog carries no per-model bounds.
+                let min = c.min_seconds.unwrap_or(1.0);
+                let max = c.max_seconds.unwrap_or(600.0);
+                if span < min {
+                    return Err(format!(
+                        "Video-to-audio span is {span:.1}s; {} needs at least {min:.0}s.",
+                        model.id
+                    ));
+                }
+                if span > max {
+                    return Err(format!(
+                        "Video-to-audio span is {span:.1}s; {} allows at most {max:.0}s.",
+                        model.id
+                    ));
+                }
+            }
+        }
         let _ = (
             args.get("voice").and_then(|v| v.as_str()),
             args.get("lyrics").and_then(|v| v.as_str()),
@@ -8026,6 +8069,46 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("entries"), "got: {err}");
+    }
+
+    #[test]
+    fn generate_audio_validates_video_span_288() {
+        // Upstream #288: span checks fire BEFORE the backend-gap error.
+        let mut manifest = MediaManifest::default();
+        let mut long = audio_media("vid", 700.0);
+        long.r#type = ClipType::Video;
+        manifest.entries.push(long);
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+
+        // mediaRef branch: 700s > minimax-music-v2.6's max span.
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "minimax-music-v2.6", "videoSourceMediaRef": "vid"}),
+            )
+            .unwrap_err();
+        assert!(err.contains("at most"), "long span rejected: {err}");
+
+        // frame-span branch at 30fps: 90 frames = 3s, within caps -> falls
+        // through to the honest backend gap (NOT a span error).
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "minimax-music-v2.6",
+                        "videoSourceStartFrame": 0, "videoSourceEndFrame": 90}),
+            )
+            .unwrap_err();
+        assert!(err.contains("backend"), "valid span reaches the gap: {err}");
+
+        // inverted frame span is its own error.
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "minimax-music-v2.6",
+                        "videoSourceStartFrame": 90, "videoSourceEndFrame": 90}),
+            )
+            .unwrap_err();
+        assert!(err.contains("greater than"), "{err}");
     }
 
     #[test]

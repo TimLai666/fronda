@@ -726,10 +726,10 @@ pub fn music_cost(model: &ModelConfig, prompt: &str, duration_seconds: f64) -> O
 }
 
 /// Swift AudioModelConfig.validate(spanSeconds:) with the catalog defaults
-/// (minSeconds 1, maxSeconds 900 — the Rust catalog carries no overrides).
+/// (minSeconds 1, maxSeconds 600 — upstream #288 lowered the default cap).
 pub fn music_span_note(model: &ModelConfig, span_seconds: f64) -> Option<String> {
     const MIN_SECONDS: i64 = 1;
-    const MAX_SECONDS: i64 = 900;
+    const MAX_SECONDS: i64 = 600;
     let s = span_seconds.round() as i64;
     if s < MIN_SECONDS {
         return Some(format!(
@@ -4526,7 +4526,7 @@ mod captions_music_tests {
             Some("Add video to the timeline, then mark a range to score only part of it.")
         );
         let too_long = music_validation_note(model, false, "", 1000.0, None, None).unwrap();
-        assert!(too_long.contains("at most 900s"), "{too_long}");
+        assert!(too_long.contains("at most 600s"), "{too_long}");
         let too_short = music_validation_note(model, false, "", 0.2, None, None).unwrap();
         assert!(too_short.contains("at least 1s"), "{too_short}");
         let shortfall =
@@ -4549,8 +4549,8 @@ mod captions_music_tests {
         let model = music_model_for(None).unwrap();
         assert!(music_span_note(model, 0.4).unwrap().contains("at least 1s"));
         assert_eq!(music_span_note(model, 1.0), None);
-        assert_eq!(music_span_note(model, 900.4), None, "rounds to 900");
-        assert!(music_span_note(model, 901.0).unwrap().contains("at most 900s"));
+        assert_eq!(music_span_note(model, 600.4), None, "rounds to 600");
+        assert!(music_span_note(model, 601.0).unwrap().contains("at most 600s"));
     }
 
     // ── 2.2 source span summary ─────────────────────────────────────

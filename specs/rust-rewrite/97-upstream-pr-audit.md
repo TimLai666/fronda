@@ -520,3 +520,18 @@ STT (aligns with transcription seam).
 Absorbed/N-A verified: #188 LAN+bearer (Rust surpasses), #190 outline,
 #175, #187/#108/#96/#95 (architecture avoided), platform asks (#20/#195/
 #220/#262) answered by Fronda's cross-platform reality.
+
+## 2026-07-10b increment audit: 141c69b..404e14f (v0.6.4)
+
+5 commits, 2 with code. #290 (PostHog telemetry) = Swift/infra-only (its
+ToolExecutor+Export diff is a pure refactor, no schema/semantics change —
+verified, does not perturb the v2 surface). 3 release-infra commits. The
+one Rust port — #288 generate_audio video-to-audio span validation — is
+DONE this session: span from videoSourceMediaRef (manifest duration) or
+videoSourceStart/EndFrame ((end-start)/fps), validated against AudioCaps
+min/max_seconds with #288 defaults 1..600s before the backend-gap error;
+AudioCaps gained the span fields (catalog carries None); the Music tab's
+fallback cap and its tests moved 900→600. Deferred XS: the
+reference-render shrink (360→240 low-quality) — host render seam, only
+relevant once video-to-audio rendering is wired. Upstream now fully
+audited to 404e14f.

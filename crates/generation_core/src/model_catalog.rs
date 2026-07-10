@@ -274,6 +274,10 @@ pub struct AudioCaps {
     pub durations: Option<Vec<i64>>,
     pub min_prompt_length: i64,
     pub pricing: AudioPricing,
+    /// Video-to-audio span bounds (upstream #288). None = the defaults
+    /// (1s .. 600s) apply; the Fal-era catalog carries no per-model values.
+    pub min_seconds: Option<f64>,
+    pub max_seconds: Option<f64>,
 }
 
 impl Default for AudioCaps {
@@ -288,6 +292,8 @@ impl Default for AudioCaps {
             durations: None,
             min_prompt_length: 1,
             pricing: AudioPricing::Unknown,
+                    min_seconds: None,
+            max_seconds: None,
         }
     }
 }
