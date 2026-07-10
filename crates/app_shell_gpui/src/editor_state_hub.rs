@@ -4,11 +4,22 @@
 //! Pure std + workspace crates — no gpui.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use agent_contract::ToolExecutor;
 use core_model::{MediaManifest, Timeline};
 use project_io::ProjectBundle;
+
+/// Debounced-autosave trigger decision (upstream #211, mirroring Swift
+/// `VideoProject.scheduleProjectCheckpointAutosave`): a coalesced checkpoint
+/// save fires only when a project root exists AND the revision advanced past
+/// the last saved revision. Rootless (unsaved) projects skip; no advance means
+/// the previous save already covered it, so rapid edits between ticks collapse
+/// to a single save.
+pub fn autosave_should_fire(has_root: bool, current_revision: u64, last_saved_revision: u64) -> bool {
+    has_root && current_revision > last_saved_revision
+}
 
 /// Process-wide holder of the current project state.
 pub struct EditorStateHub {
@@ -16,6 +27,10 @@ pub struct EditorStateHub {
     project_root: Arc<Mutex<Option<PathBuf>>>,
     /// Recent-project registry file (test constructors inject a temp path).
     registry_path: PathBuf,
+    /// Revision persisted by the last successful save / load (autosave
+    /// coalescing, #211). An autosave tick fires only when `revision()` has
+    /// advanced past this.
+    last_saved_revision: AtomicU64,
 }
 
 impl EditorStateHub {
@@ -31,7 +46,15 @@ impl EditorStateHub {
             ))),
             project_root: Arc::new(Mutex::new(None)),
             registry_path,
+            last_saved_revision: AtomicU64::new(0),
         }
+    }
+
+    /// Record the current revision as the last-saved baseline so the next
+    /// autosave tick coalesces (fires only after a further edit).
+    fn mark_saved_revision(&self) {
+        self.last_saved_revision
+            .store(self.revision(), Ordering::Relaxed);
     }
 
     fn record_in_registry(&self, project_path: &Path) {
@@ -83,6 +106,9 @@ impl EditorStateHub {
         if let Ok(mut root) = self.project_root.lock() {
             *root = Some(bundle.root);
         }
+        // A just-loaded project is already on disk — don't autosave until the
+        // next edit (#211 coalescing baseline).
+        self.mark_saved_revision();
         Ok(())
     }
 
@@ -125,8 +151,10 @@ impl EditorStateHub {
         self.project_root.lock().ok().and_then(|r| r.clone())
     }
 
-    /// Snapshot the shared timeline, siblings, manifest, and live multicam
-    /// groups under the lock.
+    /// Snapshot the shared timeline, siblings, manifest, live multicam groups,
+    /// and the revision — all under one lock so the revision matches exactly
+    /// the state being written (autosave coalescing must not record a revision
+    /// newer than what reached disk, #211).
     #[allow(clippy::type_complexity)]
     fn snapshot(
         &self,
@@ -136,6 +164,7 @@ impl EditorStateHub {
             Vec<Timeline>,
             MediaManifest,
             Vec<core_model::MulticamSource>,
+            u64,
         ),
         String,
     > {
@@ -148,6 +177,7 @@ impl EditorStateHub {
             exec.sibling_timelines().to_vec(),
             exec.media_manifest().clone(),
             exec.saved_multicam_groups().unwrap_or_default(),
+            exec.revision(),
         ))
     }
 
@@ -157,7 +187,7 @@ impl EditorStateHub {
         let Some(root) = self.project_root() else {
             return Err("No project open: nothing to save".into());
         };
-        let (timeline, siblings, manifest, groups) = self.snapshot()?;
+        let (timeline, siblings, manifest, groups, revision) = self.snapshot()?;
         project_io::save_project_state_with_siblings_and_groups(
             &root,
             &timeline,
@@ -165,13 +195,37 @@ impl EditorStateHub {
             &manifest,
             Some(groups),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+        self.last_saved_revision.store(revision, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Persist the current project to its root now (the autosave / show-Home
+    /// path, #211). A thin named wrapper over [`save`] the app's autosave timer
+    /// and Home transition can call; errors when no project is open.
+    pub fn save_now(&self) -> Result<(), String> {
+        self.save()
+    }
+
+    /// Debounced-autosave tick (#211): saves iff a project root exists and the
+    /// revision advanced since the last save/load. Returns `Ok(true)` when it
+    /// saved, `Ok(false)` when it coalesced/skipped. Multiple rapid edits
+    /// between ticks collapse into one save; a rootless project never autosaves.
+    pub fn autosave_if_dirty(&self) -> Result<bool, String> {
+        let has_root = self.project_root().is_some();
+        let current = self.revision();
+        let last = self.last_saved_revision.load(Ordering::Relaxed);
+        if !autosave_should_fire(has_root, current, last) {
+            return Ok(false);
+        }
+        self.save_now()?;
+        Ok(true)
     }
 
     /// Write the current state to a new directory and make it the
     /// project root. On write failure the root is left unchanged.
     pub fn save_as(&self, root: &Path) -> Result<(), String> {
-        let (timeline, siblings, manifest, groups) = self.snapshot()?;
+        let (timeline, siblings, manifest, groups, revision) = self.snapshot()?;
         project_io::save_project_state_with_siblings_and_groups(
             root,
             &timeline,
@@ -185,6 +239,7 @@ impl EditorStateHub {
         if let Ok(mut current) = self.project_root.lock() {
             *current = Some(root.to_path_buf());
         }
+        self.last_saved_revision.store(revision, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -432,6 +487,111 @@ mod tests {
         let hub = EditorStateHub::new();
         let err = hub.save().unwrap_err();
         assert!(err.contains("No project open"), "err={err}");
+    }
+
+    // ── #211 autosave ────────────────────────────────────────────────────
+
+    #[test]
+    fn autosave_should_fire_trigger_logic() {
+        // Injected counter (no timers): fires only with a root AND an advance.
+        assert!(!autosave_should_fire(false, 5, 0), "rootless never autosaves");
+        assert!(!autosave_should_fire(false, 5, 5), "rootless, no advance");
+        assert!(autosave_should_fire(true, 1, 0), "root + advance fires");
+        assert!(!autosave_should_fire(true, 3, 3), "no advance coalesces");
+        assert!(!autosave_should_fire(true, 2, 5), "stale tick after save skips");
+        assert!(autosave_should_fire(true, 6, 5), "further edit re-arms");
+    }
+
+    #[test]
+    fn autosave_skips_rootless_project() {
+        let hub = EditorStateHub::new();
+        // An unsaved project has no root — an edit must not autosave.
+        hub.load_project(
+            Timeline {
+                fps: 30,
+                ..Default::default()
+            },
+            MediaManifest::default(),
+        );
+        {
+            let exec = hub.executor();
+            exec.lock()
+                .unwrap()
+                .execute("organize_media", &serde_json::json!({"createFolders": ["B-roll"]}))
+                .unwrap();
+        }
+        assert!(hub.project_root().is_none());
+        assert_eq!(hub.autosave_if_dirty(), Ok(false), "rootless: no autosave");
+    }
+
+    #[test]
+    fn autosave_fires_after_edit_and_coalesces() {
+        let dir = temp_bundle_dir("autosave.palmier");
+        std::fs::write(dir.join(core_model::TIMELINE_FILENAME), r#"{"fps":30}"#).unwrap();
+
+        let hub = EditorStateHub::new();
+        hub.load_bundle(&dir).unwrap();
+        // Freshly loaded → nothing dirty yet.
+        assert_eq!(hub.autosave_if_dirty(), Ok(false), "just-loaded is clean");
+
+        {
+            let exec = hub.executor();
+            exec.lock()
+                .unwrap()
+                .execute("organize_media", &serde_json::json!({"createFolders": ["B-roll"]}))
+                .unwrap();
+        }
+        // First tick after the edit saves; the next tick coalesces (no advance).
+        assert_eq!(hub.autosave_if_dirty(), Ok(true), "edit triggers autosave");
+        assert_eq!(hub.autosave_if_dirty(), Ok(false), "no further edit → skip");
+
+        // The autosaved folder round-trips from disk.
+        let fresh = EditorStateHub::new();
+        fresh.load_bundle(&dir).unwrap();
+        let exec = fresh.executor();
+        assert!(exec
+            .lock()
+            .unwrap()
+            .media_manifest()
+            .folders
+            .iter()
+            .any(|f| f.name == "B-roll"));
+    }
+
+    #[test]
+    fn save_now_persists_current_state() {
+        let dir = temp_bundle_dir("save-now.palmier");
+        std::fs::write(dir.join(core_model::TIMELINE_FILENAME), r#"{"fps":30}"#).unwrap();
+
+        let hub = EditorStateHub::new();
+        hub.load_bundle(&dir).unwrap();
+        {
+            let exec = hub.executor();
+            exec.lock()
+                .unwrap()
+                .execute("organize_media", &serde_json::json!({"createFolders": ["C-roll"]}))
+                .unwrap();
+        }
+        hub.save_now().unwrap();
+        // save_now marks the revision clean, so a follow-up autosave coalesces.
+        assert_eq!(hub.autosave_if_dirty(), Ok(false), "save_now clears dirty");
+
+        let fresh = EditorStateHub::new();
+        fresh.load_bundle(&dir).unwrap();
+        assert!(fresh
+            .executor()
+            .lock()
+            .unwrap()
+            .media_manifest()
+            .folders
+            .iter()
+            .any(|f| f.name == "C-roll"));
+    }
+
+    #[test]
+    fn save_now_without_project_errors() {
+        let hub = EditorStateHub::new();
+        assert!(hub.save_now().unwrap_err().contains("No project open"));
     }
 
     #[test]

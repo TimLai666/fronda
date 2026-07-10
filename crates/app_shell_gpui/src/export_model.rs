@@ -120,6 +120,10 @@ pub struct ExportViewModel {
     /// Which NLE an FCPXML export is calibrated for (#254). Resolve is the default; the export
     /// dialog surfaces a "DaVinci Resolve / Final Cut Pro" selector for the Fcpxml mode.
     pub fcpxml_target: FcpxmlTarget,
+    /// 10-bit HDR video export (Issue #138): when set and the codec is H.265,
+    /// the encoder writes HEVC Main10 with BT.2020 + HLG tags instead of 8-bit
+    /// SDR. Ignored for non-HEVC codecs (H.264 / ProRes).
+    pub hdr: bool,
 }
 
 impl ExportViewModel {
@@ -131,6 +135,7 @@ impl ExportViewModel {
             settings_expanded: true,
             missing_file_count: 0,
             fcpxml_target: FcpxmlTarget::Resolve,
+            hdr: false,
         }
     }
 
@@ -140,6 +145,26 @@ impl ExportViewModel {
 
     pub fn set_fcpxml_target(&mut self, target: FcpxmlTarget) {
         self.fcpxml_target = target;
+    }
+
+    /// Toggle 10-bit HDR video export (Issue #138). Only affects H.265 output.
+    pub fn set_hdr(&mut self, hdr: bool) {
+        self.hdr = hdr;
+    }
+
+    /// The effective video codec for the current format + HDR toggle: an
+    /// HDR-enabled H.265 selection resolves to HEVC Main10 (Issue #138).
+    pub fn effective_video_codec(&self) -> render_core::ExportFormat {
+        match self.panel.settings.format {
+            render_core::ExportFormat::H265 | render_core::ExportFormat::H265Hdr => {
+                if self.hdr {
+                    render_core::ExportFormat::H265Hdr
+                } else {
+                    render_core::ExportFormat::H265
+                }
+            }
+            other => other,
+        }
     }
 
     pub fn set_resolution(&mut self, resolution: ExportResolution) {
@@ -333,5 +358,37 @@ mod tests {
         let mut vm = ExportViewModel::new();
         vm.set_mode(ExportMode::Xml);
         assert_eq!(vm.mode, ExportMode::Xml);
+    }
+
+    #[test]
+    fn hdr_toggle_upgrades_h265_to_main10() {
+        let mut vm = ExportViewModel::new();
+        assert!(!vm.hdr, "HDR off by default");
+        vm.set_format(ExportFormat::H265);
+        assert_eq!(
+            vm.effective_video_codec(),
+            ExportFormat::H265,
+            "SDR H.265 stays 8-bit"
+        );
+        vm.set_hdr(true);
+        assert_eq!(
+            vm.effective_video_codec(),
+            ExportFormat::H265Hdr,
+            "HDR upgrades H.265 → HEVC Main10"
+        );
+    }
+
+    #[test]
+    fn hdr_toggle_ignored_for_non_hevc_codecs() {
+        let mut vm = ExportViewModel::new();
+        vm.set_hdr(true);
+        vm.set_format(ExportFormat::H264);
+        assert_eq!(
+            vm.effective_video_codec(),
+            ExportFormat::H264,
+            "H.264 ignores the HDR toggle"
+        );
+        vm.set_format(ExportFormat::ProRes);
+        assert_eq!(vm.effective_video_codec(), ExportFormat::ProRes);
     }
 }

@@ -49,11 +49,14 @@ pub fn encoder_available() -> bool {
 /// file beats a broken HEVC one.
 fn find_video_encoder(codec: VideoCodec) -> Option<ffmpeg::codec::Codec> {
     match codec {
+        // HDR must be a real 10-bit HEVC encoder — NO SDR/8-bit fallback
+        // (Issue #138). `build` turns the None into an explicit error.
+        VideoCodec::H265Hdr => ffmpeg::encoder::find_by_name("libx265"),
         VideoCodec::H265 => ffmpeg::encoder::find_by_name("libx265")
-            .or_else(|| ffmpeg::encoder::find(ffmpeg::codec::Id::H264)),
-        other => ffmpeg::encoder::find(other.codec_id()),
+            .or_else(|| ffmpeg::encoder::find(ffmpeg::codec::Id::H264))
+            .or_else(pick_encoder),
+        other => ffmpeg::encoder::find(other.codec_id()).or_else(pick_encoder),
     }
-    .or_else(pick_encoder)
 }
 
 fn err<T>(context: &str, e: ffmpeg::Error) -> Result<T, String> {
@@ -90,19 +93,24 @@ pub struct Mp4Encoder {
 }
 
 /// Supported export video codecs. ProRes writes 10-bit 4:2:2 to a `.mov`;
-/// H.264/H.265 write YUV420P to an `.mp4`.
+/// H.264/H.265 write 8-bit YUV420P to an `.mp4`. `H265Hdr` (Issue #138/#59)
+/// writes 10-bit HEVC Main10 with BT.2020 + HLG color tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoCodec {
     H264,
     H265,
     ProRes,
+    /// HEVC Main10 for 10-bit HDR (BT.2020 primaries, ARIB-STD-B67 / HLG
+    /// transfer). Requires a real 10-bit HEVC encoder (libx265) — never falls
+    /// back to an 8-bit / SDR encode.
+    H265Hdr,
 }
 
 impl VideoCodec {
     fn codec_id(self) -> ffmpeg::codec::Id {
         match self {
             VideoCodec::H264 => ffmpeg::codec::Id::H264,
-            VideoCodec::H265 => ffmpeg::codec::Id::HEVC,
+            VideoCodec::H265 | VideoCodec::H265Hdr => ffmpeg::codec::Id::HEVC,
             VideoCodec::ProRes => ffmpeg::codec::Id::PRORES,
         }
     }
@@ -110,8 +118,14 @@ impl VideoCodec {
     fn pixel_format(self) -> Pixel {
         match self {
             VideoCodec::ProRes => Pixel::YUV422P10LE,
+            VideoCodec::H265Hdr => Pixel::YUV420P10LE,
             _ => Pixel::YUV420P,
         }
+    }
+
+    /// Whether this codec produces a 10-bit HDR (BT.2020 + HLG) stream.
+    fn is_hdr(self) -> bool {
+        matches!(self, VideoCodec::H265Hdr)
     }
 }
 
@@ -171,8 +185,18 @@ impl Mp4Encoder {
             return Err("fps must be positive".into());
         }
         let pix = video_codec.pixel_format();
-        let codec =
-            find_video_encoder(video_codec).ok_or("no usable video encoder in linked ffmpeg")?;
+        let codec = match find_video_encoder(video_codec) {
+            Some(c) => c,
+            None if video_codec.is_hdr() => {
+                // Never silently degrade HDR to SDR (Issue #138).
+                return Err(
+                    "HDR export (HEVC Main10) requires the libx265 10-bit encoder, \
+                     which is not available in this ffmpeg build"
+                        .into(),
+                );
+            }
+            None => return Err("no usable video encoder in linked ffmpeg".into()),
+        };
 
         let mut octx = match ffmpeg::format::output(&output) {
             Ok(o) => o,
@@ -196,6 +220,21 @@ impl Mp4Encoder {
         enc.set_frame_rate(Some(Rational(fps, 1)));
         enc.set_gop(12);
         enc.set_bit_rate(bit_rate_for(width, height, fps));
+        if video_codec.is_hdr() {
+            // Tag the stream BT.2020 primaries + HLG (ARIB-STD-B67) transfer so
+            // players render it as HDR (Issue #138). color_primaries / color_trc
+            // have no typed setter in ffmpeg-the-third; write the codec-context
+            // fields directly, exactly as `set_colorspace` does internally.
+            enc.set_colorspace(ffmpeg::color::Space::BT2020NCL);
+            enc.set_color_range(ffmpeg::color::Range::MPEG);
+            unsafe {
+                let ctx = enc.as_mut_ptr();
+                (*ctx).color_primaries =
+                    ffmpeg::color::Primaries::BT2020.into();
+                (*ctx).color_trc =
+                    ffmpeg::color::TransferCharacteristic::ARIB_STD_B67.into();
+            }
+        }
         if global_header {
             enc.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
         }
@@ -1028,6 +1067,77 @@ mod tests {
         // in a given ffmpeg build; log the support matrix rather than assert.
         for (codec, ext) in [(VideoCodec::H265, "mp4"), (VideoCodec::ProRes, "mov")] {
             eprintln!("codec {codec:?} usable = {}", try_codec(&dir, codec, ext));
+        }
+    }
+
+    /// Probe a written video stream's (pixel format, primaries, transfer).
+    /// Test helper for the HDR color-tag assertion.
+    fn probe_video_color(
+        path: &std::path::Path,
+    ) -> Option<(
+        Pixel,
+        ffmpeg::color::Primaries,
+        ffmpeg::color::TransferCharacteristic,
+    )> {
+        init_ffmpeg();
+        let ictx = ffmpeg::format::input(&path).ok()?;
+        let stream = ictx.streams().best(ffmpeg::media::Type::Video)?;
+        let decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .ok()?
+            .decoder()
+            .video()
+            .ok()?;
+        Some((
+            decoder.format(),
+            decoder.color_primaries(),
+            decoder.color_transfer_characteristic(),
+        ))
+    }
+
+    #[test]
+    fn hdr_export_is_10bit_bt2020_hlg_or_errors() {
+        if !encoder_available() {
+            return;
+        }
+        let dir = temp_dir("codec-hdr");
+        let out = dir.join("hdr.mp4");
+        match Mp4Encoder::new_av_codec(&out, 64, 48, 15, None, VideoCodec::H265Hdr) {
+            Ok(mut enc) => {
+                for _ in 0..5 {
+                    enc.write_frame(&RgbaImage::solid(64, 48, [200, 30, 30, 255]))
+                        .expect("HDR frame encodes");
+                }
+                enc.finish().expect("HDR mux finishes");
+                assert!(std::fs::metadata(&out).unwrap().len() > 0);
+                // The 10-bit pixel format and BT.2020 + HLG tags survive a
+                // re-decode — no silent SDR / 8-bit degrade.
+                let (pix, prim, trc) =
+                    probe_video_color(&out).expect("re-decode the HDR stream");
+                assert_eq!(pix, Pixel::YUV420P10LE, "HDR output must be 10-bit");
+                assert_eq!(
+                    prim,
+                    ffmpeg::color::Primaries::BT2020,
+                    "HDR output must tag BT.2020 primaries"
+                );
+                assert_eq!(
+                    trc,
+                    ffmpeg::color::TransferCharacteristic::ARIB_STD_B67,
+                    "HDR output must tag HLG transfer"
+                );
+            }
+            Err(e) => {
+                // Acceptable ONLY as an explicit HDR error — never a silent SDR
+                // file. Builds without libx265 hit this branch.
+                assert!(
+                    e.contains("HDR") || e.contains("libx265"),
+                    "HDR unavailability must be an explicit error, got: {e}"
+                );
+                assert!(
+                    !out.exists() || std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0) == 0,
+                    "a failed HDR export must not leave a (misleading SDR) file"
+                );
+                eprintln!("HDR encoder unavailable (expected without libx265): {e}");
+            }
         }
     }
 

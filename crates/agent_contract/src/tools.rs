@@ -33,6 +33,9 @@
 //! manage_multicam, change_cam, get_multicam (53 → 56 = 48 upstream + 8 Rust
 //! extensions). Host split (C-1): shared 51 + 4 MCP-only project tools +
 //! 1 in-app-only read_skill → MCP surface 55, in-app surface 52.
+//! upstream-m-batch (#176): added duplicate_clips, a shared clip-mutation tool
+//! (56 → 57 = 49 upstream + 8 Rust extensions). Host split: shared 52 + 4
+//! MCP-only + 1 in-app-only → MCP surface 56, in-app surface 53.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -76,7 +79,7 @@ pub fn tool_host(name: &str) -> ToolHost {
     }
 }
 
-/// The MCP server surface (C-1): shared tools + the four project tools (55).
+/// The MCP server surface (C-1): shared tools + the four project tools (56).
 pub fn mcp_tools() -> Vec<ToolDefinition> {
     all_tools()
         .into_iter()
@@ -84,7 +87,7 @@ pub fn mcp_tools() -> Vec<ToolDefinition> {
         .collect()
 }
 
-/// The in-app agent surface (C-1): shared tools + read_skill (52).
+/// The in-app agent surface (C-1): shared tools + read_skill (53).
 pub fn in_app_tools() -> Vec<ToolDefinition> {
     all_tools()
         .into_iter()
@@ -92,7 +95,7 @@ pub fn in_app_tools() -> Vec<ToolDefinition> {
         .collect()
 }
 
-/// Returns all 56 tools across both host surfaces.
+/// Returns all 57 tools across both host surfaces.
 ///
 /// TDEF-001: tool set (see the header history; design.md C-1).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -133,6 +136,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         change_cam(),
         get_multicam(),
         move_clips(),
+        duplicate_clips(),
         new_project(),
         open_project(),
         organize_media(),
@@ -891,6 +895,32 @@ fn move_clips() -> ToolDefinition {
                         ),
                     ],
                     &["clipId"],
+                ),
+            ),
+        )]),
+    }
+}
+
+/// Upstream #176: full-fidelity clip duplication. Description verbatim from the
+/// PR's ToolDefinitions.swift.
+fn duplicate_clips() -> ToolDefinition {
+    ToolDefinition {
+        name: "duplicate_clips",
+        description: "Creates exact copies of one or more clips at new positions. All properties are preserved: keyframes, effects, fades, speed, opacity, volume, transform, crop, and text styling. Single undoable action. Each entry specifies the source clip ID and a destination toFrame; toTrack is optional (defaults to the source clip's track). Overlap on the destination is resolved by overwriting (existing clips are trimmed/split/removed). Linked partners are duplicated automatically so A/V stays in sync — only name the lead clip.",
+        input_schema: object(&[(
+            "entries",
+            array_of(
+                "Per-clip duplication requests.",
+                object_schema(
+                    &[
+                        ("clipId", string("The source clip ID to duplicate.")),
+                        (
+                            "toTrack",
+                            integer("Destination track index (0-based). Omit to duplicate onto the source clip's track."),
+                        ),
+                        ("toFrame", integer("Destination start frame for the copy.")),
+                    ],
+                    &["clipId", "toFrame"],
                 ),
             ),
         )]),
@@ -1834,31 +1864,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_53_tools() {
-        // Final tool-surface-v2 count (design.md C-1): 57 − 5 retired
-        // (list_folders, set_blend_mode, set_chroma_key, set_color_grade,
-        // generate_music) + 1 new (detect_beats) = 53; multicam-engine
-        // landed the 3 reserved slots (manage_multicam, change_cam,
-        // get_multicam) = 56 = 48 upstream + 8 Rust extensions.
+    fn tdef_001_exactly_57_tools() {
+        // tool-surface-v2 reached 56 (48 upstream + 8 Rust extensions);
+        // upstream-m-batch added duplicate_clips (#176) → 57 = 49 upstream
+        // + 8 Rust extensions.
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            56,
-            "TDEF-001: 56 tools (see the header history)"
+            57,
+            "TDEF-001: 57 tools (see the header history)"
         );
     }
 
     #[test]
     fn tdef_001_host_split_counts() {
-        // C-1 host split (post-multicam): shared 51; MCP = shared + 4
-        // project tools = 55; in-app = shared + read_skill = 52.
+        // C-1 host split (post-#176): shared 52; MCP = shared + 4
+        // project tools = 56; in-app = shared + read_skill = 53.
         let shared = all_tools()
             .iter()
             .filter(|t| t.host() == ToolHost::Shared)
             .count();
-        assert_eq!(shared, 51, "shared surface");
-        assert_eq!(mcp_tools().len(), 55, "MCP surface");
-        assert_eq!(in_app_tools().len(), 52, "in-app surface");
+        assert_eq!(shared, 52, "shared surface");
+        assert_eq!(mcp_tools().len(), 56, "MCP surface");
+        assert_eq!(in_app_tools().len(), 53, "in-app surface");
         let mcp_names: Vec<&str> = mcp_tools().iter().map(|t| t.name).collect();
         assert!(!mcp_names.contains(&"read_skill"), "read_skill is in-app only");
         let in_app_names: Vec<&str> = in_app_tools().iter().map(|t| t.name).collect();
@@ -1897,7 +1925,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 56, "all 56 tool names must be unique");
+        assert_eq!(names.len(), 57, "all 57 tool names must be unique");
     }
 
     #[test]

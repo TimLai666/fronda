@@ -489,10 +489,17 @@ lock-off-partner desync repro'd RED then fixed; tool-surface v2 itself
 still pending the user decision); #269 sync_clips v2 (timecode
 mode + SourceTimecode NTSC frame-duration fix ~18f/10min — verify Rust
 math, M-L); #274 detect_beats + snap-to-beat (L, ML host seam); #138
-10-bit HDR export via ffmpeg Main10 (M); #268 sonnet5 effort:low in
+10-bit HDR export via ffmpeg Main10 (**PORTED 2026-07-10**, change
+`upstream-m-batch`: `video_export::VideoCodec::H265Hdr` — libx265 Main10,
+YUV420P10LE, BT.2020 + ARIB-STD-B67 HLG tags, explicit error on missing
+encoder, NO silent SDR fallback; `export_model.hdr` + toggle; threads via the
+existing VideoCodec param, audio_export untouched); #268 sonnet5 effort:low in
 requests (**PORTED 2026-07-10**: model_request_extras in build_agent_request
 AND the live run_agent_turn body, shape from AgentClientTypes.swift:20);
-#284/#279 XS; #280/#281 timeline UI polish (Tier 4).
+#284 (**PORTED 2026-07-10**, change `upstream-m-batch`:
+`generation_core::aspect_ratio_display_label` verbatim from
+`ImageModelConfig.aspectRatioDisplayLabel`, wired into list_models
+`aspectRatioLabels`)/#279 XS; #280/#281 timeline UI polish (Tier 4).
 
 **(c) open PRs, ranked:** #124 stranded linked audio on overwrite
 (**PORTED 2026-07-10**: place_clips clears linked-partner track ranges on
@@ -507,17 +514,23 @@ format_timecode already uses 1798/17982 divisors; frame 1800 @29.97DF =
 00;01;00;02 and the 10-minute boundary are pinned by tests); #36 custom
 Anthropic base URL (**PORTED 2026-07-10**: AnthropicConfig::from_env reads
 ANTHROPIC_BASE_URL, chat_view wired, URL construction unit-tested);
-#176 duplicate_clips (M); #169 viewer guides
-(M) (**PORTED 2026-07-10 upstream-m-batch**: Guides dropdown menu +
-toggle wiring over the pre-existing #167 overlay/state); #198 TwelveLabs
-(L); #32 OpenRouter (L); #65 wght axis renderer (M) (**PORTED 2026-07-10
-upstream-m-batch**: ab_glyph `set_variation(wght)` + bundled variable
-families wired into `font_for`); #67 duplicate-project context-menu UI (S)
-(**PORTED 2026-07-10 upstream-m-batch**: card "Duplicate" → host `plan_duplicate`
-+ recursive copy + recents refresh); #246 people mask (watch).
+#176 duplicate_clips (**PORTED 2026-07-10** upstream-m-batch:
+full-fidelity clone with fresh ids, linked-partner auto-duplication + fresh
+link group, destination overwrite, C-4 envelope, short-id, validator; tool
+count 56→57 across 4 assertion files + host split); #169 viewer guides
+(**PORTED 2026-07-10 upstream-m-batch**: Guides dropdown menu + toggle wiring
+over the pre-existing #167 overlay/state); #198 TwelveLabs (L); #32 OpenRouter
+(L); #65 wght axis renderer (**PORTED 2026-07-10 upstream-m-batch**: ab_glyph
+`set_variation(wght)` + bundled variable families wired into `font_for`);
+#67 duplicate-project context-menu UI (**PORTED 2026-07-10 upstream-m-batch**:
+card "Duplicate" → host `plan_duplicate` + recursive copy + recents refresh);
+#246 people mask (watch).
 
-**(d) open issues = gaps, ranked:** #211 autosave (VERIFIED: Fronda has
-NO autosave — data-loss, M); #264 overflow hardening (**PORTED 2026-07-10**
+**(d) open issues = gaps, ranked:** #211 autosave (**PORTED 2026-07-10**,
+change `upstream-m-batch`: `editor_state_hub` `autosave_should_fire` /
+`autosave_if_dirty` / `save_now` — coalesced revision-gated save, rootless
+skips, mirrors Swift `scheduleProjectCheckpointAutosave`; app_root timer/Home
+wiring is a 1-line follow-up in another slice); #264 overflow hardening (**PORTED 2026-07-10**
 via the #265 ceiling above); #154 XML/FCPXML
 IMPORT (strategic XL, neither side has it); #164 shortcut parity (M)
 (**PORTED 2026-07-10 upstream-m-batch**: `[`/`]` trim + ⇧⌫ ripple added;
