@@ -949,7 +949,61 @@ impl ToolExecutor {
         result
     }
 
+    /// Pre-dispatch gate: run the matching `mutation` validator so the pure
+    /// shape/range contract (#144 ranges, #264 frame ceiling, MUT-020) guards
+    /// the live path. Validators whose input shape diverges from the live
+    /// executor (split_clip, ripple_delete_ranges, import_folder) stay
+    /// unwired; set_keyframes already shares its parser with the executor.
+    fn validate_args(&self, tool_name: &str, args: &Value) -> Result<(), String> {
+        use crate::mutation as m;
+        fn gate<T>(r: m::ValidationResult<T>) -> Result<(), String> {
+            match r {
+                m::ValidationResult::Ok(_) => Ok(()),
+                m::ValidationResult::Error(e) => Err(e),
+            }
+        }
+        match tool_name {
+            // MUT-010 (text-only field rejection) needs clip types; it stays
+            // validator-only (None) pending a Swift-parity decision — the Rust
+            // executor deliberately styles non-text clips today.
+            "set_clip_properties" => gate(m::validate_set_clip_properties(args, None)),
+            "remove_clips" => gate(m::validate_remove_clips(args)),
+            "move_clips" | "move_clips_linked" => gate(m::validate_move_clips(args)),
+            "add_clips" => gate(m::validate_add_clips(args)),
+            "insert_clips" => gate(m::validate_insert_clips(args)),
+            "remove_tracks" => gate(m::validate_remove_tracks(args)),
+            "add_texts" => {
+                // Mirror cmd_add_texts targeting: an in-range explicit
+                // trackIndex targets that track; anything else auto-picks.
+                let track_type = args
+                    .get("trackIndex")
+                    .and_then(|v| v.as_i64())
+                    .and_then(|i| usize::try_from(i).ok())
+                    .and_then(|i| self.timeline.tracks.get(i))
+                    .map(|t| t.r#type.name().to_string());
+                gate(m::validate_add_texts(args, track_type))
+            }
+            "add_captions" => gate(m::validate_add_captions(args)),
+            "add_shapes" => gate(m::validate_add_shapes(args)),
+            "apply_animation" => gate(m::validate_apply_animation(args)),
+            "apply_color" => gate(m::validate_apply_color(args)),
+            "apply_effect" => gate(m::validate_apply_effect(args)),
+            "create_folder" => gate(m::validate_create_folder(args)),
+            "rename_folder" => gate(m::validate_rename_folder(args)),
+            "delete_folder" => gate(m::validate_delete_folder(args)),
+            "rename_media" => gate(m::validate_rename_media(args)),
+            "delete_media" => gate(m::validate_delete_media(args)),
+            "move_to_folder" => gate(m::validate_move_to_folder(args)),
+            "set_chroma_key" => gate(m::validate_set_chroma_key(args)),
+            "set_blend_mode" => gate(m::validate_set_blend_mode(args)),
+            "set_color_grade" => gate(m::validate_set_color_grade(args)),
+            "generate_music" => gate(m::validate_generate_music(args)),
+            _ => Ok(()),
+        }
+    }
+
     fn execute_inner(&mut self, tool_name: &str, args: &Value) -> Result<Value, String> {
+        self.validate_args(tool_name, args)?;
         match tool_name {
             // ── Read-only tools ──────────────────────────────────────────
             "get_timeline" => self.cmd_get_timeline(),
@@ -1234,10 +1288,6 @@ impl ToolExecutor {
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
 
-        if clip_ids.is_empty() {
-            return Err("clipIds must be non-empty".to_string());
-        }
-
         let ripple = args
             .get("ripple")
             .and_then(|v| v.as_bool())
@@ -1269,7 +1319,6 @@ impl ToolExecutor {
             .get("toFrame")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| "Missing toFrame".to_string())?;
-        crate::mutation::require_frame_in_bounds(to_frame, "toFrame")?;
 
         if to_track >= self.timeline.tracks.len() {
             return Err(format!(
@@ -1301,35 +1350,16 @@ impl ToolExecutor {
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
 
-        if clip_ids.is_empty() {
-            return Err("clipIds must be non-empty".to_string());
-        }
-
         let properties = args
             .get("properties")
             .ok_or_else(|| "Missing properties".to_string())?;
 
+        // Range/ceiling checks (#144 speed/volume/opacity/trim, #264 frame
+        // bounds) run in validate_args before dispatch.
         let duration = properties.get("durationFrames").and_then(|v| v.as_i64());
         let trim_start = properties.get("trimStartFrame").and_then(|v| v.as_i64());
         let trim_end = properties.get("trimEndFrame").and_then(|v| v.as_i64());
-        // Upstream #264/#265: ceiling-bound frame-valued properties.
-        for (label, value) in [
-            ("durationFrames", duration),
-            ("trimStartFrame", trim_start),
-            ("trimEndFrame", trim_end),
-        ] {
-            if let Some(v) = value {
-                crate::mutation::require_frame_in_bounds(v, label)?;
-            }
-        }
         let speed = properties.get("speed").and_then(|v| v.as_f64());
-        // Upstream #212/#144: any positive speed is legal (incl. <0.25x); zero or
-        // negative would corrupt duration math, so reject instead of storing it.
-        if let Some(s) = speed {
-            if s <= 0.0 {
-                return Err(format!("speed must be > 0 (got {s})"));
-            }
-        }
         let volume = properties.get("volume").and_then(|v| v.as_f64());
         let opacity = properties.get("opacity").and_then(|v| v.as_f64());
         let content = properties.get("content").and_then(|v| v.as_str());
@@ -1848,10 +1878,6 @@ impl ToolExecutor {
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
-
-        if track_ids.is_empty() {
-            return Err("trackIds must be non-empty".to_string());
-        }
 
         let before_count = self.timeline.tracks.len();
         let mut indices: Vec<usize> = track_ids
@@ -2381,10 +2407,6 @@ impl ToolExecutor {
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
 
-        if media_ids.is_empty() {
-            return Err("mediaIds must be non-empty".to_string());
-        }
-
         // trackIndex is optional (MUT-002/003): omit it and the tool auto-creates /
         // reuses a video track for visual clips and an audio track for audio clips.
         let track_index_opt = args
@@ -2613,10 +2635,6 @@ impl ToolExecutor {
             .get("frame")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| "Missing frame".to_string())?;
-        if frame < 0 {
-            return Err(format!("frame must be >= 0 (got {frame})"));
-        }
-        crate::mutation::require_frame_in_bounds(frame, "frame")?;
 
         if track_index >= self.timeline.tracks.len() {
             return Err(format!("Track index {track_index} out of bounds"));
@@ -5199,10 +5217,6 @@ impl ToolExecutor {
             .and_then(|v| v.as_array())
             .ok_or_else(|| "Missing entries array".to_string())?;
 
-        if entries.is_empty() {
-            return Err("entries must be non-empty".to_string());
-        }
-
         // Find or create a video track
         let ti = match self
             .timeline
@@ -6463,13 +6477,117 @@ mod tests {
                     &json!({"clipIds": [clip_id.clone()], "properties": {"speed": bad}}),
                 )
                 .unwrap_err();
-            assert!(err.contains("speed must be > 0"), "speed {bad}: err={err}");
+            // wire-mutation-validators: the #144 validator now rejects first;
+            // its message names the tool and field, so prefer it over the old
+            // inline "speed must be > 0".
+            assert!(err.contains("'speed' must be positive"), "speed {bad}: err={err}");
         }
         assert_eq!(
             exec.timeline().tracks[0].clips[0].speed,
             1.0,
             "rejected speed leaves the clip unchanged"
         );
+    }
+
+    // ─── wire-mutation-validators: mutation.rs validators gate execute() ───
+    // #144's range checks were dormant (mutation.rs was never called on the
+    // live path); these pin them e2e through executor.execute.
+
+    #[test]
+    fn set_clip_properties_rejects_volume_above_one() {
+        let mut exec = executor_with_clip();
+        let err = exec
+            .execute(
+                "set_clip_properties",
+                &json!({"clipIds": ["c"], "properties": {"volume": 1.5}}),
+            )
+            .unwrap_err();
+        assert!(err.contains("volume"), "got: {err}");
+        assert_eq!(exec.timeline().tracks[0].clips[0].volume, 1.0);
+    }
+
+    #[test]
+    fn set_clip_properties_rejects_negative_opacity() {
+        let mut exec = executor_with_clip();
+        let err = exec
+            .execute(
+                "set_clip_properties",
+                &json!({"clipIds": ["c"], "properties": {"opacity": -0.1}}),
+            )
+            .unwrap_err();
+        assert!(err.contains("opacity"), "got: {err}");
+        assert_eq!(exec.timeline().tracks[0].clips[0].opacity, 1.0);
+    }
+
+    #[test]
+    fn set_clip_properties_rejects_negative_trim() {
+        let mut exec = executor_with_clip();
+        for key in ["trimStartFrame", "trimEndFrame"] {
+            let err = exec
+                .execute(
+                    "set_clip_properties",
+                    &json!({"clipIds": ["c"], "properties": {key: -1}}),
+                )
+                .unwrap_err();
+            assert!(err.contains(key), "{key}: got {err}");
+        }
+        assert_eq!(exec.timeline().tracks[0].clips[0].trim_start_frame, 0);
+        assert_eq!(exec.timeline().tracks[0].clips[0].trim_end_frame, 0);
+    }
+
+    #[test]
+    fn add_texts_rejects_audio_track_target() {
+        // MUT-020 live: an explicit audio trackIndex refuses text placement
+        // (previously the executor happily put text clips on the audio track).
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Audio);
+        let err = exec
+            .execute(
+                "add_texts",
+                &json!({"texts": [{"content": "x", "startFrame": 0, "durationFrames": 30}], "trackIndex": 0}),
+            )
+            .unwrap_err();
+        assert!(err.contains("audio"), "got: {err}");
+        assert!(exec.timeline().tracks[0].clips.is_empty());
+    }
+
+    #[test]
+    fn add_texts_without_track_index_still_auto_creates() {
+        // No trackIndex → no track-type context → the MUT-020 gate must not
+        // block the auto-create path even when an audio track exists.
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Audio);
+        exec.execute("add_texts", &json!({"texts": [{"content": "x"}]}))
+            .unwrap();
+        let placed: usize = exec.timeline().tracks.iter().map(|t| t.clips.len()).sum();
+        assert_eq!(placed, 1);
+    }
+
+    #[test]
+    fn insert_clips_rejects_empty_media_ids() {
+        // Shape check the executor never had inline — the wired validator adds it.
+        let mut exec = make_executor_with_media();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "insert_clips",
+                &json!({"mediaIds": [], "trackIndex": 0, "frame": 0}),
+            )
+            .unwrap_err();
+        assert!(err.contains("mediaIds"), "got: {err}");
+    }
+
+    #[test]
+    fn validator_rejection_leaves_revision_unchanged() {
+        let mut exec = executor_with_clip();
+        let before = exec.revision();
+        let _ = exec
+            .execute(
+                "set_clip_properties",
+                &json!({"clipIds": ["c"], "properties": {"volume": 1.5}}),
+            )
+            .unwrap_err();
+        assert_eq!(exec.revision(), before, "rejected call must not bump revision");
     }
 
     #[test]
@@ -7114,7 +7232,8 @@ mod tests {
         let err = exec
             .execute("remove_clips", &json!({"clipIds": []}))
             .unwrap_err();
-        assert!(err.contains("non-empty"));
+        // wire-mutation-validators: MUT-005 gate message.
+        assert!(err.contains("missing or empty 'clipIds'"), "got: {err}");
     }
 
     #[test]
@@ -7138,7 +7257,8 @@ mod tests {
                 &json!({"clipIds": [], "properties": {}}),
             )
             .unwrap_err();
-        assert!(err.contains("non-empty"));
+        // wire-mutation-validators: MUT-009 gate message.
+        assert!(err.contains("missing or empty 'clipIds'"), "got: {err}");
     }
 
     #[test]
@@ -7147,7 +7267,8 @@ mod tests {
         let err = exec
             .execute("remove_tracks", &json!({"trackIds": []}))
             .unwrap_err();
-        assert!(err.contains("non-empty"));
+        // wire-mutation-validators: MUT-006 gate message.
+        assert!(err.contains("missing or empty 'trackIds'"), "got: {err}");
     }
 
     #[test]
@@ -7954,7 +8075,8 @@ mod tests {
     fn exec_023_create_folder_missing_name() {
         let mut exec = make_executor();
         let err = exec.execute("create_folder", &json!({})).unwrap_err();
-        assert!(err.contains("Missing name"));
+        // wire-mutation-validators: MUT-022 gate message (also rejects "").
+        assert!(err.contains("missing or empty 'name'"), "got: {err}");
     }
 
     #[test]
@@ -8112,7 +8234,8 @@ mod tests {
     fn exec_034_add_texts_missing_texts() {
         let mut exec = make_executor();
         let err = exec.execute("add_texts", &json!({})).unwrap_err();
-        assert!(err.contains("Missing texts array"));
+        // wire-mutation-validators: MUT-019 gate message (also rejects []).
+        assert!(err.contains("missing or empty 'texts'"), "got: {err}");
     }
 
     #[test]
@@ -8598,7 +8721,8 @@ mod tests {
         let err = exec
             .execute("add_captions", &json!({"clipIds": []}))
             .unwrap_err();
-        assert!(err.contains("non-empty"));
+        // wire-mutation-validators: MUT-021 gate message.
+        assert!(err.contains("at least one valid string"), "got: {err}");
     }
 
     #[test]
@@ -8931,7 +9055,12 @@ mod tests {
                 &json!({"clipIds": ["c"], "properties": {"background": {"color": "zzz"}}}),
             )
             .unwrap_err();
-        assert!(err.contains("invalid background color"), "got: {err}");
+        // wire-mutation-validators: the validator's hex check fires before the
+        // inline parse_text_fill; its message pinpoints the exact field.
+        assert!(
+            err.contains("'background.color' is not a valid hex color"),
+            "got: {err}"
+        );
     }
 
     #[test]

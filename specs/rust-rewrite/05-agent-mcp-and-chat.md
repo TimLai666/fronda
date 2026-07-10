@@ -144,12 +144,14 @@ Scope sources:
 
 ## F. Mutation-tool contract
 
+Since change `wire-mutation-validators`, the validators run on the live path: `ToolExecutor::validate_args` gates `execute()` before dispatch (validate_split_clip, validate_ripple_delete_ranges, and validate_import_folder stay unwired — their input shape diverges from the live executor; set_keyframes shares its parser with the executor instead).
+
 - [x] `MUT-001`: All mutation validators reject unknown keys and malformed input via serde deserialization strictness. Each validation function returns `ValidationResult`.
 - [x] `MUT-002`: `validate_add_clips()` — mixed track_index handling. Test: `mut_002_add_clips_valid_with_track`, `mut_002_add_clips_valid_without_track`, `mut_002_add_clips_rejects_empty`.
 - [x] `MUT-003`: Auto-create tracks when all entries omit trackIndex (implemented in `cmd_add_clips`).
 - [x] `MUT-004`: `validate_insert_clips()` requires `trackIndex` and `frame`. Tests: `mut_004_insert_clips_valid`, `mut_004_insert_clips_requires_track_index`, `mut_004_insert_clips_requires_media_ids`, `mut_004_insert_clips_requires_non_negative_frame`.
 - [x] `MUT-005`: `validate_remove_clips()` — clip_ids with optional ripple. Tests: `mut_005_remove_clips_valid`, `mut_005_remove_clips_default_no_ripple`.
-- [x] `MUT-006`: `validate_remove_tracks()` deduplicates and sorts. Tests: `mut_006_remove_tracks_valid`, `mut_006_remove_tracks_dedup`, `mut_006_remove_tracks_empty_rejected`.
+- [x] `MUT-006`: `validate_remove_tracks()` takes string track IDs (the live tool/schema shape, not Swift's `trackIndexes` integers) and deduplicates preserving order. Tests: `mut_006_remove_tracks_valid`, `mut_006_remove_tracks_dedup`, `mut_006_remove_tracks_empty_rejected`.
 - [x] `MUT-007`: `validate_move_clips()` requires at least one of `toTrack`/`toFrame`. Tests: `mut_007_move_clips_valid_with_to_track`, `mut_007_move_clips_valid_with_to_frame`, `mut_007_move_clips_valid_with_both`, `mut_007_move_clips_requires_at_least_one`, `mut_007_move_clips_requires_clip_ids`.
 - [x] `MUT-008`: `validate_move_clips_linked()` handles linked partner frame deltas. Tests: `mut_008_move_clips_linked_valid`, `mut_008_move_clips_linked_empty_rejected`.
 - [x] `MUT-009`: `validate_set_clip_properties()` applies same properties to all clip_ids. Test: `mut_009_set_clip_properties_valid`, `mut_009_set_clip_properties_empty_ids`, `mut_009_set_clip_properties_missing_properties`.
@@ -162,8 +164,8 @@ Scope sources:
 - [x] `MUT-016`: `validate_split_clip()` requires interior frame point. Tests: `mut_016_split_clip_valid`, `mut_016_split_clip_missing_clip_id`, `mut_016_split_clip_negative_frame`.
 - [x] `MUT-017`: `validate_ripple_delete_ranges()` requires exactly one of clipId or trackIndex. Tests: `mut_017_ripple_delete_ranges_with_clip_id`, `mut_017_ripple_delete_ranges_with_track_index`, `mut_017_ripple_delete_ranges_rejects_both`, `mut_017_ripple_delete_ranges_requires_one`.
 - [x] `MUT-018`: Ripple delete accepts optional `seconds` for clip-scoped mode. Tests: `mut_018_ripple_delete_ranges_clip_scoped_seconds`, `mut_018_ripple_delete_ranges_clip_scoped_no_ranges`.
-- [x] `MUT-019`: `validate_add_texts()` auto-creates visual track. Tests: `mut_019_add_texts_valid`, `mut_019_add_texts_auto_create_visual_track`, `mut_019_add_texts_missing_texts`.
-- [x] `MUT-020`: `validate_add_texts()` rejects audio tracks. Tests: `mut_020_add_texts_rejects_audio_track`, `mut_020_add_texts_allows_video_track`.
+- [x] `MUT-019`: `validate_add_texts()` auto-creates visual track. Entries follow the executor shape: `content` (preferred) or `text`, optional `startFrame`/`durationFrames` with range checks on explicit values; one bad entry rejects the whole call. Tests: `mut_019_add_texts_valid`, `mut_019_add_texts_auto_create_visual_track`, `mut_019_add_texts_missing_texts`, `mut_019_add_texts_executor_shape`, `mut_019_add_texts_bad_entry_rejects_whole_call`.
+- [x] `MUT-020`: `validate_add_texts()` rejects audio tracks — enforced live: the `validate_args` gate resolves the explicit `trackIndex` to its track type before dispatch. Tests: `mut_020_add_texts_rejects_audio_track`, `mut_020_add_texts_allows_video_track`, executor `add_texts_rejects_audio_track_target`.
 - [x] `MUT-021`: `validate_add_captions()` supports explicit clipIds or auto-detect. Tests: `mut_021_add_captions_valid_with_clip_ids`, `mut_021_add_captions_valid_auto_detect`, `mut_021_add_captions_empty_ids_rejected`.
 - [x] `MUT-022`: Folder/media tool validators: `validate_create_folder`, `validate_rename_folder`, `validate_delete_folder`, `validate_rename_media`, `validate_delete_media`, `validate_move_to_folder`. All with tests.
 - [x] `MUT-023`: `validate_hex_color()` / `parse_hex_color()` — accepts `#RGB`, `#RRGGBB`, `#RRGGBBAA`, trims whitespace, rejects internal whitespace. Tests in both `hex_color_parser` module and `mutation` module.

@@ -52,6 +52,10 @@ pub struct SplitClipInput {
 }
 
 /// MUT-016: Validate `split_clip` input.
+///
+/// UNWIRED: the live tool is the #186 batch `split_clips` (`splits[{clipId,
+/// atFrame}]` or `trackIndex`+`frames[]`); its per-cut checks live inline in
+/// `cmd_split_clips`. This validates the legacy single-clip shape only.
 pub fn validate_split_clip(input: &Value) -> ValidationResult<SplitClipInput> {
     let clip_id = match input.get("clipId").and_then(|v| v.as_str()) {
         Some(id) if !id.is_empty() => id.to_string(),
@@ -415,24 +419,25 @@ pub fn validate_insert_clips(input: &Value) -> ValidationResult<InsertClipsInput
 /// Parsed and validated `remove_tracks` input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoveTracksInput {
-    pub track_ids: Vec<usize>,
+    pub track_ids: Vec<String>,
 }
 
-/// MUT-006: Dedup repeated track indexes.
+/// MUT-006: Dedup repeated track ids. The live tool takes string track IDs
+/// (executor + schema), not the integer indexes Swift's `trackIndexes` uses.
 pub fn validate_remove_tracks(input: &Value) -> ValidationResult<RemoveTracksInput> {
     let track_ids = match input.get("trackIds").and_then(|v| v.as_array()) {
         Some(arr) if !arr.is_empty() => {
-            let mut ids: Vec<usize> = arr
+            let mut ids: Vec<String> = arr
                 .iter()
-                .filter_map(|v| v.as_u64().map(|i| i as usize))
+                .filter_map(|v| v.as_str().map(String::from))
                 .collect();
             if ids.is_empty() {
                 return ValidationResult::Error(
-                    "remove_tracks: 'trackIds' must contain at least one valid index".into(),
+                    "remove_tracks: 'trackIds' must contain at least one valid track id".into(),
                 );
             }
-            ids.sort_unstable();
-            ids.dedup();
+            let mut seen = std::collections::HashSet::new();
+            ids.retain(|id| seen.insert(id.clone()));
             ids
         }
         _ => return ValidationResult::Error("remove_tracks: missing or empty 'trackIds'".into()),
@@ -514,6 +519,10 @@ pub struct RippleDeleteRangesInput {
 
 /// MUT-017: Requires exactly one of `clipId` or `trackIndex`.
 /// MUT-018: Accepts optional `seconds` field for clip-scoped mode.
+///
+/// UNWIRED: this models Swift's clip-scoped contract (`startFrame`/`endFrame`
+/// range keys); the live executor + schema take `trackIndex` + `ranges`
+/// with `start`/`end` keys and have no clip-scoped mode yet.
 pub fn validate_ripple_delete_ranges(input: &Value) -> ValidationResult<RippleDeleteRangesInput> {
     let clip_id = input
         .get("clipId")
@@ -593,12 +602,15 @@ pub fn validate_ripple_delete_ranges(input: &Value) -> ValidationResult<RippleDe
 
 // === MUT-019/020: add_texts ===============================================
 
-/// Parsed and validated text entry for `add_texts`.
+/// Parsed and validated text entry for `add_texts`. Fields the executor
+/// defaults stay optional: `content` (Swift key, preferred) or `text`,
+/// `startFrame` (default: appended after the last clip), `durationFrames`
+/// (default: 150).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextInput {
-    pub text: String,
-    pub start_frame: i64,
-    pub duration_frames: i64,
+    pub text: Option<String>,
+    pub start_frame: Option<i64>,
+    pub duration_frames: Option<i64>,
 }
 
 /// Parsed and validated `add_texts` input.
@@ -630,28 +642,41 @@ pub fn validate_add_texts(
 
     let texts = match input.get("texts").and_then(|v| v.as_array()) {
         Some(arr) if !arr.is_empty() => {
-            let parsed: Vec<TextInput> = arr
-                .iter()
-                .filter_map(|entry| {
-                    let text = entry.get("text").and_then(|v| v.as_str())?;
-                    let start_frame = entry.get("startFrame").and_then(|v| v.as_i64())?;
-                    let duration_frames = entry.get("durationFrames").and_then(|v| v.as_i64())?;
-                    // Upstream #264/#265: out-of-bounds frames invalidate the entry.
-                    require_frame_in_bounds(start_frame, "startFrame").ok()?;
-                    require_frame_in_bounds(duration_frames, "durationFrames").ok()?;
-                    Some(TextInput {
-                        text: text.to_string(),
-                        start_frame,
-                        duration_frames,
-                    })
-                })
-                .collect();
-            if parsed.is_empty() {
-                return ValidationResult::Error(
-                    "add_texts: 'texts' entries must contain 'text', 'startFrame', \
-                     and 'durationFrames'"
-                        .into(),
-                );
+            let mut parsed: Vec<TextInput> = Vec::with_capacity(arr.len());
+            for entry in arr {
+                let text = entry
+                    .get("content")
+                    .or_else(|| entry.get("text"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let start_frame = entry.get("startFrame").and_then(|v| v.as_i64());
+                let duration_frames = entry.get("durationFrames").and_then(|v| v.as_i64());
+                // One bad entry rejects the whole call (no partial state).
+                if let Some(f) = start_frame {
+                    if f < 0 {
+                        return ValidationResult::Error(format!(
+                            "add_texts: startFrame must be >= 0 (got {f})"
+                        ));
+                    }
+                    if let Err(e) = require_frame_in_bounds(f, "startFrame") {
+                        return ValidationResult::Error(format!("add_texts: {e}"));
+                    }
+                }
+                if let Some(d) = duration_frames {
+                    if d < 1 {
+                        return ValidationResult::Error(format!(
+                            "add_texts: durationFrames must be >= 1 (got {d})"
+                        ));
+                    }
+                    if let Err(e) = require_frame_in_bounds(d, "durationFrames") {
+                        return ValidationResult::Error(format!("add_texts: {e}"));
+                    }
+                }
+                parsed.push(TextInput {
+                    text,
+                    start_frame,
+                    duration_frames,
+                });
             }
             parsed
         }
@@ -1089,6 +1114,9 @@ pub struct ImportFolderInput {
 }
 
 /// Validate `import_folder` input.
+///
+/// UNWIRED: matches the schema (`path`), but the stub executor still reads
+/// `folderName` — wire once the executor is fixed to the schema shape.
 pub fn validate_import_folder(input: &Value) -> ValidationResult<ImportFolderInput> {
     let path = match input.get("path").and_then(|v| v.as_str()) {
         Some(p) if !p.is_empty() => p.to_string(),
@@ -1458,18 +1486,18 @@ mod tests {
 
     #[test]
     fn mut_006_remove_tracks_valid() {
-        let input = json!({"trackIds": [0, 2, 4]});
+        let input = json!({"trackIds": ["t0", "t2", "t4"]});
         let result = validate_remove_tracks(&input);
         let parsed = result.into_ok().expect("MUT-006: valid");
-        assert_eq!(parsed.track_ids, vec![0, 2, 4]);
+        assert_eq!(parsed.track_ids, vec!["t0", "t2", "t4"]);
     }
 
     #[test]
     fn mut_006_remove_tracks_dedup() {
-        let input = json!({"trackIds": [3, 1, 3, 2, 1]});
+        let input = json!({"trackIds": ["t3", "t1", "t3", "t2", "t1"]});
         let result = validate_remove_tracks(&input);
         let parsed = result.into_ok().expect("MUT-006: dedup");
-        assert_eq!(parsed.track_ids, vec![1, 2, 3]);
+        assert_eq!(parsed.track_ids, vec!["t3", "t1", "t2"]);
     }
 
     #[test]
@@ -1851,10 +1879,41 @@ mod tests {
         let result = validate_add_texts(&input, None);
         let parsed = result.into_ok().expect("MUT-019: valid");
         assert_eq!(parsed.texts.len(), 2);
-        assert_eq!(parsed.texts[0].text, "Hello");
-        assert_eq!(parsed.texts[0].start_frame, 0);
-        assert_eq!(parsed.texts[0].duration_frames, 100);
+        assert_eq!(parsed.texts[0].text.as_deref(), Some("Hello"));
+        assert_eq!(parsed.texts[0].start_frame, Some(0));
+        assert_eq!(parsed.texts[0].duration_frames, Some(100));
         assert_eq!(parsed.track_index, Some(1));
+    }
+
+    #[test]
+    fn mut_019_add_texts_executor_shape() {
+        // Executor-authoritative shape: `content` preferred over `text`,
+        // startFrame/durationFrames optional (defaulted at execution).
+        let input = json!({"texts": [{"content": "C", "text": "T"}]});
+        let parsed = validate_add_texts(&input, None)
+            .into_ok()
+            .expect("optional fields accepted");
+        assert_eq!(parsed.texts[0].text.as_deref(), Some("C"));
+        assert_eq!(parsed.texts[0].start_frame, None);
+        assert_eq!(parsed.texts[0].duration_frames, None);
+    }
+
+    #[test]
+    fn mut_019_add_texts_bad_entry_rejects_whole_call() {
+        for (entry, needle) in [
+            (json!({"content": "x", "startFrame": -5}), "startFrame"),
+            (json!({"content": "x", "durationFrames": 0}), "durationFrames"),
+            (
+                json!({"content": "x", "startFrame": MAX_TOOL_FRAME + 1}),
+                "exceeds the maximum supported frame",
+            ),
+        ] {
+            let input = json!({"texts": [json!({"content": "ok"}), entry]});
+            let err = validate_add_texts(&input, None)
+                .into_error()
+                .expect("bad entry rejected");
+            assert!(err.contains(needle), "want '{needle}' in: {err}");
+        }
     }
 
     #[test]
