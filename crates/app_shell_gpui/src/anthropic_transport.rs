@@ -25,6 +25,15 @@ pub struct AnthropicConfig {
     pub timeout: Duration,
 }
 
+/// Upstream #36: resolve the base URL from an `ANTHROPIC_BASE_URL`-style
+/// value — blank/whitespace falls back to the public API.
+fn resolve_base_url(env_value: Option<String>) -> String {
+    env_value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+}
+
 impl AnthropicConfig {
     /// Config with the public API base URL and current API version.
     pub fn new(api_key: impl Into<String>) -> Self {
@@ -34,6 +43,13 @@ impl AnthropicConfig {
             anthropic_version: DEFAULT_ANTHROPIC_VERSION.to_string(),
             timeout: Duration::from_secs(120),
         }
+    }
+
+    /// Config honouring the `ANTHROPIC_BASE_URL` environment variable
+    /// (proxy/gateway, upstream #36); unset or blank keeps the public API.
+    pub fn from_env(api_key: impl Into<String>) -> Self {
+        let base = resolve_base_url(std::env::var("ANTHROPIC_BASE_URL").ok());
+        Self::new(api_key).with_base_url(base)
     }
 
     /// Override the base URL (e.g. a proxy or gateway). Trailing slash tolerated.
@@ -144,5 +160,25 @@ mod tests {
     #[test]
     fn transport_constructs() {
         assert!(AnthropicTransport::new(AnthropicConfig::new("sk-test")).is_ok());
+    }
+
+    // ─── Upstream #36: ANTHROPIC_BASE_URL override ───
+
+    #[test]
+    fn resolve_base_url_default_when_unset_or_blank() {
+        assert_eq!(resolve_base_url(None), DEFAULT_BASE_URL);
+        assert_eq!(resolve_base_url(Some(String::new())), DEFAULT_BASE_URL);
+        assert_eq!(resolve_base_url(Some("   ".into())), DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    fn resolve_base_url_uses_override_trimmed() {
+        assert_eq!(
+            resolve_base_url(Some("  https://gateway.example.com  ".into())),
+            "https://gateway.example.com"
+        );
+        let config =
+            AnthropicConfig::new("k").with_base_url(resolve_base_url(Some("http://proxy:9/".into())));
+        assert_eq!(config.messages_url(), "http://proxy:9/v1/messages");
     }
 }

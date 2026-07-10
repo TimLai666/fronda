@@ -256,6 +256,15 @@ fn resolve_placement(
     let duration_in = arg_i64("durationFrames");
     let trim_end_in = arg_i64("trimEndFrame");
 
+    // Upstream #264/#265: ceiling-bound before any start+duration arithmetic.
+    crate::mutation::require_frame_in_bounds(trim_start_in, "trimStartFrame")?;
+    if let Some(d) = duration_in {
+        crate::mutation::require_frame_in_bounds(d, "durationFrames")?;
+    }
+    if let Some(t) = trim_end_in {
+        crate::mutation::require_frame_in_bounds(t, "trimEndFrame")?;
+    }
+
     if duration_in.is_some() && trim_end_in.is_some() {
         return Err("Provide either durationFrames or trimEndFrame, not both".to_string());
     }
@@ -1138,6 +1147,8 @@ impl ToolExecutor {
                     .get("atFrame")
                     .and_then(|v| v.as_i64())
                     .ok_or_else(|| format!("splits[{i}]: missing atFrame"))?;
+                crate::mutation::require_frame_in_bounds(at_frame, "atFrame")
+                    .map_err(|e| format!("splits[{i}]: {e}"))?;
                 let located = self.timeline.tracks.iter().enumerate().find_map(|(ti, t)| {
                     t.clips
                         .iter()
@@ -1171,6 +1182,7 @@ impl ToolExecutor {
                 let frame = f
                     .as_i64()
                     .ok_or_else(|| "frames must be integers".to_string())?;
+                crate::mutation::require_frame_in_bounds(frame, "frame")?;
                 let inside = self.timeline.tracks[track_index]
                     .clips
                     .iter()
@@ -1257,6 +1269,7 @@ impl ToolExecutor {
             .get("toFrame")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| "Missing toFrame".to_string())?;
+        crate::mutation::require_frame_in_bounds(to_frame, "toFrame")?;
 
         if to_track >= self.timeline.tracks.len() {
             return Err(format!(
@@ -1299,7 +1312,24 @@ impl ToolExecutor {
         let duration = properties.get("durationFrames").and_then(|v| v.as_i64());
         let trim_start = properties.get("trimStartFrame").and_then(|v| v.as_i64());
         let trim_end = properties.get("trimEndFrame").and_then(|v| v.as_i64());
+        // Upstream #264/#265: ceiling-bound frame-valued properties.
+        for (label, value) in [
+            ("durationFrames", duration),
+            ("trimStartFrame", trim_start),
+            ("trimEndFrame", trim_end),
+        ] {
+            if let Some(v) = value {
+                crate::mutation::require_frame_in_bounds(v, label)?;
+            }
+        }
         let speed = properties.get("speed").and_then(|v| v.as_f64());
+        // Upstream #212/#144: any positive speed is legal (incl. <0.25x); zero or
+        // negative would corrupt duration math, so reject instead of storing it.
+        if let Some(s) = speed {
+            if s <= 0.0 {
+                return Err(format!("speed must be > 0 (got {s})"));
+            }
+        }
         let volume = properties.get("volume").and_then(|v| v.as_f64());
         let opacity = properties.get("opacity").and_then(|v| v.as_f64());
         let content = properties.get("content").and_then(|v| v.as_str());
@@ -2154,6 +2184,8 @@ impl ToolExecutor {
         if duration_frames < 1 {
             return Err("apply_layout placing new clips requires durationFrames >= 1.".to_string());
         }
+        crate::mutation::require_frame_in_bounds(start_frame, "startFrame")?;
+        crate::mutation::require_frame_in_bounds(duration_frames, "durationFrames")?;
         // resolve_placement (called per slot below) errors when BOTH durationFrames
         // and trimEndFrame are present. Reject that here, up front, so the failure
         // can't fire mid-loop after tracks are already created (exec_mut does not
@@ -2581,6 +2613,10 @@ impl ToolExecutor {
             .get("frame")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| "Missing frame".to_string())?;
+        if frame < 0 {
+            return Err(format!("frame must be >= 0 (got {frame})"));
+        }
+        crate::mutation::require_frame_in_bounds(frame, "frame")?;
 
         if track_index >= self.timeline.tracks.len() {
             return Err(format!("Track index {track_index} out of bounds"));
@@ -5024,6 +5060,8 @@ impl ToolExecutor {
                 .get("durationFrames")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(150);
+            crate::mutation::require_frame_in_bounds(start_frame, "startFrame")?;
+            crate::mutation::require_frame_in_bounds(duration_frames, "durationFrames")?;
 
             // Per-entry text styling (reuses the set_clip_properties parsers).
             let mut style = TextStyle::default();
@@ -6180,6 +6218,222 @@ mod tests {
         assert_eq!(video_track.clips[0].media_ref, "vid");
         assert_eq!(audio_track.clips.len(), 1);
         assert_eq!(audio_track.clips[0].media_ref, "aud");
+    }
+
+    #[test]
+    fn add_clips_overwrite_linked_pair_clears_stranded_audio_no_extra_track() {
+        // Upstream #124: overwriting a linked V+A pair cleared only the video
+        // range — the audio fragment stayed (double playback) and the new clip's
+        // audio was pushed onto a spurious extra track.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("existing", ClipType::Video, true, 3.0)); // 90f
+        manifest.entries.push(media_entry("new", ClipType::Video, true, 1.0)); // 30f
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["existing"], "trackIndex": 0}))
+            .unwrap();
+        assert_eq!(exec.timeline().tracks.len(), 2, "V + linked A placed");
+
+        exec.execute("add_clips", &json!({"mediaIds": ["new"], "trackIndex": 0}))
+            .unwrap();
+
+        assert_eq!(
+            exec.timeline().tracks.len(),
+            2,
+            "no spurious extra audio track"
+        );
+        let audio_track = &exec.timeline().tracks[1];
+        let mut spans: Vec<(i64, i64)> = audio_track
+            .clips
+            .iter()
+            .map(|c| (c.start_frame, c.start_frame + c.duration_frames))
+            .collect();
+        spans.sort_unstable();
+        assert_eq!(
+            spans,
+            vec![(0, 30), (30, 90)],
+            "overwritten audio range cleared; no stranded [0,90) fragment"
+        );
+        let head = audio_track
+            .clips
+            .iter()
+            .find(|c| c.start_frame == 0)
+            .unwrap();
+        assert_eq!(head.media_ref, "new", "new clip's audio lands in the cleared range");
+    }
+
+    // ─── Upstream #264/#265: frame args are ceiling-bounded so LLM tool calls
+    // can't overflow i64 arithmetic (debug panic / release wrap). ───
+
+    #[test]
+    fn add_clips_rejects_duration_that_would_overflow() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("i1", ClipType::Image, false, 0.0));
+        manifest.entries.push(media_entry("i2", ClipType::Image, false, 0.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "add_clips",
+                &json!({"mediaIds": ["i1", "i2"], "trackIndex": 0, "durationFrames": i64::MAX}),
+            )
+            .unwrap_err();
+        assert!(err.contains("exceeds the maximum supported frame"), "err={err}");
+    }
+
+    #[test]
+    fn insert_clips_rejects_frame_that_would_overflow() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "insert_clips",
+                &json!({"mediaIds": ["vid"], "trackIndex": 0, "frame": i64::MAX}),
+            )
+            .unwrap_err();
+        assert!(err.contains("exceeds the maximum supported frame"), "err={err}");
+    }
+
+    #[test]
+    fn move_clips_rejects_to_frame_that_would_overflow() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+            .unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let err = exec
+            .execute(
+                "move_clips",
+                &json!({"clipIds": [clip_id], "toTrack": 0, "toFrame": i64::MAX}),
+            )
+            .unwrap_err();
+        assert!(err.contains("exceeds the maximum supported frame"), "err={err}");
+    }
+
+    #[test]
+    fn split_clips_rejects_at_frame_beyond_ceiling() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+            .unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let err = exec
+            .execute(
+                "split_clips",
+                &json!({"splits": [{"clipId": clip_id, "atFrame": i64::MAX}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("exceeds the maximum supported frame"), "err={err}");
+    }
+
+    #[test]
+    fn set_clip_properties_rejects_overflowing_duration_and_trims() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+            .unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        for key in ["durationFrames", "trimStartFrame", "trimEndFrame"] {
+            let err = exec
+                .execute(
+                    "set_clip_properties",
+                    &json!({"clipIds": [clip_id], "properties": {key: i64::MAX}}),
+                )
+                .unwrap_err();
+            assert!(
+                err.contains("exceeds the maximum supported frame"),
+                "{key}: err={err}"
+            );
+        }
+    }
+
+    #[test]
+    fn add_texts_rejects_overflowing_start_frame() {
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "add_texts",
+                &json!({"texts": [{"text": "x", "startFrame": i64::MAX, "durationFrames": 10}], "trackIndex": 0}),
+            )
+            .unwrap_err();
+        assert!(err.contains("exceeds the maximum supported frame"), "err={err}");
+    }
+
+    #[test]
+    fn apply_layout_rejects_overflowing_start_frame() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(video_media("m1", 1920, 1080, 30.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let err = exec
+            .execute(
+                "apply_layout",
+                &json!({
+                    "layout": "full",
+                    "slots": [{"slot": "main", "mediaRef": "m1"}],
+                    "startFrame": i64::MAX,
+                    "durationFrames": 30
+                }),
+            )
+            .unwrap_err();
+        assert!(err.contains("exceeds the maximum supported frame"), "err={err}");
+    }
+
+    // ─── Upstream #212: slow speeds below 0.25x are legal; speed must be > 0. ───
+
+    #[test]
+    fn set_clip_properties_speed_0_1_slows_clip_10x() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("vid", ClipType::Video, false, 5.0)); // 150f
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+            .unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        exec.execute(
+            "set_clip_properties",
+            &json!({"clipIds": [clip_id], "properties": {"speed": 0.1}}),
+        )
+        .unwrap();
+        let clip = &exec.timeline().tracks[0].clips[0];
+        assert_eq!(clip.speed, 0.1);
+        assert_eq!(
+            clip.duration_frames, 1500,
+            "0.1x speed stretches 150 source frames to 1500 timeline frames"
+        );
+    }
+
+    #[test]
+    fn set_clip_properties_rejects_non_positive_speed() {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(media_entry("vid", ClipType::Video, false, 2.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute("add_clips", &json!({"mediaIds": ["vid"], "trackIndex": 0}))
+            .unwrap();
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+        for bad in [0.0, -1.0] {
+            let err = exec
+                .execute(
+                    "set_clip_properties",
+                    &json!({"clipIds": [clip_id.clone()], "properties": {"speed": bad}}),
+                )
+                .unwrap_err();
+            assert!(err.contains("speed must be > 0"), "speed {bad}: err={err}");
+        }
+        assert_eq!(
+            exec.timeline().tracks[0].clips[0].speed,
+            1.0,
+            "rejected speed leaves the clip unchanged"
+        );
     }
 
     #[test]

@@ -401,6 +401,67 @@ fn clp_002_place_clips_clears_destination() {
     assert!(t.tracks[0].clips.iter().all(|c| c.id == placed[0]));
 }
 
+// Upstream #124: overwrite-placing over a linked V+A pair must clear the same
+// range on the linked partner's track — otherwise a stranded audio fragment
+// keeps playing under the new clip and pushes new audio onto a spurious track.
+#[test]
+fn clp_124_place_clips_clears_linked_partner_range() {
+    let mut v = clip("v1", ClipType::Video, 0, 90);
+    let mut a = clip("a1", ClipType::Audio, 0, 90);
+    v.link_group_id = Some("g1".into());
+    a.link_group_id = Some("g1".into());
+    let new_clip = clip("new", ClipType::Video, 0, 30);
+    let mut t = timeline(vec![video_track(vec![v]), audio_track(vec![a])]);
+
+    let placed = place_clips(&mut t, 0, 30, &[new_clip]);
+    assert_eq!(placed.len(), 1);
+
+    // Video track: v1 head [0,30), new [30,60), v1 tail [60,90).
+    let mut video_spans: Vec<(i64, i64)> = t.tracks[0]
+        .clips
+        .iter()
+        .map(|c| (c.start_frame, c.start_frame + c.duration_frames))
+        .collect();
+    video_spans.sort_unstable();
+    assert_eq!(video_spans, vec![(0, 30), (30, 60), (60, 90)]);
+
+    // Audio track: the [30,60) range must be CLEARED, not left as one [0,90) clip.
+    let mut audio_spans: Vec<(i64, i64)> = t.tracks[1]
+        .clips
+        .iter()
+        .map(|c| (c.start_frame, c.start_frame + c.duration_frames))
+        .collect();
+    audio_spans.sort_unstable();
+    assert_eq!(
+        audio_spans,
+        vec![(0, 30), (60, 90)],
+        "linked audio range must clear with the overwritten video"
+    );
+}
+
+#[test]
+fn clp_124_place_clips_on_audio_track_leaves_video_partner_intact() {
+    // Mirrors the Swift fix's video-track gate: overwriting on an AUDIO track
+    // must not destroy the linked video on another track.
+    let mut v = clip("v1", ClipType::Video, 0, 90);
+    let mut a = clip("a1", ClipType::Audio, 0, 90);
+    v.link_group_id = Some("g1".into());
+    a.link_group_id = Some("g1".into());
+    let new_audio = clip("new", ClipType::Audio, 0, 30);
+    let mut t = timeline(vec![video_track(vec![v]), audio_track(vec![a])]);
+
+    let placed = place_clips(&mut t, 1, 30, &[new_audio]);
+    assert_eq!(placed.len(), 1);
+
+    let video = &t.tracks[0].clips;
+    assert_eq!(video.len(), 1, "video partner untouched");
+    assert_eq!(
+        (video[0].start_frame, video[0].duration_frames),
+        (0, 90),
+        "video partner keeps its full span"
+    );
+}
+
 #[test]
 fn clp_001_place_clips_returns_empty_for_bad_track() {
     let c = clip("c1", ClipType::Video, 0, 30);

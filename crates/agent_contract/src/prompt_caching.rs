@@ -152,6 +152,27 @@ fn content_block(c: &CachedContent) -> serde_json::Value {
     b
 }
 
+/// Upstream #268: model-specific request extras. Sonnet 5-family requests set
+/// `output_config.effort` to `low` (mirrors Swift `AnthropicModel.requestExtras`).
+pub fn model_request_extras(model: &str) -> Option<serde_json::Value> {
+    if model.starts_with("claude-sonnet-5") {
+        Some(serde_json::json!({ "output_config": { "effort": "low" } }))
+    } else {
+        None
+    }
+}
+
+/// Merge `model_request_extras` into a request body (top-level keys).
+pub fn apply_model_request_extras(req: &mut serde_json::Value, model: &str) {
+    if let Some(serde_json::Value::Object(extras)) = model_request_extras(model) {
+        if let serde_json::Value::Object(body) = req {
+            for (k, v) in extras {
+                body.insert(k, v);
+            }
+        }
+    }
+}
+
 /// Assemble an Anthropic Messages API request body from a cache-annotated
 /// conversation, the tool set, and model params. System prompt and messages
 /// carry `cache_control: {type: ephemeral}` wherever the conversation marked a
@@ -167,6 +188,7 @@ pub fn build_agent_request(
         "model": model,
         "max_tokens": max_tokens,
     });
+    apply_model_request_extras(&mut req, model);
 
     if let Some(sys) = &conversation.system_prompt {
         req["system"] = serde_json::json!([content_block(sys)]);
@@ -207,6 +229,7 @@ pub fn build_agent_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn build_agent_request_assembles_anthropic_body() {
@@ -257,6 +280,37 @@ mod tests {
         );
         assert_eq!(req["messages"][1]["role"], "assistant");
         assert!(req["messages"][1]["content"][0].get("cache_control").is_none());
+    }
+
+    // ─── Upstream #268: Sonnet 5 output_config.effort = low ───
+
+    #[test]
+    fn sonnet5_requests_carry_low_effort_output_config() {
+        let conversation = CachedConversation {
+            system_prompt: None,
+            messages: vec![],
+        };
+        let tools: Vec<crate::tools::ToolDefinition> = vec![];
+        for m in ["claude-sonnet-5", "claude-sonnet-5-20260203"] {
+            let req = build_agent_request(m, 1024, &tools, &conversation);
+            assert_eq!(req["output_config"], json!({ "effort": "low" }), "{m}");
+        }
+        for m in ["claude-opus-4-8", "claude-haiku-4-5-20251001"] {
+            let req = build_agent_request(m, 1024, &tools, &conversation);
+            assert!(
+                req.get("output_config").is_none(),
+                "{m} must not set output_config"
+            );
+        }
+    }
+
+    #[test]
+    fn model_request_extras_matches_swift_shape() {
+        assert_eq!(
+            model_request_extras("claude-sonnet-5"),
+            Some(json!({ "output_config": { "effort": "low" } }))
+        );
+        assert_eq!(model_request_extras("claude-opus-4-8"), None);
     }
 
     fn msg(role: &str, content: &str) -> (String, String) {

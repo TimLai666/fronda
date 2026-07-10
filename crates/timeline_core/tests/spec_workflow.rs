@@ -331,6 +331,132 @@ fn rpl_227_unsynced_follower_is_not_cut() {
     }
 }
 
+// ─── #263: partner propagation reaches a fixpoint across ALL cleared tracks ───
+
+fn unsynced_audio_track(clips: Vec<Clip>) -> Track {
+    Track {
+        id: "unsynced-audio".to_string(),
+        r#type: ClipType::Audio,
+        muted: false,
+        hidden: false,
+        sync_locked: false,
+        display_height: 50.0,
+        clips,
+    }
+}
+
+#[test]
+fn rpl_263_partner_on_lockoff_track_of_cleared_sync_locked_track_clears_too() {
+    // Anchor (unsynced) track 0 cuts; sync-locked track 1 is cut in sync (#227).
+    // Track 1's clip is LINKED to an audio clip on lock-OFF track 2 — that
+    // partner must clear too, or its audio desyncs from the cut video.
+    let anchor = unsynced_track(vec![clip("anchor", 0, 100)]);
+    let mut v1 = clip("v1", 0, 100);
+    v1.link_group_id = Some("G".to_string());
+    let mut a1 = audio_clip("a1", 0, 100);
+    a1.link_group_id = Some("G".to_string());
+    let t = timeline(vec![
+        anchor,
+        video_track(vec![v1]),
+        unsynced_audio_track(vec![a1]),
+    ]);
+    match compute_ripple_delete(
+        &t,
+        RippleDeleteConfig {
+            anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
+            ranges: vec![FrameRange { start: 40, end: 50 }],
+        },
+    ) {
+        RippleDeleteOutcome::Ok(report) => {
+            assert_eq!(
+                report.cleared_track_indices,
+                vec![0, 1, 2],
+                "linked partner of a cut sync-locked clip must clear too"
+            );
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
+#[test]
+fn rpl_263_partner_propagation_chains_to_fixpoint() {
+    // Anchor clip links to track 1 (group A); a DIFFERENT clip on track 1 links
+    // to track 2 (group B). Both partners overlap the range — clearing must
+    // chain: anchor → track 1 (group A) → track 2 (group B).
+    let mut c0 = clip("c0", 0, 100);
+    c0.link_group_id = Some("A".to_string());
+    let mut c1 = clip("c1", 0, 100);
+    c1.link_group_id = Some("A".to_string());
+    let mut c1b = clip("c1b", 0, 100);
+    c1b.link_group_id = Some("B".to_string());
+    let mut c2 = audio_clip("c2", 0, 100);
+    c2.link_group_id = Some("B".to_string());
+    let t = timeline(vec![
+        unsynced_track(vec![c0]),
+        Track {
+            id: "mid".to_string(),
+            r#type: ClipType::Video,
+            muted: false,
+            hidden: false,
+            sync_locked: false,
+            display_height: 50.0,
+            clips: vec![c1, c1b],
+        },
+        unsynced_audio_track(vec![c2]),
+    ]);
+    match compute_ripple_delete(
+        &t,
+        RippleDeleteConfig {
+            anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
+            ranges: vec![FrameRange { start: 40, end: 50 }],
+        },
+    ) {
+        RippleDeleteOutcome::Ok(report) => {
+            assert_eq!(
+                report.cleared_track_indices,
+                vec![0, 1, 2],
+                "partner propagation must reach a fixpoint across cleared tracks"
+            );
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
+#[test]
+fn rpl_263_partner_outside_ranges_does_not_propagate() {
+    // A linked clip on the cleared sync-locked track that does NOT overlap the
+    // deleted range must not drag its partner's track into the clear set.
+    let anchor = unsynced_track(vec![clip("anchor", 0, 100)]);
+    let mut v1 = clip("v1", 60, 30);
+    v1.link_group_id = Some("G".to_string());
+    let mut a1 = audio_clip("a1", 60, 30);
+    a1.link_group_id = Some("G".to_string());
+    let t = timeline(vec![
+        anchor,
+        video_track(vec![v1]),
+        unsynced_audio_track(vec![a1]),
+    ]);
+    match compute_ripple_delete(
+        &t,
+        RippleDeleteConfig {
+            anchor_track_index: 0,
+            ignore_sync_lock_track_indices: Default::default(),
+            ranges: vec![FrameRange { start: 40, end: 50 }],
+        },
+    ) {
+        RippleDeleteOutcome::Ok(report) => {
+            assert_eq!(
+                report.cleared_track_indices,
+                vec![0, 1],
+                "no propagation from clips outside the deleted ranges"
+            );
+        }
+        _ => panic!("expected Ok"),
+    }
+}
+
 // ─── RPL-007/008: Validation in gap context ───
 
 #[test]

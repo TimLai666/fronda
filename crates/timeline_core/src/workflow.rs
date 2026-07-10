@@ -75,38 +75,37 @@ pub fn compute_ripple_delete(
 
     let mut clear_track_indices: BTreeSet<usize> = BTreeSet::from([config.anchor_track_index]);
 
-    for clip in &timeline.tracks[config.anchor_track_index].clips {
-        if clip.link_group_id.is_some()
-            && merged
-                .iter()
-                .any(|r| r.start < clip.end_frame() && r.end > clip.start_frame)
-        {
-            for partner_id in linked_partner_ids(timeline, &clip.id) {
-                if let Some((ti, _)) = find_clip(timeline, &partner_id) {
-                    clear_track_indices.insert(ti);
-                }
-            }
-        }
-    }
-
     // #227: a sync-locked follower track is CUT in sync with the anchor — the deleted
     // range is cleared on it too, not merely shifted. Otherwise it keeps content the
     // master track removed (e.g. master audio linked to a video cut). A single-track
     // cut+ripple always absorbs the gap it creates, so no refuse is needed here (the
     // old shift-without-cut behaviour could collide, which is why it validated).
-    let sync_locked_followers: Vec<usize> = timeline
-        .tracks
-        .iter()
-        .enumerate()
-        .filter(|(ti, t)| {
-            t.sync_locked
-                && !clear_track_indices.contains(ti)
-                && !config.ignore_sync_lock_track_indices.contains(ti)
-        })
-        .map(|(ti, _)| ti)
-        .collect();
-    for ti in sync_locked_followers {
-        clear_track_indices.insert(ti);
+    for (ti, track) in timeline.tracks.iter().enumerate() {
+        if track.sync_locked && !config.ignore_sync_lock_track_indices.contains(&ti) {
+            clear_track_indices.insert(ti);
+        }
+    }
+
+    // #263: linked partners of every clip cut on a cleared track are cut too, to a
+    // FIXPOINT — a cleared sync-locked track's clips may link to lock-off tracks,
+    // and those partners would otherwise stay behind and desync.
+    let mut worklist: Vec<usize> = clear_track_indices.iter().copied().collect();
+    while let Some(scan_ti) = worklist.pop() {
+        for clip in &timeline.tracks[scan_ti].clips {
+            if clip.link_group_id.is_some()
+                && merged
+                    .iter()
+                    .any(|r| r.start < clip.end_frame() && r.end > clip.start_frame)
+            {
+                for partner_id in linked_partner_ids(timeline, &clip.id) {
+                    if let Some((ti, _)) = find_clip(timeline, &partner_id) {
+                        if clear_track_indices.insert(ti) {
+                            worklist.push(ti);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     RippleDeleteOutcome::Ok(RippleDeleteReport {

@@ -1361,6 +1361,12 @@ mod tests {
         assert_eq!(format_timecode(3600, 60, true), "00;01;00;04");
         // The tenth minute does NOT drop, so one real hour reads exactly 01;00;00;00.
         assert_eq!(format_timecode(107892, 30, true), "01;00;00;00");
+        // Upstream #139 divisors: a 10-minute block is 17982 frames (30*600 - 9*2)
+        // and a dropped minute is 1798 (30*60 - 2). VERIFIED-OK 2026-07-10.
+        assert_eq!(format_timecode(17982, 30, true), "00;10;00;00");
+        // Minute 10 is a NON-drop minute (1800 real frames); minute 11 drops 2 labels.
+        assert_eq!(format_timecode(17982 + 1800, 30, true), "00;11;00;02");
+        assert_eq!(format_timecode(1799, 30, true), "00;00;59;29");
     }
 
     #[test]

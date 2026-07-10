@@ -28,6 +28,22 @@ impl<T> ValidationResult<T> {
     }
 }
 
+/// Upstream #264/#265: frame-valued tool args are ceiling-bounded so
+/// `start + duration` can never overflow i64 (debug panic / release wrap).
+/// ~9,259 hours at 30fps — far beyond any real timeline, far below i64::MAX.
+pub const MAX_TOOL_FRAME: i64 = 1_000_000_000;
+
+/// Reject a frame-valued arg above `MAX_TOOL_FRAME` (upstream error shape).
+pub fn require_frame_in_bounds(value: i64, label: &str) -> Result<(), String> {
+    if value > MAX_TOOL_FRAME {
+        Err(format!(
+            "{label} {value} exceeds the maximum supported frame ({MAX_TOOL_FRAME})"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Parsed and validated `split_clip` input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplitClipInput {
@@ -49,6 +65,9 @@ pub fn validate_split_clip(input: &Value) -> ValidationResult<SplitClipInput> {
         }
         None => return ValidationResult::Error("split_clip: missing or invalid 'frame'".into()),
     };
+    if let Err(e) = require_frame_in_bounds(frame, "frame") {
+        return ValidationResult::Error(format!("split_clip: {e}"));
+    }
 
     ValidationResult::Ok(SplitClipInput { clip_id, frame })
 }
@@ -215,6 +234,14 @@ pub fn validate_set_clip_properties(
                 ));
             }
         }
+        // Upstream #264/#265: bound frame-valued properties.
+        for key in ["durationFrames", "trimStartFrame", "trimEndFrame"] {
+            if let Some(v) = obj.get(key).and_then(|v| v.as_i64()) {
+                if let Err(e) = require_frame_in_bounds(v, key) {
+                    return ValidationResult::Error(format!("set_clip_properties: {e}"));
+                }
+            }
+        }
     }
 
     ValidationResult::Ok(SetClipPropertiesInput {
@@ -372,6 +399,9 @@ pub fn validate_insert_clips(input: &Value) -> ValidationResult<InsertClipsInput
         }
         None => return ValidationResult::Error("insert_clips: missing or invalid 'frame'".into()),
     };
+    if let Err(e) = require_frame_in_bounds(frame, "frame") {
+        return ValidationResult::Error(format!("insert_clips: {e}"));
+    }
 
     ValidationResult::Ok(InsertClipsInput {
         media_ids,
@@ -438,6 +468,11 @@ pub fn validate_move_clips(input: &Value) -> ValidationResult<MoveClipsInput> {
         .and_then(|v| v.as_u64())
         .map(|i| i as usize);
     let to_frame = input.get("toFrame").and_then(|v| v.as_i64());
+    if let Some(f) = to_frame {
+        if let Err(e) = require_frame_in_bounds(f, "toFrame") {
+            return ValidationResult::Error(format!("move_clips: {e}"));
+        }
+    }
 
     if to_track.is_none() && to_frame.is_none() {
         return ValidationResult::Error(
@@ -601,6 +636,9 @@ pub fn validate_add_texts(
                     let text = entry.get("text").and_then(|v| v.as_str())?;
                     let start_frame = entry.get("startFrame").and_then(|v| v.as_i64())?;
                     let duration_frames = entry.get("durationFrames").and_then(|v| v.as_i64())?;
+                    // Upstream #264/#265: out-of-bounds frames invalidate the entry.
+                    require_frame_in_bounds(start_frame, "startFrame").ok()?;
+                    require_frame_in_bounds(duration_frames, "durationFrames").ok()?;
                     Some(TextInput {
                         text: text.to_string(),
                         start_frame,
@@ -1138,6 +1176,63 @@ mod tests {
         let input = json!({"clipId": "c1", "frame": -1});
         let result = validate_split_clip(&input);
         assert!(result.into_error().is_some());
+    }
+
+    // ---- Upstream #264/#265: MAX_TOOL_FRAME ceiling -----------------------
+
+    #[test]
+    fn frame_bound_helper_accepts_ceiling_rejects_above() {
+        assert!(require_frame_in_bounds(MAX_TOOL_FRAME, "frame").is_ok());
+        assert!(require_frame_in_bounds(0, "frame").is_ok());
+        let err = require_frame_in_bounds(MAX_TOOL_FRAME + 1, "frame").unwrap_err();
+        assert!(err.contains("exceeds the maximum supported frame"));
+    }
+
+    #[test]
+    fn frame_bound_split_insert_move_reject_i64_max() {
+        assert!(validate_split_clip(&json!({"clipId": "c1", "frame": i64::MAX}))
+            .into_error()
+            .unwrap()
+            .contains("exceeds the maximum supported frame"));
+        assert!(validate_insert_clips(
+            &json!({"trackIndex": 0, "mediaIds": ["m1"], "frame": i64::MAX})
+        )
+        .into_error()
+        .unwrap()
+        .contains("exceeds the maximum supported frame"));
+        assert!(
+            validate_move_clips(&json!({"clipIds": ["c1"], "toFrame": i64::MAX}))
+                .into_error()
+                .unwrap()
+                .contains("exceeds the maximum supported frame")
+        );
+    }
+
+    #[test]
+    fn frame_bound_set_clip_properties_rejects_i64_max_timing() {
+        for key in ["durationFrames", "trimStartFrame", "trimEndFrame"] {
+            let input = json!({"clipIds": ["c1"], "properties": {key: i64::MAX}});
+            let err = validate_set_clip_properties(&input, None)
+                .into_error()
+                .unwrap_or_else(|| panic!("{key} should be rejected"));
+            assert!(err.contains("exceeds the maximum supported frame"), "{key}: {err}");
+        }
+    }
+
+    // ---- Upstream #212: slow speeds below 0.25x are legal ------------------
+
+    #[test]
+    fn speed_below_quarter_accepted_zero_rejected() {
+        let ok = validate_set_clip_properties(
+            &json!({"clipIds": ["c1"], "properties": {"speed": 0.1}}),
+            None,
+        );
+        assert!(ok.into_ok().is_some(), "0.1x speed is valid");
+        let err = validate_set_clip_properties(
+            &json!({"clipIds": ["c1"], "properties": {"speed": 0.0}}),
+            None,
+        );
+        assert!(err.into_error().is_some(), "0 speed rejected");
     }
 
     // ---- MUT-009: set_clip_properties -----------------------------------

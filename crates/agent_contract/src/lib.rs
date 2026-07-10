@@ -33,7 +33,8 @@ pub use tools::{all_tools, ToolDefinition, SYSTEM_INSTRUCTION};
 
 pub use hex_color_parser::parse_hex_color;
 pub use mutation::{
-    validate_add_captions, validate_add_clips, validate_add_texts, validate_create_folder,
+    require_frame_in_bounds, validate_add_captions, validate_add_clips, validate_add_texts,
+    validate_create_folder,
     validate_delete_folder, validate_delete_media, validate_duplicate_project,
     validate_generate_music, validate_hex_color, validate_import_folder, validate_insert_clips,
     validate_move_clips, validate_move_clips_linked, validate_move_to_folder,
@@ -45,5 +46,5 @@ pub use mutation::{
     ImportFolderInput, InsertClipsInput, MoveClipsInput, MoveToFolderInput, RemoveClipsInput,
     RemoveTracksInput, RenameFolderInput, RenameMediaInput, RippleDeleteRangesInput,
     SetBlendModeInput, SetChromaKeyInput, SetClipPropertiesInput, SetColorGradeInput,
-    SetKeyframesInput, SplitClipInput, TextInput,
+    SetKeyframesInput, SplitClipInput, TextInput, MAX_TOOL_FRAME,
 };

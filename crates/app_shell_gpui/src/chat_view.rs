@@ -235,7 +235,7 @@ impl ChatView {
                 .background_executor()
                 .spawn(async move {
                     let mut transport = crate::anthropic_transport::AnthropicTransport::new(
-                        crate::anthropic_transport::AnthropicConfig::new(api_key),
+                        crate::anthropic_transport::AnthropicConfig::from_env(api_key),
                     )?;
                     let tools = agent_contract::all_tools();
                     // Include any installed skills in the system prompt so the

@@ -475,27 +475,42 @@ manage_multicam/change_cam/get_multicam tools, XL — after tool-surface
 decision); #263 tool-surface v2 (48 consolidated tools: organize_media,
 manage_tracks, close_project, mutation envelopes, relationship-first
 get_timeline — XL, **NEEDS USER DECISION**: converging breaks Fronda's
-shipped 64-tool MCP surface) + its embedded ripple bug (VERIFIED IN RUST:
-linked partners of clips on cleared sync-locked tracks left behind —
-fixpoint propagation needed, S, do first); #269 sync_clips v2 (timecode
+shipped 64-tool MCP surface) + its embedded ripple bug (**PORTED
+2026-07-10**, change `upstream-critical-fixes`: compute_ripple_delete
+partner propagation is now a fixpoint across ALL cleared tracks — the
+lock-off-partner desync repro'd RED then fixed; tool-surface v2 itself
+still pending the user decision); #269 sync_clips v2 (timecode
 mode + SourceTimecode NTSC frame-duration fix ~18f/10min — verify Rust
 math, M-L); #274 detect_beats + snap-to-beat (L, ML host seam); #138
 10-bit HDR export via ffmpeg Main10 (M); #268 sonnet5 effort:low in
-requests (S); #284/#279 XS; #280/#281 timeline UI polish (Tier 4).
+requests (**PORTED 2026-07-10**: model_request_extras in build_agent_request
+AND the live run_agent_turn body, shape from AgentClientTypes.swift:20);
+#284/#279 XS; #280/#281 timeline UI polish (Tier 4).
 
 **(c) open PRs, ranked:** #124 stranded linked audio on overwrite
-(VERIFIED IN RUST — top priority with the #263 ripple fix, S-M); #265
-frame-arg 1e9 bound (UNVERIFIED overflow exposure in mutation.rs, S);
-#139 drop-frame timecode divisor bug (UNVERIFIED whether ported into
-format_timecode — test frame 1800 @29.97DF, S); #36 custom Anthropic base
-URL (verified hardcoded, S); #176 duplicate_clips (M); #169 viewer guides
+(**PORTED 2026-07-10**: place_clips clears linked-partner track ranges on
+video-track overwrites, mirroring PR `4b776e1`'s Swift semantics; executor
+repro pinned — no stranded fragment, no spurious audio track); #265
+frame-arg 1e9 bound (**PORTED 2026-07-10**: overflow VERIFIED — real debug
+panics in insert/move/apply_layout/add_texts paths; shared MAX_TOOL_FRAME +
+require_frame_in_bounds in mutation.rs wired into validators AND executor
+inline checks);
+#139 drop-frame timecode divisor bug (**VERIFIED-OK 2026-07-10**: Rust
+format_timecode already uses 1798/17982 divisors; frame 1800 @29.97DF =
+00;01;00;02 and the 10-minute boundary are pinned by tests); #36 custom
+Anthropic base URL (**PORTED 2026-07-10**: AnthropicConfig::from_env reads
+ANTHROPIC_BASE_URL, chat_view wired, URL construction unit-tested);
+#176 duplicate_clips (M); #169 viewer guides
 (M); #198 TwelveLabs (L); #32 OpenRouter (L); #65 wght axis renderer (M);
 #67 duplicate-project context-menu UI (S); #246 people mask (watch).
 
 **(d) open issues = gaps, ranked:** #211 autosave (VERIFIED: Fronda has
-NO autosave — data-loss, M); #264 overflow hardening (S); #154 XML/FCPXML
+NO autosave — data-loss, M); #264 overflow hardening (**PORTED 2026-07-10**
+via the #265 ceiling above); #154 XML/FCPXML
 IMPORT (strategic XL, neither side has it); #164 shortcut parity (M);
-#212 speed <0.25x (UNVERIFIED range, XS-S); #140/#17/#142 multi-provider
+#212 speed <0.25x (**VERIFIED-OK 2026-07-10**: Rust accepts any positive
+speed end-to-end, 0.1x duration math pinned; also fixed the live executor
+silently storing speed<=0 — now rejects like Swift); #140/#17/#142 multi-provider
 LLM (S then L); #156 folder hierarchy → #263's path model (L); #158 audio
 EQ/compression (L); #45 arrow/line shapes (S-M); #137 multi-window (L);
 #166 export workspace panel (M); #286 dockable panels (L); #287 custom

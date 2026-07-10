@@ -230,14 +230,34 @@ pub fn place_clips(
     if total_duration <= 0 {
         return Vec::new();
     }
+    let end_frame = start_frame + total_duration;
+    // Upstream #124: overwriting on a video track also clears the same range on
+    // tracks holding linked partners of the overlapped clips — otherwise a
+    // stranded audio fragment plays under the new clip and forces new linked
+    // audio onto a spurious extra track. Audio-track placement stays local so
+    // an audio overwrite never destroys its linked video.
+    let partner_track_indices: BTreeSet<usize> =
+        if timeline.tracks[track_index].r#type == ClipType::Video {
+            timeline.tracks[track_index]
+                .clips
+                .iter()
+                .filter(|c| {
+                    c.link_group_id.is_some()
+                        && c.start_frame < end_frame
+                        && c.end_frame() > start_frame
+                })
+                .flat_map(|c| linked_partner_ids(timeline, &c.id))
+                .filter_map(|pid| find_clip(timeline, &pid).map(|loc| loc.track_index))
+                .filter(|&ti| ti != track_index)
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
     // CLP-002: Overwrite placement clears conflicting destination regions before inserting
-    clear_region(
-        timeline,
-        track_index,
-        start_frame,
-        start_frame + total_duration,
-        false,
-    );
+    clear_region(timeline, track_index, start_frame, end_frame, false);
+    for ti in partner_track_indices {
+        clear_region(timeline, ti, start_frame, end_frame, false);
+    }
     // Place clips sequentially at the target
     let mut offset = 0i64;
     let mut placed_ids = Vec::new();

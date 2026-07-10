@@ -165,7 +165,7 @@ pub fn run_agent_turn(
     let mut tool_calls = Vec::new();
 
     for iteration in 0..max_iterations {
-        let request = json!({
+        let mut request = json!({
             "model": model,
             "max_tokens": max_tokens,
             // System prompt as a cached content block — it's static across the
@@ -178,6 +178,8 @@ pub fn run_agent_turn(
             "tools": tools,
             "messages": messages,
         });
+        // Upstream #268: Sonnet 5 requests carry output_config.effort = low.
+        crate::prompt_caching::apply_model_request_extras(&mut request, model);
         let resp = transport.send(&request)?;
         let parsed = parse_response(&resp);
 
@@ -291,6 +293,49 @@ mod tests {
         assert_eq!(outcome.final_text, "all done");
         assert_eq!(outcome.iterations, 1);
         assert!(outcome.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn sonnet5_turn_requests_carry_low_effort() {
+        // Upstream #268: the live loop's request bodies set output_config.effort
+        // for Sonnet 5-family models, and only for them.
+        let mut transport = ScriptedTransport::new(vec![text_response("done")]);
+        let mut executor = ToolExecutor::new(
+            core_model::Timeline::default(),
+            core_model::MediaManifest::default(),
+        );
+        run_agent_turn(
+            &mut transport,
+            |name, args| executor.execute(name, args),
+            "claude-sonnet-5",
+            1024,
+            "system",
+            &[],
+            "hi",
+            8,
+        )
+        .unwrap();
+        assert_eq!(
+            transport.seen_requests[0]["output_config"]["effort"],
+            "low"
+        );
+
+        let mut transport = ScriptedTransport::new(vec![text_response("done")]);
+        run_agent_turn(
+            &mut transport,
+            |name, args| executor.execute(name, args),
+            "claude-haiku-4-5-20251001",
+            1024,
+            "system",
+            &[],
+            "hi",
+            8,
+        )
+        .unwrap();
+        assert!(
+            transport.seen_requests[0].get("output_config").is_none(),
+            "non-sonnet5 models must not set output_config"
+        );
     }
 
     #[test]
