@@ -1152,6 +1152,7 @@ impl ToolExecutor {
             "set_clip_properties" => gate(m::validate_set_clip_properties(args, None)),
             "remove_clips" => gate(m::validate_remove_clips(args)),
             "move_clips" | "move_clips_linked" => gate(m::validate_move_clips(args)),
+            "duplicate_clips" => gate(m::validate_duplicate_clips(args)),
             "add_clips" => gate(m::validate_add_clips(args)),
             "insert_clips" => gate(m::validate_insert_clips(args)),
             "manage_tracks" => gate(m::validate_manage_tracks(args)),
@@ -1192,6 +1193,9 @@ impl ToolExecutor {
             "move_clips" => self.exec_enveloped(tool_name, ToolExecutor::cmd_move_clips, args),
             "move_clips_linked" => {
                 self.exec_enveloped(tool_name, ToolExecutor::cmd_move_clips_linked, args)
+            }
+            "duplicate_clips" => {
+                self.exec_enveloped(tool_name, ToolExecutor::cmd_duplicate_clips, args)
             }
             "set_clip_properties" => {
                 self.exec_enveloped(tool_name, ToolExecutor::cmd_set_clip_properties, args)
@@ -1801,6 +1805,145 @@ impl ToolExecutor {
 
     fn cmd_move_clips_linked(&mut self, args: &Value) -> Result<Value, String> {
         self.cmd_move_clips(args)
+    }
+
+    /// duplicate_clips (upstream #176): full-fidelity copies at new positions.
+    /// Each entry names a lead clip + toFrame (+ optional toTrack); linked
+    /// partners are duplicated alongside it (relative offset preserved), the
+    /// duplicated set keeps its intra-group links via a fresh link group, and
+    /// each copy overwrites its destination region. Ported from Swift
+    /// `ToolExecutor.duplicateClips` + `duplicateClipsToPositions`.
+    fn cmd_duplicate_clips(&mut self, args: &Value) -> Result<Value, String> {
+        let entries = args
+            .get("entries")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "Missing or empty 'entries' array".to_string())?;
+        if entries.is_empty() {
+            return Err("Missing or empty 'entries' array".to_string());
+        }
+
+        // Pre-seed with every named lead so a partner that is itself a named
+        // entry is never duplicated twice (Swift `seen`).
+        let mut seen: std::collections::BTreeSet<String> = entries
+            .iter()
+            .filter_map(|e| e.get("clipId").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+
+        // (source clip id, dest track, dest frame) — leads first, then partners.
+        let mut moves: Vec<(String, usize, i64)> = Vec::new();
+        for (idx, entry) in entries.iter().enumerate() {
+            let path = format!("entries[{idx}]");
+            let clip_id = entry
+                .get("clipId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("{path}: missing 'clipId'"))?;
+            let to_frame = entry
+                .get("toFrame")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| format!("{path}: missing 'toFrame'"))?;
+
+            let loc = timeline_core::find_clip(&self.timeline, clip_id)
+                .ok_or_else(|| format!("{path}: clip not found: {clip_id}"))?;
+            if to_frame < 0 {
+                return Err(format!("{path}: toFrame must be >= 0 (got {to_frame})"));
+            }
+            let src_type = self.timeline.tracks[loc.track_index].r#type;
+            let media_type = self.timeline.tracks[loc.track_index].clips[loc.clip_index].media_type;
+            let to_track = match entry.get("toTrack").and_then(|v| v.as_i64()) {
+                Some(ti) => {
+                    let last = self.timeline.tracks.len().saturating_sub(1);
+                    let ti = usize::try_from(ti)
+                        .ok()
+                        .filter(|&i| i < self.timeline.tracks.len())
+                        .ok_or_else(|| format!("{path}: toTrack {ti} out of range (0..{last})"))?;
+                    let dest_type = self.timeline.tracks[ti].r#type;
+                    if !self.timeline.tracks[ti].is_compatible_with(media_type) {
+                        return Err(format!(
+                            "{path}: toTrack {ti} ({}) is incompatible with clip's {} source track",
+                            dest_type.name(),
+                            src_type.name()
+                        ));
+                    }
+                    ti
+                }
+                None => loc.track_index,
+            };
+            moves.push((clip_id.to_string(), to_track, to_frame));
+
+            for pm in timeline_core::partner_moves_for_move_of(&self.timeline, clip_id, to_frame) {
+                if seen.contains(&pm.clip_id) {
+                    continue;
+                }
+                moves.push((pm.clip_id.clone(), pm.track_index, pm.to_frame.max(0)));
+                seen.insert(pm.clip_id);
+            }
+        }
+
+        // Snapshot every source clip up front so a clone that overwrites another
+        // source doesn't corrupt a later read.
+        let sources: Vec<Clip> = moves
+            .iter()
+            .filter_map(|(id, _, _)| {
+                timeline_core::find_clip(&self.timeline, id).map(|loc| {
+                    self.timeline.tracks[loc.track_index].clips[loc.clip_index].clone()
+                })
+            })
+            .collect();
+        if sources.len() != moves.len() {
+            return Err("duplicate_clips: a source clip vanished before duplication".into());
+        }
+
+        // Remap link groups: a group with >= 2 duplicated members keeps a fresh
+        // shared link (A/V pairs stay in sync); a lone duplicated member unlinks
+        // (mirrors the clipboard clone contract / Swift duplication).
+        let mut group_counts: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for c in &sources {
+            if let Some(g) = &c.link_group_id {
+                *group_counts.entry(g.clone()).or_default() += 1;
+            }
+        }
+        let mut remap: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for (g, n) in &group_counts {
+            if *n > 1 {
+                remap.insert(g.clone(), Uuid::new_v4().to_string());
+            }
+        }
+
+        let mut created: Vec<String> = Vec::with_capacity(moves.len());
+        for (src, (_, dest_track, dest_frame)) in sources.iter().zip(moves.iter()) {
+            let mut clone = src.clone();
+            clone.id = Uuid::new_v4().to_string();
+            clone.start_frame = *dest_frame;
+            clone.multicam_group_id = None;
+            clone.link_group_id = match &src.link_group_id {
+                Some(g) => remap.get(g).cloned(),
+                None => None,
+            };
+            let end = dest_frame + clone.duration_frames.max(0);
+            timeline_core::clear_region(&mut self.timeline, *dest_track, *dest_frame, end, false);
+            let track = &mut self.timeline.tracks[*dest_track];
+            track.clips.push(clone.clone());
+            track.clips.sort_by_key(|c| c.start_frame);
+            created.push(clone.id);
+        }
+
+        let linked = created.len().saturating_sub(entries.len());
+        let linked_note = if linked > 0 {
+            format!(" (+{linked} linked)")
+        } else {
+            String::new()
+        };
+        Ok(json!({
+            "duplicatedClipIds": created,
+            "note": format!(
+                "Duplicated {} clip{}{}.",
+                entries.len(),
+                if entries.len() == 1 { "" } else { "s" },
+                linked_note
+            ),
+        }))
     }
 
     fn cmd_set_clip_properties(&mut self, args: &Value) -> Result<Value, String> {
@@ -4442,6 +4585,15 @@ impl ToolExecutor {
         }))
     }
 
+    /// Human-readable labels parallel to a model's raw aspect-ratio ids
+    /// (upstream #284): "landscape_16_9" → "Landscape 16:9". Colon-form ids
+    /// pass through unchanged.
+    fn aspect_ratio_labels(ids: &[&str]) -> Vec<String> {
+        ids.iter()
+            .map(|id| model_catalog::aspect_ratio_display_label(id))
+            .collect()
+    }
+
     /// One list_models entry (mirrors Swift's videoModelInfo/imageModelInfo/
     /// audioModelInfo fields), plus #249 gating: paid-only models on a free plan
     /// are marked unavailable with an upgrade hint rather than hidden.
@@ -4456,6 +4608,10 @@ impl ToolExecutor {
             model_catalog::ModelCaps::Video(c) => {
                 obj.insert("durations".into(), json!(c.durations));
                 obj.insert("aspectRatios".into(), json!(c.aspect_ratios));
+                obj.insert(
+                    "aspectRatioLabels".into(),
+                    json!(Self::aspect_ratio_labels(&c.aspect_ratios)),
+                );
                 obj.insert("supportsFirstFrame".into(), json!(c.supports_first_frame));
                 obj.insert("supportsLastFrame".into(), json!(c.supports_last_frame));
                 obj.insert("supportsReferences".into(), json!(c.supports_references()));
@@ -4492,6 +4648,10 @@ impl ToolExecutor {
             }
             model_catalog::ModelCaps::Image(c) => {
                 obj.insert("aspectRatios".into(), json!(c.aspect_ratios));
+                obj.insert(
+                    "aspectRatioLabels".into(),
+                    json!(Self::aspect_ratio_labels(&c.aspect_ratios)),
+                );
                 obj.insert(
                     "supportsImageReference".into(),
                     json!(c.supports_image_reference),
@@ -9556,6 +9716,167 @@ mod tests {
         assert!(err.contains("out of range"), "got: {err}");
     }
 
+    // ── duplicate_clips (upstream #176) ──────────────────────────────────
+
+    #[test]
+    fn duplicate_clips_creates_exact_copy_at_new_position() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let mut src = crate::test_helpers::make_clip(0, 60);
+        src.speed = 1.5;
+        src.opacity = 0.7;
+        let src_id = src.id.clone();
+        let src_ref = src.media_ref.clone();
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[src]);
+        // place_clips assigns a fresh id; find the placed clip's real id.
+        let placed_id = exec.timeline().tracks[0].clips[0].id.clone();
+
+        exec.execute(
+            "duplicate_clips",
+            &json!({"entries": [{"clipId": placed_id, "toFrame": 100}]}),
+        )
+        .unwrap();
+
+        let mut clips = exec.timeline().tracks[0].clips.clone();
+        clips.sort_by_key(|c| c.start_frame);
+        assert_eq!(clips.len(), 2);
+        let copy = &clips[1];
+        assert_eq!(copy.start_frame, 100);
+        assert_ne!(copy.id, placed_id, "copy gets a fresh id");
+        assert_ne!(copy.id, src_id);
+        assert_eq!(copy.speed, 1.5, "speed preserved");
+        assert_eq!(copy.opacity, 0.7, "opacity preserved");
+        assert_eq!(copy.media_ref, src_ref, "same source media");
+    }
+
+    #[test]
+    fn duplicate_clips_preserves_keyframes_and_effects() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let mut src = crate::test_helpers::make_clip(0, 60);
+        src.opacity_track = Some(KeyframeTrack {
+            keyframes: vec![
+                Keyframe { frame: 0, value: 1.0, interpolation_out: Interpolation::Linear },
+                Keyframe { frame: 30, value: 0.5, interpolation_out: Interpolation::Linear },
+            ],
+        });
+        src.effects = Some(vec![Effect::new("blur", vec![("radius", 10.0)])]);
+        src.fade_in_frames = 5;
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[src]);
+        let placed_id = exec.timeline().tracks[0].clips[0].id.clone();
+
+        exec.execute(
+            "duplicate_clips",
+            &json!({"entries": [{"clipId": placed_id, "toFrame": 100}]}),
+        )
+        .unwrap();
+
+        let copy = exec
+            .timeline()
+            .tracks[0]
+            .clips
+            .iter()
+            .find(|c| c.start_frame == 100)
+            .cloned()
+            .expect("copy at frame 100");
+        let kf = copy.opacity_track.as_ref().expect("opacity keyframes preserved");
+        assert_eq!(kf.keyframes.len(), 2);
+        assert_eq!(kf.keyframes[1].value, 0.5);
+        let fx = copy.effects.as_ref().expect("effects preserved");
+        assert_eq!(fx.len(), 1);
+        assert_eq!(fx[0].r#type, "blur");
+        assert_eq!(copy.fade_in_frames, 5, "fade preserved");
+    }
+
+    #[test]
+    fn duplicate_clips_expands_linked_partners() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Audio);
+        let group = "grp-dup".to_string();
+        let mut v = crate::test_helpers::make_clip(0, 60);
+        v.link_group_id = Some(group.clone());
+        let mut a = crate::test_helpers::make_clip(0, 60);
+        a.media_type = ClipType::Audio;
+        a.source_clip_type = ClipType::Audio;
+        a.link_group_id = Some(group);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[v]);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 1, 0, &[a]);
+        let video_id = exec.timeline().tracks[0].clips[0].id.clone();
+
+        // Only the lead is named; the audio partner is duplicated automatically.
+        exec.execute(
+            "duplicate_clips",
+            &json!({"entries": [{"clipId": video_id, "toFrame": 100}]}),
+        )
+        .unwrap();
+
+        let mut vclips = exec.timeline().tracks[0].clips.clone();
+        let mut aclips = exec.timeline().tracks[1].clips.clone();
+        vclips.sort_by_key(|c| c.start_frame);
+        aclips.sort_by_key(|c| c.start_frame);
+        assert_eq!(vclips.len(), 2, "video duplicated");
+        assert_eq!(aclips.len(), 2, "audio partner duplicated");
+        assert_eq!(vclips[1].start_frame, 100);
+        assert_eq!(aclips[1].start_frame, 100);
+        // The two copies share a FRESH link group, not the original.
+        let vg = vclips[1].link_group_id.as_ref().expect("copy video linked");
+        let ag = aclips[1].link_group_id.as_ref().expect("copy audio linked");
+        assert_eq!(vg, ag, "copies stay linked to each other");
+        assert_ne!(vg, "grp-dup", "copies get a fresh link group");
+    }
+
+    #[test]
+    fn duplicate_clips_rejects_invalid_track() {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let src = crate::test_helpers::make_clip(0, 30);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[src]);
+        let clip_id = exec.timeline().tracks[0].clips[0].id.clone();
+
+        let err = exec
+            .execute(
+                "duplicate_clips",
+                &json!({"entries": [{"clipId": clip_id, "toTrack": 99, "toFrame": 0}]}),
+            )
+            .unwrap_err();
+        assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn duplicate_clips_rejects_empty_entries() {
+        let mut exec = make_executor();
+        let err = exec
+            .execute("duplicate_clips", &json!({"entries": []}))
+            .unwrap_err();
+        assert!(err.contains("entries"), "got: {err}");
+    }
+
+    #[test]
+    fn duplicate_clips_expands_and_shortens_ids() {
+        // The nested entries[].clipId is a SCALAR_ID_KEY, so a >= 8-char prefix
+        // expands (C-3); output duplicatedClipIds come back shortened.
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let src = crate::test_helpers::make_clip(0, 30);
+        let _ = timeline_core::place_clips(exec.timeline_mut(), 0, 0, &[src]);
+        let full_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let prefix = &full_id[..8];
+
+        let result = exec
+            .execute(
+                "duplicate_clips",
+                &json!({"entries": [{"clipId": prefix, "toFrame": 100}]}),
+            )
+            .expect("prefix clipId expands to the full id");
+        assert_eq!(exec.timeline().tracks[0].clips.len(), 2, "duplicate placed");
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let dup = body["duplicatedClipIds"][0].as_str().unwrap();
+        // Output ids are shortened to a unique prefix, not the full 36-char uuid.
+        assert!(dup.len() < 36, "output id shortened: {dup}");
+    }
+
     #[test]
     fn exec_011_get_media_found() {
         let mut exec = make_executor_with_media();
@@ -9919,6 +10240,38 @@ mod tests {
         assert_eq!(models[0]["referenceTagNoun"], json!("Image"));
         assert_eq!(models[2]["displayName"], json!("Kling O3"));
         assert_eq!(models[2]["maxReferenceImages"], json!(7));
+    }
+
+    #[test]
+    fn exec_018_list_models_emits_aspect_ratio_labels() {
+        // #284: every image/video entry carries human-readable aspectRatioLabels
+        // parallel to the raw aspectRatios ids.
+        let mut exec = make_executor();
+        let result = exec
+            .execute("list_models", &json!({"type": "image"}))
+            .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let models = body["models"].as_array().unwrap();
+        let m = models
+            .iter()
+            .find(|m| m["aspectRatios"].as_array().is_some_and(|a| !a.is_empty()))
+            .expect("an image model with aspect ratios");
+        let ratios = m["aspectRatios"].as_array().unwrap();
+        let labels = m["aspectRatioLabels"]
+            .as_array()
+            .expect("aspectRatioLabels present");
+        assert_eq!(ratios.len(), labels.len(), "labels parallel the raw ids");
+        for (r, l) in ratios.iter().zip(labels) {
+            let raw = r.as_str().unwrap();
+            let label = l.as_str().unwrap();
+            if raw == "auto" {
+                assert_eq!(label, "Auto");
+            } else {
+                // Colon-form ids pass through unchanged.
+                assert_eq!(label, model_catalog::aspect_ratio_display_label(raw));
+            }
+        }
     }
 
     #[test]

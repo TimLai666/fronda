@@ -665,6 +665,70 @@ pub fn validate_move_clips_linked(clip_ids: &[String]) -> ValidationResult<Vec<S
     ValidationResult::Ok(clip_ids.to_vec())
 }
 
+// === Upstream #176: duplicate_clips =======================================
+
+/// Parsed and validated `duplicate_clips` input: per-entry (clipId, toFrame,
+/// optional toTrack). Full existence/compatibility checks happen against the
+/// live timeline in the executor; this is the pure shape/range gate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuplicateClipsInput {
+    pub entries: Vec<(String, Option<usize>, i64)>,
+}
+
+/// Requires a non-empty `entries` array; each entry needs a `clipId` and a
+/// non-negative in-bounds `toFrame`; `toTrack`, when present, must be a
+/// non-negative index.
+pub fn validate_duplicate_clips(input: &Value) -> ValidationResult<DuplicateClipsInput> {
+    let arr = match input.get("entries").and_then(|v| v.as_array()) {
+        Some(a) if !a.is_empty() => a,
+        _ => {
+            return ValidationResult::Error(
+                "duplicate_clips: 'entries' must be a non-empty array".into(),
+            )
+        }
+    };
+    let mut entries = Vec::with_capacity(arr.len());
+    for (i, e) in arr.iter().enumerate() {
+        let clip_id = match e.get("clipId").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => {
+                return ValidationResult::Error(format!(
+                    "duplicate_clips: entries[{i}] missing 'clipId'"
+                ))
+            }
+        };
+        let to_frame = match e.get("toFrame").and_then(|v| v.as_i64()) {
+            Some(f) => f,
+            None => {
+                return ValidationResult::Error(format!(
+                    "duplicate_clips: entries[{i}] missing or invalid 'toFrame'"
+                ))
+            }
+        };
+        if to_frame < 0 {
+            return ValidationResult::Error(format!(
+                "duplicate_clips: entries[{i}] toFrame must be >= 0 (got {to_frame})"
+            ));
+        }
+        if let Err(e) = require_frame_in_bounds(to_frame, "toFrame") {
+            return ValidationResult::Error(format!("duplicate_clips: entries[{i}]: {e}"));
+        }
+        let to_track = match e.get("toTrack") {
+            None => None,
+            Some(v) => match v.as_i64() {
+                Some(t) if t >= 0 => Some(t as usize),
+                _ => {
+                    return ValidationResult::Error(format!(
+                        "duplicate_clips: entries[{i}] toTrack must be a non-negative track index"
+                    ))
+                }
+            },
+        };
+        entries.push((clip_id, to_track, to_frame));
+    }
+    ValidationResult::Ok(DuplicateClipsInput { entries })
+}
+
 // === MUT-017/018: ripple_delete_ranges ====================================
 
 /// Parsed and validated `ripple_delete_ranges` input.
@@ -1704,6 +1768,57 @@ pub fn validate_duplicate_project(input: &Value) -> ValidationResult<DuplicatePr
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ---- Upstream #176: duplicate_clips ---------------------------------
+
+    #[test]
+    fn duplicate_clips_valid_entries_parse() {
+        let input = json!({"entries": [
+            {"clipId": "c1", "toFrame": 100},
+            {"clipId": "c2", "toTrack": 1, "toFrame": 0}
+        ]});
+        let parsed = validate_duplicate_clips(&input)
+            .into_ok()
+            .expect("valid entries");
+        assert_eq!(parsed.entries.len(), 2);
+        assert_eq!(parsed.entries[0], ("c1".to_string(), None, 100));
+        assert_eq!(parsed.entries[1], ("c2".to_string(), Some(1), 0));
+    }
+
+    #[test]
+    fn duplicate_clips_empty_entries_rejected() {
+        let err = validate_duplicate_clips(&json!({"entries": []}))
+            .into_error()
+            .unwrap();
+        assert!(err.contains("non-empty"), "err={err}");
+    }
+
+    #[test]
+    fn duplicate_clips_negative_to_frame_rejected() {
+        let err = validate_duplicate_clips(&json!({"entries": [{"clipId": "c1", "toFrame": -3}]}))
+            .into_error()
+            .unwrap();
+        assert!(err.contains("toFrame must be >= 0"), "err={err}");
+    }
+
+    #[test]
+    fn duplicate_clips_missing_to_frame_rejected() {
+        let err = validate_duplicate_clips(&json!({"entries": [{"clipId": "c1"}]}))
+            .into_error()
+            .unwrap();
+        assert!(err.contains("toFrame"), "err={err}");
+    }
+
+    #[test]
+    fn duplicate_clips_frame_ceiling_enforced() {
+        let over = MAX_TOOL_FRAME + 1;
+        let err = validate_duplicate_clips(
+            &json!({"entries": [{"clipId": "c1", "toFrame": over}]}),
+        )
+        .into_error()
+        .unwrap();
+        assert!(err.contains("maximum supported frame"), "err={err}");
+    }
 
     // ---- MUT-016: split_clip --------------------------------------------
 

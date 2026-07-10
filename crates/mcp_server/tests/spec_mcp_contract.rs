@@ -26,19 +26,19 @@ fn mcp_002_server_version() {
 // ── MCP-003: Exposes the same tool set as the in-app agent ───────────────────
 
 #[test]
-fn mcp_003_exposes_55_tools() {
-    // Post-multicam counts (design.md C-1 + multicam-engine): 56 total
-    // = 51 shared + 4 MCP-only project tools + 1 in-app-only read_skill;
-    // the MCP surface exposes 55 (everything but read_skill).
+fn mcp_003_exposes_56_tools() {
+    // Post-#176 counts (design.md C-1 + multicam-engine + duplicate_clips): 57
+    // total = 52 shared + 4 MCP-only project tools + 1 in-app-only read_skill;
+    // the MCP surface exposes 56 (everything but read_skill).
     assert_eq!(
         agent_contract::all_tools().len(),
-        56,
-        "56 total tools (see agent_contract tools.rs header history)"
+        57,
+        "57 total tools (see agent_contract tools.rs header history)"
     );
     assert_eq!(
         agent_contract::tools::mcp_tools().len(),
-        55,
-        "MCP-003: 55 MCP-surface tools"
+        56,
+        "MCP-003: 56 MCP-surface tools"
     );
 }
 
@@ -67,7 +67,7 @@ fn mcp_003_all_tool_names_are_unique() {
     let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), 56, "all 56 tool names must be unique");
+    assert_eq!(names.len(), 57, "all 57 tool names must be unique");
 }
 
 #[test]
@@ -237,7 +237,7 @@ fn json_rpc_tools_list_response_format() {
         .pointer("/result/tools")
         .and_then(|v| v.as_array())
         .unwrap();
-    assert_eq!(tools_arr.len(), 55);
+    assert_eq!(tools_arr.len(), 56);
 
     // Each tool entry has required fields
     for tool_val in tools_arr {

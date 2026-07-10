@@ -809,6 +809,52 @@ pub fn upscale_cost(model: &UpscaleModelConfig, duration_seconds: i64) -> Option
     Some(model.price_per_second * duration_seconds.max(1) as f64)
 }
 
+/// Human-readable label for an image aspect / image-size API enum id
+/// (upstream #284, verbatim port of Swift
+/// `ImageModelConfig.aspectRatioDisplayLabel`). Colon-form ids
+/// ("16:9", "2.35:1") pass through unchanged; underscore enum ids are
+/// tokenized ("landscape_16_9" → "Landscape 16:9", "square_hd" → "Square HD").
+pub fn aspect_ratio_display_label(id: &str) -> String {
+    if id.contains(':') {
+        return id.to_string();
+    }
+    let mut parts: Vec<String> = id.split('_').map(str::to_string).collect();
+    if parts.is_empty() {
+        return id.to_string();
+    }
+    if parts.len() >= 2 {
+        let n = parts.len();
+        if let (Ok(width), Ok(height)) =
+            (parts[n - 2].parse::<i64>(), parts[n - 1].parse::<i64>())
+        {
+            parts.truncate(n - 2);
+            parts.push(format!("{width}:{height}"));
+        }
+    }
+    parts
+        .iter()
+        .map(|t| aspect_ratio_display_token(t))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Per-token casing for [`aspect_ratio_display_label`] (Swift
+/// `aspectRatioDisplayToken`): resolution acronyms upcase, everything else
+/// capitalizes.
+fn aspect_ratio_display_token(token: &str) -> String {
+    let lower = token.to_lowercase();
+    match lower.as_str() {
+        "hd" | "uhd" | "1k" | "2k" | "4k" | "8k" => lower.to_uppercase(),
+        _ => {
+            let mut chars = lower.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => lower,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1248,5 +1294,30 @@ mod tests {
             "\"\" key is the default"
         );
         assert_eq!(video("seedance-2").audio_discount(Some("720p")), None);
+    }
+
+    #[test]
+    fn aspect_ratio_display_labels_match_swift() {
+        // Golden vectors transplanted verbatim from Swift ImageModelConfigTests
+        // (deleted in upstream PR #284; the labels are the canonical contract).
+        let cases = [
+            ("16:9", "16:9"),
+            ("2.35:1", "2.35:1"),
+            ("auto", "Auto"),
+            ("auto_2K", "Auto 2K"),
+            ("square_hd", "Square HD"),
+            ("16_9", "16:9"),
+            ("portrait_4_3", "Portrait 4:3"),
+            ("portrait_16_9", "Portrait 16:9"),
+            ("landscape_4_3", "Landscape 4:3"),
+            ("landscape_16_9", "Landscape 16:9"),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(
+                aspect_ratio_display_label(id),
+                expected,
+                "aspect_ratio_display_label({id})"
+            );
+        }
     }
 }

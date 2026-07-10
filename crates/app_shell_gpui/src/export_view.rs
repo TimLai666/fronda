@@ -125,6 +125,9 @@ impl Render for ExportView {
         let progress = self.model.progress_fraction() as f32;
         let selected_codec = self.selected_codec;
         let selected_resolution = self.selected_resolution;
+        // #138: HDR (10-bit HEVC Main10) is only offered for the H.265 codec.
+        let hdr_enabled = self.model.hdr;
+        let show_hdr = selected_codec == 1;
 
         let codec_labels = ["H.264", "H.265", "ProRes"];
         let res_labels = ["720p", "1080p", "2K", "4K", "Match Timeline"];
@@ -262,6 +265,18 @@ impl Render for ExportView {
                                                 }))
                                             })),
                                     )
+                                    // HDR toggle (#138) — HEVC Main10 / BT.2020 HLG, H.265 only
+                                    .when(show_hdr, |el| {
+                                        el.child(
+                                            picker_option("codec-hdr", "HDR (10-bit)", hdr_enabled)
+                                                .on_click(cx.listener(
+                                                    move |this, _: &ClickEvent, _: &mut Window, cx| {
+                                                        this.model.set_hdr(!this.model.hdr);
+                                                        cx.notify();
+                                                    },
+                                                )),
+                                        )
+                                    })
                                     // Resolution section
                                     .child(
                                         div()
@@ -724,12 +739,16 @@ impl Render for ExportView {
                                     let start_dir =
                                         std::env::home_dir().unwrap_or_else(|| ".".into());
                                     let resolution = this.model.panel.settings.resolution;
-                                    let (video_codec, ext) = match this.model.panel.settings.format
+                                    // #138: the HDR toggle upgrades H.265 to HEVC Main10.
+                                    let (video_codec, ext) = match this.model.effective_video_codec()
                                     {
                                         ExportFormat::ProRes => {
                                             (crate::video_export::VideoCodec::ProRes, "mov")
                                         }
-                                        ExportFormat::H265 | ExportFormat::H265Hdr => {
+                                        ExportFormat::H265Hdr => {
+                                            (crate::video_export::VideoCodec::H265Hdr, "mp4")
+                                        }
+                                        ExportFormat::H265 => {
                                             (crate::video_export::VideoCodec::H265, "mp4")
                                         }
                                         ExportFormat::H264 => {
