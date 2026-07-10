@@ -1,6 +1,6 @@
 ## 1. 契約抄錄（先行，read-only）
 
-- [ ] 1.1 從 upstream/main@141c69b 抄錄完整 v2 契約到本 change 的 design.md：48 工具清單與每個的精確 input schema（ToolDefinitions.swift 全文對照）、mutation envelope 的確切 JSON 形狀（含哪些工具回它）、get_timeline v2 輸出（[start,end) frames、A/V 折疊規則、caption-group 摘要、gaps 表示）、get_transcript v2、新 SYSTEM_INSTRUCTION 全文；標注與 Rust 現面的逐工具 diff（新增/更名/吸收/退場/參數變更）與 Rust-native 擴展保留清單
+- [x] 1.1 從 upstream/main@141c69b 抄錄完整 v2 契約到本 change 的 design.md：48 工具清單與每個的精確 input schema（ToolDefinitions.swift 全文對照）、mutation envelope 的確切 JSON 形狀（含哪些工具回它）、get_timeline v2 輸出（[start,end) frames、A/V 折疊規則、caption-group 摘要、gaps 表示）、get_transcript v2、新 SYSTEM_INSTRUCTION 全文；標注與 Rust 現面的逐工具 diff（新增/更名/吸收/退場/參數變更）與 Rust-native 擴展保留清單 — 完成：48 上游（45 本 change + 3 multicam 留位）+ 8 Rust 擴展 = 最終面 53；Rust 64 = 40 SAME + 1 RENAMED(sync_audio→sync_clips) + 15 ABSORBED + 8 KEPT；set_blend_mode/duplicate_timeline 實為上游吸收（修正 proposal 假設）
 
 ## 2. 新工具
 
