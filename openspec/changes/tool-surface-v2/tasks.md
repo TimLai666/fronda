@@ -22,4 +22,4 @@
 
 - [x] 5.1 SYSTEM_INSTRUCTION 重寫：上游 v2 全文 + Rust 擴展工具段
 - [x] 5.2 工具數斷言（4 檔）、snapshot、MCP 契約測試全面更新至最終數（48 + 擴展數，design 定案）
-- [ ] 5.3 三 gate exit code 全綠；對抗審查一輪；AGENTS.md 工具面記載更新
+- [x] 5.3 三 gate exit code 全綠；對抗審查一輪；AGENTS.md 工具面記載更新
