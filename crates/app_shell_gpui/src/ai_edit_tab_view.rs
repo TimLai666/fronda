@@ -463,8 +463,15 @@ impl Render for AiEditTabView {
         let place_audio = self.state.place_audio_on_timeline;
         let is_video = self.state.is_video;
         let is_image = asset.as_ref().is_some_and(|a| a.clip_type == ClipType::Image);
-        let enabled = actions_enabled(asset.as_ref());
-        let can_rerun = rerun_enabled(asset.as_ref());
+        // Gate every generation action on a connected backend, so the buttons
+        // disable and a "coming soon" notice shows instead of failing on click.
+        let gen_available = crate::editor_state_hub::EditorStateHub::global()
+            .executor()
+            .lock()
+            .map(|e| e.is_generation_available())
+            .unwrap_or(false);
+        let enabled = actions_enabled(asset.as_ref()) && gen_available;
+        let can_rerun = rerun_enabled(asset.as_ref()) && gen_available;
         let upscale_models = asset
             .as_ref()
             .map(|a| model_catalog::upscale_models_for(a.clip_type))
@@ -472,7 +479,14 @@ impl Render for AiEditTabView {
         let upscale_enabled = enabled && !upscale_models.is_empty();
         let show_upscale_picker = self.state.show_upscale_picker && upscale_enabled;
         let duration_seconds = asset.as_ref().map(|a| a.duration_seconds).unwrap_or(0.0);
-        let status = self.state.status.clone();
+        let status = if !gen_available {
+            Some(
+                "AI generation is coming soon — no generation service is connected in this build."
+                    .to_string(),
+            )
+        } else {
+            self.state.status.clone()
+        };
 
         div()
             .track_focus(&self.focus_handle.clone())

@@ -1395,7 +1395,15 @@ impl Render for GenerationView {
         let selected = st.selected_type;
         let cost = estimated_cost(&st);
         let insufficient = has_insufficient_credits(cost, st.credits_remaining);
-        let submit_enabled = can_submit(&st);
+        // Gate generation up front: with no backend connected, keep the panel
+        // visible but disable submit and show a "coming soon" notice so the user
+        // never fills the form only to hit an unavailable result.
+        let gen_available = crate::editor_state_hub::EditorStateHub::global()
+            .executor()
+            .lock()
+            .map(|e| e.is_generation_available())
+            .unwrap_or(false);
+        let submit_enabled = can_submit(&st) && gen_available;
         let inflight = self.inflight;
         let requires_source = video_caps(&st).is_some_and(|c| c.requires_source_video);
         let last_frame_supported = video_caps(&st).is_some_and(|c| c.supports_last_frame);
@@ -1408,15 +1416,20 @@ impl Render for GenerationView {
             a: 0.10,
         };
 
-        // Status line: submission status, else the credit shortfall.
-        let status_line: Option<String> = st.status.clone().or_else(|| {
-            insufficient.then(|| {
-                credit_shortfall_message(
-                    cost.unwrap_or_default(),
-                    st.credits_remaining.unwrap_or_default(),
-                )
+        // Status line: coming-soon notice when gating, else submission status,
+        // else the credit shortfall.
+        let status_line: Option<String> = if !gen_available {
+            Some("AI generation is coming soon — no generation service is connected in this build.".to_string())
+        } else {
+            st.status.clone().or_else(|| {
+                insufficient.then(|| {
+                    credit_shortfall_message(
+                        cost.unwrap_or_default(),
+                        st.credits_remaining.unwrap_or_default(),
+                    )
+                })
             })
-        });
+        };
 
         div()
             .id("generation-panel")

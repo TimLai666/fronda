@@ -839,6 +839,20 @@ impl ToolExecutor {
         self.generation_backend = Some(backend);
     }
 
+    /// Whether a generation backend is connected. UI surfaces query this to
+    /// gate generation up front ("Coming soon") instead of letting the user
+    /// submit and hit an unavailable result.
+    pub fn is_generation_available(&self) -> bool {
+        self.generation_backend.is_some()
+    }
+
+    /// Whether a transcription provider is connected. The captions/transcript
+    /// UI gates on this so it reads as "coming soon" rather than surfacing an
+    /// empty "No transcribable speech" boundary.
+    pub fn is_transcription_available(&self) -> bool {
+        self.transcription_provider.is_some()
+    }
+
     /// Plan and run generation recovery over the current manifest (#216):
     /// resume each in-flight job via the host backend and apply its outcome.
     /// Without a backend the plan is still returned with nothing applied (no
@@ -14175,6 +14189,17 @@ mod tests {
         assert_eq!(exec.sibling_timelines()[0].id, "root");
         assert_eq!(exec.revision(), before + 1);
         assert!(exec.undo_stack().is_empty());
+    }
+
+    #[test]
+    fn availability_flags_reflect_installed_seams() {
+        let mut exec = ToolExecutor::new(Timeline::default(), MediaManifest::default());
+        // Nothing installed on the pure/MCP path.
+        assert!(!exec.is_generation_available());
+        assert!(!exec.is_transcription_available());
+        exec.set_generation_backend(std::sync::Arc::new(MockGenerationBackend));
+        assert!(exec.is_generation_available());
+        assert!(!exec.is_transcription_available());
     }
 
     // ── send_feedback (#152: seam + session dedup + cap) ───────────────

@@ -2973,7 +2973,16 @@ impl MediaPanelView {
             })
             .or_else(|| self.captions.language.clone())
             .unwrap_or_else(|| "Auto".to_string());
-        let disabled = effective_count == 0 || self.captions.is_generating;
+        // Captions need transcript words, which only a connected transcription
+        // provider produces. With none, gate the action and say "coming soon"
+        // instead of surfacing an empty "No transcribable speech" result.
+        let transcription_available = crate::editor_state_hub::EditorStateHub::global()
+            .executor()
+            .lock()
+            .map(|e| e.is_transcription_available())
+            .unwrap_or(false);
+        let disabled =
+            effective_count == 0 || self.captions.is_generating || !transcription_available;
 
         // ── Source section ──
         let mut source_section = div()
@@ -3278,7 +3287,15 @@ impl MediaPanelView {
             .py(px(Spacing::MD))
             .border_t_1()
             .border_color(BorderColors::SUBTLE);
-        if let Some(note) = &self.captions.note {
+        if !transcription_available {
+            bar = bar.child(
+                div()
+                    .text_color(Text::TERTIARY)
+                    .text_size(px(FontSize::XS))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child("Auto-captions are coming soon — transcription isn't connected in this build."),
+            );
+        } else if let Some(note) = &self.captions.note {
             bar = bar.child(generate_note(note));
         }
         bar = bar.child(
