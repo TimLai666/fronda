@@ -3397,12 +3397,20 @@ impl ToolExecutor {
             .iter()
             .position(|f| f.id == folder_id)
             .ok_or_else(|| format!("Folder '{}' not found", folder_id))?;
+        let parent = self.media_manifest.folders[pos].parent_folder_id.clone();
         self.media_manifest.folders.remove(pos);
 
-        // Unset folder_id on entries in this folder
+        // Contents move to the deleted folder's parent: entries directly
+        // inside it AND subfolders (previously left with a dangling
+        // parentFolderId, unreachable in Folders view).
         for entry in self.media_manifest.entries.iter_mut() {
             if entry.folder_id.as_deref() == Some(folder_id) {
-                entry.folder_id = None;
+                entry.folder_id = parent.clone();
+            }
+        }
+        for folder in self.media_manifest.folders.iter_mut() {
+            if folder.parent_folder_id.as_deref() == Some(folder_id) {
+                folder.parent_folder_id = parent.clone();
             }
         }
 
@@ -7671,6 +7679,44 @@ mod tests {
             .execute("delete_folder", &json!({"folderId": "folder-001"}))
             .unwrap();
         assert!(exec.media_manifest.folders.is_empty());
+    }
+
+    #[test]
+    fn delete_folder_reparents_contents_to_its_parent() {
+        // Deleting a middle folder must not leave subfolders dangling
+        // (unreachable in Folders view) — contents move to ITS parent.
+        let mut exec = make_executor_with_media();
+        exec.media_manifest.folders.push(core_model::MediaFolder {
+            id: "mid".into(),
+            name: "Mid".into(),
+            parent_folder_id: Some("folder-001".into()),
+        });
+        exec.media_manifest.folders.push(core_model::MediaFolder {
+            id: "leaf".into(),
+            name: "Leaf".into(),
+            parent_folder_id: Some("mid".into()),
+        });
+        exec.media_manifest.entries[0].folder_id = Some("mid".into());
+
+        exec.execute("delete_folder", &json!({"folderId": "mid"}))
+            .unwrap();
+
+        let leaf = exec
+            .media_manifest
+            .folders
+            .iter()
+            .find(|f| f.id == "leaf")
+            .unwrap();
+        assert_eq!(
+            leaf.parent_folder_id.as_deref(),
+            Some("folder-001"),
+            "subfolder re-parents to the deleted folder's parent"
+        );
+        assert_eq!(
+            exec.media_manifest.entries[0].folder_id.as_deref(),
+            Some("folder-001"),
+            "entry moves to the parent, not the root"
+        );
     }
 
     #[test]
