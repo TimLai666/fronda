@@ -72,12 +72,12 @@ pub fn rerun_enabled(selected: Option<&SelectedAsset>) -> bool {
     selected.is_some_and(|a| a.generation_input.is_some())
 }
 
-/// upscale_media takes mediaId today; the picked model rides along for the
+/// upscale_media takes the v2 mediaRef; the picked model rides along for the
 /// future backend (same convention as the generate tools' extra args).
 pub fn upscale_tool_call(asset_id: &str, model_id: &str) -> (&'static str, serde_json::Value) {
     (
         "upscale_media",
-        serde_json::json!({ "mediaId": asset_id, "model": model_id }),
+        serde_json::json!({ "mediaRef": asset_id, "model": model_id }),
     )
 }
 
@@ -777,7 +777,7 @@ mod tests {
     fn upscale_call_args() {
         let (tool, args) = upscale_tool_call("asset-1", "topaz-upscaler");
         assert_eq!(tool, "upscale_media");
-        assert_eq!(args["mediaId"], "asset-1");
+        assert_eq!(args["mediaRef"], "asset-1");
         assert_eq!(args["model"], "topaz-upscaler");
     }
 
@@ -822,7 +822,7 @@ mod tests {
         let a = asset(ClipType::Video, Some(input));
         let (tool, args) = rerun_tool_call(&a).unwrap();
         assert_eq!(tool, "upscale_media");
-        assert_eq!(args["mediaId"], "asset-1");
+        assert_eq!(args["mediaRef"], "asset-1");
         assert_eq!(args["model"], "seedvr-upscaler");
     }
 

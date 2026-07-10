@@ -306,7 +306,14 @@ pub fn color_object(clip: &Clip) -> Option<Value> {
 /// `key.chroma` entry when the clip carries a chroma key. `None` when empty.
 pub fn effects_list(clip: &Clip) -> Option<Value> {
     let mut list: Vec<Value> = Vec::new();
-    if let Some(ck) = &clip.chroma_key {
+    // apply_effect's key.chroma keeps a real effect entry (richer params) AND
+    // mirrors into chroma_key for the compositor — synthesize from the mirror
+    // only when no entry exists (legacy projects).
+    let has_chroma_entry = clip
+        .effects
+        .as_ref()
+        .is_some_and(|es| es.iter().any(|e| e.r#type == "key.chroma"));
+    if let Some(ck) = clip.chroma_key.as_ref().filter(|_| !has_chroma_entry) {
         let (h, _s, _v) = rgb_to_hue(ck.key_r, ck.key_g, ck.key_b);
         let mut e = Map::new();
         e.insert("type".into(), json!("key.chroma"));
@@ -1118,6 +1125,36 @@ mod tests {
         assert_eq!(e["type"], json!("key.chroma"));
         assert_eq!(e["params"]["keyHue"], json!(0.333));
         assert_eq!(e["params"]["tolerance"], json!(0.4));
+    }
+
+    #[test]
+    fn chroma_effect_entry_suppresses_the_mirror_synth() {
+        // apply_effect key.chroma stores an entry AND mirrors chroma_key —
+        // the effects list must not show the key twice.
+        let mut c = clip("c1", 0, 100);
+        c.chroma_key = Some(core_model::ChromaKey {
+            enabled: true,
+            key_r: 0.0,
+            key_g: 1.0,
+            key_b: 0.0,
+            tolerance: 0.4,
+            spill_suppression: 0.5,
+        });
+        c.effects = Some(vec![core_model::Effect {
+            id: "e1".into(),
+            r#type: "key.chroma".into(),
+            enabled: true,
+            params: [
+                ("keyHue".to_string(), core_model::EffectParam::value(0.333)),
+                ("softness".to_string(), core_model::EffectParam::value(0.7)),
+            ]
+            .into_iter()
+            .collect(),
+        }]);
+        let j = Value::Object(clip_v2(&c));
+        let effects = j["effects"].as_array().unwrap();
+        assert_eq!(effects.len(), 1, "no duplicate key.chroma: {j}");
+        assert_eq!(effects[0]["params"]["softness"], json!(0.7), "entry wins (richer)");
     }
 
     #[test]

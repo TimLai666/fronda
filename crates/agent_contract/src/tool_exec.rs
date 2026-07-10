@@ -4011,10 +4011,13 @@ impl ToolExecutor {
     }
 
     fn cmd_inspect_media(&self, args: &Value) -> Result<Value, String> {
+        // v2 key is mediaRef (short-id expansion applies); legacy mediaId
+        // still parses for older callers.
         let media_id = args
-            .get("mediaId")
+            .get("mediaRef")
+            .or_else(|| args.get("mediaId"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing mediaId".to_string())?;
+            .ok_or_else(|| "Missing mediaRef".to_string())?;
 
         // Issue #39: resolve language — per-call arg → project setting → None.
         let _language = args
@@ -7402,10 +7405,13 @@ impl ToolExecutor {
     }
 
     fn cmd_upscale_media(&mut self, args: &Value) -> Result<Value, String> {
+        // v2 key is mediaRef (short-id expansion applies); legacy mediaId
+        // still parses for older callers.
         let media_id = args
-            .get("mediaId")
+            .get("mediaRef")
+            .or_else(|| args.get("mediaId"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing mediaId".to_string())?;
+            .ok_or_else(|| "Missing mediaRef".to_string())?;
 
         let entry = self
             .media_manifest

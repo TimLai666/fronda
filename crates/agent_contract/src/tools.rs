@@ -836,7 +836,7 @@ fn inspect_media() -> ToolDefinition {
         name: "inspect_media",
         description: "Inspect a media asset and return details. Transcription defaults to system language — pass language when the audio is in another language.",
         input_schema: object(&[
-            ("mediaId", string("Media asset id to inspect")),
+            ("mediaRef", string("Asset ID from get_media.")),
             ("clipId", string("Optional clip id for cross-validation (READ-014)")),
             ("language", string("Optional BCP-47 spoken language (e.g. 'fr', 'ja', 'en-GB'). Overrides project transcriptionLanguage for this call; falls back to system language if neither is set.")),
             ("maxFrames", string("Optional max frames for storyboard (default 6, max 12, READ-015)")),
@@ -1139,11 +1139,22 @@ fn undo() -> ToolDefinition {
     }
 }
 
+/// Description verbatim from upstream@141c69b.
 fn upscale_media() -> ToolDefinition {
     ToolDefinition {
         name: "upscale_media",
-        description: "Upscale a media asset.",
-        input_schema: object(&[("mediaId", string("Media asset id to upscale"))]),
+        description: "Upscales an existing video or image asset to higher resolution using an AI upscaler. Returns a placeholder asset ID immediately; the upscaled asset appears in get_media once ready. Use list_models with type='upscale' to pick a model that supports the asset's type. Costs real money and is not undoable.",
+        input_schema: object(&[
+            ("mediaRef", string("ID of the video or image asset to upscale")),
+            (
+                "model",
+                string("Upscaler model ID. Defaults to the first model that supports the asset's type."),
+            ),
+            (
+                "sourceClipId",
+                string("Optional. Video clip id (from get_timeline) referencing mediaRef. When set and the clip is trimmed, only the clip's visible range is upscaled, not the full source."),
+            ),
+        ]),
     }
 }
 
