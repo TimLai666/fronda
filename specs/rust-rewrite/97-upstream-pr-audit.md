@@ -474,8 +474,9 @@ Fronda saves, same class as #261 speakers).
 manage_multicam/change_cam/get_multicam tools, XL — after tool-surface
 decision); #263 tool-surface v2 (48 consolidated tools: organize_media,
 manage_tracks, close_project, mutation envelopes, relationship-first
-get_timeline — XL, **NEEDS USER DECISION**: converging breaks Fronda's
-shipped 64-tool MCP surface) + its embedded ripple bug (**PORTED
+get_timeline — XL, **USER DECIDED 2026-07-10: FOLLOW upstream v2**;
+Rust-native extensions kept on top of the 48; spectra change
+tool-surface-v2 tracks it) + its embedded ripple bug (**PORTED
 2026-07-10**, change `upstream-critical-fixes`: compute_ripple_delete
 partner propagation is now a fixpoint across ALL cleared tracks — the
 lock-off-partner desync repro'd RED then fixed; tool-surface v2 itself
