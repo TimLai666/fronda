@@ -43,6 +43,100 @@ impl PreviewTabItem {
     }
 }
 
+/// Which transport-bar settings dropdown is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsMenu {
+    Aspect,
+    Fps,
+    Quality,
+    Zoom,
+}
+
+/// What picking a settings-menu row does.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingsSelection {
+    /// set_project_settings { aspectRatio }
+    AspectRatio(&'static str),
+    /// set_project_settings { fps }
+    Fps(i64),
+    /// set_project_settings { quality }
+    Quality(&'static str),
+    /// View-local canvas zoom factor (1.0 = Fit).
+    Zoom(f64),
+}
+
+/// One row of a settings dropdown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingsRow {
+    pub label: String,
+    pub checked: bool,
+    pub select: SettingsSelection,
+}
+
+/// Rows for a settings menu, fed by `timeline_core::project_presets` with the
+/// preset's own active-selection logic (Swift: PreviewContainerView menus).
+pub fn settings_menu_rows(
+    menu: SettingsMenu,
+    width: i64,
+    height: i64,
+    fps: i64,
+    canvas_zoom: f64,
+) -> Vec<SettingsRow> {
+    match menu {
+        SettingsMenu::Aspect => timeline_core::ASPECT_PRESETS
+            .iter()
+            .map(|p| SettingsRow {
+                label: p.label.to_string(),
+                checked: p.is_active(width, height),
+                select: SettingsSelection::AspectRatio(p.label),
+            })
+            .collect(),
+        SettingsMenu::Fps => timeline_core::FPS_PRESETS
+            .iter()
+            .map(|&f| SettingsRow {
+                label: format!("{f} fps"),
+                checked: fps == f,
+                select: SettingsSelection::Fps(f),
+            })
+            .collect(),
+        SettingsMenu::Quality => timeline_core::QUALITY_PRESETS
+            .iter()
+            .map(|p| SettingsRow {
+                label: p.label.to_string(),
+                checked: p.matches(width, height),
+                select: SettingsSelection::Quality(p.label),
+            })
+            .collect(),
+        SettingsMenu::Zoom => timeline_core::ZOOM_PRESETS
+            .iter()
+            .map(|p| SettingsRow {
+                label: p.label.to_string(),
+                checked: zoom_preset_active(canvas_zoom, p.value),
+                select: SettingsSelection::Zoom(p.value),
+            })
+            .collect(),
+    }
+}
+
+/// Swift `isZoomPresetActive`: within 0.01 of the preset value.
+pub fn zoom_preset_active(canvas_zoom: f64, preset_value: f64) -> bool {
+    (canvas_zoom - preset_value).abs() < 0.01
+}
+
+/// Zoom badge label (Swift `zoomBadgeLabel`): "Fit" at 1.0, else a percentage.
+pub fn zoom_badge_label(canvas_zoom: f64) -> String {
+    if zoom_preset_active(canvas_zoom, 1.0) {
+        "Fit".to_string()
+    } else {
+        format!("{}%", (canvas_zoom * 100.0) as i64)
+    }
+}
+
+/// File name for a captured frame PNG in the project media directory.
+pub fn capture_file_name(frame: i64, stamp: u128) -> String {
+    format!("frame-{frame}-{stamp}.png")
+}
+
 pub struct PreviewView {
     pub state: PlaybackState,
     pub show_transform_overlay: bool,
@@ -55,6 +149,10 @@ pub struct PreviewView {
     pub guide_state: ViewerGuideState,
     /// Whether the guides dropdown menu is open.
     pub show_guide_menu: bool,
+    /// Open transport-bar settings dropdown, if any.
+    pub open_settings_menu: Option<SettingsMenu>,
+    /// Canvas zoom factor (Swift: editor.canvasZoom; 1.0 = Fit).
+    pub canvas_zoom: f64,
     transform_overlay: Entity<TransformOverlayView>,
     crop_overlay: Entity<CropOverlayView>,
     focus_handle: FocusHandle,
@@ -79,6 +177,8 @@ impl PreviewView {
             active_tab_idx: 0,
             guide_state: ViewerGuideState::new(),
             show_guide_menu: false,
+            open_settings_menu: None,
+            canvas_zoom: 1.0,
             transform_overlay: cx.new(|cx| TransformOverlayView::new(cx)),
             crop_overlay: cx.new(|cx| CropOverlayView::new(cx)),
             focus_handle: cx.focus_handle(),
@@ -218,6 +318,116 @@ impl PreviewView {
     pub fn step_forward(&mut self, cx: &mut Context<Self>) {
         self.state.step_forward();
         cx.notify();
+    }
+
+    fn toggle_settings_menu(&mut self, menu: SettingsMenu, cx: &mut Context<Self>) {
+        self.open_settings_menu = if self.open_settings_menu == Some(menu) {
+            None
+        } else {
+            Some(menu)
+        };
+        cx.notify();
+    }
+
+    /// Apply a settings-menu pick: zoom is view-local, everything else goes
+    /// through the shared set_project_settings tool (rescale semantics, undo).
+    fn apply_settings_selection(&mut self, select: &SettingsSelection, cx: &mut Context<Self>) {
+        match select {
+            SettingsSelection::Zoom(value) => self.canvas_zoom = *value,
+            SettingsSelection::AspectRatio(label) => {
+                Self::run_shared_tool(
+                    "set_project_settings",
+                    serde_json::json!({ "aspectRatio": label }),
+                );
+            }
+            SettingsSelection::Fps(fps) => {
+                Self::run_shared_tool("set_project_settings", serde_json::json!({ "fps": fps }));
+            }
+            SettingsSelection::Quality(label) => {
+                Self::run_shared_tool(
+                    "set_project_settings",
+                    serde_json::json!({ "quality": label }),
+                );
+            }
+        }
+        self.open_settings_menu = None;
+        cx.notify();
+    }
+
+    /// Run a tool on the shared executor; tool errors leave the UI unchanged.
+    fn run_shared_tool(tool: &str, args: serde_json::Value) {
+        let executor = crate::editor_state_hub::EditorStateHub::global().executor();
+        let guard = executor.lock();
+        if let Ok(mut exec) = guard {
+            if let Err(reason) = exec.execute(tool, &args) {
+                eprintln!("{tool} failed: {reason}");
+            }
+        }
+    }
+
+    /// Capture Frame (Swift: captureCurrentFrameToMedia): composite the current
+    /// timeline frame off the UI thread, write the PNG into the project's
+    /// media/ directory (ProjectMatteWriter file semantics), and register it as
+    /// an image asset via import_media — which bumps the shared revision so
+    /// views refresh.
+    fn capture_frame(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab_idx != 0 {
+            return;
+        }
+        let frame = self.state.active_frame;
+        cx.spawn(async move |this, cx| {
+            let result: Result<(), String> = cx
+                .background_executor()
+                .spawn(async move {
+                    let hub = crate::editor_state_hub::EditorStateHub::global();
+                    let (timeline, manifest, timelines) = {
+                        let exec = hub.executor();
+                        let guard = exec.lock().map_err(|_| "editor state lock poisoned")?;
+                        (
+                            guard.timeline().clone(),
+                            guard.media_manifest().clone(),
+                            guard.sibling_timeline_map(),
+                        )
+                    };
+                    // Unsaved projects have no package yet; captures then land
+                    // in a temp folder and register as external assets.
+                    let root = hub
+                        .project_root()
+                        .unwrap_or_else(|| std::env::temp_dir().join("fronda-captures"));
+                    let media_dir = root.join("media");
+                    std::fs::create_dir_all(&media_dir)
+                        .map_err(|e| format!("create media dir: {e}"))?;
+                    let stamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0);
+                    let out = media_dir.join(capture_file_name(frame, stamp));
+                    crate::preview_render::render_frame_png(
+                        &timeline, &manifest, &timelines, &root, frame, &out,
+                    )?;
+                    let exec = hub.executor();
+                    let mut guard = exec.lock().map_err(|_| "editor state lock poisoned")?;
+                    guard
+                        .execute(
+                            "import_media",
+                            &serde_json::json!({
+                                "name": format!("Frame {frame}"),
+                                "filePath": out.to_string_lossy(),
+                                "type": "image",
+                                "duration": 5.0,
+                            }),
+                        )
+                        .map(|_| ())
+                })
+                .await;
+            let _ = this.update(cx, |_, cx| {
+                if let Err(reason) = result {
+                    eprintln!("Capture frame failed: {reason}");
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
@@ -452,7 +662,7 @@ impl Render for PreviewView {
         let any_guides = !active_guides.is_empty();
 
         // Real project settings for the badge row (was hardcoded).
-        let (aspect_label, fps_label, quality_label) = {
+        let (aspect_label, fps_label, quality_label, tl_width, tl_height, tl_fps) = {
             let hub = crate::editor_state_hub::EditorStateHub::global();
             let exec = hub.executor();
             let guard = exec.lock().unwrap();
@@ -467,12 +677,19 @@ impl Render for PreviewView {
                 timeline_core::format_aspect_ratio(w, h),
                 format!("{fps} fps"),
                 quality,
+                w,
+                h,
+                fps,
             )
         };
+        let canvas_zoom = self.canvas_zoom;
+        let zoom_label = zoom_badge_label(canvas_zoom);
+        let open_menu = self.open_settings_menu;
         div()
             .id("preview-panel")
             .flex()
             .flex_col()
+            .relative()
             .size_full()
             .bg(Background::BASE)
             // Header tab bar (matches Swift PreviewContainerView.tabBar)
@@ -610,16 +827,28 @@ impl Render for PreviewView {
                     .justify_center()
                     .w_full()
                     .relative()
+                    .overflow_hidden()
                     .bg(Background::BASE)
-                    // Composited frame (or placeholder) — hidden when an overlay is shown
+                    // Composited frame (or placeholder) — hidden when an overlay is
+                    // shown. The zoom wrapper scales the fitted frame by
+                    // canvas_zoom (Swift: fitSize * editor.canvasZoom, clipped).
                     .when(
                         canvas_overlay == CanvasOverlay::None,
                         |el| match &frame_png {
                             Some(path) => el.child(
-                                gpui::img(path.clone())
-                                    .max_w_full()
-                                    .max_h_full()
-                                    .object_fit(gpui::ObjectFit::Contain),
+                                div()
+                                    .w(gpui::relative(canvas_zoom as f32))
+                                    .h(gpui::relative(canvas_zoom as f32))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .flex_none()
+                                    .child(
+                                        gpui::img(path.clone())
+                                            .max_w_full()
+                                            .max_h_full()
+                                            .object_fit(gpui::ObjectFit::Contain),
+                                    ),
                             ),
                             None => el.child(
                                 div()
@@ -868,11 +1097,28 @@ impl Render for PreviewView {
                             .justify_end()
                             .items_center()
                             .gap(px(Spacing::XS))
-                            // Badges reflect the live project settings (Swift: aspectRatio, fps, quality, viewFit)
-                            .child(settings_badge("badge-aspect", &aspect_label))
-                            .child(settings_badge("badge-fps", &fps_label))
-                            .child(settings_badge("badge-quality", &quality_label))
-                            .child(settings_badge("badge-fit", "Fit"))
+                            // Badges reflect the live project settings and open
+                            // their preset menus (Swift: projectSettingsGroup)
+                            .child(settings_badge("badge-aspect", &aspect_label).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.toggle_settings_menu(SettingsMenu::Aspect, cx);
+                                }),
+                            ))
+                            .child(settings_badge("badge-fps", &fps_label).on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.toggle_settings_menu(SettingsMenu::Fps, cx);
+                                },
+                            )))
+                            .child(settings_badge("badge-quality", &quality_label).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.toggle_settings_menu(SettingsMenu::Quality, cx);
+                                }),
+                            ))
+                            .child(settings_badge("badge-fit", &zoom_label).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.toggle_settings_menu(SettingsMenu::Zoom, cx);
+                                }),
+                            ))
                             // Guides toggle (Swift: guideMenuButton — shows/hides ViewerGuideMenu)
                             .child(
                                 div()
@@ -904,12 +1150,128 @@ impl Render for PreviewView {
                                     .child("⊞"),
                             )
                             // Capture frame button (Swift: captureFrameButton → camera SF symbol)
-                            .child(transport_btn_svg(
-                                "btn-capture-frame",
-                                "icons/camera.svg",
-                                false,
-                            )),
+                            .child(
+                                transport_btn_svg("btn-capture-frame", "icons/camera.svg", false)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.capture_frame(cx);
+                                    })),
+                            ),
                     ),
             )
+            // Settings dropdown — anchored above the transport bar's badges
+            .when_some(open_menu, |el, menu| {
+                let rows = settings_menu_rows(menu, tl_width, tl_height, tl_fps, canvas_zoom);
+                let mut panel = div()
+                    .id("preview-settings-menu")
+                    .occlude()
+                    .absolute()
+                    .bottom(px(36.0 + Spacing::XS))
+                    .right(px(Spacing::MD))
+                    .flex()
+                    .flex_col()
+                    .py(px(Spacing::XS))
+                    .min_w(px(120.0))
+                    .bg(Background::RAISED)
+                    .border_1()
+                    .border_color(BorderColors::SUBTLE)
+                    .rounded(px(Radius::SM))
+                    .shadow_lg()
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.open_settings_menu = None;
+                        cx.notify();
+                    }));
+                for (i, row) in rows.into_iter().enumerate() {
+                    let select = row.select.clone();
+                    panel = panel.child(
+                        div()
+                            .id(("preview-settings-row", i))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Spacing::SM))
+                            .px(px(Spacing::MD))
+                            .py(px(Spacing::XS))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(Background::PROMINENT))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.apply_settings_selection(&select, cx);
+                            }))
+                            .child(
+                                div()
+                                    .w(px(crate::theme::IconSize::XXS))
+                                    .text_size(px(FontSize::XS))
+                                    .text_color(Accent::PRIMARY)
+                                    .child(if row.checked { "✓" } else { "" }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(FontSize::SM))
+                                    .text_color(Text::SECONDARY)
+                                    .child(row.label),
+                            ),
+                    );
+                }
+                el.child(panel)
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aspect_rows_mirror_presets_and_mark_active() {
+        let rows = settings_menu_rows(SettingsMenu::Aspect, 1920, 1080, 30, 1.0);
+        assert_eq!(rows.len(), timeline_core::ASPECT_PRESETS.len());
+        assert_eq!(rows[0].label, "16:9");
+        assert!(rows[0].checked, "1920x1080 marks 16:9 active");
+        assert!(rows.iter().filter(|r| r.checked).count() == 1);
+        assert_eq!(rows[0].select, SettingsSelection::AspectRatio("16:9"));
+    }
+
+    #[test]
+    fn fps_rows_mark_current_rate() {
+        let rows = settings_menu_rows(SettingsMenu::Fps, 1920, 1080, 25, 1.0);
+        let active: Vec<_> = rows.iter().filter(|r| r.checked).collect();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].label, "25 fps");
+        assert_eq!(active[0].select, SettingsSelection::Fps(25));
+    }
+
+    #[test]
+    fn quality_rows_match_on_short_edge() {
+        let rows = settings_menu_rows(SettingsMenu::Quality, 1080, 1920, 30, 1.0);
+        let active: Vec<_> = rows.iter().filter(|r| r.checked).collect();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].label, "1080p");
+        assert_eq!(active[0].select, SettingsSelection::Quality("1080p"));
+    }
+
+    #[test]
+    fn zoom_rows_mark_fit_at_one() {
+        let rows = settings_menu_rows(SettingsMenu::Zoom, 1920, 1080, 30, 1.0);
+        let active: Vec<_> = rows.iter().filter(|r| r.checked).collect();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].label, "Fit");
+        let rows = settings_menu_rows(SettingsMenu::Zoom, 1920, 1080, 30, 0.5);
+        let active: Vec<_> = rows.iter().filter(|r| r.checked).collect();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].select, SettingsSelection::Zoom(0.5));
+    }
+
+    #[test]
+    fn zoom_badge_label_matches_swift() {
+        assert_eq!(zoom_badge_label(1.0), "Fit");
+        assert_eq!(zoom_badge_label(1.005), "Fit"); // within 0.01 tolerance
+        assert_eq!(zoom_badge_label(0.25), "25%");
+        assert_eq!(zoom_badge_label(2.0), "200%");
+    }
+
+    #[test]
+    fn capture_file_name_is_frame_and_stamp_keyed() {
+        assert_eq!(capture_file_name(42, 7), "frame-42-7.png");
+        assert_ne!(capture_file_name(42, 7), capture_file_name(42, 8));
+        assert_ne!(capture_file_name(42, 7), capture_file_name(43, 7));
     }
 }

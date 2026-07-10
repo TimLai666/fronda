@@ -12,11 +12,21 @@ use gpui::{
     IntoElement, ParentElement, Render, Styled, Window,
 };
 
+/// Actions the toolbar requests from the editor shell (which owns the
+/// timeline playhead and the shared executor).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolbarEvent {
+    /// Insert a default text clip at the playhead (Swift: addTextClip).
+    AddText,
+}
+
 /// Toolbar gpui entity.
 pub struct ToolbarView {
     pub state: ToolbarState,
     focus_handle: FocusHandle,
 }
+
+impl gpui::EventEmitter<ToolbarEvent> for ToolbarView {}
 
 impl ToolbarView {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -227,7 +237,9 @@ impl Render for ToolbarView {
                     .text_color(Text::SECONDARY)
                     .text_size(px(FontSize::MD_LG))
                     .font_weight(gpui::FontWeight::BOLD)
-                    .on_click(cx.listener(|_, _, _, _| {}))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(ToolbarEvent::AddText);
+                    }))
                     .child("T"),
             )
             // ── Spacer ──
