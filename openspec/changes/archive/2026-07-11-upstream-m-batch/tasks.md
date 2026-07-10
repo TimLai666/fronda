@@ -23,7 +23,7 @@
   **既有已符（無需補）**：Space/←/→/⇧←/⇧→、Q/W、Backspace、` `` `、I/O、所有 ⌘ 選單鍵（New/Open/Save/SaveAs/Import/Export/Undo/Redo/Cut/Copy/Paste/SelectAll/Split/FullScreen）。
 ## 4. 收尾
 
-- [ ] 4.1 三 gate exit code 全綠；對抗審查一輪；AGENTS.md/97-audit 各項標注 PORTED
+- [x] 4.1 三 gate exit code 全綠；對抗審查一輪；AGENTS.md/97-audit 各項標注 PORTED
 
 > Cross-slice follow-ups CLOSED (coordinator, 2026-07-11): #211 save_now()
 > wired into app_root show_home + a 20s periodic autosave_if_dirty tick in
