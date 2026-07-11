@@ -524,43 +524,67 @@ pub fn apply_chroma_key(img: &mut RgbaImage, key: &ChromaKey) {
     if !key.enabled {
         return;
     }
-    let (kr, kg, kb) = (key.key_r, key.key_g, key.key_b);
-    // Distance is in 0..√3; scale the 0..1 tolerance to that range.
-    let cutoff = key.tolerance.clamp(0.0, 1.0) * 3.0f64.sqrt();
+    // Mirror Swift's Core Image chromaKey kernel (Metal/ChromaKey.metal): a
+    // soft, hue-based key. `k` ∈ 0..1 is how much a pixel is keyed out — near
+    // the key hue, saturated, and with enough chroma (the `dd` gate keeps dark
+    // / near-grey pixels, upstream #291). Alpha scales by (1 - k) for feathered
+    // edges; spill desaturates the leftover key tint toward luma.
+    let (key_hue, _, _) = hue_sat_chroma(key.key_r, key.key_g, key.key_b);
+    let tolerance = key.tolerance.clamp(0.0, 1.0);
+    let softness = key.softness.clamp(0.0, 1.0);
     let spill = key.spill_suppression.clamp(0.0, 1.0);
+    let inner = tolerance * 0.25;
     for px in img.pixels.chunks_exact_mut(4) {
         let r = px[0] as f64 / 255.0;
         let g = px[1] as f64 / 255.0;
         let b = px[2] as f64 / 255.0;
-        let d = ((r - kr).powi(2) + (g - kg).powi(2) + (b - kb).powi(2)).sqrt();
-        if d <= cutoff {
-            px[3] = 0;
-        } else if spill > 0.0 {
-            // Spill suppression: where the key's dominant channel exceeds the
-            // average of the other two (key-colour bleed), pull it down toward
-            // that average by `spill`. Independent of the keying distance.
-            let (ci, cv) = dominant_channel(kr, kg, kb);
-            if cv > 0.5 {
-                let chans = [r, g, b];
-                let others = (chans[0] + chans[1] + chans[2] - chans[ci]) / 2.0;
-                if chans[ci] > others {
-                    let reduced = chans[ci] + (others - chans[ci]) * spill;
-                    px[ci] = (reduced * 255.0).round().clamp(0.0, 255.0) as u8;
-                }
-            }
+        let (hue, sat, dd) = hue_sat_chroma(r, g, b);
+        let mut hd = (hue - key_hue).abs();
+        hd = hd.min(1.0 - hd); // circular hue distance, 0..0.5
+        let k = (1.0 - smoothstep(inner, inner + softness * 0.3 + 0.02, hd))
+            * smoothstep(0.12, 0.32, sat)
+            * smoothstep(0.04, 0.12, dd);
+        if k <= 0.0 {
+            continue;
         }
+        if spill > 0.0 {
+            let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let f = spill * k;
+            px[0] = ((r + (y - r) * f) * 255.0).round().clamp(0.0, 255.0) as u8;
+            px[1] = ((g + (y - g) * f) * 255.0).round().clamp(0.0, 255.0) as u8;
+            px[2] = ((b + (y - b) * f) * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+        let a = px[3] as f64 / 255.0;
+        px[3] = (a * (1.0 - k) * 255.0).round().clamp(0.0, 255.0) as u8;
     }
 }
 
-/// Index (0=r,1=g,2=b) and value of the key's largest channel.
-fn dominant_channel(kr: f64, kg: f64, kb: f64) -> (usize, f64) {
-    if kg >= kr && kg >= kb {
-        (1, kg)
-    } else if kr >= kb {
-        (0, kr)
+/// Hue (0..1), saturation (0..1), and chroma `dd = max-min` of an RGB triple —
+/// the HSV decomposition Swift's chromaKey kernel uses.
+fn hue_sat_chroma(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+    let mx = r.max(g).max(b);
+    let mn = r.min(g).min(b);
+    let dd = mx - mn;
+    let sat = if mx <= 1e-5 { 0.0 } else { dd / mx };
+    let hue = if dd <= 1e-5 {
+        0.0
+    } else if mx == r {
+        (((g - b) / dd) / 6.0).rem_euclid(1.0)
+    } else if mx == g {
+        (((b - r) / dd + 2.0) / 6.0).rem_euclid(1.0)
     } else {
-        (2, kb)
+        (((r - g) / dd + 4.0) / 6.0).rem_euclid(1.0)
+    };
+    (hue, sat, dd)
+}
+
+/// Hermite smoothstep — 0 below `edge0`, 1 above `edge1`, smooth between.
+fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
+    if edge0 >= edge1 {
+        return if x < edge0 { 0.0 } else { 1.0 };
     }
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 fn rgba_to_u8(c: &Rgba) -> [u8; 4] {
@@ -1593,11 +1617,49 @@ mod tests {
             key_g: 1.0,
             key_b: 0.0,
             tolerance: 0.2,
+            softness: 0.1,
             spill_suppression: 0.0,
         };
         apply_chroma_key(&mut img, &key);
-        assert_eq!(px(&img, 0, 0)[3], 0, "green keyed out");
-        assert_eq!(px(&img, 1, 0), [255, 0, 0, 255], "red untouched");
+        assert_eq!(px(&img, 0, 0)[3], 0, "pure key hue fully keyed");
+        assert_eq!(px(&img, 1, 0), [255, 0, 0, 255], "off-hue red untouched");
+    }
+
+    #[test]
+    fn chroma_key_soft_edge_gives_partial_alpha() {
+        // Cyan sits in the hue feather of a green key (soft edge): it is neither
+        // fully keyed nor fully kept — the whole point of the soft algorithm.
+        let mut img = RgbaImage::solid(1, 1, [0, 255, 255, 255]);
+        let key = core_model::ChromaKey {
+            enabled: true,
+            key_r: 0.0,
+            key_g: 1.0,
+            key_b: 0.0,
+            tolerance: 0.4,
+            softness: 0.5,
+            spill_suppression: 0.0,
+        };
+        apply_chroma_key(&mut img, &key);
+        let a = px(&img, 0, 0)[3];
+        assert!(a > 0 && a < 255, "feathered edge → partial alpha, got {a}");
+    }
+
+    #[test]
+    fn chroma_key_keeps_low_chroma_pixels() {
+        // A dark, near-grey green-hue pixel: same hue as the key but too little
+        // chroma. Upstream #291's `dd` gate keeps it instead of over-keying.
+        let mut img = RgbaImage::solid(1, 1, [40, 48, 40, 255]);
+        let key = core_model::ChromaKey {
+            enabled: true,
+            key_r: 0.0,
+            key_g: 1.0,
+            key_b: 0.0,
+            tolerance: 0.5,
+            softness: 0.1,
+            spill_suppression: 0.0,
+        };
+        apply_chroma_key(&mut img, &key);
+        assert_eq!(px(&img, 0, 0)[3], 255, "low-chroma pixel kept opaque");
     }
 
     fn color_effect(kind: &str, value: f64) -> crate::effects::EffectState {
@@ -1812,21 +1874,23 @@ mod tests {
 
     #[test]
     fn chroma_key_spill_suppression_reduces_green_bleed() {
-        // A greenish pixel that is NOT close enough to be keyed out.
-        let mut img = RgbaImage::solid(1, 1, [77, 204, 77, 255]); // ~[0.3, 0.8, 0.3]
+        // Cyan is only partially keyed (soft edge), so it survives with reduced
+        // alpha — and spill desaturates its leftover green/blue toward luma.
+        let mut img = RgbaImage::solid(1, 1, [0, 255, 255, 255]);
         let key = core_model::ChromaKey {
             enabled: true,
             key_r: 0.0,
             key_g: 1.0,
             key_b: 0.0,
-            tolerance: 0.2, // cutoff ~0.35; this pixel's distance ~0.47 → kept
+            tolerance: 0.4,
+            softness: 0.5,
             spill_suppression: 1.0,
         };
         apply_chroma_key(&mut img, &key);
         let p = px(&img, 0, 0);
-        assert_eq!(p[3], 255, "not keyed out");
-        assert!(p[1] < 204, "green spill reduced (was 204, now {})", p[1]);
-        assert!(p[1] <= 78, "pulled toward the ~0.3 of the other channels");
+        assert!(p[3] > 0 && p[3] < 255, "partially keyed, got alpha {}", p[3]);
+        assert!(p[1] < 255, "green spill reduced (was 255, now {})", p[1]);
+        assert!(p[0] > 0, "desaturated toward luma lifts red (was 0, now {})", p[0]);
     }
 
     #[test]
@@ -1838,6 +1902,7 @@ mod tests {
             key_g: 1.0,
             key_b: 0.0,
             tolerance: 0.5,
+            softness: 0.1,
             spill_suppression: 0.0,
         };
         apply_chroma_key(&mut img, &key);

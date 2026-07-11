@@ -7901,6 +7901,7 @@ impl ToolExecutor {
                             key_g: g,
                             key_b: b,
                             tolerance: get("tolerance", 0.0),
+                            softness: get("softness", 0.1),
                             spill_suppression: get("spill", 0.5),
                         });
                     }

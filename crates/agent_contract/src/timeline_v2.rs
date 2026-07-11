@@ -1118,6 +1118,7 @@ mod tests {
             key_g: 1.0,
             key_b: 0.0,
             tolerance: 0.4,
+            softness: 0.1,
             spill_suppression: 0.5,
         });
         let j = Value::Object(clip_v2(&c));
@@ -1138,6 +1139,7 @@ mod tests {
             key_g: 1.0,
             key_b: 0.0,
             tolerance: 0.4,
+            softness: 0.1,
             spill_suppression: 0.5,
         });
         c.effects = Some(vec![core_model::Effect {

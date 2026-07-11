@@ -670,12 +670,20 @@ pub struct ChromaKey {
     /// Hue tolerance (0.0–1.0). Higher = more of the range is removed.
     #[serde(default = "default_chroma_tolerance")]
     pub tolerance: f64,
+    /// Edge softness / feather (0.0–1.0). Higher = softer key edge. Mirrors the
+    /// `key.chroma` effect's `softness` param (Swift default 0.1).
+    #[serde(default = "default_chroma_softness")]
+    pub softness: f64,
     /// Spill suppression (0.0–1.0).
     #[serde(default)]
     pub spill_suppression: f64,
 }
 
 fn default_chroma_tolerance() -> f64 {
+    0.1
+}
+
+fn default_chroma_softness() -> f64 {
     0.1
 }
 
@@ -688,6 +696,7 @@ impl ChromaKey {
             key_g: 1.0,
             key_b: 0.0,
             tolerance: 0.1,
+            softness: 0.1,
             spill_suppression: 0.0,
         }
     }
@@ -700,6 +709,7 @@ impl ChromaKey {
             key_g: 0.0,
             key_b: 1.0,
             tolerance: 0.1,
+            softness: 0.1,
             spill_suppression: 0.0,
         }
     }
