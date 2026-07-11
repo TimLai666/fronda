@@ -133,6 +133,35 @@ pub fn clip_waveform_peaks(source: &Path, buckets: usize) -> Option<Vec<f32>> {
     Some(audio_core::audio_mixer::compute_peaks(&pcm, 1, buckets))
 }
 
+/// Mono peak envelope (0..1) of the whole timeline's mixed audio — `buckets`
+/// values feeding the audio meter at the playhead. Heavy (decodes every audio
+/// clip), so compute off the UI thread and cache by project revision. Empty
+/// when the timeline is silent / has no decodable audio.
+pub fn timeline_audio_envelope(
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+    project_root: &Path,
+    buckets: usize,
+) -> Vec<f32> {
+    if buckets == 0 {
+        return Vec::new();
+    }
+    let rate = 48_000;
+    let paths: HashMap<&str, PathBuf> = manifest
+        .entries
+        .iter()
+        .filter_map(|e| source_path(e, project_root).map(|p| (e.id.as_str(), p)))
+        .collect();
+    let mixed = mix_timeline_audio(timeline, rate, 1, |clip: &Clip| {
+        let path = paths.get(clip.media_ref.as_str())?;
+        decode_audio_pcm(path, rate, 1)
+    });
+    if mixed.is_empty() {
+        return Vec::new();
+    }
+    audio_core::audio_mixer::compute_peaks(&mixed, 1, buckets)
+}
+
 /// Export a project timeline to an mp4 with both video and audio. Composites
 /// each frame (reusing one decoder per source), mixes the timeline audio, and
 /// muxes an AAC stream when there is any non-silent audio (otherwise video-only).
@@ -300,6 +329,42 @@ mod tests {
         assert_eq!(peaks.len(), 16);
         assert!(peaks.iter().all(|&p| (0.0..=1.0).contains(&p)));
         assert!(peaks.iter().any(|&p| p > 0.1), "envelope is non-trivial");
+    }
+
+    #[test]
+    fn timeline_audio_envelope_from_generated_wav() {
+        let dir = temp_dir("envelope");
+        let wav = dir.join("tone.wav");
+        make_wav(&wav, 48_000, 1, 48_000); // 1s mono ramp
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(external_entry_audio("a1", &wav));
+        let mut clip = audio_clip("a1", 0, 30); // 1s at 30fps
+        clip.trim_end_frame = 30;
+        let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
+            fps: 30,
+            width: 1920,
+            height: 1080,
+            tracks: vec![Track {
+                id: "aud".into(),
+                r#type: ClipType::Audio,
+                muted: false,
+                hidden: false,
+                sync_locked: false,
+                display_height: 50.0,
+                clips: vec![clip],
+            }],
+            settings_configured: true,
+            selected_clip_ids: Default::default(),
+            transcription_language: None,
+            folder_id: None,
+            compound_timelines: Default::default(),
+        };
+        let env = timeline_audio_envelope(&timeline, &manifest, &dir, 30);
+        assert_eq!(env.len(), 30, "one bucket per frame");
+        assert!(env.iter().all(|&p| (0.0..=1.0).contains(&p)));
+        assert!(env.iter().any(|&p| p > 0.05), "non-silent envelope");
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::crop_overlay_view::CropOverlayView;
 use crate::preview_guides::{ViewerGuide, ViewerGuideState};
 use crate::preview_model::PlaybackState;
 use crate::theme::{
-    Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text,
+    Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Status, Text,
 };
 use crate::transform_overlay_view::TransformOverlayView;
 use gpui::{
@@ -14,6 +14,54 @@ use gpui::{
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render, Styled,
     Window,
 };
+
+/// Compact stereo audio meter — L/R level bars with a peak tick and a clip
+/// tint (upstream #293). Fed by the playhead audio level.
+fn render_audio_meter(
+    display: audio_core::audio_meter::StereoMeterDisplay,
+) -> impl IntoElement {
+    let bar = |ch: audio_core::audio_meter::MeterChannelDisplay| {
+        let level = audio_core::audio_meter::normalized_level(ch.level_db);
+        let peak = audio_core::audio_meter::normalized_level(ch.peak_db);
+        div()
+            .w_full()
+            .h(px(4.0))
+            .rounded(px(1.0))
+            .bg(Background::RAISED)
+            .relative()
+            .overflow_hidden()
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(gpui::relative(level))
+                    .bg(if ch.clipped {
+                        Status::ERROR
+                    } else {
+                        Accent::PRIMARY
+                    }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(gpui::relative(peak.clamp(0.0, 0.98)))
+                    .w(px(1.5))
+                    .bg(Text::PRIMARY),
+            )
+    };
+    div()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .gap(px(2.0))
+        .w(px(56.0))
+        .child(bar(display.left))
+        .child(bar(display.right))
+}
 
 /// Read the RGB (0..1) of the composited frame PNG at normalized (u, v).
 fn sample_png_pixel(path: &std::path::Path, u: f64, v: f64) -> Option<(f64, f64, f64)> {
@@ -215,6 +263,14 @@ pub struct PreviewView {
     /// Preview-canvas bounds captured during paint (window coords), so the
     /// chroma eyedropper can map a click to a frame pixel.
     canvas_bounds: std::sync::Arc<std::sync::Mutex<Option<gpui::Bounds<gpui::Pixels>>>>,
+    /// Audio meter (upstream #293) fed by the timeline audio level at the
+    /// playhead — Fronda has no live audio output, so this is a playhead meter.
+    meter: audio_core::audio_meter::StereoMeter,
+    meter_start: std::time::Instant,
+    /// (revision, mono peak envelope over the timeline) — one bucket per frame,
+    /// computed off the UI thread and sampled at the playhead.
+    envelope: std::sync::Arc<std::sync::Mutex<Option<(u64, Vec<f32>)>>>,
+    envelope_computing: bool,
 }
 
 impl PreviewView {
@@ -237,7 +293,81 @@ impl PreviewView {
             rendered_key: None,
             rendering: false,
             canvas_bounds: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            meter: audio_core::audio_meter::StereoMeter::default(),
+            meter_start: std::time::Instant::now(),
+            envelope: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            envelope_computing: false,
         }
+    }
+
+    /// Compute the timeline audio envelope off the UI thread when the project
+    /// changed, so the meter can sample the level at the playhead cheaply.
+    fn ensure_envelope(&mut self, cx: &mut Context<Self>) {
+        if self.envelope_computing {
+            return;
+        }
+        let hub = crate::editor_state_hub::EditorStateHub::global();
+        let revision = hub.revision();
+        if self
+            .envelope
+            .lock()
+            .ok()
+            .and_then(|e| e.as_ref().map(|(r, _)| *r))
+            == Some(revision)
+        {
+            return;
+        }
+        self.envelope_computing = true;
+        let slot = self.envelope.clone();
+        cx.spawn(async move |this, cx| {
+            let env = cx
+                .background_executor()
+                .spawn(async move {
+                    let hub = crate::editor_state_hub::EditorStateHub::global();
+                    let (timeline, manifest, root) = {
+                        let exec = hub.executor();
+                        let guard = match exec.lock() {
+                            Ok(g) => g,
+                            Err(_) => return None,
+                        };
+                        (
+                            guard.timeline().clone(),
+                            guard.media_manifest().clone(),
+                            hub.project_root()
+                                .unwrap_or_else(|| std::env::temp_dir().join("fronda-preview")),
+                        )
+                    };
+                    let buckets =
+                        (timeline_core::TimelineMathExt::total_frames(&timeline).max(1)) as usize;
+                    Some(crate::audio_export::timeline_audio_envelope(
+                        &timeline, &manifest, &root, buckets,
+                    ))
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.envelope_computing = false;
+                if let (Some(env), Ok(mut slot)) = (env, slot.lock()) {
+                    *slot = Some((revision, env));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Sample the audio level at the playhead and update the meter. Returns the
+    /// current stereo display for rendering.
+    fn update_meter(&mut self) -> audio_core::audio_meter::StereoMeterDisplay {
+        let frame = self.state.active_frame.max(0) as usize;
+        let level = self
+            .envelope
+            .lock()
+            .ok()
+            .and_then(|e| e.as_ref().and_then(|(_, env)| env.get(frame).copied()))
+            .unwrap_or(0.0);
+        let time = self.meter_start.elapsed().as_secs_f64();
+        self.meter.ingest(level, level, time);
+        self.meter.display(time)
     }
 
     /// Chroma eyedropper: when sampling is armed, map a preview click to a frame
@@ -765,6 +895,8 @@ fn settings_badge(id: &str, label: &str) -> gpui::Stateful<gpui::Div> {
 impl Render for PreviewView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_preview_frame(cx);
+        self.ensure_envelope(cx);
+        let meter = self.update_meter();
         let frame_png = self.frame_png.clone();
         let is_playing = self.state.is_playing;
         let fraction = self.state.playhead_fraction();
@@ -1192,7 +1324,8 @@ impl Render for PreviewView {
                                     .text_color(Text::SECONDARY)
                                     .text_size(px(FontSize::SM))
                                     .child(total_tc),
-                            ),
+                            )
+                            .child(div().pl(px(Spacing::MD)).child(render_audio_meter(meter))),
                     )
                     .child(
                         div()
