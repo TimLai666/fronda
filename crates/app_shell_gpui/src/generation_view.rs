@@ -464,8 +464,7 @@ pub fn can_submit(state: &GenerationState) -> bool {
 // ── Reference layout + caps (Swift showsFrameStrip / showsRefSections) ──
 
 pub fn shows_mode_toggle(state: &GenerationState) -> bool {
-    video_caps(state)
-        .is_some_and(|c| c.frames_and_references_exclusive && !c.requires_source_video)
+    video_caps(state).is_some_and(|c| c.frames_and_references_exclusive && !c.requires_source_video)
 }
 
 pub fn shows_frame_strip(state: &GenerationState) -> bool {
@@ -548,11 +547,7 @@ pub fn drop_rejection_message(
 }
 
 /// Per-model reference cap check (Swift `addRefAsset` + `isRefCapReached`).
-pub fn can_add_reference(
-    state: &GenerationState,
-    id: &str,
-    kind: ClipType,
-) -> Result<(), String> {
+pub fn can_add_reference(state: &GenerationState, id: &str, kind: ClipType) -> Result<(), String> {
     if state.references.iter().any(|r| r.id == id) {
         return Err("Already a reference.".into());
     }
@@ -612,8 +607,7 @@ pub fn ref_cap_reached(state: &GenerationState) -> bool {
                 }
             }
             let full = |kind: ClipType, cap: i64| {
-                cap == 0
-                    || state.references.iter().filter(|r| r.kind == kind).count() as i64 >= cap
+                cap == 0 || state.references.iter().filter(|r| r.kind == kind).count() as i64 >= cap
             };
             full(ClipType::Image, c.max_reference_images)
                 && full(ClipType::Video, c.max_reference_videos)
@@ -765,7 +759,11 @@ pub fn setting_options(state: &GenerationState, field: SettingField) -> Vec<(Str
         (SettingField::AudioDuration, ModelCaps::Audio(c)) => c
             .durations
             .as_ref()
-            .map(|ds| ds.iter().map(|d| (d.to_string(), format!("{d}s"))).collect())
+            .map(|ds| {
+                ds.iter()
+                    .map(|d| (d.to_string(), format!("{d}s")))
+                    .collect()
+            })
             .unwrap_or_default(),
         (SettingField::AspectRatio, ModelCaps::Video(c)) => c
             .aspect_ratios
@@ -780,11 +778,7 @@ pub fn setting_options(state: &GenerationState, field: SettingField) -> Vec<(Str
         (SettingField::Resolution, ModelCaps::Video(c)) => c
             .resolutions
             .as_ref()
-            .map(|rs| {
-                rs.iter()
-                    .map(|r| (r.to_string(), r.to_string()))
-                    .collect()
-            })
+            .map(|rs| rs.iter().map(|r| (r.to_string(), r.to_string())).collect())
             .unwrap_or_default(),
         (SettingField::Resolution, ModelCaps::Image(c)) => c
             .resolutions
@@ -917,7 +911,11 @@ pub fn build_generation_input(state: &GenerationState) -> GenerationInput {
     };
     match &model.caps {
         ModelCaps::Video(c) => {
-            input.duration = if c.requires_source_video { 0 } else { p.duration };
+            input.duration = if c.requires_source_video {
+                0
+            } else {
+                p.duration
+            };
             if c.audio_discount_rate.is_some() {
                 input.generate_audio = Some(p.generate_audio);
             }
@@ -1069,7 +1067,10 @@ pub fn interpret_submission(result: &Result<serde_json::Value, String>) -> Submi
     match result {
         Err(reason) => SubmitOutcome::Failed(reason.clone()),
         Ok(value) => {
-            let text = value["content"][0]["text"].as_str().unwrap_or("").to_string();
+            let text = value["content"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
             let is_error = value
                 .get("isError")
                 .and_then(|b| b.as_bool())
@@ -1419,7 +1420,10 @@ impl Render for GenerationView {
         // Status line: coming-soon notice when gating, else submission status,
         // else the credit shortfall.
         let status_line: Option<String> = if !gen_available {
-            Some("AI generation is coming soon — no generation service is connected in this build.".to_string())
+            Some(
+                "AI generation is coming soon — no generation service is connected in this build."
+                    .to_string(),
+            )
         } else {
             st.status.clone().or_else(|| {
                 insufficient.then(|| {
@@ -1463,13 +1467,12 @@ impl Render for GenerationView {
                     .w_full()
                     .h(px(Spacing::MD))
                     .cursor_ns_resize()
-                    .child(
-                        div()
-                            .w(px(24.0))
-                            .h(px(2.0))
-                            .rounded_full()
-                            .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::SOFT }),
-                    ),
+                    .child(div().w(px(24.0)).h(px(2.0)).rounded_full().bg(Hsla {
+                        h: 0.0,
+                        s: 0.0,
+                        l: 1.0,
+                        a: Opacity::SOFT,
+                    })),
             )
             // ── Header: type tabs (left) + credit chip + activity + close (right) ──
             .child(
@@ -1492,19 +1495,36 @@ impl Render for GenerationView {
                             .px(px(Spacing::XXS))
                             .py(px(Spacing::XXS))
                             .rounded(px(Radius::SM))
-                            .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::SUBTLE })
+                            .bg(Hsla {
+                                h: 0.0,
+                                s: 0.0,
+                                l: 1.0,
+                                a: Opacity::SUBTLE,
+                            })
                             .border_1()
-                            .border_color(Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::FAINT });
+                            .border_color(Hsla {
+                                h: 0.0,
+                                s: 0.0,
+                                l: 1.0,
+                                a: Opacity::FAINT,
+                            });
                         for gen_type in GenerationType::all() {
                             let is_active = *gen_type == selected;
                             let gt = *gen_type;
                             let icon_path = gen_type.icon_path();
                             let accent = gen_type.accent_color();
                             let icon_color = if is_active { accent } else { Text::TERTIARY };
-                            let text_color = if is_active { Text::PRIMARY } else { Text::TERTIARY };
+                            let text_color = if is_active {
+                                Text::PRIMARY
+                            } else {
+                                Text::TERTIARY
+                            };
                             pill = pill.child(
                                 div()
-                                    .id(SharedString::from(format!("gen-type-{}", gen_type.label())))
+                                    .id(SharedString::from(format!(
+                                        "gen-type-{}",
+                                        gen_type.label()
+                                    )))
                                     .px(px(Spacing::SM_MD))
                                     .h(px(22.0))
                                     .flex()
@@ -1513,13 +1533,28 @@ impl Render for GenerationView {
                                     .gap(px(Spacing::XS))
                                     .rounded(px(Radius::XS_SM))
                                     .cursor_pointer()
-                                    .bg(if is_active { active_tab_bg } else { Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 } })
+                                    .bg(if is_active {
+                                        active_tab_bg
+                                    } else {
+                                        Hsla {
+                                            h: 0.0,
+                                            s: 0.0,
+                                            l: 0.0,
+                                            a: 0.0,
+                                        }
+                                    })
                                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                         cx.stop_propagation();
                                         this.state.select_type(gt);
                                         cx.notify();
                                     }))
-                                    .child(svg().path(icon_path).w(px(11.0)).h(px(11.0)).text_color(icon_color))
+                                    .child(
+                                        svg()
+                                            .path(icon_path)
+                                            .w(px(11.0))
+                                            .h(px(11.0))
+                                            .text_color(icon_color),
+                                    )
                                     .child(
                                         div()
                                             .text_size(px(FontSize::SM))
@@ -1626,7 +1661,15 @@ impl Render for GenerationView {
                 )
             })
             // ── Prompt input box ──
-            .child(self.render_prompt_box(&st, model, cost, insufficient, submit_enabled, inflight, cx))
+            .child(self.render_prompt_box(
+                &st,
+                model,
+                cost,
+                insufficient,
+                submit_enabled,
+                inflight,
+                cx,
+            ))
     }
 }
 
@@ -1664,8 +1707,18 @@ impl GenerationView {
         }
 
         if mode_toggle {
-            let seg_bg: Hsla = Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::HINT };
-            let active_seg: Hsla = Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.14 };
+            let seg_bg: Hsla = Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 1.0,
+                a: Opacity::HINT,
+            };
+            let active_seg: Hsla = Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 1.0,
+                a: 0.14,
+            };
             area = area.child(
                 div()
                     .flex()
@@ -1685,9 +1738,22 @@ impl GenerationView {
                             .items_center()
                             .rounded(px(Radius::XS))
                             .cursor_pointer()
-                            .bg(if use_first_last { active_seg } else { Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 } })
+                            .bg(if use_first_last {
+                                active_seg
+                            } else {
+                                Hsla {
+                                    h: 0.0,
+                                    s: 0.0,
+                                    l: 0.0,
+                                    a: 0.0,
+                                }
+                            })
                             .text_size(px(FontSize::XXS))
-                            .text_color(if use_first_last { Text::PRIMARY } else { Text::MUTED })
+                            .text_color(if use_first_last {
+                                Text::PRIMARY
+                            } else {
+                                Text::MUTED
+                            })
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
                                 this.state.use_first_last = true;
@@ -1705,9 +1771,22 @@ impl GenerationView {
                             .items_center()
                             .rounded(px(Radius::XS))
                             .cursor_pointer()
-                            .bg(if !use_first_last { active_seg } else { Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 } })
+                            .bg(if !use_first_last {
+                                active_seg
+                            } else {
+                                Hsla {
+                                    h: 0.0,
+                                    s: 0.0,
+                                    l: 0.0,
+                                    a: 0.0,
+                                }
+                            })
                             .text_size(px(FontSize::XXS))
-                            .text_color(if !use_first_last { Text::PRIMARY } else { Text::MUTED })
+                            .text_color(if !use_first_last {
+                                Text::PRIMARY
+                            } else {
+                                Text::MUTED
+                            })
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
                                 this.state.use_first_last = false;
@@ -1890,10 +1969,12 @@ impl GenerationView {
         let gear_visible = has_any_settings(st);
 
         let divider = || {
-            div()
-                .h(px(1.0))
-                .w_full()
-                .bg(Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::HINT })
+            div().h(px(1.0)).w_full().bg(Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 1.0,
+                a: Opacity::HINT,
+            })
         };
 
         let mut prompt_box = div()
@@ -2079,7 +2160,11 @@ impl GenerationView {
         footer = footer
             .child(
                 div()
-                    .text_color(if insufficient { Status::ERROR } else { Text::TERTIARY })
+                    .text_color(if insufficient {
+                        Status::ERROR
+                    } else {
+                        Text::TERTIARY
+                    })
                     .text_size(px(FontSize::XS))
                     .child(model_catalog::format_usd(cost)),
             )
@@ -2149,7 +2234,12 @@ impl GenerationView {
                                 .text_color(if is_selected {
                                     Accent::PRIMARY
                                 } else {
-                                    Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.0 }
+                                    Hsla {
+                                        h: 0.0,
+                                        s: 0.0,
+                                        l: 1.0,
+                                        a: 0.0,
+                                    }
                                 })
                                 .text_size(px(FontSize::XS))
                                 .child("✓"),
@@ -2220,7 +2310,12 @@ impl GenerationView {
                                     .text_color(if is_selected {
                                         Accent::PRIMARY
                                     } else {
-                                        Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.0 }
+                                        Hsla {
+                                            h: 0.0,
+                                            s: 0.0,
+                                            l: 1.0,
+                                            a: 0.0,
+                                        }
                                     })
                                     .text_size(px(FontSize::XS))
                                     .child("✓"),
@@ -2294,12 +2389,26 @@ impl GenerationView {
                         .rounded(px(Radius::XS_SM))
                         .cursor_pointer()
                         .bg(if is_selected {
-                            Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.10 }
+                            Hsla {
+                                h: 0.0,
+                                s: 0.0,
+                                l: 1.0,
+                                a: 0.10,
+                            }
                         } else {
-                            Hsla { h: 0.0, s: 0.0, l: 1.0, a: Opacity::SUBTLE }
+                            Hsla {
+                                h: 0.0,
+                                s: 0.0,
+                                l: 1.0,
+                                a: Opacity::SUBTLE,
+                            }
                         })
                         .text_size(px(FontSize::XXS))
-                        .text_color(if is_selected { Text::PRIMARY } else { Text::TERTIARY })
+                        .text_color(if is_selected {
+                            Text::PRIMARY
+                        } else {
+                            Text::TERTIARY
+                        })
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
                             apply_setting(&mut this.state, field, &value);
@@ -2343,8 +2452,7 @@ impl GenerationView {
                                 this.state.params.instrumental = !this.state.params.instrumental
                             }
                             SettingToggle::GenerateAudio => {
-                                this.state.params.generate_audio =
-                                    !this.state.params.generate_audio
+                                this.state.params.generate_audio = !this.state.params.generate_audio
                             }
                         }
                         cx.notify();
@@ -2725,7 +2833,10 @@ mod tests {
 
         let ist = image_state("gpt-image-2");
         let resolutions = setting_options(&ist, SettingField::Resolution);
-        assert_eq!(resolutions[1], ("1024x1024".to_string(), "Square".to_string()));
+        assert_eq!(
+            resolutions[1],
+            ("1024x1024".to_string(), "Square".to_string())
+        );
         assert_eq!(
             resolutions[5],
             ("3840x2160".to_string(), "Landscape 4K".to_string())
@@ -2771,21 +2882,15 @@ mod tests {
                 kind: ClipType::Image,
             });
         }
-        assert!(
-            can_add_reference(&st, "img9", ClipType::Image)
-                .unwrap_err()
-                .contains("limit reached (3)"),
-        );
-        assert!(
-            can_add_reference(&st, "vid1", ClipType::Video)
-                .unwrap_err()
-                .contains("doesn't accept video references"),
-        );
-        assert!(
-            can_add_reference(&st, "img0", ClipType::Image)
-                .unwrap_err()
-                .contains("Already"),
-        );
+        assert!(can_add_reference(&st, "img9", ClipType::Image)
+            .unwrap_err()
+            .contains("limit reached (3)"),);
+        assert!(can_add_reference(&st, "vid1", ClipType::Video)
+            .unwrap_err()
+            .contains("doesn't accept video references"),);
+        assert!(can_add_reference(&st, "img0", ClipType::Image)
+            .unwrap_err()
+            .contains("Already"),);
         assert!(ref_cap_reached(&st));
         assert_eq!(ref_counter_label(&st), "3/3");
     }
@@ -2839,7 +2944,10 @@ mod tests {
             vec![ClipType::Image, ClipType::Video, ClipType::Audio]
         );
         let kst = video_state("kling-v3");
-        assert_eq!(accepted_kinds(&kst, RefSlot::Reference), vec![ClipType::Image]);
+        assert_eq!(
+            accepted_kinds(&kst, RefSlot::Reference),
+            vec![ClipType::Image]
+        );
         let ist = image_state("recraft-v4");
         assert!(accepted_kinds(&ist, RefSlot::Reference).is_empty());
     }
@@ -2923,8 +3031,14 @@ mod tests {
         st.first_frame = Some("f1".into());
         st.last_frame = Some("l1".into());
         st.references = vec![
-            RefAsset { id: "ri".into(), kind: ClipType::Image },
-            RefAsset { id: "rv".into(), kind: ClipType::Video },
+            RefAsset {
+                id: "ri".into(),
+                kind: ClipType::Image,
+            },
+            RefAsset {
+                id: "rv".into(),
+                kind: ClipType::Video,
+            },
         ];
         let input = build_generation_input(&st);
         assert_eq!(input.prompt, "a fox running");
@@ -2937,8 +3051,14 @@ mod tests {
             input.image_url_asset_ids,
             Some(vec!["f1".to_string(), "l1".to_string()])
         );
-        assert_eq!(input.reference_image_asset_ids, Some(vec!["ri".to_string()]));
-        assert_eq!(input.reference_video_asset_ids, Some(vec!["rv".to_string()]));
+        assert_eq!(
+            input.reference_image_asset_ids,
+            Some(vec!["ri".to_string()])
+        );
+        assert_eq!(
+            input.reference_video_asset_ids,
+            Some(vec!["rv".to_string()])
+        );
         assert_eq!(input.reference_audio_asset_ids, None);
         assert_eq!(input.quality, None);
         assert_eq!(input.num_images, None);
@@ -2949,15 +3069,27 @@ mod tests {
         let mut st = video_state("seedance-2");
         st.prompt = "p".into();
         st.first_frame = Some("f1".into());
-        st.references.push(RefAsset { id: "r1".into(), kind: ClipType::Image });
+        st.references.push(RefAsset {
+            id: "r1".into(),
+            kind: ClipType::Image,
+        });
         st.use_first_last = true;
         let input = build_generation_input(&st);
         assert_eq!(input.image_url_asset_ids, Some(vec!["f1".to_string()]));
-        assert_eq!(input.reference_image_asset_ids, None, "refs hidden in frames mode");
+        assert_eq!(
+            input.reference_image_asset_ids, None,
+            "refs hidden in frames mode"
+        );
         st.use_first_last = false;
         let input = build_generation_input(&st);
-        assert_eq!(input.image_url_asset_ids, None, "frames hidden in refs mode");
-        assert_eq!(input.reference_image_asset_ids, Some(vec!["r1".to_string()]));
+        assert_eq!(
+            input.image_url_asset_ids, None,
+            "frames hidden in refs mode"
+        );
+        assert_eq!(
+            input.reference_image_asset_ids,
+            Some(vec!["r1".to_string()])
+        );
     }
 
     #[test]
@@ -2976,7 +3108,10 @@ mod tests {
         let mut ist = image_state("nano-banana-pro");
         ist.prompt = "a sunset".into();
         ist.params.num_images = 3;
-        ist.references.push(RefAsset { id: "r1".into(), kind: ClipType::Image });
+        ist.references.push(RefAsset {
+            id: "r1".into(),
+            kind: ClipType::Image,
+        });
         let input = build_generation_input(&ist);
         assert_eq!(input.num_images, Some(3));
         assert_eq!(input.quality, None, "nano has no qualities");
@@ -3012,7 +3147,10 @@ mod tests {
         let (tool, args) = generation_tool_call(&mm);
         assert_eq!(tool, "generate_audio");
         assert_eq!(args["instrumental"], true);
-        assert!(args.get("duration").is_none(), "minimax has no duration caps");
+        assert!(
+            args.get("duration").is_none(),
+            "minimax has no duration caps"
+        );
 
         let mut em = audio_state("elevenlabs-music");
         em.prompt = "orchestral".into();

@@ -356,13 +356,19 @@ pub struct AddClipsInput {
 /// tool-surface-v2: entries carry mediaRef + startFrame; endFrame and source
 /// are mutually exclusive.
 pub fn validate_add_clips(input: &Value) -> ValidationResult<AddClipsInput> {
-    let Some(arr) = input.get("entries").and_then(|v| v.as_array()).filter(|a| !a.is_empty())
+    let Some(arr) = input
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
     else {
         return ValidationResult::Error("add_clips: missing or empty 'entries'".into());
     };
     let mut entries: Vec<AddClipEntryInput> = Vec::with_capacity(arr.len());
     for (i, e) in arr.iter().enumerate() {
-        let Some(media_ref) = e.get("mediaRef").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        let Some(media_ref) = e
+            .get("mediaRef")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
         else {
             return ValidationResult::Error(format!("add_clips: entries[{i}] missing 'mediaRef'"));
         };
@@ -384,7 +390,10 @@ pub fn validate_add_clips(input: &Value) -> ValidationResult<AddClipsInput> {
                 "add_clips: entries[{i}]: endFrame and source are mutually exclusive"
             ));
         }
-        let track_index = e.get("trackIndex").and_then(|v| v.as_u64()).map(|i| i as usize);
+        let track_index = e
+            .get("trackIndex")
+            .and_then(|v| v.as_u64())
+            .map(|i| i as usize);
         entries.push(AddClipEntryInput {
             media_ref: media_ref.to_string(),
             track_index,
@@ -430,13 +439,19 @@ pub fn validate_insert_clips(input: &Value) -> ValidationResult<InsertClipsInput
         None => return ValidationResult::Error("insert_clips: missing 'trackIndex'".into()),
     };
 
-    let Some(arr) = input.get("entries").and_then(|v| v.as_array()).filter(|a| !a.is_empty())
+    let Some(arr) = input
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
     else {
         return ValidationResult::Error("insert_clips: missing or empty 'entries'".into());
     };
     let mut media_refs: Vec<String> = Vec::with_capacity(arr.len());
     for (i, e) in arr.iter().enumerate() {
-        let Some(media_ref) = e.get("mediaRef").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        let Some(media_ref) = e
+            .get("mediaRef")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
         else {
             return ValidationResult::Error(format!(
                 "insert_clips: entries[{i}] missing 'mediaRef'"
@@ -590,9 +605,7 @@ pub fn validate_move_clips(input: &Value) -> ValidationResult<MoveClipsInput> {
         }
         for (i, m) in arr.iter().enumerate() {
             if m.get("clipId").and_then(|v| v.as_str()).is_none() {
-                return ValidationResult::Error(format!(
-                    "move_clips: moves[{i}] missing 'clipId'"
-                ));
+                return ValidationResult::Error(format!("move_clips: moves[{i}] missing 'clipId'"));
             }
             let to_track = m.get("toTrack").and_then(|v| v.as_i64());
             let to_frame = m.get("toFrame").and_then(|v| v.as_i64());
@@ -1352,10 +1365,15 @@ pub fn validate_import_media(input: &Value) -> ValidationResult<ImportMediaInput
     let path = get("path");
     let bytes = get("bytes");
     let matte = source.get("matte").and_then(|v| v.as_object());
-    let set_count = [url.is_some(), path.is_some(), bytes.is_some(), matte.is_some()]
-        .iter()
-        .filter(|b| **b)
-        .count();
+    let set_count = [
+        url.is_some(),
+        path.is_some(),
+        bytes.is_some(),
+        matte.is_some(),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count();
     if set_count != 1 {
         return ValidationResult::Error(
             "import_media: source must set exactly one of url, path, bytes, or matte.".into(),
@@ -1497,9 +1515,7 @@ pub fn validate_manage_multicam(input: &Value) -> ValidationResult<ManageMultica
                     .and_then(|v| v.as_str())
                     .map(String::from),
                 start_frame: body.get("startFrame").and_then(|v| v.as_i64()),
-                search_window_seconds: body
-                    .get("searchWindowSeconds")
-                    .and_then(|v| v.as_f64()),
+                search_window_seconds: body.get("searchWindowSeconds").and_then(|v| v.as_f64()),
             }),
             ungroup_group_id: None,
         });
@@ -1812,11 +1828,10 @@ mod tests {
     #[test]
     fn duplicate_clips_frame_ceiling_enforced() {
         let over = MAX_TOOL_FRAME + 1;
-        let err = validate_duplicate_clips(
-            &json!({"entries": [{"clipId": "c1", "toFrame": over}]}),
-        )
-        .into_error()
-        .unwrap();
+        let err =
+            validate_duplicate_clips(&json!({"entries": [{"clipId": "c1", "toFrame": over}]}))
+                .into_error()
+                .unwrap();
         assert!(err.contains("maximum supported frame"), "err={err}");
     }
 
@@ -1860,10 +1875,12 @@ mod tests {
 
     #[test]
     fn frame_bound_split_insert_move_reject_i64_max() {
-        assert!(validate_split_clip(&json!({"clipId": "c1", "frame": i64::MAX}))
-            .into_error()
-            .unwrap()
-            .contains("exceeds the maximum supported frame"));
+        assert!(
+            validate_split_clip(&json!({"clipId": "c1", "frame": i64::MAX}))
+                .into_error()
+                .unwrap()
+                .contains("exceeds the maximum supported frame")
+        );
         assert!(validate_insert_clips(
             &json!({"trackIndex": 0, "entries": [{"mediaRef": "m1"}], "atFrame": i64::MAX})
         )
@@ -1885,7 +1902,10 @@ mod tests {
             let err = validate_set_clip_properties(&input, None)
                 .into_error()
                 .unwrap_or_else(|| panic!("{key} should be rejected"));
-            assert!(err.contains("exceeds the maximum supported frame"), "{key}: {err}");
+            assert!(
+                err.contains("exceeds the maximum supported frame"),
+                "{key}: {err}"
+            );
         }
     }
 
@@ -2059,7 +2079,9 @@ mod tests {
             {"mediaRef": "m1", "trackIndex": 0, "startFrame": 0},
             {"mediaRef": "m2", "startFrame": 60},
         ]});
-        let err = validate_add_clips(&input).into_error().expect("mixed rejected");
+        let err = validate_add_clips(&input)
+            .into_error()
+            .expect("mixed rejected");
         assert!(err.contains("mixing"), "{err}");
     }
 
@@ -2174,9 +2196,11 @@ mod tests {
             .into_error()
             .expect("empty call refused");
         assert!(err.contains("at least one of"), "{err}");
-        assert!(validate_manage_tracks(&json!({"reorder": [], "set": [], "remove": []}))
-            .into_error()
-            .is_some());
+        assert!(
+            validate_manage_tracks(&json!({"reorder": [], "set": [], "remove": []}))
+                .into_error()
+                .is_some()
+        );
     }
 
     #[test]
@@ -2192,9 +2216,11 @@ mod tests {
         assert!(validate_manage_tracks(&json!({"remove": [-1]}))
             .into_error()
             .is_some());
-        assert!(validate_manage_tracks(&json!({"reorder": [{"index": -1, "to": 0}]}))
-            .into_error()
-            .is_some());
+        assert!(
+            validate_manage_tracks(&json!({"reorder": [{"index": -1, "to": 0}]}))
+                .into_error()
+                .is_some()
+        );
         assert!(validate_manage_tracks(&json!({"reorder": [{"index": 0}]}))
             .into_error()
             .is_some());
@@ -2350,7 +2376,9 @@ mod tests {
         let result = validate_set_clip_properties(&input, None);
         let parsed = result.into_ok().expect("MUT-012: timing props");
         assert!(parsed.timing_properties.contains(&"speed".to_string()));
-        assert!(parsed.timing_properties.contains(&"trimStartFrame".to_string()));
+        assert!(parsed
+            .timing_properties
+            .contains(&"trimStartFrame".to_string()));
         assert_eq!(parsed.timing_properties.len(), 2);
     }
 
@@ -2415,9 +2443,7 @@ mod tests {
             "properties": {"border": {"enabled": false, "color": "#000000"}}
         });
         let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result
-            .into_error()
-            .expect("border rejected for non-text");
+        let err = result.into_error().expect("border rejected for non-text");
         assert!(err.contains("border"), "err={err}");
     }
 
@@ -2595,7 +2621,10 @@ mod tests {
     fn mut_019_add_texts_bad_entry_rejects_whole_call() {
         for (entry, needle) in [
             (json!({"content": "x", "startFrame": -5}), "startFrame"),
-            (json!({"content": "x", "durationFrames": 0}), "durationFrames"),
+            (
+                json!({"content": "x", "durationFrames": 0}),
+                "durationFrames",
+            ),
             (
                 json!({"content": "x", "startFrame": MAX_TOOL_FRAME + 1}),
                 "exceeds the maximum supported frame",
@@ -2769,12 +2798,16 @@ mod tests {
 
     #[test]
     fn mut_022_organize_media_rename_needs_item_and_name() {
-        assert!(validate_organize_media(&json!({"renames": [{"item": "m1"}]}))
-            .into_error()
-            .is_some());
-        assert!(validate_organize_media(&json!({"renames": [{"name": "X"}]}))
-            .into_error()
-            .is_some());
+        assert!(
+            validate_organize_media(&json!({"renames": [{"item": "m1"}]}))
+                .into_error()
+                .is_some()
+        );
+        assert!(
+            validate_organize_media(&json!({"renames": [{"name": "X"}]}))
+                .into_error()
+                .is_some()
+        );
         assert!(
             validate_organize_media(&json!({"renames": [{"item": "m1", "name": "  "}]}))
                 .into_error()
@@ -2790,7 +2823,14 @@ mod tests {
         let parsed = validate_close_project(&json!({}))
             .into_ok()
             .expect("no-arg close is valid");
-        assert_eq!(parsed, CloseProjectInput { name: None, id: None, path: None });
+        assert_eq!(
+            parsed,
+            CloseProjectInput {
+                name: None,
+                id: None,
+                path: None
+            }
+        );
     }
 
     #[test]
@@ -2853,11 +2893,10 @@ mod tests {
         assert!(validate_import_media(&json!({"source": {"bytes": "aGk="}}))
             .into_error()
             .is_some());
-        let parsed = validate_import_media(
-            &json!({"source": {"bytes": "aGk=", "mimeType": "image/png"}}),
-        )
-        .into_ok()
-        .expect("bytes + mimeType valid");
+        let parsed =
+            validate_import_media(&json!({"source": {"bytes": "aGk=", "mimeType": "image/png"}}))
+                .into_ok()
+                .expect("bytes + mimeType valid");
         assert_eq!(parsed.mime_type.as_deref(), Some("image/png"));
     }
 

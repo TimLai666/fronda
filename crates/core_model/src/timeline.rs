@@ -448,7 +448,9 @@ impl TextRgba {
             } else {
                 slice
             };
-            u8::from_str_radix(&byte_str, 16).ok().map(|n| n as f64 / 255.0)
+            u8::from_str_radix(&byte_str, 16)
+                .ok()
+                .map(|n| n as f64 / 255.0)
         };
         match chars.len() {
             3 => Some(Self {
@@ -961,8 +963,14 @@ mod tests {
     #[test]
     fn text_alignment_from_name() {
         assert_eq!(TextAlignment::from_name("left"), Some(TextAlignment::Left));
-        assert_eq!(TextAlignment::from_name("center"), Some(TextAlignment::Center));
-        assert_eq!(TextAlignment::from_name("right"), Some(TextAlignment::Right));
+        assert_eq!(
+            TextAlignment::from_name("center"),
+            Some(TextAlignment::Center)
+        );
+        assert_eq!(
+            TextAlignment::from_name("right"),
+            Some(TextAlignment::Right)
+        );
         assert_eq!(TextAlignment::from_name("middle"), None);
     }
 
@@ -1003,12 +1011,30 @@ mod tests {
 
     #[test]
     fn content_type_for_extension_maps_known_types() {
-        assert_eq!(ClipType::content_type_for_extension("mov"), Some("video/quicktime"));
-        assert_eq!(ClipType::content_type_for_extension("MP4"), Some("video/mp4"));
-        assert_eq!(ClipType::content_type_for_extension("m4a"), Some("audio/mp4"));
-        assert_eq!(ClipType::content_type_for_extension("mp3"), Some("audio/mpeg"));
-        assert_eq!(ClipType::content_type_for_extension("jpeg"), Some("image/jpeg"));
-        assert_eq!(ClipType::content_type_for_extension("heic"), Some("image/heic"));
+        assert_eq!(
+            ClipType::content_type_for_extension("mov"),
+            Some("video/quicktime")
+        );
+        assert_eq!(
+            ClipType::content_type_for_extension("MP4"),
+            Some("video/mp4")
+        );
+        assert_eq!(
+            ClipType::content_type_for_extension("m4a"),
+            Some("audio/mp4")
+        );
+        assert_eq!(
+            ClipType::content_type_for_extension("mp3"),
+            Some("audio/mpeg")
+        );
+        assert_eq!(
+            ClipType::content_type_for_extension("jpeg"),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            ClipType::content_type_for_extension("heic"),
+            Some("image/heic")
+        );
         assert_eq!(ClipType::content_type_for_extension("txt"), None);
     }
 
@@ -1040,7 +1066,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![],
         };
         assert!(audio_track.is_compatible_with(ClipType::Audio));
@@ -1059,7 +1085,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: false,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![],
         };
         assert!(video_track.is_compatible_with(ClipType::Video));

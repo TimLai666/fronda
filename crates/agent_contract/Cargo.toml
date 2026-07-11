@@ -17,3 +17,6 @@ serde.workspace = true
 serde_json.workspace = true
 timeline_core = { package = "fronda-timeline-core", path = "../timeline_core" }
 uuid.workspace = true
+
+[lints]
+workspace = true

@@ -235,7 +235,10 @@ fn cap_008_min_duration_extends_into_silent_gap() {
     let segs = phrases_from_words(&words, &config, 30);
     assert_eq!(segs.len(), 2);
     assert_eq!(segs[0].start_frame, 0);
-    assert_eq!(segs[0].end_frame, 21, "extends into the silent gap to the floor");
+    assert_eq!(
+        segs[0].end_frame, 21,
+        "extends into the silent gap to the floor"
+    );
     assert_eq!(segs[1].start_frame, 90, "next onset NOT shifted");
 }
 
@@ -266,7 +269,10 @@ fn cap_008_min_duration_leaves_long_segments_untouched() {
     // A 2.0s caption (60 frames) is already well above the floor.
     let words = vec![word("plenty", 0.0, 2.0)];
     let segs = phrases_from_words(&words, &CaptionConfig::default(), 30);
-    assert_eq!(segs[0].end_frame, 60, "no change to an already-long caption");
+    assert_eq!(
+        segs[0].end_frame, 60,
+        "no change to an already-long caption"
+    );
 }
 
 #[test]

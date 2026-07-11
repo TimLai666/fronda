@@ -12,13 +12,12 @@ pub mod app_root;
 pub mod assets;
 pub mod audio_export;
 pub mod audio_source;
-pub mod export_host;
-pub mod project_lister;
-pub mod project_navigator;
 #[cfg(feature = "desktop-app")]
 pub mod chat_history_view;
 #[cfg(feature = "desktop-app")]
 pub mod chat_view;
+pub mod chroma_controls;
+pub mod chroma_sampling;
 #[cfg(feature = "desktop-app")]
 pub mod context_menu;
 #[cfg(feature = "desktop-app")]
@@ -26,6 +25,7 @@ pub mod crop_overlay_view;
 pub mod editor_state_hub;
 #[cfg(feature = "desktop-app")]
 pub mod editor_view;
+pub mod export_host;
 pub mod export_model;
 #[cfg(feature = "desktop-app")]
 pub mod export_view;
@@ -35,6 +35,8 @@ pub mod feedback_view;
 pub mod field_components;
 #[cfg(feature = "desktop-app")]
 pub mod generation_view;
+#[cfg(feature = "desktop-app")]
+pub mod global_shortcuts;
 #[cfg(feature = "desktop-app")]
 pub mod help_view;
 pub mod home_model;
@@ -47,10 +49,7 @@ pub mod inspector_view;
 pub mod keyframes_view;
 pub mod matte_writer;
 pub mod mcp_service;
-pub mod chroma_controls;
-pub mod chroma_sampling;
 pub mod media_import;
-pub mod timeline_import;
 pub mod media_panel_model;
 #[cfg(feature = "desktop-app")]
 pub mod media_panel_view;
@@ -67,6 +66,8 @@ pub mod preview_render;
 pub mod preview_view;
 #[cfg(feature = "desktop-app")]
 pub mod project_activity_view;
+pub mod project_lister;
+pub mod project_navigator;
 pub mod project_registry_store;
 #[cfg(feature = "desktop-app")]
 pub mod settings_mismatch_view;
@@ -74,13 +75,12 @@ pub mod settings_mismatch_view;
 pub mod settings_view;
 pub mod skill_store;
 #[cfg(feature = "desktop-app")]
-pub mod global_shortcuts;
-#[cfg(feature = "desktop-app")]
 pub mod text_area;
 #[cfg(feature = "desktop-app")]
 pub mod text_field;
 #[cfg(feature = "desktop-app")]
 pub mod theme;
+pub mod timeline_import;
 pub mod timeline_model;
 #[cfg(feature = "desktop-app")]
 pub mod timeline_view;

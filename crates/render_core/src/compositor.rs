@@ -251,8 +251,7 @@ pub fn blit_scaled(
 
     // Canvas AABB of the rotated destination rect (clipped to the canvas).
     let corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)];
-    let (mut min_x, mut min_y, mut max_x, mut max_y) =
-        (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for (lx, ly) in corners {
         let wx = cx + lx * cos - ly * sin;
         let wy = cy + lx * sin + ly * cos;
@@ -360,7 +359,8 @@ pub fn apply_blur(img: &mut RgbaImage, radius: usize) {
                 let hi = (y + radius).min(h - 1);
                 let sum = prefix[hi + 1] - prefix[lo];
                 let count = (hi - lo + 1) as f64;
-                img.pixels[(y * w + x) * 4 + c] = (sum as f64 / count).round().clamp(0.0, 255.0) as u8;
+                img.pixels[(y * w + x) * 4 + c] =
+                    (sum as f64 / count).round().clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -385,8 +385,9 @@ pub fn apply_vignette(img: &mut RgbaImage, amount: f64) {
             let factor = 1.0 - amount * d2;
             let i = (y * img.width + x) * 4;
             for c in 0..3 {
-                img.pixels[i + c] =
-                    (img.pixels[i + c] as f64 * factor).round().clamp(0.0, 255.0) as u8;
+                img.pixels[i + c] = (img.pixels[i + c] as f64 * factor)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -716,9 +717,8 @@ pub fn rasterize_shape(shape: &ShapeStyle, w: usize, h: usize) -> RgbaImage {
                 // Uniform sw-pixel stroke: the inner ellipse is shrunk by sw pixels
                 // per axis (was a single normalized band → non-uniform on non-square).
                 let (irx, iry) = ((rx - sw).max(0.0), (ry - sw).max(0.0));
-                let inner = irx > 0.0
-                    && iry > 0.0
-                    && (dx / irx).powi(2) + (dy / iry).powi(2) <= 1.0;
+                let inner =
+                    irx > 0.0 && iry > 0.0 && (dx / irx).powi(2) + (dy / iry).powi(2) <= 1.0;
                 (outer, outer && !inner)
             } else {
                 let on = nx < band_x || nx > 1.0 - band_x || ny < band_y || ny > 1.0 - band_y;
@@ -819,7 +819,16 @@ pub fn compose_frame_with_timelines(
     height: usize,
     fetch_source: &mut dyn FnMut(&Clip, i64) -> Option<RgbaImage>,
 ) -> RgbaImage {
-    compose_frame_inner(timeline, manifest, timelines, frame, width, height, fetch_source, 0)
+    compose_frame_inner(
+        timeline,
+        manifest,
+        timelines,
+        frame,
+        width,
+        height,
+        fetch_source,
+        0,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1105,13 +1114,33 @@ mod tests {
         let mut canvas = RgbaImage::new(1, 1); // transparent, straight-alpha buffer
         let white_half = RgbaImage::solid(1, 1, [255, 255, 255, 128]);
         let region = (0.0, 0.0, 1.0, 1.0);
-        blit_scaled(&mut canvas, &white_half, region, (0.0, 0.0, 1.0, 1.0), 1.0, 0.0, BlendMode::Normal);
+        blit_scaled(
+            &mut canvas,
+            &white_half,
+            region,
+            (0.0, 0.0, 1.0, 1.0),
+            1.0,
+            0.0,
+            BlendMode::Normal,
+        );
         let p = px(&canvas, 0, 0);
         assert_eq!(p, [255, 255, 255, 128], "straight colour over transparent");
         // Stacking a second identical layer stays pure white (never greys out).
-        blit_scaled(&mut canvas, &white_half, region, (0.0, 0.0, 1.0, 1.0), 1.0, 0.0, BlendMode::Normal);
+        blit_scaled(
+            &mut canvas,
+            &white_half,
+            region,
+            (0.0, 0.0, 1.0, 1.0),
+            1.0,
+            0.0,
+            BlendMode::Normal,
+        );
         let p2 = px(&canvas, 0, 0);
-        assert_eq!((p2[0], p2[1], p2[2]), (255, 255, 255), "white-over-white stays white: {p2:?}");
+        assert_eq!(
+            (p2[0], p2[1], p2[2]),
+            (255, 255, 255),
+            "white-over-white stays white: {p2:?}"
+        );
         assert!(p2[3] > 180 && p2[3] < 200, "alpha ~0.75: {}", p2[3]);
     }
 
@@ -1165,7 +1194,11 @@ mod tests {
                 Some(RgbaImage::solid(2, 2, [0, 255, 0, 255])) // green
             }
         });
-        assert_eq!(px(&out, 0, 0), [0, 255, 0, 255], "top-left is the green overlay");
+        assert_eq!(
+            px(&out, 0, 0),
+            [0, 255, 0, 255],
+            "top-left is the green overlay"
+        );
         assert_eq!(px(&out, 3, 3), [255, 0, 0, 255], "elsewhere is the red bg");
     }
 
@@ -1267,7 +1300,10 @@ mod tests {
             fps: 30,
             width: 4,
             height: 4,
-            tracks: vec![mk_track("v0", vec![top_clip]), mk_track("v1", vec![bottom_clip])],
+            tracks: vec![
+                mk_track("v0", vec![top_clip]),
+                mk_track("v1", vec![bottom_clip]),
+            ],
             settings_configured: true,
             selected_clip_ids: std::collections::HashSet::new(),
             transcription_language: None,
@@ -1381,7 +1417,11 @@ mod tests {
         // empty.
         assert_eq!(px(&out, 0, 0), [255, 0, 0, 255], "top-left pixel red");
         assert_eq!(px(&out, 1, 1), [255, 0, 0, 255], "clip reaches (1,1)");
-        assert_eq!(px(&out, 3, 3), [0, 0, 0, 0], "clip does not reach bottom-right");
+        assert_eq!(
+            px(&out, 3, 3),
+            [0, 0, 0, 0],
+            "clip does not reach bottom-right"
+        );
     }
 
     #[test]
@@ -1412,7 +1452,11 @@ mod tests {
         let out = compose_frame(&timeline, &MediaManifest::default(), 0, 2, 2, |_| {
             Some(RgbaImage::solid(2, 2, [200, 100, 50, 255]))
         });
-        assert_eq!(px(&out, 0, 0), [200, 100, 50, 255], "source shows over transparent");
+        assert_eq!(
+            px(&out, 0, 0),
+            [200, 100, 50, 255],
+            "source shows over transparent"
+        );
     }
 
     fn solid_shape(kind: core_model::shape_style::ShapeKind, rgba: [f64; 4]) -> ShapeStyle {
@@ -1464,10 +1508,18 @@ mod tests {
         // In a wide 16×4 box a Circle has radius min(8,2)=2 centred at (8,2); the
         // far-left mid-row pixel is well outside it — an Oval fills the box width.
         let circle = rasterize_shape(&solid_shape(ShapeKind::Circle, [1.0, 0.0, 0.0, 1.0]), 16, 4);
-        assert_eq!(px(&circle, 1, 2), [0, 0, 0, 0], "circle does not reach the box edge");
+        assert_eq!(
+            px(&circle, 1, 2),
+            [0, 0, 0, 0],
+            "circle does not reach the box edge"
+        );
         assert_eq!(px(&circle, 8, 2), [255, 0, 0, 255], "circle centre filled");
         let oval = rasterize_shape(&solid_shape(ShapeKind::Oval, [1.0, 0.0, 0.0, 1.0]), 16, 4);
-        assert_eq!(px(&oval, 1, 2)[3], 255, "oval fills the box width at mid-row");
+        assert_eq!(
+            px(&oval, 1, 2)[3],
+            255,
+            "oval fills the box width at mid-row"
+        );
     }
 
     #[test]
@@ -1498,8 +1550,14 @@ mod tests {
         };
         let img = rasterize_shape(&shape, 24, 8);
         let stroke_run = (0..24).filter(|&x| px(&img, x, 4)[3] > 0).count();
-        assert!(stroke_run >= 2, "mid-row must have some stroke, got {stroke_run}px");
-        assert!(stroke_run <= 6, "mid-row stroke stays thin, got {stroke_run}px");
+        assert!(
+            stroke_run >= 2,
+            "mid-row must have some stroke, got {stroke_run}px"
+        );
+        assert!(
+            stroke_run <= 6,
+            "mid-row stroke stays thin, got {stroke_run}px"
+        );
     }
 
     // Issue #45: arrow / line shape rasterization. Endpoints are normalized 0..1
@@ -1514,12 +1572,20 @@ mod tests {
         ShapeStyle {
             kind,
             stroke: Stroke {
-                color: Rgba { r: 1.0, g: 0.0, b: 0.0, a: 1.0 },
+                color: Rgba {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
                 width,
                 dashed: false,
                 arrowhead_style: None,
             },
-            fill: Fill { enabled: false, color: Rgba::default() },
+            fill: Fill {
+                enabled: false,
+                color: Rgba::default(),
+            },
             arrowhead: None,
             endpoints,
         }
@@ -1530,7 +1596,11 @@ mod tests {
         use core_model::shape_style::ShapeKind;
         let img = rasterize_shape(&stroke_shape(ShapeKind::Line, 2.0, None), 20, 10);
         // The line runs full-width along the vertical centre in the stroke colour.
-        assert_eq!(px(&img, 10, 5), [255, 0, 0, 255], "centre is stroke-coloured");
+        assert_eq!(
+            px(&img, 10, 5),
+            [255, 0, 0, 255],
+            "centre is stroke-coloured"
+        );
         assert!(px(&img, 1, 5)[3] > 0, "line spans to the left edge");
         assert!(px(&img, 18, 5)[3] > 0, "line spans to the right edge");
         // Top and bottom rows are clear (thin centred stroke).
@@ -1568,7 +1638,10 @@ mod tests {
         // A plain Line of the same geometry has no head — its tip stays thin.
         let line = rasterize_shape(&stroke_shape(ShapeKind::Line, 2.0, None), 40, 20);
         let line_tip = (0..20).filter(|&y| px(&line, 36, y)[3] > 0).count();
-        assert!(line_tip <= near_tail + 1, "line has no arrowhead spread, got {line_tip}");
+        assert!(
+            line_tip <= near_tail + 1,
+            "line has no arrowhead spread, got {line_tip}"
+        );
     }
 
     #[test]
@@ -1750,8 +1823,7 @@ mod tests {
                         sum += tmp[(sy * w + x) * 4 + c] as f64;
                     }
                     let count = (hi - lo + 1) as f64;
-                    img.pixels[(y * w + x) * 4 + c] =
-                        (sum / count).round().clamp(0.0, 255.0) as u8;
+                    img.pixels[(y * w + x) * 4 + c] = (sum / count).round().clamp(0.0, 255.0) as u8;
                 }
             }
         }
@@ -1888,9 +1960,17 @@ mod tests {
         };
         apply_chroma_key(&mut img, &key);
         let p = px(&img, 0, 0);
-        assert!(p[3] > 0 && p[3] < 255, "partially keyed, got alpha {}", p[3]);
+        assert!(
+            p[3] > 0 && p[3] < 255,
+            "partially keyed, got alpha {}",
+            p[3]
+        );
         assert!(p[1] < 255, "green spill reduced (was 255, now {})", p[1]);
-        assert!(p[0] > 0, "desaturated toward luma lifts red (was 0, now {})", p[0]);
+        assert!(
+            p[0] > 0,
+            "desaturated toward luma lifts red (was 0, now {})",
+            p[0]
+        );
     }
 
     #[test]
@@ -1920,7 +2000,12 @@ mod tests {
             font_name: "Poppins".into(),
             font_size: 40.0,
             font_scale: 1.0,
-            color: TextRgba { r: 1.0, g: 0.0, b: 0.0, a: 1.0 },
+            color: TextRgba {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
             alignment: TextAlignment::Center,
             shadow: Default::default(),
             background: Default::default(),

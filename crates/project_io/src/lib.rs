@@ -306,8 +306,7 @@ pub fn save_project_state_with_siblings_and_groups(
         None => disk_multicam_groups,
     };
 
-    let mut by_id: HashMap<&str, &Timeline> =
-        siblings.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut by_id: HashMap<&str, &Timeline> = siblings.iter().map(|t| (t.id.as_str(), t)).collect();
     by_id.insert(timeline.id.as_str(), timeline);
 
     let mut timelines: Vec<Timeline> = Vec::with_capacity(by_id.len());

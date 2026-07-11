@@ -88,7 +88,9 @@ mod tests {
     fn writes_valid_solid_png_into_media_dir() {
         let root = temp_project();
         let writer = ProjectMatteWriter::new(root.clone());
-        let src = writer.write_matte([255, 0, 0, 255], 4, 6, "Red BG!").unwrap();
+        let src = writer
+            .write_matte([255, 0, 0, 255], 4, 6, "Red BG!")
+            .unwrap();
         let MediaSource::Project { relative_path } = src else {
             panic!("expected a project-relative source");
         };

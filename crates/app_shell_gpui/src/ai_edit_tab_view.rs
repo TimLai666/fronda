@@ -165,9 +165,7 @@ fn generation_args_from_input(input: &GenerationInput) -> serde_json::Value {
 /// `EditSubmitter.rerun` branch order — upscale model → catalog kind).
 /// A model gone from the catalog dispatches by the asset's kind and lets
 /// the executor's model validation report honestly.
-pub fn rerun_tool_call(
-    asset: &SelectedAsset,
-) -> Result<(&'static str, serde_json::Value), String> {
+pub fn rerun_tool_call(asset: &SelectedAsset) -> Result<(&'static str, serde_json::Value), String> {
     let input = asset
         .generation_input
         .as_ref()
@@ -242,7 +240,13 @@ impl AiEditTabView {
     }
 
     /// Run a tool on the shared executor and put the outcome on the status line.
-    fn dispatch(&mut self, action: &str, tool: &str, args: serde_json::Value, cx: &mut Context<Self>) {
+    fn dispatch(
+        &mut self,
+        action: &str,
+        tool: &str,
+        args: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
         let executor = crate::editor_state_hub::EditorStateHub::global().executor();
         let result = match executor.lock() {
             Ok(mut exec) => exec.execute(tool, &args),
@@ -462,7 +466,9 @@ impl Render for AiEditTabView {
         let trimmed = self.state.use_trimmed_portion;
         let place_audio = self.state.place_audio_on_timeline;
         let is_video = self.state.is_video;
-        let is_image = asset.as_ref().is_some_and(|a| a.clip_type == ClipType::Image);
+        let is_image = asset
+            .as_ref()
+            .is_some_and(|a| a.clip_type == ClipType::Image);
         // Gate every generation action on a connected backend, so the buttons
         // disable and a "coming soon" notice shows instead of failing on click.
         let gen_available = crate::editor_state_hub::EditorStateHub::global()
@@ -782,7 +788,10 @@ mod tests {
         assert!(!rerun_enabled(None));
         let plain = asset(ClipType::Video, None);
         assert!(actions_enabled(Some(&plain)));
-        assert!(!rerun_enabled(Some(&plain)), "no generation_input → Rerun off");
+        assert!(
+            !rerun_enabled(Some(&plain)),
+            "no generation_input → Rerun off"
+        );
         let generated = asset(ClipType::Video, Some(GenerationInput::default()));
         assert!(rerun_enabled(Some(&generated)));
     }
@@ -803,7 +812,10 @@ mod tests {
         assert_eq!(args["prompt"], "");
         assert_eq!(args["referenceVideoAssetIds"], json!(["asset-1"]));
         assert_eq!(args["duration"], json!(12.0));
-        assert!(args.get("model").is_none(), "no video-to-audio model in the catalog");
+        assert!(
+            args.get("model").is_none(),
+            "no video-to-audio model in the catalog"
+        );
 
         let (tool, args) = sfx_tool_call(&a);
         assert_eq!(tool, "generate_audio");
@@ -873,9 +885,18 @@ mod tests {
             };
             rerun_tool_call(&asset(ct, Some(input))).unwrap().0
         };
-        assert_eq!(by_model("nano-banana-pro", ClipType::Image), "generate_image");
-        assert_eq!(by_model("minimax-music-v2.6", ClipType::Audio), "generate_audio");
-        assert_eq!(by_model("elevenlabs-tts-v3", ClipType::Audio), "generate_audio");
+        assert_eq!(
+            by_model("nano-banana-pro", ClipType::Image),
+            "generate_image"
+        );
+        assert_eq!(
+            by_model("minimax-music-v2.6", ClipType::Audio),
+            "generate_audio"
+        );
+        assert_eq!(
+            by_model("elevenlabs-tts-v3", ClipType::Audio),
+            "generate_audio"
+        );
     }
 
     #[test]
@@ -924,7 +945,10 @@ mod tests {
             "content": [{"type": "text", "text": "Some other tool error."}],
             "isError": true,
         }));
-        assert_eq!(action_status("Music", &tool_error), "Some other tool error.");
+        assert_eq!(
+            action_status("Music", &tool_error),
+            "Some other tool error."
+        );
     }
 
     #[test]

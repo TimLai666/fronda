@@ -152,25 +152,24 @@ fn collapse_keyframes(clip: &Clip) -> CollapsedKeyframes {
         static_crop: None,
     };
 
-    let mut handle =
-        |prop: &str, rows: Vec<(i64, Vec<f64>, &'static str)>, identity: &[f64]| -> Option<Vec<f64>> {
-            if rows.is_empty() {
-                return None;
+    let mut handle = |prop: &str,
+                      rows: Vec<(i64, Vec<f64>, &'static str)>,
+                      identity: &[f64]|
+     -> Option<Vec<f64>> {
+        if rows.is_empty() {
+            return None;
+        }
+        if is_constant(&rows) {
+            let v = rows[0].1.clone();
+            if values_close(&v, identity) {
+                return None; // identity constant track: dropped
             }
-            if is_constant(&rows) {
-                let v = rows[0].1.clone();
-                if values_close(&v, identity) {
-                    return None; // identity constant track: dropped
-                }
-                return Some(v); // non-identity constant: collapse to static
-            }
-            let json_rows: Vec<Value> = rows
-                .iter()
-                .map(|(f, v, i)| kf_row_json(*f, v, i))
-                .collect();
-            out.keyframes.insert(prop.to_string(), json!(json_rows));
-            None
-        };
+            return Some(v); // non-identity constant: collapse to static
+        }
+        let json_rows: Vec<Value> = rows.iter().map(|(f, v, i)| kf_row_json(*f, v, i)).collect();
+        out.keyframes.insert(prop.to_string(), json!(json_rows));
+        None
+    };
 
     if let Some(t) = &clip.opacity_track {
         if let Some(v) = handle("opacity", kf_rows_scalar(t), &[1.0]) {
@@ -375,7 +374,11 @@ fn rgb_to_hue(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
     } else {
         ((r - g) / d + 4.0) / 6.0
     };
-    let s = if max.abs() < f64::EPSILON { 0.0 } else { d / max };
+    let s = if max.abs() < f64::EPSILON {
+        0.0
+    } else {
+        d / max
+    };
     (h, s, max)
 }
 
@@ -433,10 +436,7 @@ pub fn clip_v2(clip: &Clip) -> Map<String, Value> {
         out.insert("mediaType".into(), json!(clip.media_type.name()));
     }
     if clip.source_clip_type != clip.media_type {
-        out.insert(
-            "sourceClipType".into(),
-            json!(clip.source_clip_type.name()),
-        );
+        out.insert("sourceClipType".into(), json!(clip.source_clip_type.name()));
     }
     if (clip.speed - 1.0).abs() > f64::EPSILON {
         out.insert("speed".into(), num(clip.speed));
@@ -956,17 +956,23 @@ mod tests {
     fn av_fold_maps_two_member_link_groups() {
         let mut timeline = Timeline::default();
         timeline.tracks = vec![
-            track(ClipType::Video, vec![{
-                let mut c = clip("v1", 0, 100);
-                c.link_group_id = Some("lg1".into());
-                c
-            }]),
-            track(ClipType::Audio, vec![{
-                let mut c = clip("a1", 0, 100);
-                c.media_type = ClipType::Audio;
-                c.link_group_id = Some("lg1".into());
-                c
-            }]),
+            track(
+                ClipType::Video,
+                vec![{
+                    let mut c = clip("v1", 0, 100);
+                    c.link_group_id = Some("lg1".into());
+                    c
+                }],
+            ),
+            track(
+                ClipType::Audio,
+                vec![{
+                    let mut c = clip("a1", 0, 100);
+                    c.media_type = ClipType::Audio;
+                    c.link_group_id = Some("lg1".into());
+                    c
+                }],
+            ),
         ];
         let fold = folded_audio_partners(&timeline);
         assert_eq!(fold.get("v1"), Some(&(1usize, "a1".to_string())));
@@ -982,7 +988,10 @@ mod tests {
         a.link_group_id = Some("lg1".into());
         a.volume = 0.4;
         let j = Value::Object(clip_v2_folded(&v, 1, &a));
-        assert!(j.get("linkGroupId").is_none(), "folded visual drops linkGroupId");
+        assert!(
+            j.get("linkGroupId").is_none(),
+            "folded visual drops linkGroupId"
+        );
         let audio = &j["audio"];
         assert_eq!(audio["id"], json!("a1"));
         assert_eq!(audio["track"], json!(1));
@@ -1014,7 +1023,10 @@ mod tests {
     #[test]
     fn caption_groups_fold_with_preview_and_deviants() {
         let mut clips: Vec<Clip> = Vec::new();
-        for (i, text) in ["First words", "middle", "the last words"].iter().enumerate() {
+        for (i, text) in ["First words", "middle", "the last words"]
+            .iter()
+            .enumerate()
+        {
             let mut c = clip(&format!("cap{i}"), i as i64 * 60, 60);
             c.media_type = ClipType::Text;
             c.source_clip_type = ClipType::Text;
@@ -1156,7 +1168,11 @@ mod tests {
         let j = Value::Object(clip_v2(&c));
         let effects = j["effects"].as_array().unwrap();
         assert_eq!(effects.len(), 1, "no duplicate key.chroma: {j}");
-        assert_eq!(effects[0]["params"]["softness"], json!(0.7), "entry wins (richer)");
+        assert_eq!(
+            effects[0]["params"]["softness"],
+            json!(0.7),
+            "entry wins (richer)"
+        );
     }
 
     #[test]

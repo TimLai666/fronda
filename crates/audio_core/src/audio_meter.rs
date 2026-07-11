@@ -178,7 +178,11 @@ mod tests {
         assert!(approx(ch.display(1.0).peak_db, 0.0), "still held at 1s");
         // After the hold window, the peak decays (18 dB/s).
         let d = ch.display(2.5); // 1.0s past hold-until (1.5)
-        assert!(approx(d.peak_db, -18.0), "peak decays past hold, got {}", d.peak_db);
+        assert!(
+            approx(d.peak_db, -18.0),
+            "peak decays past hold, got {}",
+            d.peak_db
+        );
     }
 
     #[test]
@@ -206,7 +210,11 @@ mod tests {
         m.ingest(1.0, 0.01, 0.0); // loud left, quiet right
         let d = m.display(0.0);
         assert!(approx(d.left.level_db, 0.0));
-        assert!(d.right.level_db < -20.0, "right quiet, got {}", d.right.level_db);
+        assert!(
+            d.right.level_db < -20.0,
+            "right quiet, got {}",
+            d.right.level_db
+        );
         m.reset();
         assert_eq!(m.display(0.0).left.level_db, METER_FLOOR_DB);
     }

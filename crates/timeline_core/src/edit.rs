@@ -374,7 +374,13 @@ pub fn move_clips(
     for (clip, track_index, new_start_frame) in &linked_partner_clips {
         let start = (*new_start_frame).max(0);
         if clip.duration_frames > 0 && *track_index < timeline.tracks.len() {
-            clear_region(timeline, *track_index, start, start + clip.duration_frames, false);
+            clear_region(
+                timeline,
+                *track_index,
+                start,
+                start + clip.duration_frames,
+                false,
+            );
         }
     }
 
@@ -542,7 +548,7 @@ pub fn link_audio_for_placed_clips(
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
-        multicam_group_id: None,
+            multicam_group_id: None,
             text_animation: None,
             word_timings: None,
         });

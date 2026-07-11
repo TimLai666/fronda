@@ -278,7 +278,10 @@ mod tests {
     #[test]
     fn returns_immediately_when_no_tools_requested() {
         let mut transport = ScriptedTransport::new(vec![text_response("all done")]);
-        let mut executor = ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
+        let mut executor = ToolExecutor::new(
+            core_model::Timeline::default(),
+            core_model::MediaManifest::default(),
+        );
         let outcome = run_agent_turn(
             &mut transport,
             |name, args| executor.execute(name, args),
@@ -315,10 +318,7 @@ mod tests {
             8,
         )
         .unwrap();
-        assert_eq!(
-            transport.seen_requests[0]["output_config"]["effort"],
-            "low"
-        );
+        assert_eq!(transport.seen_requests[0]["output_config"]["effort"], "low");
 
         let mut transport = ScriptedTransport::new(vec![text_response("done")]);
         run_agent_turn(
@@ -350,7 +350,10 @@ mod tests {
             text_response("here is your timeline"),
         ];
         let mut transport = ScriptedTransport::new(responses);
-        let mut executor = ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
+        let mut executor = ToolExecutor::new(
+            core_model::Timeline::default(),
+            core_model::MediaManifest::default(),
+        );
         let outcome = run_agent_turn(
             &mut transport,
             |name, args| executor.execute(name, args),
@@ -372,7 +375,11 @@ mod tests {
         // The second request must carry the tool_result feeding back the call.
         let second = &transport.seen_requests[1];
         let msgs = second["messages"].as_array().unwrap();
-        assert_eq!(msgs.len(), 3, "user, assistant(tool_use), user(tool_result)");
+        assert_eq!(
+            msgs.len(),
+            3,
+            "user, assistant(tool_use), user(tool_result)"
+        );
         assert_eq!(msgs[2]["content"][0]["type"], "tool_result");
         assert_eq!(msgs[2]["content"][0]["tool_use_id"], "t1");
     }
@@ -389,7 +396,10 @@ mod tests {
             text_response("recovered"),
         ];
         let mut transport = ScriptedTransport::new(responses);
-        let mut executor = ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
+        let mut executor = ToolExecutor::new(
+            core_model::Timeline::default(),
+            core_model::MediaManifest::default(),
+        );
         let outcome = run_agent_turn(
             &mut transport,
             |name, args| executor.execute(name, args),
@@ -412,8 +422,10 @@ mod tests {
     #[test]
     fn request_marks_system_and_last_tool_for_caching() {
         let mut transport = ScriptedTransport::new(vec![text_response("done")]);
-        let mut executor =
-            ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
+        let mut executor = ToolExecutor::new(
+            core_model::Timeline::default(),
+            core_model::MediaManifest::default(),
+        );
         let tools = crate::all_tools();
         run_agent_turn(
             &mut transport,
@@ -431,7 +443,10 @@ mod tests {
         assert_eq!(req["system"][0]["text"], "SYS");
         let arr = req["tools"].as_array().unwrap();
         assert_eq!(arr.last().unwrap()["cache_control"]["type"], "ephemeral");
-        assert!(arr[0].get("cache_control").is_none(), "only the last tool is a breakpoint");
+        assert!(
+            arr[0].get("cache_control").is_none(),
+            "only the last tool is a breakpoint"
+        );
     }
 
     #[test]
@@ -444,7 +459,10 @@ mod tests {
             ],
         });
         let mut transport = ScriptedTransport::new(vec![looping.clone(), looping.clone(), looping]);
-        let mut executor = ToolExecutor::new(core_model::Timeline::default(), core_model::MediaManifest::default());
+        let mut executor = ToolExecutor::new(
+            core_model::Timeline::default(),
+            core_model::MediaManifest::default(),
+        );
         let outcome = run_agent_turn(
             &mut transport,
             |name, args| executor.execute(name, args),

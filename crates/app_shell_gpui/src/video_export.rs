@@ -198,7 +198,7 @@ impl Mp4Encoder {
             None => return Err("no usable video encoder in linked ffmpeg".into()),
         };
 
-        let mut octx = match ffmpeg::format::output(&output) {
+        let mut octx = match ffmpeg::format::output(output) {
             Ok(o) => o,
             Err(e) => return err("open output", e),
         };
@@ -229,10 +229,8 @@ impl Mp4Encoder {
             enc.set_color_range(ffmpeg::color::Range::MPEG);
             unsafe {
                 let ctx = enc.as_mut_ptr();
-                (*ctx).color_primaries =
-                    ffmpeg::color::Primaries::BT2020.into();
-                (*ctx).color_trc =
-                    ffmpeg::color::TransferCharacteristic::ARIB_STD_B67.into();
+                (*ctx).color_primaries = ffmpeg::color::Primaries::BT2020.into();
+                (*ctx).color_trc = ffmpeg::color::TransferCharacteristic::ARIB_STD_B67.into();
             }
         }
         if global_header {
@@ -900,7 +898,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![clip],
             }],
             settings_configured: true,
@@ -1080,7 +1078,7 @@ mod tests {
         ffmpeg::color::TransferCharacteristic,
     )> {
         init_ffmpeg();
-        let ictx = ffmpeg::format::input(&path).ok()?;
+        let ictx = ffmpeg::format::input(path).ok()?;
         let stream = ictx.streams().best(ffmpeg::media::Type::Video)?;
         let decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
             .ok()?
@@ -1111,8 +1109,7 @@ mod tests {
                 assert!(std::fs::metadata(&out).unwrap().len() > 0);
                 // The 10-bit pixel format and BT.2020 + HLG tags survive a
                 // re-decode — no silent SDR / 8-bit degrade.
-                let (pix, prim, trc) =
-                    probe_video_color(&out).expect("re-decode the HDR stream");
+                let (pix, prim, trc) = probe_video_color(&out).expect("re-decode the HDR stream");
                 assert_eq!(pix, Pixel::YUV420P10LE, "HDR output must be 10-bit");
                 assert_eq!(
                     prim,

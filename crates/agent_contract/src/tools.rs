@@ -861,7 +861,6 @@ fn inspect_timeline() -> ToolDefinition {
     }
 }
 
-
 fn list_models() -> ToolDefinition {
     ToolDefinition {
         name: "list_models",
@@ -1304,10 +1303,6 @@ fn upscale_media() -> ToolDefinition {
     }
 }
 
-
-
-
-
 fn duplicate_project() -> ToolDefinition {
     ToolDefinition {
         name: "duplicate_project",
@@ -1572,7 +1567,12 @@ fn string_enum(description: &str, values: &[&str]) -> Value {
     );
     map.insert(
         "enum".to_string(),
-        Value::Array(values.iter().map(|v| Value::String(v.to_string())).collect()),
+        Value::Array(
+            values
+                .iter()
+                .map(|v| Value::String(v.to_string()))
+                .collect(),
+        ),
     );
     Value::Object(map)
 }
@@ -1599,7 +1599,12 @@ fn object_schema(props: &[(&str, Value)], required: &[&str]) -> Value {
     map.insert("type".to_string(), Value::String("object".to_string()));
     map.insert(
         "required".to_string(),
-        Value::Array(required.iter().map(|r| Value::String(r.to_string())).collect()),
+        Value::Array(
+            required
+                .iter()
+                .map(|r| Value::String(r.to_string()))
+                .collect(),
+        ),
     );
     map.insert("properties".to_string(), Value::Object(properties));
     Value::Object(map)
@@ -1673,7 +1678,6 @@ fn denoise_audio() -> ToolDefinition {
         ]),
     }
 }
-
 
 // ── Issue #155: compound clip MCP tools ───────────────────────────────────────
 
@@ -1812,7 +1816,6 @@ fn list_clip_presets() -> ToolDefinition {
 
 // ── Issue #172: project lifecycle MCP tools ──────────────────────────────────
 
-
 fn get_projects() -> ToolDefinition {
     ToolDefinition {
         name: "get_projects",
@@ -1854,7 +1857,6 @@ fn send_feedback() -> ToolDefinition {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1888,9 +1890,17 @@ mod tests {
         assert_eq!(mcp_tools().len(), 56, "MCP surface");
         assert_eq!(in_app_tools().len(), 53, "in-app surface");
         let mcp_names: Vec<&str> = mcp_tools().iter().map(|t| t.name).collect();
-        assert!(!mcp_names.contains(&"read_skill"), "read_skill is in-app only");
+        assert!(
+            !mcp_names.contains(&"read_skill"),
+            "read_skill is in-app only"
+        );
         let in_app_names: Vec<&str> = in_app_tools().iter().map(|t| t.name).collect();
-        for project_tool in ["get_projects", "open_project", "new_project", "close_project"] {
+        for project_tool in [
+            "get_projects",
+            "open_project",
+            "new_project",
+            "close_project",
+        ] {
             assert!(mcp_names.contains(&project_tool));
             assert!(
                 !in_app_names.contains(&project_tool),
@@ -1974,7 +1984,10 @@ mod tests {
             .and_then(|v| v.as_object())
             .expect("split_clips schema has properties");
         assert!(props.contains_key("splits"), "split_clips has splits");
-        assert!(props.contains_key("trackIndex"), "split_clips has trackIndex");
+        assert!(
+            props.contains_key("trackIndex"),
+            "split_clips has trackIndex"
+        );
         assert!(props.contains_key("frames"), "split_clips has frames");
         // Modes are exactly-one-of, so nothing is unconditionally required.
         let required = schema
@@ -2014,7 +2027,9 @@ mod tests {
         // TDEF-005: key v2 guidance preserved (Appendix B-1 phrases).
         assert!(SYSTEM_INSTRUCTION.contains("Call get_timeline once per session"));
         assert!(SYSTEM_INSTRUCTION.contains("Call get_media before referencing any asset"));
-        assert!(SYSTEM_INSTRUCTION.contains("Call list_models before any generate_* or upscale call"));
+        assert!(
+            SYSTEM_INSTRUCTION.contains("Call list_models before any generate_* or upscale call")
+        );
         assert!(SYSTEM_INSTRUCTION.contains("inspect_media first"));
         assert!(SYSTEM_INSTRUCTION.contains("then wait for confirmation"));
         assert!(SYSTEM_INSTRUCTION.contains("lead with the outcome"));
@@ -2028,7 +2043,10 @@ mod tests {
         assert!(mcp.starts_with(SERVER_INSTRUCTIONS));
         assert!(mcp.contains("# Projects"));
         assert!(mcp.contains("close_project: save and close a project"));
-        assert!(!SYSTEM_INSTRUCTION.contains("# Projects"), "in-app has no project section");
+        assert!(
+            !SYSTEM_INSTRUCTION.contains("# Projects"),
+            "in-app has no project section"
+        );
         assert!(SYSTEM_INSTRUCTION.contains("# Fronda extensions"));
         for tool in [
             "duplicate_project",
@@ -2056,10 +2074,16 @@ mod tests {
             SYSTEM_INSTRUCTION.contains("TIMELINE positions are project frames"),
             "frame-based model stated"
         );
-        assert!(SYSTEM_INSTRUCTION.contains("apply_layout"), "layout gesture");
+        assert!(
+            SYSTEM_INSTRUCTION.contains("apply_layout"),
+            "layout gesture"
+        );
         assert!(SYSTEM_INSTRUCTION.contains("ripple_delete_ranges"));
         assert!(SYSTEM_INSTRUCTION.contains("set_keyframes"));
-        assert!(SYSTEM_INSTRUCTION.contains("detect_beats"), "beat-sync guidance");
+        assert!(
+            SYSTEM_INSTRUCTION.contains("detect_beats"),
+            "beat-sync guidance"
+        );
     }
 
     #[test]

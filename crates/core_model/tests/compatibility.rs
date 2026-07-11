@@ -153,7 +153,10 @@ fn upstream_065_serialize_writes_both_swift_and_rust_keys() {
     assert_eq!(j["isItalic"], json!(true), "Swift italic key");
 
     // Weight below 700 → isBold false.
-    let light = TextStyle { font_weight: 400.0, ..Default::default() };
+    let light = TextStyle {
+        font_weight: 400.0,
+        ..Default::default()
+    };
     let jl = serde_json::to_value(&light).unwrap();
     assert_eq!(jl["isBold"], json!(false));
 
@@ -399,11 +402,26 @@ fn media_manifest_acronym_keys_roundtrip_without_data_loss() {
         .expect("video entry");
     assert_eq!(video.source_fps, Some(30.0), "sourceFPS must load");
     let gi = video.generation_input.as_ref().expect("generationInput");
-    assert_eq!(gi.image_urls, Some(vec!["https://example.com/board.png".to_string()]));
-    assert_eq!(gi.reference_image_urls, Some(vec!["https://example.com/ref-image.png".to_string()]));
-    assert_eq!(gi.reference_video_urls, Some(vec!["https://example.com/ref-video.mp4".to_string()]));
-    assert_eq!(gi.reference_audio_urls, Some(vec!["https://example.com/ref-audio.wav".to_string()]));
-    assert_eq!(gi.image_url_asset_ids, Some(vec!["asset-image-ref-1".to_string()]));
+    assert_eq!(
+        gi.image_urls,
+        Some(vec!["https://example.com/board.png".to_string()])
+    );
+    assert_eq!(
+        gi.reference_image_urls,
+        Some(vec!["https://example.com/ref-image.png".to_string()])
+    );
+    assert_eq!(
+        gi.reference_video_urls,
+        Some(vec!["https://example.com/ref-video.mp4".to_string()])
+    );
+    assert_eq!(
+        gi.reference_audio_urls,
+        Some(vec!["https://example.com/ref-audio.wav".to_string()])
+    );
+    assert_eq!(
+        gi.image_url_asset_ids,
+        Some(vec!["asset-image-ref-1".to_string()])
+    );
 
     let audio = manifest
         .entries
@@ -422,11 +440,22 @@ fn media_manifest_acronym_keys_roundtrip_without_data_loss() {
 
     // Re-serialization emits Swift-compatible uppercase acronym keys, not lowercased.
     let out = serde_json::to_string(&manifest).unwrap();
-    for key in ["\"sourceFPS\"", "\"cachedRemoteURL\"", "\"imageURLs\"", "\"imageURLAssetIds\""] {
+    for key in [
+        "\"sourceFPS\"",
+        "\"cachedRemoteURL\"",
+        "\"imageURLs\"",
+        "\"imageURLAssetIds\"",
+    ] {
         assert!(out.contains(key), "save must emit {key}");
     }
-    assert!(!out.contains("\"sourceFps\""), "no lowercased acronym key on save");
-    assert!(!out.contains("\"cachedRemoteUrl\""), "no lowercased acronym key on save");
+    assert!(
+        !out.contains("\"sourceFps\""),
+        "no lowercased acronym key on save"
+    );
+    assert!(
+        !out.contains("\"cachedRemoteUrl\""),
+        "no lowercased acronym key on save"
+    );
 }
 
 #[test]

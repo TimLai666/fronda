@@ -32,11 +32,7 @@ pub struct AudioPlacement {
 impl AudioPlacement {
     /// Per-channel frame count of this placement's PCM.
     fn frames(&self, channels: usize) -> usize {
-        if channels == 0 {
-            0
-        } else {
-            self.samples.len() / channels
-        }
+        self.samples.len().checked_div(channels).unwrap_or(0)
     }
 }
 
@@ -296,8 +292,16 @@ mod tests {
             ..Default::default()
         };
         let out = mix(&[p], 1, 0);
-        assert!(out[2] < 0.2 - 1e-6, "smoothstep(0.2)=0.104 < 0.2: {}", out[2]);
-        assert!(out[8] > 0.8 + 1e-6, "smoothstep(0.8)=0.896 > 0.8: {}", out[8]);
+        assert!(
+            out[2] < 0.2 - 1e-6,
+            "smoothstep(0.2)=0.104 < 0.2: {}",
+            out[2]
+        );
+        assert!(
+            out[8] > 0.8 + 1e-6,
+            "smoothstep(0.8)=0.896 > 0.8: {}",
+            out[8]
+        );
     }
 
     #[test]
@@ -313,7 +317,11 @@ mod tests {
             ..Default::default()
         };
         let out = mix(&[p], 1, 0);
-        assert!((out[5] - 0.625).abs() < 1e-6, "min of the two ramps: {}", out[5]);
+        assert!(
+            (out[5] - 0.625).abs() < 1e-6,
+            "min of the two ramps: {}",
+            out[5]
+        );
     }
 
     #[test]
@@ -344,8 +352,16 @@ mod tests {
         // 4 frames → 2 (2x speed): each output averages its 2-sample window.
         let out = resample_linear(&[0.0, 0.2, 0.4, 0.6], 1, 2);
         assert_eq!(out.len(), 2);
-        assert!((out[0] - 0.1).abs() < 1e-6, "avg(0.0,0.2)=0.1, got {}", out[0]);
-        assert!((out[1] - 0.5).abs() < 1e-6, "avg(0.4,0.6)=0.5, got {}", out[1]);
+        assert!(
+            (out[0] - 0.1).abs() < 1e-6,
+            "avg(0.0,0.2)=0.1, got {}",
+            out[0]
+        );
+        assert!(
+            (out[1] - 0.5).abs() < 1e-6,
+            "avg(0.4,0.6)=0.5, got {}",
+            out[1]
+        );
     }
 
     #[test]
@@ -379,7 +395,10 @@ mod tests {
         let samples = vec![0.1, 0.1, 0.1, -0.9, 0.1, 0.1, 0.1, 0.1];
         let peaks = compute_peaks(&samples, 2, 2);
         assert_eq!(peaks.len(), 2);
-        assert!((peaks[0] - 0.9).abs() < 1e-6, "bucket 0 catches the -0.9 spike");
+        assert!(
+            (peaks[0] - 0.9).abs() < 1e-6,
+            "bucket 0 catches the -0.9 spike"
+        );
         assert!((peaks[1] - 0.1).abs() < 1e-6);
     }
 

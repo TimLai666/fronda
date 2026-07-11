@@ -177,8 +177,8 @@ mod tests {
             resolve_base_url(Some("  https://gateway.example.com  ".into())),
             "https://gateway.example.com"
         );
-        let config =
-            AnthropicConfig::new("k").with_base_url(resolve_base_url(Some("http://proxy:9/".into())));
+        let config = AnthropicConfig::new("k")
+            .with_base_url(resolve_base_url(Some("http://proxy:9/".into())));
         assert_eq!(config.messages_url(), "http://proxy:9/v1/messages");
     }
 }

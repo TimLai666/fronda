@@ -170,7 +170,10 @@ mod tests {
             open_url_argv(url, "windows"),
             ("explorer".into(), vec![url.into()])
         );
-        assert_eq!(open_url_argv(url, "macos"), ("open".into(), vec![url.into()]));
+        assert_eq!(
+            open_url_argv(url, "macos"),
+            ("open".into(), vec![url.into()])
+        );
         assert_eq!(
             open_url_argv(url, "linux"),
             ("xdg-open".into(), vec![url.into()])

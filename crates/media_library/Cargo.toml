@@ -10,3 +10,6 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 fronda-core-model = { path = "../core_model" }
+
+[lints]
+workspace = true

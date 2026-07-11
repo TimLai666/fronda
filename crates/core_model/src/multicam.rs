@@ -230,7 +230,10 @@ mod tests {
         assert_eq!(decoded.members[0].kind, MulticamMemberKind::Both);
         assert_eq!(decoded.members[0].sync.offset_seconds, 1.5);
         let reencoded = serde_json::to_value(&decoded).unwrap();
-        assert_eq!(reencoded, raw, "Swift-shaped JSON must round-trip losslessly");
+        assert_eq!(
+            reencoded, raw,
+            "Swift-shaped JSON must round-trip losslessly"
+        );
     }
 
     #[test]
@@ -242,8 +245,7 @@ mod tests {
         let mut clip: Clip = serde_json::from_value(base.clone()).unwrap();
         assert_eq!(clip.multicam_group_id, None, "legacy clip decodes nil");
         clip.multicam_group_id = Some("g1".into());
-        let round: Clip =
-            serde_json::from_value(serde_json::to_value(&clip).unwrap()).unwrap();
+        let round: Clip = serde_json::from_value(serde_json::to_value(&clip).unwrap()).unwrap();
         assert_eq!(round.multicam_group_id.as_deref(), Some("g1"));
     }
 

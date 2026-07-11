@@ -209,7 +209,7 @@ fn clp_006_clear_region_split_does_not_touch_linked_partner_track() {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![v],
             },
             Track {
@@ -218,7 +218,7 @@ fn clp_006_clear_region_split_does_not_touch_linked_partner_track() {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![a],
             },
         ],
@@ -234,7 +234,11 @@ fn clp_006_clear_region_split_does_not_touch_linked_partner_track() {
         tl.tracks[1].clips.len(),
         1,
         "linked audio partner must not be split: {:?}",
-        tl.tracks[1].clips.iter().map(|c| (c.start_frame, c.duration_frames)).collect::<Vec<_>>()
+        tl.tracks[1]
+            .clips
+            .iter()
+            .map(|c| (c.start_frame, c.duration_frames))
+            .collect::<Vec<_>>()
     );
     assert_eq!(tl.tracks[1].clips[0].start_frame, 0);
     assert_eq!(tl.tracks[1].clips[0].duration_frames, 200);

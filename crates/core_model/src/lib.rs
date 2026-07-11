@@ -30,9 +30,7 @@ pub use project_registry::{ProjectEntry, ProjectRegistry};
 pub use shape_style::{
     Arrowhead, Endpoints, Fill, Point2d, Rgba, ShapeAnimationPreset, ShapeKind, ShapeStyle, Stroke,
 };
-pub use text_animation::{
-    TextAnimation, TextAnimationPreset, TextAnimationRenderMode, WordTiming,
-};
+pub use text_animation::{TextAnimation, TextAnimationPreset, TextAnimationRenderMode, WordTiming};
 pub use timeline::{
     AnimPair, BlendMode, ChromaKey, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack,
     TextAlignment, TextFill, TextRgba, TextShadow, TextStyle, Timeline, Track, Transform,

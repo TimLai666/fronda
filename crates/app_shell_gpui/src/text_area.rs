@@ -14,9 +14,8 @@ use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, App, AvailableSpace, Bounds,
     ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, SharedString, Style, TextRun, TextStyle, UTF16Selection, UnderlineStyle,
-    Window, WrappedLine,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    SharedString, Style, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window, WrappedLine,
 };
 use std::ops::Range;
 
@@ -792,9 +791,7 @@ impl Element for TextAreaElement {
                     .sum();
                 let rows = clamped_row_count(rows, min_lines, max_lines);
                 let width = width.unwrap_or_else(|| {
-                    lines
-                        .iter()
-                        .fold(px(0.), |acc, line| acc.max(line.width()))
+                    lines.iter().fold(px(0.), |acc, line| acc.max(line.width()))
                 });
                 size(width, line_height * rows as f32)
             },
@@ -879,10 +876,7 @@ impl Element for TextAreaElement {
                             selections.push(fill(
                                 Bounds::from_corners(
                                     point(bounds.left() + x0, top + line_height * k as f32),
-                                    point(
-                                        bounds.left() + x1,
-                                        top + line_height * (k + 1) as f32,
-                                    ),
+                                    point(bounds.left() + x1, top + line_height * (k + 1) as f32),
                                 ),
                                 selection_color,
                             ));
@@ -1042,7 +1036,10 @@ mod tests {
     fn selection_segment_single_line() {
         let line = 0..5;
         let row = 0..5;
-        assert_eq!(selection_segment(&(1..3), &line, &row, true), Some((1, 3, false)));
+        assert_eq!(
+            selection_segment(&(1..3), &line, &row, true),
+            Some((1, 3, false))
+        );
         // Empty selection: nothing.
         assert_eq!(selection_segment(&(2..2), &line, &row, true), None);
         // Selection fully outside the line.
@@ -1057,9 +1054,15 @@ mod tests {
         let row0 = 0..2;
         let row1 = 0..2;
         // Line 0: local 1..2, extends over the newline.
-        assert_eq!(selection_segment(&(1..4), &line0, &row0, true), Some((1, 2, true)));
+        assert_eq!(
+            selection_segment(&(1..4), &line0, &row0, true),
+            Some((1, 2, true))
+        );
         // Line 1: local 0..1, no extension.
-        assert_eq!(selection_segment(&(1..4), &line1, &row1, true), Some((0, 1, false)));
+        assert_eq!(
+            selection_segment(&(1..4), &line1, &row1, true),
+            Some((0, 1, false))
+        );
     }
 
     #[test]
@@ -1067,7 +1070,10 @@ mod tests {
         // "a\n\nb": the empty middle line (2..2) inside selection 0..4.
         let line = 2..2;
         let row = 0..0;
-        assert_eq!(selection_segment(&(0..4), &line, &row, true), Some((0, 0, true)));
+        assert_eq!(
+            selection_segment(&(0..4), &line, &row, true),
+            Some((0, 0, true))
+        );
         // Selection ending exactly at the empty line does not extend.
         assert_eq!(selection_segment(&(0..2), &line, &row, true), None);
     }
@@ -1079,12 +1085,21 @@ mod tests {
         let row0 = 0..4;
         let row1 = 4..10;
         let sel = 2..7;
-        assert_eq!(selection_segment(&sel, &line, &row0, false), Some((2, 4, false)));
-        assert_eq!(selection_segment(&sel, &line, &row1, true), Some((4, 7, false)));
+        assert_eq!(
+            selection_segment(&sel, &line, &row0, false),
+            Some((2, 4, false))
+        );
+        assert_eq!(
+            selection_segment(&sel, &line, &row1, true),
+            Some((4, 7, false))
+        );
         // Selection endpoint exactly on the wrap boundary produces no
         // zero-width duplicate on the next row.
         let sel = 2..4;
-        assert_eq!(selection_segment(&sel, &line, &row0, false), Some((2, 4, false)));
+        assert_eq!(
+            selection_segment(&sel, &line, &row0, false),
+            Some((2, 4, false))
+        );
         assert_eq!(selection_segment(&sel, &line, &row1, true), None);
     }
 }

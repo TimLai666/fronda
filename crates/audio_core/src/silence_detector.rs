@@ -213,7 +213,11 @@ pub fn speech_spans_to_dead_air(
     gaps.into_iter()
         .filter_map(|(s, e)| {
             let padded_s = if s > 0.0 { s + edge_padding_seconds } else { s };
-            let padded_e = if e < clip_duration { e - edge_padding_seconds } else { e };
+            let padded_e = if e < clip_duration {
+                e - edge_padding_seconds
+            } else {
+                e
+            };
             (padded_e > padded_s && padded_e - padded_s >= min_silence_seconds)
                 .then_some((padded_s, padded_e))
         })
@@ -281,8 +285,12 @@ mod tests {
     fn adaptive_threshold_tracks_the_speech_level() {
         // A loud recording (speech ~0.5) gets a much higher threshold than a
         // quiet one (speech ~0.05); both sit 25 dB under their speech level.
-        let loud: Vec<f64> = (0..100).map(|i| if i % 4 == 0 { 0.0 } else { 0.5 }).collect();
-        let quiet: Vec<f64> = (0..100).map(|i| if i % 4 == 0 { 0.0 } else { 0.05 }).collect();
+        let loud: Vec<f64> = (0..100)
+            .map(|i| if i % 4 == 0 { 0.0 } else { 0.5 })
+            .collect();
+        let quiet: Vec<f64> = (0..100)
+            .map(|i| if i % 4 == 0 { 0.0 } else { 0.05 })
+            .collect();
         let t_loud = adaptive_silence_threshold(&loud);
         let t_quiet = adaptive_silence_threshold(&quiet);
         assert!(t_loud > t_quiet * 5.0, "loud {t_loud} vs quiet {t_quiet}");
@@ -428,8 +436,14 @@ mod tests {
         // Spec table: [1,7] over 8s → (0.0,0.9),(7.1,8.0).
         let out = speech_spans_to_dead_air(&[(1.0, 7.0)], 8.0, 0.5, 0.1);
         assert_eq!(out.len(), 2, "{out:?}");
-        assert!(out[0].0.abs() < 1e-9 && (out[0].1 - 0.9).abs() < 1e-9, "{out:?}");
-        assert!((out[1].0 - 7.1).abs() < 1e-9 && (out[1].1 - 8.0).abs() < 1e-9, "{out:?}");
+        assert!(
+            out[0].0.abs() < 1e-9 && (out[0].1 - 0.9).abs() < 1e-9,
+            "{out:?}"
+        );
+        assert!(
+            (out[1].0 - 7.1).abs() < 1e-9 && (out[1].1 - 8.0).abs() < 1e-9,
+            "{out:?}"
+        );
     }
 
     #[test]
@@ -456,7 +470,10 @@ mod tests {
         // Unsorted + overlapping + touching: [2,4],[0,3],[4,5] merge to [0,5].
         let out = speech_spans_to_dead_air(&[(2.0, 4.0), (0.0, 3.0), (4.0, 5.0)], 8.0, 0.5, 0.1);
         assert_eq!(out.len(), 1, "{out:?}");
-        assert!((out[0].0 - 5.1).abs() < 1e-9 && (out[0].1 - 8.0).abs() < 1e-9, "{out:?}");
+        assert!(
+            (out[0].0 - 5.1).abs() < 1e-9 && (out[0].1 - 8.0).abs() < 1e-9,
+            "{out:?}"
+        );
     }
 
     #[test]
@@ -464,7 +481,10 @@ mod tests {
         // Spans past the clip bounds clamp: speech [0,1],[6,8] → gap (1.1, 5.9).
         let out = speech_spans_to_dead_air(&[(-1.0, 1.0), (6.0, 10.0)], 8.0, 0.5, 0.1);
         assert_eq!(out.len(), 1, "{out:?}");
-        assert!((out[0].0 - 1.1).abs() < 1e-9 && (out[0].1 - 5.9).abs() < 1e-9, "{out:?}");
+        assert!(
+            (out[0].0 - 1.1).abs() < 1e-9 && (out[0].1 - 5.9).abs() < 1e-9,
+            "{out:?}"
+        );
     }
 
     #[test]

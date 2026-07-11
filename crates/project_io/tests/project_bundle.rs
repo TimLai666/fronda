@@ -225,14 +225,20 @@ fn save_preserves_unreadable_chat_files() {
     fs::write(&corrupt, "not valid json").unwrap();
 
     let mut bundle = ProjectBundle::open(&destination).unwrap();
-    assert!(!bundle.chat_sessions.is_empty(), "valid session still loads");
+    assert!(
+        !bundle.chat_sessions.is_empty(),
+        "valid session still loads"
+    );
     bundle.timeline.fps = 24; // unrelated change → triggers a full save
     bundle.save().unwrap();
 
     assert!(corrupt.exists(), "unreadable chat file must survive a save");
     assert_eq!(fs::read_to_string(&corrupt).unwrap(), "not valid json");
     let reopened = ProjectBundle::open(&destination).unwrap();
-    assert!(!reopened.chat_sessions.is_empty(), "valid session rewritten");
+    assert!(
+        !reopened.chat_sessions.is_empty(),
+        "valid session rewritten"
+    );
 }
 
 #[test]
@@ -437,8 +443,16 @@ fn non_finite_float_is_sanitized_on_save_so_project_reopens() {
 
     let reopened = ProjectBundle::open(&dest).expect("sanitized project must reopen");
     let clip = &reopened.timeline.tracks[0].clips[0];
-    assert!(clip.speed.is_finite(), "speed not sanitized: {}", clip.speed);
-    assert!(clip.opacity.is_finite(), "opacity not sanitized: {}", clip.opacity);
+    assert!(
+        clip.speed.is_finite(),
+        "speed not sanitized: {}",
+        clip.speed
+    );
+    assert!(
+        clip.opacity.is_finite(),
+        "opacity not sanitized: {}",
+        clip.opacity
+    );
     assert_eq!(clip.speed, 1.0);
     assert_eq!(clip.opacity, 1.0);
 }
@@ -547,7 +561,6 @@ fn save_project_state_preserves_sibling_timelines() {
     assert_eq!(timelines[0]["width"], 3840, "active edit written");
     assert_eq!(timelines[1]["id"], "tl-b");
 }
-
 
 #[test]
 fn save_project_state_with_siblings_is_authoritative_deletions_stick() {

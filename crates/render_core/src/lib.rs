@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 pub mod audio_plan;
 pub mod bundle_export;
 pub mod compositor;
-pub mod text;
 pub mod effects;
 pub mod export_stall_watchdog;
 pub mod fcpxml_export;
+pub mod text;
 pub mod xml_export;
 pub mod xml_import;
 pub use effects::{
@@ -685,7 +685,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![v1],
                 },
                 Track {
@@ -694,7 +694,7 @@ mod tests {
                     muted: false,
                     hidden: true,
                     sync_locked: true,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![a1],
                 },
             ],
@@ -940,7 +940,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![video],
                 },
                 Track {
@@ -949,7 +949,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![text],
                 },
             ],
@@ -1045,7 +1045,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![v1, v2],
             }],
         };
@@ -1100,7 +1100,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![a1, a2],
             }],
         };
@@ -1156,7 +1156,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![a1, a2],
             }],
         };
@@ -1670,7 +1670,7 @@ mod tests {
                 muted: false,
                 hidden: true,
                 sync_locked: true,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![v1],
             }],
         };
@@ -1713,7 +1713,7 @@ mod tests {
                 muted: true,
                 hidden: false,
                 sync_locked: true,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![a1],
             }],
         };

@@ -480,10 +480,7 @@ impl Default for CaptionsState {
 }
 
 fn clip_is_captionable(clip: &core_model::Clip) -> bool {
-    matches!(
-        clip.source_clip_type,
-        ClipType::Audio | ClipType::Video
-    )
+    matches!(clip.source_clip_type, ClipType::Audio | ClipType::Video)
 }
 
 /// Captionable clip ids, optionally limited to one track (Swift captionTargets).
@@ -1013,8 +1010,7 @@ impl MediaPanelView {
             }
         })
         .detach();
-        let folder_rename_field =
-            cx.new(|cx| crate::text_field::TextField::new(cx, "Folder name"));
+        let folder_rename_field = cx.new(|cx| crate::text_field::TextField::new(cx, "Folder name"));
         cx.subscribe(&folder_rename_field, |this, _field, event, cx| {
             if matches!(event, crate::text_field::TextFieldEvent::Submitted) {
                 this.commit_folder_rename(cx);
@@ -1105,16 +1101,28 @@ impl MediaPanelView {
             self.music.is_generating && has_inflight_generation(&self.manifest);
         // Prune view state that points at deleted things (Swift
         // pruneStaleFolderState).
-        let folder_exists =
-            |id: &String| self.manifest.folders.iter().any(|f| &f.id == id);
-        if self.library.current_folder.as_ref().is_some_and(|id| !folder_exists(id)) {
+        let folder_exists = |id: &String| self.manifest.folders.iter().any(|f| &f.id == id);
+        if self
+            .library
+            .current_folder
+            .as_ref()
+            .is_some_and(|id| !folder_exists(id))
+        {
             self.library.current_folder = None;
         }
-        if self.folder_editing.as_ref().is_some_and(|id| !folder_exists(id)) {
+        if self
+            .folder_editing
+            .as_ref()
+            .is_some_and(|id| !folder_exists(id))
+        {
             self.folder_editing = None;
         }
         let entry_exists = |id: &String| self.manifest.entries.iter().any(|e| &e.id == id);
-        if self.asset_editing.as_ref().is_some_and(|id| !entry_exists(id)) {
+        if self
+            .asset_editing
+            .as_ref()
+            .is_some_and(|id| !entry_exists(id))
+        {
             self.asset_editing = None;
         }
         let menu_target_gone = match self.library_menu.target() {
@@ -1200,7 +1208,8 @@ impl MediaPanelView {
             // where the new folder is visible (review M2).
             self.library.view_mode = LibraryViewMode::Folders;
             self.library.search_query.clear();
-            self.search_field.update(cx, |field, cx| field.set_text("", cx));
+            self.search_field
+                .update(cx, |field, cx| field.set_text("", cx));
             self.folder_editing = Some(id);
             self.folder_rename_field.update(cx, |field, cx| {
                 field.set_text(name, cx);
@@ -1735,7 +1744,9 @@ impl MediaPanelView {
                 this.library_menu.open_at(
                     ev.position.x.as_f32(),
                     ev.position.y.as_f32(),
-                    LibraryMenuTarget::Asset { id: menu_id.clone() },
+                    LibraryMenuTarget::Asset {
+                        id: menu_id.clone(),
+                    },
                 );
                 cx.notify();
             }),
@@ -1830,7 +1841,13 @@ impl MediaPanelView {
                             .flex()
                             .flex_col()
                             .items_start()
-                            .child(div().w(px(18.0)).h(px(5.0)).rounded(px(Radius::XS)).bg(accent))
+                            .child(
+                                div()
+                                    .w(px(18.0))
+                                    .h(px(5.0))
+                                    .rounded(px(Radius::XS))
+                                    .bg(accent),
+                            )
                             .child(
                                 div()
                                     .w(px(44.0))
@@ -1918,8 +1935,7 @@ impl MediaPanelView {
                         this.commit_folder_rename(cx);
                         this.commit_asset_rename(cx);
                     }
-                    if renaming || this.open_menu.is_some() || !this.library.selection.is_empty()
-                    {
+                    if renaming || this.open_menu.is_some() || !this.library.selection.is_empty() {
                         this.open_menu = None;
                         this.library.clear_selection();
                         cx.notify();
@@ -1943,7 +1959,10 @@ impl MediaPanelView {
                     .justify_center()
                     .text_size(px(FontSize::SM))
                     .text_color(Text::TERTIARY)
-                    .child(format!("No matches for \u{201c}{}\u{201d}", self.library.trimmed_query())),
+                    .child(format!(
+                        "No matches for \u{201c}{}\u{201d}",
+                        self.library.trimmed_query()
+                    )),
             )
         } else {
             div()
@@ -1984,14 +2003,14 @@ impl MediaPanelView {
                 );
             if let Some(fid) = folder_id {
                 let open_id = fid.to_string();
-                header = header.cursor_pointer().on_click(cx.listener(
-                    move |this, _, _, cx| {
+                header = header
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         this.library.view_mode = LibraryViewMode::Folders;
                         this.library.current_folder = Some(open_id.clone());
                         this.library.clear_selection();
                         cx.notify();
-                    },
-                ));
+                    }));
             }
             let body: AnyElement = if entries.is_empty() {
                 div()
@@ -2009,11 +2028,7 @@ impl MediaPanelView {
                     .flex_col()
                     .gap(px(Spacing::XS))
                     .child(header)
-                    .child(
-                        div()
-                            .h(px(BorderWidth::HAIRLINE))
-                            .bg(BorderColors::SUBTLE),
-                    )
+                    .child(div().h(px(BorderWidth::HAIRLINE)).bg(BorderColors::SUBTLE))
                     .child(body),
             );
         }
@@ -2086,13 +2101,13 @@ impl MediaPanelView {
                     })
                     .child(label);
                 if !is_leaf {
-                    chip = chip.cursor_pointer().on_click(cx.listener(
-                        move |this, _, _, cx| {
+                    chip = chip
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
                             this.library.current_folder = target.clone();
                             this.library.clear_selection();
                             cx.notify();
-                        },
-                    ));
+                        }));
                 }
                 row = row.child(chip);
             }
@@ -2442,12 +2457,13 @@ impl MediaPanelView {
         // Occlude + deferred + outside-click dismiss (context_menu.rs
         // pattern): the menu owns its hit area so a click on it can't bleed
         // into the grid, and the first outside click only dismisses (M1).
-        let panel = panel
-            .occlude()
-            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                this.open_menu = None;
-                cx.notify();
-            }));
+        let panel =
+            panel
+                .occlude()
+                .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.open_menu = None;
+                    cx.notify();
+                }));
         Some(deferred(panel).with_priority(1).into_any_element())
     }
 
@@ -2543,11 +2559,7 @@ fn menu_value_button(id: &str, value: String) -> gpui::Stateful<gpui::Div> {
         .text_size(px(FontSize::SM))
         .font_weight(gpui::FontWeight::MEDIUM)
         .child(value)
-        .child(
-            div()
-                .text_size(px(FontSize::XXS))
-                .child("↕"),
-        )
+        .child(div().text_size(px(FontSize::XXS)).child("↕"))
 }
 
 /// Inline dropdown panel below a row. Mouse-downs stay inside so the scroll
@@ -3029,8 +3041,8 @@ impl MediaPanelView {
                 );
             } else {
                 for (i, (track_id, label, count)) in track_entries.iter().enumerate() {
-                    let checked = self.captions.selected_track_id.as_deref()
-                        == Some(track_id.as_str());
+                    let checked =
+                        self.captions.selected_track_id.as_deref() == Some(track_id.as_str());
                     let id = track_id.clone();
                     panel = panel.child(
                         menu_row(
@@ -3158,7 +3170,10 @@ impl MediaPanelView {
                 )
                 .into_any_element(),
             ))
-            .child(tab_row("Color", self.swatch_strip(false, cx).into_any_element()))
+            .child(tab_row(
+                "Color",
+                self.swatch_strip(false, cx).into_any_element(),
+            ))
             .child(tab_row(
                 "Background",
                 div()
@@ -3180,16 +3195,19 @@ impl MediaPanelView {
             ))
             .child(tab_row(
                 "Case",
-                menu_value_button("captions-case-btn", self.captions.text_case.label().to_string())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.captions_menu = match this.captions_menu {
-                            Some(CaptionsMenu::Case) => None,
-                            _ => Some(CaptionsMenu::Case),
-                        };
-                        cx.notify();
-                    }))
-                    .into_any_element(),
+                menu_value_button(
+                    "captions-case-btn",
+                    self.captions.text_case.label().to_string(),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.captions_menu = match this.captions_menu {
+                        Some(CaptionsMenu::Case) => None,
+                        _ => Some(CaptionsMenu::Case),
+                    };
+                    cx.notify();
+                }))
+                .into_any_element(),
             ));
         if self.captions_menu == Some(CaptionsMenu::Case) {
             let mut panel = tab_menu_panel();
@@ -3342,8 +3360,7 @@ impl MediaPanelView {
             .size_full()
             .bg(Background::SURFACE)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if event.keystroke.key.as_str() == "escape" && this.captions_menu.take().is_some()
-                {
+                if event.keystroke.key.as_str() == "escape" && this.captions_menu.take().is_some() {
                     cx.stop_propagation();
                     cx.notify();
                 }
@@ -3403,8 +3420,15 @@ impl MediaPanelView {
         };
         let cost = model.and_then(|m| music_cost(m, &self.music.prompt, duration));
         let credits = self.generation.read(cx).state.credits_remaining;
-        if music_validation_note(model, text_mode, &self.music.prompt, span_seconds, cost, credits)
-            .is_some()
+        if music_validation_note(
+            model,
+            text_mode,
+            &self.music.prompt,
+            span_seconds,
+            cost,
+            credits,
+        )
+        .is_some()
         {
             cx.notify();
             return;
@@ -3516,7 +3540,9 @@ impl MediaPanelView {
         );
         let note = self.music.note.clone().or_else(|| validation.clone());
         let can_generate = model.is_some() && validation.is_none() && !self.music.is_generating;
-        let mode_label = effective_music_mode(self.music.mode, model).label().to_string();
+        let mode_label = effective_music_mode(self.music.mode, model)
+            .label()
+            .to_string();
         let model_label = model
             .map(|m| m.display_name.to_string())
             .unwrap_or_else(|| "None".to_string());
@@ -3991,7 +4017,10 @@ mod library_tests {
         s.view_mode = LibraryViewMode::Flat;
         s.current_folder = Some("f1".into());
         assert_eq!(visible_entries(&m, &s).len(), 5, "folder scope ignored");
-        assert!(visible_folders(&m, &s).is_empty(), "no folder tiles in flat");
+        assert!(
+            visible_folders(&m, &s).is_empty(),
+            "no folder tiles in flat"
+        );
     }
 
     #[test]
@@ -4024,7 +4053,10 @@ mod library_tests {
         let mut s = state();
         s.view_mode = LibraryViewMode::Flat;
         s.sort_key = LibrarySortKey::Name;
-        assert_eq!(ids(&visible_entries(&m, &s)), ["m1", "m3", "m2", "m4", "m5"]);
+        assert_eq!(
+            ids(&visible_entries(&m, &s)),
+            ["m1", "m3", "m2", "m4", "m5"]
+        );
     }
 
     #[test]
@@ -4033,7 +4065,10 @@ mod library_tests {
         let mut s = state();
         s.view_mode = LibraryViewMode::Flat;
         s.sort_key = LibrarySortKey::DateAdded;
-        assert_eq!(ids(&visible_entries(&m, &s)), ["m1", "m2", "m3", "m4", "m5"]);
+        assert_eq!(
+            ids(&visible_entries(&m, &s)),
+            ["m1", "m2", "m3", "m4", "m5"]
+        );
     }
 
     #[test]
@@ -4042,7 +4077,10 @@ mod library_tests {
         let mut s = state();
         s.view_mode = LibraryViewMode::Flat;
         s.sort_key = LibrarySortKey::Duration;
-        assert_eq!(ids(&visible_entries(&m, &s)), ["m2", "m3", "m1", "m5", "m4"]);
+        assert_eq!(
+            ids(&visible_entries(&m, &s)),
+            ["m2", "m3", "m1", "m5", "m4"]
+        );
     }
 
     #[test]
@@ -4052,7 +4090,10 @@ mod library_tests {
         s.view_mode = LibraryViewMode::Flat;
         s.sort_key = LibrarySortKey::Type;
         // audio < image < video; stable within a kind.
-        assert_eq!(ids(&visible_entries(&m, &s)), ["m2", "m4", "m1", "m3", "m5"]);
+        assert_eq!(
+            ids(&visible_entries(&m, &s)),
+            ["m2", "m4", "m1", "m3", "m5"]
+        );
     }
 
     // ── 1.1 grouped sections + folder helpers ──
@@ -4084,7 +4125,10 @@ mod library_tests {
             "empty root section skipped"
         );
         assert_eq!(ids(&sections[0].2), ["m4"]);
-        assert!(sections[1].2.is_empty(), "empty folder sections stay visible");
+        assert!(
+            sections[1].2.is_empty(),
+            "empty folder sections stay visible"
+        );
     }
 
     #[test]
@@ -4567,7 +4611,9 @@ mod captions_music_tests {
         assert!(music_span_note(model, 0.4).unwrap().contains("at least 1s"));
         assert_eq!(music_span_note(model, 1.0), None);
         assert_eq!(music_span_note(model, 600.4), None, "rounds to 600");
-        assert!(music_span_note(model, 601.0).unwrap().contains("at most 600s"));
+        assert!(music_span_note(model, 601.0)
+            .unwrap()
+            .contains("at most 600s"));
     }
 
     // ── 2.2 source span summary ─────────────────────────────────────
@@ -4616,7 +4662,14 @@ mod captions_music_tests {
     #[test]
     fn bundled_font_families_match_render_core_set() {
         // render_core::text::font_for matches these bundled families.
-        for family in ["Anton", "Bebas Neue", "Permanent Marker", "Shrikhand", "Basement Grotesque", "Poppins"] {
+        for family in [
+            "Anton",
+            "Bebas Neue",
+            "Permanent Marker",
+            "Shrikhand",
+            "Basement Grotesque",
+            "Poppins",
+        ] {
             assert!(BUNDLED_FONT_FAMILIES.contains(&family), "{family}");
         }
         assert_eq!(BUNDLED_FONT_FAMILIES.len(), 6, "no dupes / strays");

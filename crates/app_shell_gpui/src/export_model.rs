@@ -228,22 +228,53 @@ mod tests {
     fn interchange_content_matches_mode() {
         let tl = Timeline::default();
         let m = MediaManifest::default();
-        let xml = interchange_content(ExportMode::Xml, &tl, &m, &Default::default(), FcpxmlTarget::Resolve).unwrap();
+        let xml = interchange_content(
+            ExportMode::Xml,
+            &tl,
+            &m,
+            &Default::default(),
+            FcpxmlTarget::Resolve,
+        )
+        .unwrap();
         assert!(xml.contains("<xmeml"), "Xml mode produces XMEML");
-        let fcp =
-            interchange_content(ExportMode::Fcpxml, &tl, &m, &Default::default(), FcpxmlTarget::Resolve).unwrap();
+        let fcp = interchange_content(
+            ExportMode::Fcpxml,
+            &tl,
+            &m,
+            &Default::default(),
+            FcpxmlTarget::Resolve,
+        )
+        .unwrap();
         assert!(
             fcp.contains("<fcpxml version=\"1.10\">"),
             "Fcpxml mode produces FCPXML"
         );
         // The Fcp target is reachable through the model and produces a valid FCPXML too.
-        let fcp2 = interchange_content(ExportMode::Fcpxml, &tl, &m, &Default::default(), FcpxmlTarget::Fcp).unwrap();
+        let fcp2 = interchange_content(
+            ExportMode::Fcpxml,
+            &tl,
+            &m,
+            &Default::default(),
+            FcpxmlTarget::Fcp,
+        )
+        .unwrap();
         assert!(fcp2.contains("<fcpxml version=\"1.10\">"));
-        assert!(interchange_content(ExportMode::Video, &tl, &m, &Default::default(), FcpxmlTarget::Resolve).is_none());
-        assert!(
-            interchange_content(ExportMode::PalmierProject, &tl, &m, &Default::default(), FcpxmlTarget::Resolve)
-                .is_none()
-        );
+        assert!(interchange_content(
+            ExportMode::Video,
+            &tl,
+            &m,
+            &Default::default(),
+            FcpxmlTarget::Resolve
+        )
+        .is_none());
+        assert!(interchange_content(
+            ExportMode::PalmierProject,
+            &tl,
+            &m,
+            &Default::default(),
+            FcpxmlTarget::Resolve
+        )
+        .is_none());
     }
 
     #[test]

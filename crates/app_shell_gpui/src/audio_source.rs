@@ -41,7 +41,7 @@ mod tests {
         let dir = std::env::temp_dir().join("fronda-audio-source-external");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("clip.wav");
-        let samples: Vec<f32> = std::iter::repeat(0.5f32).take(4800).collect(); // 0.1s @ 48k
+        let samples: Vec<f32> = std::iter::repeat_n(0.5f32, 4800).collect(); // 0.1s @ 48k
         write_wav(&path, &samples, 48_000, 1).unwrap();
 
         let src = ProjectAudioSource::new(dir.clone());
@@ -51,7 +51,10 @@ mod tests {
         let pcm = src
             .decode_source_pcm(&source, 48_000, 1)
             .expect("external wav decodes");
-        assert!(pcm.iter().any(|s| s.abs() > 0.1), "decoded non-silent audio");
+        assert!(
+            pcm.iter().any(|s| s.abs() > 0.1),
+            "decoded non-silent audio"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -61,7 +64,7 @@ mod tests {
         let media = dir.join("media");
         let _ = std::fs::create_dir_all(&media);
         let path = media.join("a.wav");
-        let samples: Vec<f32> = std::iter::repeat(0.3f32).take(2400).collect();
+        let samples: Vec<f32> = std::iter::repeat_n(0.3f32, 2400).collect();
         write_wav(&path, &samples, 48_000, 1).unwrap();
 
         let src = ProjectAudioSource::new(dir.clone());

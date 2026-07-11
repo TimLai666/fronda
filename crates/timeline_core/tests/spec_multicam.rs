@@ -9,11 +9,11 @@ use core_model::{
 };
 use std::collections::{HashMap, HashSet};
 use timeline_core::{
-    create_group, live_groups, max_lag_hops, multicam_atomicity_violation,
-    multicam_clip_locations, multicam_group_offsets, multicam_manual_ripple_violation,
-    multicam_move_violation, multicam_program_rows, multicam_trim_bounds, referenced_group_ids,
-    strip_group_stamps, switch_angles, switch_segment, AngleSwitchRequest, ClipMathExt,
-    FrameRange, MulticamAsset, MulticamMemberSpec,
+    create_group, live_groups, max_lag_hops, multicam_atomicity_violation, multicam_clip_locations,
+    multicam_group_offsets, multicam_manual_ripple_violation, multicam_move_violation,
+    multicam_program_rows, multicam_trim_bounds, referenced_group_ids, strip_group_stamps,
+    switch_angles, switch_segment, AngleSwitchRequest, ClipMathExt, FrameRange, MulticamAsset,
+    MulticamMemberSpec,
 };
 
 fn asset(name: &str, ty: ClipType, duration: f64, has_audio: bool) -> MulticamAsset {
@@ -48,9 +48,18 @@ fn sync(offset: f64, confidence: f64) -> MulticamSyncMap {
 /// (master) [60, 3960) — the Swift harness.
 fn harness_assets() -> HashMap<String, MulticamAsset> {
     HashMap::from([
-        ("camA".to_string(), asset("camA", ClipType::Video, 120.0, true)),
-        ("camB".to_string(), asset("camB", ClipType::Video, 110.0, true)),
-        ("mic1".to_string(), asset("mic1", ClipType::Audio, 130.0, false)),
+        (
+            "camA".to_string(),
+            asset("camA", ClipType::Video, 120.0, true),
+        ),
+        (
+            "camB".to_string(),
+            asset("camB", ClipType::Video, 110.0, true),
+        ),
+        (
+            "mic1".to_string(),
+            asset("mic1", ClipType::Audio, 130.0, false),
+        ),
     ])
 }
 
@@ -153,9 +162,18 @@ fn create_fills_program_holes_with_covering_angles() {
     // Seed camera stops early; a longer angle must fill the tail — no gap
     // where some camera has picture.
     let assets = HashMap::from([
-        ("short".to_string(), asset("short", ClipType::Video, 20.0, true)),
-        ("wide".to_string(), asset("wide", ClipType::Video, 120.0, true)),
-        ("mic1".to_string(), asset("mic1", ClipType::Audio, 130.0, false)),
+        (
+            "short".to_string(),
+            asset("short", ClipType::Video, 20.0, true),
+        ),
+        (
+            "wide".to_string(),
+            asset("wide", ClipType::Video, 120.0, true),
+        ),
+        (
+            "mic1".to_string(),
+            asset("mic1", ClipType::Audio, 130.0, false),
+        ),
     ]);
     let maps = HashMap::from([
         ("short".to_string(), sync(0.0, 1.0)),
@@ -180,7 +198,10 @@ fn create_fills_program_holes_with_covering_angles() {
     .unwrap();
     let program = program_clips(&timeline, &group.id);
     assert_eq!(
-        program.iter().map(|c| c.media_ref.as_str()).collect::<Vec<_>>(),
+        program
+            .iter()
+            .map(|c| c.media_ref.as_str())
+            .collect::<Vec<_>>(),
         ["short", "wide"]
     );
     assert_eq!(program[0].end_frame(), 600);
@@ -203,7 +224,10 @@ fn create_lays_stamped_clips() {
     assert_eq!(program[0].start_frame, 0);
     assert_eq!(program[0].end_frame(), 3600);
     assert_eq!(program[0].media_ref, "camA");
-    assert_eq!(program[0].multicam_group_id.as_deref(), Some(group.id.as_str()));
+    assert_eq!(
+        program[0].multicam_group_id.as_deref(),
+        Some(group.id.as_str())
+    );
     assert_eq!(
         group
             .member_by_media_ref(&program[0].media_ref)
@@ -225,9 +249,18 @@ fn create_lays_stamped_clips() {
 #[test]
 fn switch_mic_rewrites_audio_clip_in_place() {
     let assets = HashMap::from([
-        ("camA".to_string(), asset("camA", ClipType::Video, 120.0, true)),
-        ("lapel".to_string(), asset("lapel", ClipType::Audio, 130.0, false)),
-        ("room".to_string(), asset("room", ClipType::Audio, 125.0, false)),
+        (
+            "camA".to_string(),
+            asset("camA", ClipType::Video, 120.0, true),
+        ),
+        (
+            "lapel".to_string(),
+            asset("lapel", ClipType::Audio, 130.0, false),
+        ),
+        (
+            "room".to_string(),
+            asset("room", ClipType::Audio, 125.0, false),
+        ),
     ]);
     let maps = HashMap::from([
         ("camA".to_string(), sync(0.0, 1.0)),
@@ -302,7 +335,10 @@ fn switch_rewrites_trim_through_sync_maps() {
     assert_eq!(outcome.switched, 1);
     let clips = program_clips(&timeline, &group.id);
     assert_eq!(
-        clips.iter().map(|c| c.media_ref.as_str()).collect::<Vec<_>>(),
+        clips
+            .iter()
+            .map(|c| c.media_ref.as_str())
+            .collect::<Vec<_>>(),
         ["camA", "camB", "camA"]
     );
     // Same real moment on cam-b's clock: 600 - (5-0)*30 = 450.
@@ -334,7 +370,10 @@ fn switch_clamps_to_angle_coverage() {
     assert_eq!(outcome.clamped[0].culprit, "cam-b");
     let clips = program_clips(&timeline, &group.id);
     assert_eq!(
-        clips.iter().map(|c| c.media_ref.as_str()).collect::<Vec<_>>(),
+        clips
+            .iter()
+            .map(|c| c.media_ref.as_str())
+            .collect::<Vec<_>>(),
         ["camA", "camB", "camA"]
     );
     assert_eq!(clips[1].start_frame, 150);
@@ -372,8 +411,8 @@ fn user_framing_survives_angle_switch() {
     {
         let loc = timeline_core::find_clip(&timeline, &framed.id).unwrap();
         let clip = &mut timeline.tracks[loc.track_index].clips[loc.clip_index];
-        clip.transform = punched.clone();
-        clip.crop = punched_crop.clone();
+        clip.transform = punched;
+        clip.crop = punched_crop;
     }
 
     // The punch-in rides the swap; the crop is untouched.
@@ -436,7 +475,13 @@ fn switch_survives_word_cut_fragments() {
     let mut timeline = Timeline::default();
     let (group, _) = create_harness_group(&mut timeline, &assets);
     // A word cut: ripple out [900, 1000) — the whole group shifts atomically.
-    ripple_all_tracks(&mut timeline, &[FrameRange { start: 900, end: 1000 }]);
+    ripple_all_tracks(
+        &mut timeline,
+        &[FrameRange {
+            start: 900,
+            end: 1000,
+        }],
+    );
     // Switch across the seam.
     let outcome = switch_angles(
         &mut timeline,
@@ -566,17 +611,15 @@ fn partial_ripple_across_group_refuses() {
         .unwrap();
     // Only the mic track would shift (program track exempted) — must refuse.
     let shifting: HashSet<usize> = HashSet::from([mic_track]);
-    let reason = multicam_atomicity_violation(&timeline, &groups, &shifting)
-        .expect("expected refusal");
+    let reason =
+        multicam_atomicity_violation(&timeline, &groups, &shifting).expect("expected refusal");
     assert!(reason.to_lowercase().contains("multicam"), "{reason}");
 }
 
 fn multicam_track_indexes_of(timeline: &Timeline, group_id: &str, audio: bool) -> Vec<usize> {
     let mut out: Vec<usize> = multicam_clip_locations(timeline, group_id)
         .into_iter()
-        .filter(|(ti, ci)| {
-            (timeline.tracks[*ti].clips[*ci].media_type == ClipType::Audio) == audio
-        })
+        .filter(|(ti, ci)| (timeline.tracks[*ti].clips[*ci].media_type == ClipType::Audio) == audio)
         .map(|(ti, _)| ti)
         .collect();
     out.sort();
@@ -589,7 +632,13 @@ fn atomic_ripple_keeps_relative_alignment() {
     let assets = harness_assets();
     let mut timeline = Timeline::default();
     let (group, _) = create_harness_group(&mut timeline, &assets);
-    ripple_all_tracks(&mut timeline, &[FrameRange { start: 300, end: 400 }]);
+    ripple_all_tracks(
+        &mut timeline,
+        &[FrameRange {
+            start: 300,
+            end: 400,
+        }],
+    );
     let program = program_clips(&timeline, &group.id);
     // Fragment after the cut resumes at source 400 — content at a position never changed.
     assert_eq!(
@@ -776,13 +825,27 @@ fn trim_stops_at_ripple_seam() {
     let mut timeline = Timeline::default();
     let (group, _) = create_harness_group(&mut timeline, &assets);
     // Ripple out [600, 700): a seam at 600 with 100 frames of cut time.
-    ripple_all_tracks(&mut timeline, &[FrameRange { start: 600, end: 700 }]);
+    ripple_all_tracks(
+        &mut timeline,
+        &[FrameRange {
+            start: 600,
+            end: 700,
+        }],
+    );
     // Delete the program fragment left of the seam; growth of the right
     // fragment leftward across the seam must be capped at 0 — those frames
     // were cut and the mics no longer carry them.
     let program = program_clips(&timeline, &group.id);
-    let left = program.iter().find(|c| c.end_frame() == 600).unwrap().clone();
-    let right = program.iter().find(|c| c.start_frame == 600).unwrap().clone();
+    let left = program
+        .iter()
+        .find(|c| c.end_frame() == 600)
+        .unwrap()
+        .clone();
+    let right = program
+        .iter()
+        .find(|c| c.start_frame == 600)
+        .unwrap()
+        .clone();
     timeline_core::remove_clips(&mut timeline, [left.id], false);
 
     let bounds = multicam_trim_bounds(&timeline, &group, &right.id).expect("bounds");
@@ -809,8 +872,14 @@ fn synced_members_show_no_link_offset_badge() {
     ripple_all_tracks(
         &mut timeline,
         &[
-            FrameRange { start: 300, end: 400 },
-            FrameRange { start: 900, end: 1050 },
+            FrameRange {
+                start: 300,
+                end: 400,
+            },
+            FrameRange {
+                start: 900,
+                end: 1050,
+            },
         ],
     );
     assert!(multicam_group_offsets(&timeline, &groups).is_empty());

@@ -201,7 +201,10 @@ mod tests {
         let aspect = 16.0 / 9.0;
         // Centre maps to (0.5, 0.5).
         let (u, v) = frame_uv_from_click((50.0, 50.0), (100.0, 100.0), aspect).unwrap();
-        assert!(approx(u, 0.5) && approx(v, 0.5), "centre → 0.5,0.5 got {u},{v}");
+        assert!(
+            approx(u, 0.5) && approx(v, 0.5),
+            "centre → 0.5,0.5 got {u},{v}"
+        );
         // Top edge (y=0) is inside the letterbox bar → None.
         assert!(frame_uv_from_click((50.0, 0.0), (100.0, 100.0), aspect).is_none());
         // Frame fills width; its top is at y = (100 - 56.25)/2 ≈ 21.9.
@@ -214,6 +217,9 @@ mod tests {
         // 1:1 frame in a 200×100 canvas → pillarbox left/right, frame 100 wide centred.
         let (u, v) = frame_uv_from_click((100.0, 50.0), (200.0, 100.0), 1.0).unwrap();
         assert!(approx(u, 0.5) && approx(v, 0.5));
-        assert!(frame_uv_from_click((10.0, 50.0), (200.0, 100.0), 1.0).is_none(), "left bar");
+        assert!(
+            frame_uv_from_click((10.0, 50.0), (200.0, 100.0), 1.0).is_none(),
+            "left bar"
+        );
     }
 }

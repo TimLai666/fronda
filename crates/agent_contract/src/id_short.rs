@@ -354,7 +354,10 @@ mod tests {
             "moves": [{"items": ["aaaa1111"], "into": "B-roll"}],
         });
         let out = expand_input_ids(&args, &uni()).unwrap();
-        assert_eq!(out["moves"][0]["items"][0], "aaaa1111-0000-4000-8000-000000000001");
+        assert_eq!(
+            out["moves"][0]["items"][0],
+            "aaaa1111-0000-4000-8000-000000000001"
+        );
         assert_eq!(out["moves"][0]["into"], "B-roll");
     }
 

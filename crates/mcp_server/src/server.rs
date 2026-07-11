@@ -239,7 +239,11 @@ fn notify_sessions(sessions: &SharedSessions, payload: &str) {
         let Some(stream) = session.sse.as_mut() else {
             return true;
         };
-        if stream.write_all(frame.as_bytes()).and_then(|_| stream.flush()).is_err() {
+        if stream
+            .write_all(frame.as_bytes())
+            .and_then(|_| stream.flush())
+            .is_err()
+        {
             session.sse = None;
         }
         true
@@ -346,9 +350,16 @@ fn wants_event_stream(head: &str) -> bool {
 fn session_not_found_response(session_id: &str) -> String {
     let resp = JsonRpcResponse::error(
         Value::Null,
-        JsonRpcError::custom(-32001, format!("Session '{session_id}' not found or expired")),
+        JsonRpcError::custom(
+            -32001,
+            format!("Session '{session_id}' not found or expired"),
+        ),
     );
-    build_http_response(404, "application/json", &serde_json::to_string(&resp).unwrap())
+    build_http_response(
+        404,
+        "application/json",
+        &serde_json::to_string(&resp).unwrap(),
+    )
 }
 
 fn handle_connection(
@@ -369,7 +380,8 @@ fn handle_connection(
     // server must not serve tool calls unauthenticated.
     if let Some(token) = auth_token {
         if !request_has_bearer(head, token) {
-            let response = build_http_response(401, "application/json", "{\"error\":\"unauthorized\"}");
+            let response =
+                build_http_response(401, "application/json", "{\"error\":\"unauthorized\"}");
             let _ = stream.write_all(response.as_bytes());
             let _ = stream.flush();
             return;
@@ -387,17 +399,18 @@ fn handle_connection(
     if http_method == "DELETE" {
         let response = match session_id {
             Some(id) => {
-                let removed = sessions
-                    .lock()
-                    .ok()
-                    .and_then(|mut store| store.remove(&id));
+                let removed = sessions.lock().ok().and_then(|mut store| store.remove(&id));
                 if removed.is_some() {
                     build_http_response(200, "application/json", "{\"ok\":true}")
                 } else {
                     session_not_found_response(&id)
                 }
             }
-            None => build_http_response(400, "application/json", "{\"error\":\"missing Mcp-Session-Id\"}"),
+            None => build_http_response(
+                400,
+                "application/json",
+                "{\"error\":\"missing Mcp-Session-Id\"}",
+            ),
         };
         let _ = stream.write_all(response.as_bytes());
         let _ = stream.flush();
@@ -409,8 +422,11 @@ fn handle_connection(
     // threads write to it via notify_sessions.
     if http_method == "GET" && wants_event_stream(head) {
         let Some(id) = session_id else {
-            let response =
-                build_http_response(400, "application/json", "{\"error\":\"missing Mcp-Session-Id\"}");
+            let response = build_http_response(
+                400,
+                "application/json",
+                "{\"error\":\"missing Mcp-Session-Id\"}",
+            );
             let _ = stream.write_all(response.as_bytes());
             let _ = stream.flush();
             return;
@@ -426,7 +442,11 @@ fn handle_connection(
             return;
         };
         let sse_head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n: connected\n\n";
-        if stream.write_all(sse_head.as_bytes()).and_then(|_| stream.flush()).is_ok() {
+        if stream
+            .write_all(sse_head.as_bytes())
+            .and_then(|_| stream.flush())
+            .is_ok()
+        {
             session.sse = Some(stream);
         }
         return;
@@ -857,12 +877,23 @@ mod tests {
         let call = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_timeline","arguments":{}}}"#;
 
         let unauth = http_raw(port, None, call);
-        assert!(unauth.starts_with("HTTP/1.1 401"), "missing token → 401: {}", unauth.lines().next().unwrap_or(""));
+        assert!(
+            unauth.starts_with("HTTP/1.1 401"),
+            "missing token → 401: {}",
+            unauth.lines().next().unwrap_or("")
+        );
         let wrong = http_raw(port, Some("nope"), call);
         assert!(wrong.starts_with("HTTP/1.1 401"), "wrong token → 401");
         let ok = http_raw(port, Some("secret-token"), call);
-        assert!(ok.starts_with("HTTP/1.1 200"), "correct token → 200: {}", ok.lines().next().unwrap_or(""));
-        assert!(ok.contains("\"result\""), "authorized call returns a result");
+        assert!(
+            ok.starts_with("HTTP/1.1 200"),
+            "correct token → 200: {}",
+            ok.lines().next().unwrap_or("")
+        );
+        assert!(
+            ok.contains("\"result\""),
+            "authorized call returns a result"
+        );
         handle.stop();
     }
 
@@ -916,7 +947,10 @@ mod tests {
             port,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"organize_media","arguments":{"createFolders":["B-roll"]}}}"#,
         );
-        assert!(resp.get("result").is_some(), "organize_media failed: {resp}");
+        assert!(
+            resp.get("result").is_some(),
+            "organize_media failed: {resp}"
+        );
         {
             let exec = shared.lock().unwrap();
             assert!(exec

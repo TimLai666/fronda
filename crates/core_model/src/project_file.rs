@@ -164,7 +164,10 @@ mod tests {
         assert_eq!(json["multicamGroups"][0]["masterMemberId"], "m1");
 
         let decoded = ProjectFile::decode(&bytes).unwrap();
-        assert_eq!(decoded, file, "incl. opaque speakers (#261) + typed multicamGroups (#283)");
+        assert_eq!(
+            decoded, file,
+            "incl. opaque speakers (#261) + typed multicamGroups (#283)"
+        );
         assert_eq!(decoded.active_index(), 1);
         assert_eq!(decoded.active_timeline().unwrap().name, "B-roll");
     }

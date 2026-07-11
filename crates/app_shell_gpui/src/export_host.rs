@@ -70,7 +70,11 @@ impl ExportHost for AgentExportHost {
         let timelines = timeline_core::timeline_resolver(&request.sibling_timelines);
         match request.mode.as_str() {
             "xml" | "fcpxml" => {
-                let ext = if request.mode == "xml" { "xml" } else { "fcpxml" };
+                let ext = if request.mode == "xml" {
+                    "xml"
+                } else {
+                    "fcpxml"
+                };
                 let path = self.resolve_output(&request, ext)?;
                 let target = if request.fcpxml_target == "fcp" {
                     FcpxmlTarget::Fcp
@@ -109,7 +113,11 @@ impl ExportHost for AgentExportHost {
                 })
             }
             "video" => {
-                let ext = if request.codec == "ProRes" { "mov" } else { "mp4" };
+                let ext = if request.codec == "ProRes" {
+                    "mov"
+                } else {
+                    "mp4"
+                };
                 let path = self.resolve_output(&request, ext)?;
                 let codec = match request.codec.as_str() {
                     "H.265" => crate::video_export::VideoCodec::H265,

@@ -17,9 +17,7 @@ use gpui::{
 
 /// Compact stereo audio meter — L/R level bars with a peak tick and a clip
 /// tint (upstream #293). Fed by the playhead audio level.
-fn render_audio_meter(
-    display: audio_core::audio_meter::StereoMeterDisplay,
-) -> impl IntoElement {
+fn render_audio_meter(display: audio_core::audio_meter::StereoMeterDisplay) -> impl IntoElement {
     let bar = |ch: audio_core::audio_meter::MeterChannelDisplay| {
         let level = audio_core::audio_meter::normalized_level(ch.level_db);
         let peak = audio_core::audio_meter::normalized_level(ch.peak_db);
@@ -409,9 +407,10 @@ impl PreviewView {
         );
         let canvas = (bounds.size.width.as_f32(), bounds.size.height.as_f32());
         let clip_id = crate::chroma_sampling::take_sampling();
-        if let (Some((u, v)), Some(clip_id)) =
-            (crate::chroma_controls::frame_uv_from_click(rel, canvas, aspect), clip_id)
-        {
+        if let (Some((u, v)), Some(clip_id)) = (
+            crate::chroma_controls::frame_uv_from_click(rel, canvas, aspect),
+            clip_id,
+        ) {
             if let Some((r, g, b)) = sample_png_pixel(&path, u, v) {
                 let hue = crate::chroma_controls::rgb_to_hue(r, g, b);
                 // Swift commit resets tolerance/softness on sample (fresh key).
@@ -1389,21 +1388,25 @@ impl Render for PreviewView {
                                     this.toggle_settings_menu(SettingsMenu::Aspect, cx);
                                 }),
                             ))
-                            .child(settings_badge("badge-fps", &fps_label).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.toggle_settings_menu(SettingsMenu::Fps, cx);
-                                },
-                            )))
+                            .child(
+                                settings_badge("badge-fps", &fps_label).on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.toggle_settings_menu(SettingsMenu::Fps, cx);
+                                    },
+                                )),
+                            )
                             .child(settings_badge("badge-quality", &quality_label).on_click(
                                 cx.listener(|this, _, _, cx| {
                                     this.toggle_settings_menu(SettingsMenu::Quality, cx);
                                 }),
                             ))
-                            .child(settings_badge("badge-fit", &zoom_label).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.toggle_settings_menu(SettingsMenu::Zoom, cx);
-                                }),
-                            ))
+                            .child(
+                                settings_badge("badge-fit", &zoom_label).on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.toggle_settings_menu(SettingsMenu::Zoom, cx);
+                                    },
+                                )),
+                            )
                             // Guides toggle (Swift: guideMenuButton — shows/hides ViewerGuideMenu)
                             .child(
                                 div()
@@ -1629,11 +1632,18 @@ mod tests {
         st.toggle(ViewerGuide::TitleSafe);
         let rows = guide_menu_rows(&st);
         assert!(
-            rows.iter().find(|r| r.guide == ViewerGuide::TitleSafe).unwrap().checked,
+            rows.iter()
+                .find(|r| r.guide == ViewerGuide::TitleSafe)
+                .unwrap()
+                .checked,
             "toggled guide is checked"
         );
         assert!(
-            !rows.iter().find(|r| r.guide == ViewerGuide::ActionSafe).unwrap().checked,
+            !rows
+                .iter()
+                .find(|r| r.guide == ViewerGuide::ActionSafe)
+                .unwrap()
+                .checked,
             "others stay unchecked"
         );
     }

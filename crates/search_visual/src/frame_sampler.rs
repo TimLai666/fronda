@@ -75,7 +75,11 @@ pub fn luma_grid(luma: &[u8], width: usize, height: usize) -> LumaGrid {
     let mut cells = Vec::with_capacity(64);
     for gy in 0..8 {
         let y0 = gy * height / 8;
-        let y1 = if gy == 7 { height } else { (gy + 1) * height / 8 };
+        let y1 = if gy == 7 {
+            height
+        } else {
+            (gy + 1) * height / 8
+        };
         for gx in 0..8 {
             let x0 = gx * width / 8;
             let x1 = if gx == 7 { width } else { (gx + 1) * width / 8 };
@@ -163,7 +167,7 @@ mod tests {
 
     #[test]
     fn luma_grid_uniform_128_is_half() {
-        let grid = luma_grid(&vec![128u8; 8 * 8], 8, 8);
+        let grid = luma_grid(&[128u8; 8 * 8], 8, 8);
         assert_eq!(grid.cells.len(), 64);
         for c in &grid.cells {
             assert!((c - 0.502).abs() < 0.001, "cell was {c}");
@@ -181,7 +185,7 @@ mod tests {
 
     #[test]
     fn non_divisible_dims_cover_all_pixels() {
-        let grid = luma_grid(&vec![200u8; 10 * 10], 10, 10);
+        let grid = luma_grid(&[200u8; 10 * 10], 10, 10);
         assert_eq!(grid.cells.len(), 64);
         for c in &grid.cells {
             assert!((c - 200.0 / 255.0).abs() < 1e-6);
@@ -190,8 +194,12 @@ mod tests {
 
     #[test]
     fn mismatched_grid_lengths_is_scene_change() {
-        let a = LumaGrid { cells: vec![0.0; 64] };
-        let b = LumaGrid { cells: vec![0.0; 32] };
+        let a = LumaGrid {
+            cells: vec![0.0; 64],
+        };
+        let b = LumaGrid {
+            cells: vec![0.0; 32],
+        };
         assert!(scene_changed(&a, &b, 0.9));
     }
 }

@@ -554,7 +554,11 @@ fn clp_004_move_clips_clamps_primary_to_frame_zero() {
     let mut t = timeline(vec![video_track(vec![c1])]);
     let placed = move_clips(&mut t, &["c1".to_string()], 0, -50);
     assert_eq!(placed.len(), 1);
-    let moved = t.tracks[0].clips.iter().find(|c| c.id == placed[0]).unwrap();
+    let moved = t.tracks[0]
+        .clips
+        .iter()
+        .find(|c| c.id == placed[0])
+        .unwrap();
     assert_eq!(moved.start_frame, 0, "must not be negative");
 }
 
@@ -567,7 +571,11 @@ fn clp_004_move_negative_dest_clears_the_clamped_frame_zero_region() {
     let mut t = timeline(vec![video_track(vec![c1, x1])]);
     let placed = move_clips(&mut t, &["c1".to_string()], 0, -50);
     assert_eq!(placed.len(), 1);
-    let moved = t.tracks[0].clips.iter().find(|c| c.id == placed[0]).unwrap();
+    let moved = t.tracks[0]
+        .clips
+        .iter()
+        .find(|c| c.id == placed[0])
+        .unwrap();
     assert_eq!(moved.start_frame, 0);
     // The pre-existing frame-0 clip was cleared; no overlap remains.
     let mut spans: Vec<(i64, i64)> = t.tracks[0]
@@ -597,7 +605,11 @@ fn clp_004_move_partner_on_primary_track_loses_no_clip() {
         t.tracks[0].clips.len(),
         2,
         "both moved clips must survive: {:?}",
-        t.tracks[0].clips.iter().map(|c| (c.start_frame, c.duration_frames)).collect::<Vec<_>>()
+        t.tracks[0]
+            .clips
+            .iter()
+            .map(|c| (c.start_frame, c.duration_frames))
+            .collect::<Vec<_>>()
     );
 }
 

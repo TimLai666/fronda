@@ -114,22 +114,34 @@ mod tests {
     #[test]
     fn landscape_ratio_fits_short_edge() {
         // 16:9 in a 1920x1080 timeline: short edge 1080 → 1920x1080.
-        assert_eq!(MatteAspect::SixteenNine.pixel_size(1920, 1080), (1920, 1080));
+        assert_eq!(
+            MatteAspect::SixteenNine.pixel_size(1920, 1080),
+            (1920, 1080)
+        );
         // 16:9 in a portrait 1080x1920 timeline: short edge 1080 → still 1920x1080.
-        assert_eq!(MatteAspect::SixteenNine.pixel_size(1080, 1920), (1920, 1080));
+        assert_eq!(
+            MatteAspect::SixteenNine.pixel_size(1080, 1920),
+            (1920, 1080)
+        );
     }
 
     #[test]
     fn portrait_ratio_fits_short_edge() {
         // 9:16 in 1920x1080: short 1080 → 1080x1920.
-        assert_eq!(MatteAspect::NineSixteen.pixel_size(1920, 1080), (1080, 1920));
+        assert_eq!(
+            MatteAspect::NineSixteen.pixel_size(1920, 1080),
+            (1080, 1920)
+        );
     }
 
     #[test]
     fn square_and_others() {
         assert_eq!(MatteAspect::OneOne.pixel_size(1920, 1080), (1080, 1080));
         // 2.4:1 (24:10) landscape: short 1080 → 1080*24/10 = 2592 x 1080.
-        assert_eq!(MatteAspect::TwoPointFourOne.pixel_size(1920, 1080), (2592, 1080));
+        assert_eq!(
+            MatteAspect::TwoPointFourOne.pixel_size(1920, 1080),
+            (2592, 1080)
+        );
     }
 
     #[test]
@@ -137,7 +149,10 @@ mod tests {
         assert_eq!(MatteAspect::parse("Project"), Some(MatteAspect::Project));
         assert_eq!(MatteAspect::parse("project"), Some(MatteAspect::Project));
         assert_eq!(MatteAspect::parse(" 16:9 "), Some(MatteAspect::SixteenNine));
-        assert_eq!(MatteAspect::parse("2.4:1"), Some(MatteAspect::TwoPointFourOne));
+        assert_eq!(
+            MatteAspect::parse("2.4:1"),
+            Some(MatteAspect::TwoPointFourOne)
+        );
         assert_eq!(MatteAspect::parse("nonsense"), None);
         assert_eq!(MatteAspect::parse(""), None);
     }

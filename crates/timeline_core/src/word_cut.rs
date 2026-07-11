@@ -78,7 +78,10 @@ pub fn cut_ranges(
     clip_end: i64,
     keep_gap_frames: i64,
 ) -> Vec<FrameRange> {
-    let words: Vec<&PlannerWord> = words.iter().filter(|w| w.end_frame > w.start_frame).collect();
+    let words: Vec<&PlannerWord> = words
+        .iter()
+        .filter(|w| w.end_frame > w.start_frame)
+        .collect();
     if clip_end <= clip_start || words.is_empty() {
         return Vec::new();
     }
@@ -94,7 +97,11 @@ pub fn cut_ranges(
         while l + 1 < words.len() && words[l + 1].selected {
             l += 1;
         }
-        let left = if k > 0 { words[k - 1].end_frame } else { clip_start };
+        let left = if k > 0 {
+            words[k - 1].end_frame
+        } else {
+            clip_start
+        };
         let right = if l + 1 < words.len() {
             words[l + 1].start_frame
         } else {
@@ -127,8 +134,9 @@ pub fn span_frames(start_sec: f64, end_sec: f64, clip: &Clip, fps: i64) -> Optio
     if e <= s {
         return None;
     }
-    let to_timeline =
-        |source_frame: f64| (clip.start_frame as f64 + (source_frame - vis_start) / speed).round() as i64;
+    let to_timeline = |source_frame: f64| {
+        (clip.start_frame as f64 + (source_frame - vis_start) / speed).round() as i64
+    };
     let a = to_timeline(s);
     Some((a, a.max(to_timeline(e))))
 }
@@ -248,7 +256,9 @@ pub fn plan_word_removal(
     }
 
     if ranges_by_track.is_empty() {
-        return Err("The selected words resolved to no removable frames. Re-read get_transcript.".into());
+        return Err(
+            "The selected words resolved to no removable frames. Re-read get_transcript.".into(),
+        );
     }
 
     let primary_track = if ranges_by_track.len() == 1 {
@@ -330,9 +340,21 @@ mod tests {
     #[test]
     fn cut_overlapping_timestamps() {
         let ws = vec![
-            PlannerWord { start_frame: 0, end_frame: 10, selected: false },
-            PlannerWord { start_frame: 9, end_frame: 20, selected: true },
-            PlannerWord { start_frame: 19, end_frame: 30, selected: false },
+            PlannerWord {
+                start_frame: 0,
+                end_frame: 10,
+                selected: false,
+            },
+            PlannerWord {
+                start_frame: 9,
+                end_frame: 20,
+                selected: true,
+            },
+            PlannerWord {
+                start_frame: 19,
+                end_frame: 30,
+                selected: false,
+            },
         ];
         assert_eq!(
             cut_ranges(&ws, 0, 100, 6),
@@ -344,18 +366,40 @@ mod tests {
     fn cut_ignores_zero_length_words() {
         // A zero-length word is dropped before planning, so a lone zero-length
         // selection yields no removable range (nothing real is selected).
-        let ws = vec![PlannerWord { start_frame: 5, end_frame: 5, selected: true }];
+        let ws = vec![PlannerWord {
+            start_frame: 5,
+            end_frame: 5,
+            selected: true,
+        }];
         assert!(cut_ranges(&ws, 0, 100, 0).is_empty());
         // With a real neighbour, the dropped zero-length word doesn't shift the cut:
         // [word0 kept][word1 zero-len selected, dropped][word2 selected] → only word2 cut.
         let ws2 = vec![
-            PlannerWord { start_frame: 0, end_frame: 10, selected: false },
-            PlannerWord { start_frame: 12, end_frame: 12, selected: true }, // dropped
-            PlannerWord { start_frame: 20, end_frame: 30, selected: true },
+            PlannerWord {
+                start_frame: 0,
+                end_frame: 10,
+                selected: false,
+            },
+            PlannerWord {
+                start_frame: 12,
+                end_frame: 12,
+                selected: true,
+            }, // dropped
+            PlannerWord {
+                start_frame: 20,
+                end_frame: 30,
+                selected: true,
+            },
         ];
         // filtered: [(0,10,false),(20,30,true)]; lone selected survivor with no right
         // neighbour extends to clip_end. left=10, half=0 → start=10; end=100.
-        assert_eq!(cut_ranges(&ws2, 0, 100, 0), vec![FrameRange { start: 10, end: 100 }]);
+        assert_eq!(
+            cut_ranges(&ws2, 0, 100, 0),
+            vec![FrameRange {
+                start: 10,
+                end: 100
+            }]
+        );
     }
 
     #[test]
@@ -378,7 +422,10 @@ mod tests {
         assert_eq!(CutAggressiveness::Tight.kept_gap_ms(), 60.0);
         assert_eq!(CutAggressiveness::Balanced.kept_gap_ms(), 150.0);
         assert_eq!(CutAggressiveness::Loose.kept_gap_ms(), 320.0);
-        assert_eq!(CutAggressiveness::from_raw("loose"), Some(CutAggressiveness::Loose));
+        assert_eq!(
+            CutAggressiveness::from_raw("loose"),
+            Some(CutAggressiveness::Loose)
+        );
         assert_eq!(CutAggressiveness::from_raw("nope"), None);
     }
 
@@ -507,7 +554,10 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!((all[0].index, all[0].start_frame), (0, 30));
         assert_eq!(all[0].clip_id, "c");
-        assert_eq!((all[1].index, all[1].start_frame, all[1].end_frame), (1, 90, 105));
+        assert_eq!(
+            (all[1].index, all[1].start_frame, all[1].end_frame),
+            (1, 90, 105)
+        );
         assert_eq!(all[1].clip_id, "b");
     }
 

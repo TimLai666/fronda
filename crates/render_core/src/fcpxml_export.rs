@@ -119,9 +119,7 @@ impl FcpxmlExport {
                         continue;
                     }
                     if let Some(child) = timelines.get(&clip.media_ref) {
-                        if timeline_total_frames(child) > 0
-                            && !nest_index.contains_key(&child.id)
-                        {
+                        if timeline_total_frames(child) > 0 && !nest_index.contains_key(&child.id) {
                             let media_id = format!("nest{}", nests.len() + 1);
                             nest_index.insert(child.id.clone(), media_id.clone());
                             nests.push((media_id, child.clone()));
@@ -138,36 +136,34 @@ impl FcpxmlExport {
             .collect();
         for t in &all_timelines {
             for track in &t.tracks {
-            for clip in &track.clips {
-                if clip.media_ref.is_empty()
-                    || clip.media_type == ClipType::Text
-                    || clip.media_type == ClipType::Shape
-                    || clip.source_clip_type == ClipType::Sequence
-                {
-                    continue;
-                }
-                if asset_ids.contains_key(&clip.media_ref) {
-                    continue;
-                }
-                let entry = manifest.entry_for(&clip.media_ref);
-                let media_type = entry
-                    .map(|e| e.r#type.clone())
-                    .unwrap_or_else(|| clip.media_type.clone());
-                let has_video = media_type != ClipType::Audio;
-                let has_dims = entry.and_then(|e| e.source_width).is_some()
-                    && entry.and_then(|e| e.source_height).is_some();
-                let format_id = if has_video && has_dims {
-                    let fid = format!("r{counter}");
+                for clip in &track.clips {
+                    if clip.media_ref.is_empty()
+                        || clip.media_type == ClipType::Text
+                        || clip.media_type == ClipType::Shape
+                        || clip.source_clip_type == ClipType::Sequence
+                    {
+                        continue;
+                    }
+                    if asset_ids.contains_key(&clip.media_ref) {
+                        continue;
+                    }
+                    let entry = manifest.entry_for(&clip.media_ref);
+                    let media_type = entry.map(|e| e.r#type).unwrap_or_else(|| clip.media_type);
+                    let has_video = media_type != ClipType::Audio;
+                    let has_dims = entry.and_then(|e| e.source_width).is_some()
+                        && entry.and_then(|e| e.source_height).is_some();
+                    let format_id = if has_video && has_dims {
+                        let fid = format!("r{counter}");
+                        counter += 1;
+                        Some(fid)
+                    } else {
+                        None
+                    };
+                    let asset_id = format!("r{counter}");
                     counter += 1;
-                    Some(fid)
-                } else {
-                    None
-                };
-                let asset_id = format!("r{counter}");
-                counter += 1;
-                asset_ids.insert(clip.media_ref.clone(), asset_id.clone());
-                resources.push((clip.media_ref.clone(), asset_id, format_id));
-            }
+                    asset_ids.insert(clip.media_ref.clone(), asset_id.clone());
+                    resources.push((clip.media_ref.clone(), asset_id, format_id));
+                }
             }
         }
 
@@ -211,7 +207,14 @@ impl FcpxmlExport {
                 )
                 .ok();
             }
-            write_asset(&mut xml, asset_id, format_id.as_deref(), media_ref, manifest, fps);
+            write_asset(
+                &mut xml,
+                asset_id,
+                format_id.as_deref(),
+                media_ref,
+                manifest,
+                fps,
+            );
         }
         // Title generator effect, emitted once when the timeline has any text overlay (#254).
         let has_titles = all_timelines
@@ -298,12 +301,7 @@ impl FcpxmlExport {
         } else {
             timeline.name.as_str()
         };
-        writeln!(
-            xml,
-            "      <project name=\"{}\">",
-            xml_escape(project_name)
-        )
-        .ok();
+        writeln!(xml, "      <project name=\"{}\">", xml_escape(project_name)).ok();
         writeln!(
             xml,
             "        <sequence format=\"r1\" duration=\"{}\" tcStart=\"0s\" tcFormat=\"NDF\">",
@@ -378,135 +376,134 @@ fn write_story_clips(
             lane_of_track.push(num_video - video_seen + 1);
         }
     }
-        // A synced A/V pair (same source, timing, trim, speed) collapses into the
-        // single video asset-clip — the asset already carries audio — so the audio
-        // partner is dropped (upstream #206/#254).
-        let (redundant_audio, collapsed_audio_vol) = redundant_audio_clip_ids(timeline);
+    // A synced A/V pair (same source, timing, trim, speed) collapses into the
+    // single video asset-clip — the asset already carries audio — so the audio
+    // partner is dropped (upstream #206/#254).
+    let (redundant_audio, collapsed_audio_vol) = redundant_audio_clip_ids(timeline);
 
-                for (ti, track) in timeline.tracks.iter().enumerate() {
-            let lane = lane_of_track[ti];
-            // A hidden video track / muted audio track exports its clips disabled.
-            let track_disabled = if track.r#type == ClipType::Audio {
-                track.muted
-            } else {
-                track.hidden
-            };
-            for clip in &track.clips {
-                // Text overlays become <title> generators; they have no backing asset.
-                if clip.media_type == ClipType::Text {
-                    if let Some(content) = clip.text_content.as_ref().filter(|c| !c.is_empty()) {
-                        write_title(
-                            xml,
-                            clip,
-                            content,
-                            lane,
-                            fps,
-                            seq_w,
-                            seq_h,
-                            track_disabled,
-                            title_style_id,
-                        );
-                    }
-                    continue;
-                }
-                // Nested-timeline carrier -> <ref-clip> over its compound resource.
-                if clip.source_clip_type == ClipType::Sequence {
-                    if redundant_audio.contains(&clip.id) {
-                        continue;
-                    }
-                    write_ref_clip(
+    for (ti, track) in timeline.tracks.iter().enumerate() {
+        let lane = lane_of_track[ti];
+        // A hidden video track / muted audio track exports its clips disabled.
+        let track_disabled = if track.r#type == ClipType::Audio {
+            track.muted
+        } else {
+            track.hidden
+        };
+        for clip in &track.clips {
+            // Text overlays become <title> generators; they have no backing asset.
+            if clip.media_type == ClipType::Text {
+                if let Some(content) = clip.text_content.as_ref().filter(|c| !c.is_empty()) {
+                    write_title(
                         xml,
                         clip,
+                        content,
                         lane,
                         fps,
                         seq_w,
                         seq_h,
-                        manifest,
-                        nest_index,
-                        nest_names,
                         track_disabled,
-                        collapsed_audio_vol.get(&clip.id).copied(),
-                        target,
+                        title_style_id,
                     );
+                }
+                continue;
+            }
+            // Nested-timeline carrier -> <ref-clip> over its compound resource.
+            if clip.source_clip_type == ClipType::Sequence {
+                if redundant_audio.contains(&clip.id) {
                     continue;
                 }
-                if clip.media_ref.is_empty()
-                    || clip.media_type == ClipType::Shape
-                    || redundant_audio.contains(&clip.id)
-                {
-                    continue;
-                }
-                let Some(ref_id) = asset_ids.get(&clip.media_ref) else {
-                    continue;
-                };
-                // Reference the clip's OWN format: an audio-only asset-clip inherits
-                // from its (video-format-less) asset — omit `format`; a video clip
-                // uses its per-asset format, falling back to the sequence format r1
-                // only when it has no dimensions. Hardcoding r1 mislabels a clip's
-                // native size/rate and points audio clips at a video format.
-                let is_audio = manifest
+                write_ref_clip(
+                    xml,
+                    clip,
+                    lane,
+                    fps,
+                    seq_w,
+                    seq_h,
+                    manifest,
+                    nest_index,
+                    nest_names,
+                    track_disabled,
+                    collapsed_audio_vol.get(&clip.id).copied(),
+                    target,
+                );
+                continue;
+            }
+            if clip.media_ref.is_empty()
+                || clip.media_type == ClipType::Shape
+                || redundant_audio.contains(&clip.id)
+            {
+                continue;
+            }
+            let Some(ref_id) = asset_ids.get(&clip.media_ref) else {
+                continue;
+            };
+            // Reference the clip's OWN format: an audio-only asset-clip inherits
+            // from its (video-format-less) asset — omit `format`; a video clip
+            // uses its per-asset format, falling back to the sequence format r1
+            // only when it has no dimensions. Hardcoding r1 mislabels a clip's
+            // native size/rate and points audio clips at a video format.
+            let is_audio = manifest
+                .entry_for(&clip.media_ref)
+                .map(|e| e.r#type == ClipType::Audio)
+                .unwrap_or(clip.media_type == ClipType::Audio);
+            let format_attr = if is_audio {
+                String::new()
+            } else {
+                let fid = format_by_ref
+                    .get(&clip.media_ref)
+                    .and_then(|o| o.as_deref())
+                    .unwrap_or("r1");
+                format!(" format=\"{fid}\"")
+            };
+            let origin = start_timecode_frames(manifest.entry_for(&clip.media_ref), fps);
+            // A hidden video track / muted audio track exports its clips disabled, so the
+            // export mirrors what's actually visible/audible (Swift emits `enabled`).
+            let enabled_attr = if track_disabled { " enabled=\"0\"" } else { "" };
+            // #197: a retimed clip (speed != 1) carries a <timeMap> and its in-point is on the
+            // retimed axis (trim/speed); a 1x clip's in-point is the source origin + trim (#247).
+            let retimed = (clip.speed - 1.0).abs() > 0.001;
+            let start_str = if retimed {
+                let (p, q) = rational_speed(clip.speed);
+                rational_time(clip.trim_start_frame.max(0) * q, fps * p)
+            } else {
+                time_str(origin + clip.trim_start_frame.max(0), fps)
+            };
+            let time_map = if retimed {
+                let media_frames = manifest
                     .entry_for(&clip.media_ref)
-                    .map(|e| e.r#type == ClipType::Audio)
-                    .unwrap_or(clip.media_type == ClipType::Audio);
-                let format_attr = if is_audio {
-                    String::new()
-                } else {
-                    let fid = format_by_ref
-                        .get(&clip.media_ref)
-                        .and_then(|o| o.as_deref())
-                        .unwrap_or("r1");
-                    format!(" format=\"{fid}\"")
-                };
-                let origin = start_timecode_frames(manifest.entry_for(&clip.media_ref), fps);
-                // A hidden video track / muted audio track exports its clips disabled, so the
-                // export mirrors what's actually visible/audible (Swift emits `enabled`).
-                let enabled_attr = if track_disabled { " enabled=\"0\"" } else { "" };
-                // #197: a retimed clip (speed != 1) carries a <timeMap> and its in-point is on the
-                // retimed axis (trim/speed); a 1x clip's in-point is the source origin + trim (#247).
-                let retimed = (clip.speed - 1.0).abs() > 0.001;
-                let start_str = if retimed {
-                    let (p, q) = rational_speed(clip.speed);
-                    rational_time(clip.trim_start_frame.max(0) * q, fps * p)
-                } else {
-                    time_str(origin + clip.trim_start_frame.max(0), fps)
-                };
-                let time_map = if retimed {
-                    let media_frames = manifest
-                        .entry_for(&clip.media_ref)
-                        .map(|e| (e.duration * fps as f64).round() as i64)
-                        .unwrap_or(0);
-                    build_time_map(clip.speed, origin, media_frames, fps)
-                } else {
-                    String::new()
-                };
-                let open = format!(
+                    .map(|e| (e.duration * fps as f64).round() as i64)
+                    .unwrap_or(0);
+                build_time_map(clip.speed, origin, media_frames, fps)
+            } else {
+                String::new()
+            };
+            let open = format!(
                     "              <asset-clip ref=\"{ref_id}\" lane=\"{lane}\" offset=\"{}\" name=\"{}\" duration=\"{}\" start=\"{start_str}\"{format_attr}{enabled_attr}",
                     time_str(clip.start_frame, fps),
                     xml_escape(&file_name(manifest, &clip.media_ref)),
                     time_str(clip.duration_frames.max(1), fps),
                 );
-                // Children in Swift's order: timeMap, then crop/conform/transform/blend/volume.
-                let mut children = time_map;
-                children.push_str(&clip_adjustments(
-                    clip,
-                    manifest,
-                    is_audio,
-                    seq_w,
-                    seq_h,
-                    fps,
-                    collapsed_audio_vol.get(&clip.id).copied(),
-                    target,
-                ));
-                if children.is_empty() {
-                    writeln!(xml, "{open}/>").ok();
-                } else {
-                    writeln!(xml, "{open}>").ok();
-                    xml.push_str(&children);
-                    writeln!(xml, "              </asset-clip>").ok();
-                }
+            // Children in Swift's order: timeMap, then crop/conform/transform/blend/volume.
+            let mut children = time_map;
+            children.push_str(&clip_adjustments(
+                clip,
+                manifest,
+                is_audio,
+                seq_w,
+                seq_h,
+                fps,
+                collapsed_audio_vol.get(&clip.id).copied(),
+                target,
+            ));
+            if children.is_empty() {
+                writeln!(xml, "{open}/>").ok();
+            } else {
+                writeln!(xml, "{open}>").ok();
+                xml.push_str(&children);
+                writeln!(xml, "              </asset-clip>").ok();
             }
         }
-
+    }
 }
 
 /// child timeline id -> child display name, for ref-clip naming.
@@ -540,10 +537,7 @@ fn write_ref_clip(
     let Some(media_id) = nest_index.get(&clip.media_ref) else {
         return; // unresolved/empty child exports nothing
     };
-    let name = nest_names
-        .get(&clip.media_ref)
-        .cloned()
-        .unwrap_or_default();
+    let name = nest_names.get(&clip.media_ref).cloned().unwrap_or_default();
     let is_audio = clip.media_type == ClipType::Audio;
     let enabled_attr = if track_disabled { " enabled=\"0\"" } else { "" };
     // srcEnable: audio carriers take only the child's audio; a video carrier
@@ -730,9 +724,18 @@ fn clip_adjustments(
         let moved = (t.center_x - 0.5).abs() > 0.0005 || (t.center_y - 0.5).abs() > 0.0005;
         let rotated = t.rotation.abs() > 0.005;
         let scaled = base != "1 1";
-        let has_scale_kf = clip.scale_track.as_ref().is_some_and(|k| !k.keyframes.is_empty());
-        let has_pos_kf = clip.position_track.as_ref().is_some_and(|k| !k.keyframes.is_empty());
-        let has_rot_kf = clip.rotation_track.as_ref().is_some_and(|k| !k.keyframes.is_empty());
+        let has_scale_kf = clip
+            .scale_track
+            .as_ref()
+            .is_some_and(|k| !k.keyframes.is_empty());
+        let has_pos_kf = clip
+            .position_track
+            .as_ref()
+            .is_some_and(|k| !k.keyframes.is_empty());
+        let has_rot_kf = clip
+            .rotation_track
+            .as_ref()
+            .is_some_and(|k| !k.keyframes.is_empty());
         let has_transform_kf = has_scale_kf || has_pos_kf || has_rot_kf;
         let transform_needed = moved || rotated || scaled || has_transform_kf;
         let crop_needed = !clip.crop.is_identity();
@@ -1032,7 +1035,10 @@ fn write_kf_param(
     base: &str,
     rows: &[(String, core_model::Interpolation, String)],
 ) {
-    let _ = writeln!(out, "                  <param name=\"{name}\" value=\"{base}\">");
+    let _ = writeln!(
+        out,
+        "                  <param name=\"{name}\" value=\"{base}\">"
+    );
     let _ = writeln!(out, "                    <keyframeAnimation>");
     for (time, interp, value) in rows {
         let curve = if *interp == core_model::Interpolation::Linear {
@@ -1200,7 +1206,10 @@ fn file_name(manifest: &MediaManifest, media_ref: &str) -> String {
             MediaSource::Project { relative_path } => relative_path.as_str(),
         };
         let name = path.replace('\\', "/");
-        name.rsplit('/').next().filter(|s| !s.is_empty()).map(String::from)
+        name.rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .map(String::from)
     });
     from_source.unwrap_or_else(|| display_name(manifest, media_ref))
 }
@@ -1300,7 +1309,7 @@ mod tests {
         Clip {
             id: id.to_string(),
             media_ref: media_ref.to_string(),
-            media_type: kind.clone(),
+            media_type: kind,
             source_clip_type: kind,
             start_frame: start,
             duration_frames: dur,
@@ -1337,7 +1346,13 @@ mod tests {
         }
     }
 
-    fn entry(id: &str, name: &str, kind: ClipType, duration: f64, path: &str) -> MediaManifestEntry {
+    fn entry(
+        id: &str,
+        name: &str,
+        kind: ClipType,
+        duration: f64,
+        path: &str,
+    ) -> MediaManifestEntry {
         MediaManifestEntry {
             id: id.to_string(),
             name: name.to_string(),
@@ -1394,15 +1409,29 @@ mod tests {
 
     fn sample() -> (Timeline, MediaManifest) {
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
-        manifest
-            .entries
-            .push(entry("a1", "music.wav", ClipType::Audio, 20.0, "/media/music.wav"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
+        manifest.entries.push(entry(
+            "a1",
+            "music.wav",
+            ClipType::Audio,
+            20.0,
+            "/media/music.wav",
+        ));
         let tl = timeline(vec![
-            track(ClipType::Video, vec![clip("c1", "v1", ClipType::Video, 0, 60)]),
-            track(ClipType::Audio, vec![clip("c2", "a1", ClipType::Audio, 0, 120)]),
+            track(
+                ClipType::Video,
+                vec![clip("c1", "v1", ClipType::Video, 0, 60)],
+            ),
+            track(
+                ClipType::Audio,
+                vec![clip("c2", "a1", ClipType::Audio, 0, 120)],
+            ),
         ]);
         (tl, manifest)
     }
@@ -1423,9 +1452,13 @@ mod tests {
         let timelines = std::collections::HashMap::from([("n1".to_string(), nested)]);
 
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
 
         let xml = FcpxmlExport::export_with_target_and_timelines(
             &tl,
@@ -1486,7 +1519,10 @@ mod tests {
             &timelines,
         );
         assert!(xml.contains("<media id=\"nest1\""), "middle nest: {xml}");
-        assert!(xml.contains("<media id=\"nest2\""), "grandchild nest via recursion");
+        assert!(
+            xml.contains("<media id=\"nest2\""),
+            "grandchild nest via recursion"
+        );
         assert!(
             xml.contains("srcEnable=\"audio\""),
             "audio carrier restricts to audio: {xml}"
@@ -1509,7 +1545,10 @@ mod tests {
         // just the clip's trim (no origin offset).
         let (tl, m) = sample();
         let xml = FcpxmlExport::export(&tl, &m);
-        assert!(xml.contains("<asset id=\"r3\" name=\"shot.mp4\" start=\"0s\""), "{xml}");
+        assert!(
+            xml.contains("<asset id=\"r3\" name=\"shot.mp4\" start=\"0s\""),
+            "{xml}"
+        );
     }
 
     #[test]
@@ -1543,16 +1582,23 @@ mod tests {
         let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
         c.opacity = 0.5;
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
         assert!(
             xml.contains("<adjust-blend amount=\"0.5\"/>"),
             "opacity → adjust-blend\n{xml}"
         );
-        assert!(xml.contains("</asset-clip>"), "open/close form when adjusted");
+        assert!(
+            xml.contains("</asset-clip>"),
+            "open/close form when adjusted"
+        );
     }
 
     #[test]
@@ -1561,9 +1607,13 @@ mod tests {
         let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
         c.volume = 0.5;
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
         assert!(
@@ -1578,16 +1628,25 @@ mod tests {
         // visual clip) — no blend/volume/transform/crop. Audio stays self-closing.
         let (tl, m) = sample();
         let xml = FcpxmlExport::export(&tl, &m);
-        assert!(xml.contains("<adjust-conform type=\"fit\"/>"), "conform for visual\n{xml}");
+        assert!(
+            xml.contains("<adjust-conform type=\"fit\"/>"),
+            "conform for visual\n{xml}"
+        );
         assert!(!xml.contains("<adjust-blend"), "no opacity for default");
-        assert!(!xml.contains("<adjust-transform"), "no transform for default same-res");
+        assert!(
+            !xml.contains("<adjust-transform"),
+            "no transform for default same-res"
+        );
         assert!(!xml.contains("<adjust-crop"), "no crop for default");
         // Audio clip (r4) has no conform and stays self-closing.
         let audio_line = xml
             .lines()
             .find(|l| l.contains("<asset-clip") && l.contains("ref=\"r4\""))
             .expect("audio asset-clip");
-        assert!(audio_line.trim_end().ends_with("/>"), "audio self-closing: {audio_line}");
+        assert!(
+            audio_line.trim_end().ends_with("/>"),
+            "audio self-closing: {audio_line}"
+        );
     }
 
     #[test]
@@ -1610,8 +1669,16 @@ mod tests {
         vid.crop.top = 0.1;
         vid.opacity_track = Some(core_model::KeyframeTrack {
             keyframes: vec![
-                core_model::Keyframe { frame: 0, value: 0.0, interpolation_out: core_model::Interpolation::Linear },
-                core_model::Keyframe { frame: 30, value: 1.0, interpolation_out: core_model::Interpolation::Linear },
+                core_model::Keyframe {
+                    frame: 0,
+                    value: 0.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
+                core_model::Keyframe {
+                    frame: 30,
+                    value: 1.0,
+                    interpolation_out: core_model::Interpolation::Linear,
+                },
             ],
         });
         let mut slow = clip("slow-clip", "v2", ClipType::Video, 60, 30);
@@ -1623,10 +1690,19 @@ mod tests {
         txt.text_content = Some("Title".to_string());
 
         let mut manifest = MediaManifest::default();
-        manifest.entries.push(entry("v1", "a.mp4", ClipType::Video, 10.0, "/m/a.mp4"));
-        manifest.entries.push(entry("v2", "b.mp4", ClipType::Video, 10.0, "/m/b.mp4"));
-        manifest.entries.push(entry("a1", "c.wav", ClipType::Audio, 10.0, "/m/c.wav"));
-        let mut hidden = track(ClipType::Video, vec![clip("h-clip", "v1", ClipType::Video, 0, 30)]);
+        manifest
+            .entries
+            .push(entry("v1", "a.mp4", ClipType::Video, 10.0, "/m/a.mp4"));
+        manifest
+            .entries
+            .push(entry("v2", "b.mp4", ClipType::Video, 10.0, "/m/b.mp4"));
+        manifest
+            .entries
+            .push(entry("a1", "c.wav", ClipType::Audio, 10.0, "/m/c.wav"));
+        let mut hidden = track(
+            ClipType::Video,
+            vec![clip("h-clip", "v1", ClipType::Video, 0, 30)],
+        );
         hidden.hidden = true;
         let tl = timeline(vec![
             track(ClipType::Video, vec![vid, slow, txt]),
@@ -1640,13 +1716,33 @@ mod tests {
         assert!(xml.trim_end().ends_with("</fcpxml>"));
         // Every always-paired container tag is balanced (these never self-close). Tags that CAN
         // self-close (asset-clip, adjust-transform, adjust-blend) are checked for presence below.
-        for tag in ["fcpxml", "resources", "library", "event", "project", "sequence", "spine", "gap", "title", "timeMap", "adjust-crop", "keyframeAnimation"] {
-            let open = xml.matches(&format!("<{tag} ")).count() + xml.matches(&format!("<{tag}>")).count();
+        for tag in [
+            "fcpxml",
+            "resources",
+            "library",
+            "event",
+            "project",
+            "sequence",
+            "spine",
+            "gap",
+            "title",
+            "timeMap",
+            "adjust-crop",
+            "keyframeAnimation",
+        ] {
+            let open =
+                xml.matches(&format!("<{tag} ")).count() + xml.matches(&format!("<{tag}>")).count();
             let close = xml.matches(&format!("</{tag}>")).count();
-            assert_eq!(open, close, "tag <{tag}> is unbalanced: {open} open vs {close} close");
+            assert_eq!(
+                open, close,
+                "tag <{tag}> is unbalanced: {open} open vs {close} close"
+            );
         }
         // Each feature is present.
-        assert!(xml.contains("<effect id=\"titleBasic\""), "title effect resource");
+        assert!(
+            xml.contains("<effect id=\"titleBasic\""),
+            "title effect resource"
+        );
         assert!(xml.contains("<title "), "title node");
         assert!(xml.contains("<timeMap "), "retimed clip timeMap");
         assert!(xml.contains("<adjust-crop "), "crop");
@@ -1674,7 +1770,10 @@ mod tests {
         let resolve = FcpxmlExport::export(&tl, &manifest);
         let fcp = FcpxmlExport::export_with_target(&tl, &manifest, FcpxmlTarget::Fcp);
         // Resolve fit=(0.5625,1) → scale (0.5/0.5625, 0.5) = 0.8889 0.5; FCP fit=(1,1) → 0.5 0.5.
-        assert!(resolve.contains("scale=\"0.8889 0.5\""), "resolve scale\n{resolve}");
+        assert!(
+            resolve.contains("scale=\"0.8889 0.5\""),
+            "resolve scale\n{resolve}"
+        );
         assert!(fcp.contains("scale=\"0.5 0.5\""), "fcp scale\n{fcp}");
         // Resolve crop tb = 100/min(1920/1080,1080/1080)=100 → top 20; FCP also 100 here (square).
         // Use a 4K source to separate them:
@@ -1687,7 +1786,10 @@ mod tests {
         m2.entries.push(e2);
         let tl2 = timeline(vec![track(ClipType::Video, vec![c2])]);
         // Resolve tb = 100/min(1920/3840,1080/2160) = 100/0.5 = 200 → top 40; FCP → 20.
-        assert!(FcpxmlExport::export(&tl2, &m2).contains("top=\"40\""), "resolve crop");
+        assert!(
+            FcpxmlExport::export(&tl2, &m2).contains("top=\"40\""),
+            "resolve crop"
+        );
         assert!(
             FcpxmlExport::export_with_target(&tl2, &m2, FcpxmlTarget::Fcp).contains("top=\"20\""),
             "fcp crop"
@@ -1711,12 +1813,19 @@ mod tests {
         let mut c = clip("c1", "v1", ClipType::Video, 0, 30);
         c.speed = 2.0;
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("<timeMap frameSampling=\"floor\">"), "timeMap\n{xml}");
+        assert!(
+            xml.contains("<timeMap frameSampling=\"floor\">"),
+            "timeMap\n{xml}"
+        );
         assert!(
             xml.contains("<timept time=\"0s\" value=\"0s\" interp=\"linear\"/>"),
             "timept 0\n{xml}"
@@ -1730,7 +1839,10 @@ mod tests {
     #[test]
     fn fcpxml_1x_clip_has_no_timemap() {
         let (tl, m) = sample();
-        assert!(!FcpxmlExport::export(&tl, &m).contains("<timeMap"), "1x → no timeMap");
+        assert!(
+            !FcpxmlExport::export(&tl, &m).contains("<timeMap"),
+            "1x → no timeMap"
+        );
     }
 
     #[test]
@@ -1754,9 +1866,13 @@ mod tests {
             ],
         });
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
         assert!(
@@ -1772,9 +1888,13 @@ mod tests {
         c.speed = 2.0;
         c.trim_start_frame = 15;
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
         assert!(xml.contains("start=\"1/4s\""), "retimed in-point\n{xml}");
@@ -1791,14 +1911,23 @@ mod tests {
         c.transform.width = 0.5;
         c.transform.height = 0.5;
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("<adjust-conform type=\"fit\"/>"), "conform\n{xml}");
         assert!(
-            xml.contains("<adjust-transform scale=\"0.5 0.5\" anchor=\"0 0\" position=\"-44.4444 25\"/>"),
+            xml.contains("<adjust-conform type=\"fit\"/>"),
+            "conform\n{xml}"
+        );
+        assert!(
+            xml.contains(
+                "<adjust-transform scale=\"0.5 0.5\" anchor=\"0 0\" position=\"-44.4444 25\"/>"
+            ),
             "PIP transform\n{xml}"
         );
     }
@@ -1808,12 +1937,19 @@ mod tests {
         let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
         c.transform.rotation = 90.0;
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("rotation=\"-90\""), "FCP rotation negated\n{xml}");
+        assert!(
+            xml.contains("rotation=\"-90\""),
+            "FCP rotation negated\n{xml}"
+        );
     }
 
     #[test]
@@ -1823,9 +1959,13 @@ mod tests {
         let mut c = clip("c1", "v1", ClipType::Video, 0, 60);
         c.crop.top = 0.1;
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
         assert!(xml.contains("<adjust-crop mode=\"trim\">"), "crop\n{xml}");
@@ -1833,7 +1973,10 @@ mod tests {
             xml.contains("<trim-rect top=\"10\" right=\"0\" bottom=\"0\" left=\"0\"/>"),
             "trim-rect\n{xml}"
         );
-        assert!(xml.contains("<adjust-conform type=\"fit\"/>"), "crop also emits conform");
+        assert!(
+            xml.contains("<adjust-conform type=\"fit\"/>"),
+            "crop also emits conform"
+        );
     }
 
     #[test]
@@ -1843,12 +1986,19 @@ mod tests {
         c.transform.height = 0.5;
         c.transform.flip_horizontal = true;
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("scale=\"-0.5 0.5\""), "h-flip negates sx\n{xml}");
+        assert!(
+            xml.contains("scale=\"-0.5 0.5\""),
+            "h-flip negates sx\n{xml}"
+        );
     }
 
     #[test]
@@ -1871,12 +2021,19 @@ mod tests {
             ],
         });
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("<param name=\"amount\" value=\"1\">"), "param\n{xml}");
+        assert!(
+            xml.contains("<param name=\"amount\" value=\"1\">"),
+            "param\n{xml}"
+        );
         assert!(xml.contains("<keyframeAnimation>"), "keyframeAnimation");
         assert!(
             xml.contains("<keyframe time=\"0s\" curve=\"linear\" value=\"1\"/>"),
@@ -1912,16 +2069,23 @@ mod tests {
             ],
         });
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
         assert!(
             xml.contains("<adjust-transform scale=\"0.5 0.5\" anchor=\"0 0\" position=\"0 0\">"),
             "transform open tag\n{xml}"
         );
-        assert!(xml.contains("<param name=\"position\" value=\"0 0\">"), "position param\n{xml}");
+        assert!(
+            xml.contains("<param name=\"position\" value=\"0 0\">"),
+            "position param\n{xml}"
+        );
         assert!(
             xml.contains("<keyframe time=\"0s\" curve=\"linear\" value=\"-44.4444 25\"/>"),
             "frame 0 centre\n{xml}"
@@ -1957,7 +2121,10 @@ mod tests {
         let manifest = MediaManifest::default();
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("<effect id=\"titleBasic\""), "title effect resource\n{xml}");
+        assert!(
+            xml.contains("<effect id=\"titleBasic\""),
+            "title effect resource\n{xml}"
+        );
         assert!(
             xml.contains("<title ref=\"titleBasic\" name=\"Hello World\""),
             "title node\n{xml}"
@@ -1984,9 +2151,13 @@ mod tests {
         a.link_group_id = Some("g1".into());
         a.volume = 0.5;
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("m1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "m1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![
             track(ClipType::Video, vec![v]),
             track(ClipType::Audio, vec![a]),
@@ -2052,7 +2223,10 @@ mod tests {
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &MediaManifest::default());
         assert!(xml.contains("<title "), "title emitted\n{xml}");
-        assert!(xml.contains("<param name=\"amount\""), "keyframed opacity param\n{xml}");
+        assert!(
+            xml.contains("<param name=\"amount\""),
+            "keyframed opacity param\n{xml}"
+        );
         assert!(
             xml.contains("<keyframe time=\"0s\" curve=\"linear\" value=\"0\"/>"),
             "kf 0\n{xml}"
@@ -2072,7 +2246,12 @@ mod tests {
             font_size: 50.0,
             border: core_model::TextFill {
                 enabled: true,
-                color: core_model::TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+                color: core_model::TextRgba {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
                 padding: None,
                 corner_radius: None,
             },
@@ -2107,29 +2286,52 @@ mod tests {
             ],
         });
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("<keyframe time=\"0s\""), "clip-relative start\n{xml}");
-        assert!(xml.contains("<keyframe time=\"30/30s\""), "clip-relative end\n{xml}");
+        assert!(
+            xml.contains("<keyframe time=\"0s\""),
+            "clip-relative start\n{xml}"
+        );
+        assert!(
+            xml.contains("<keyframe time=\"30/30s\""),
+            "clip-relative end\n{xml}"
+        );
         assert!(!xml.contains("time=\"100/30s\""), "not absolute");
         // The asset-clip offset IS absolute (timeline position 100).
-        assert!(xml.contains("offset=\"100/30s\""), "clip offset is absolute\n{xml}");
+        assert!(
+            xml.contains("offset=\"100/30s\""),
+            "clip offset is absolute\n{xml}"
+        );
     }
 
     #[test]
     fn fcpxml_hidden_track_clip_is_disabled() {
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
-        let mut t = track(ClipType::Video, vec![clip("c1", "v1", ClipType::Video, 0, 60)]);
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
+        let mut t = track(
+            ClipType::Video,
+            vec![clip("c1", "v1", ClipType::Video, 0, 60)],
+        );
         t.hidden = true;
         let tl = timeline(vec![t]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("enabled=\"0\""), "hidden track → disabled\n{xml}");
+        assert!(
+            xml.contains("enabled=\"0\""),
+            "hidden track → disabled\n{xml}"
+        );
         // A visible track carries no enabled attribute (FCP defaults to enabled).
         let (vis_tl, vis_m) = sample();
         assert!(
@@ -2142,7 +2344,13 @@ mod tests {
     fn fcpxml_name_uses_on_disk_filename_for_relink() {
         // #247 relink: even when the asset's display name is a user label, the `name` attribute
         // is the on-disk filename (with extension) so Resolve can relink.
-        let mut e = entry("v1", "My Interview", ClipType::Video, 10.0, "/media/C0012.MP4");
+        let mut e = entry(
+            "v1",
+            "My Interview",
+            ClipType::Video,
+            10.0,
+            "/media/C0012.MP4",
+        );
         e.name = "My Interview".to_string();
         let mut manifest = MediaManifest::default();
         manifest.entries.push(e);
@@ -2151,12 +2359,18 @@ mod tests {
             vec![clip("c1", "v1", ClipType::Video, 0, 60)],
         )]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("<asset id=\"r3\" name=\"C0012.MP4\""), "asset name = filename\n{xml}");
+        assert!(
+            xml.contains("<asset id=\"r3\" name=\"C0012.MP4\""),
+            "asset name = filename\n{xml}"
+        );
         assert!(
             xml.contains("<asset-clip ref=\"r3\"") && xml.contains("name=\"C0012.MP4\""),
             "asset-clip name = filename\n{xml}"
         );
-        assert!(!xml.contains("My Interview"), "display label not used for name\n{xml}");
+        assert!(
+            !xml.contains("My Interview"),
+            "display label not used for name\n{xml}"
+        );
     }
 
     #[test]
@@ -2173,7 +2387,10 @@ mod tests {
             vec![clip("c1", "v1", ClipType::Video, 0, 60)],
         )]);
         let xml = FcpxmlExport::export(&tl, &manifest);
-        assert!(xml.contains("start=\"60/30s\""), "quanta rescaled to fps\n{xml}");
+        assert!(
+            xml.contains("start=\"60/30s\""),
+            "quanta rescaled to fps\n{xml}"
+        );
     }
 
     #[test]
@@ -2183,7 +2400,10 @@ mod tests {
         assert!(xml.contains("<format id=\"r1\" name=\"FFVideoFormat1080p30\" frameDuration=\"1/30s\" width=\"1920\" height=\"1080\" colorSpace=\"1-1-1 (Rec. 709)\"/>"));
         // Video asset gets its own per-asset format (r2), then the asset (r3);
         // the audio asset (r4) carries no format attribute.
-        assert!(xml.contains("<format id=\"r2\" name=\"FFVideoFormat1080p30\""), "per-asset video format");
+        assert!(
+            xml.contains("<format id=\"r2\" name=\"FFVideoFormat1080p30\""),
+            "per-asset video format"
+        );
         assert!(xml.contains("<asset id=\"r3\""), "video asset");
         assert!(xml.contains("<asset id=\"r4\""), "audio asset");
         assert!(xml.contains("src=\"file:///media/shot.mp4\""));
@@ -2196,7 +2416,13 @@ mod tests {
         // RESOLUTION but must declare the PROJECT frameDuration (1/30s) so the asset
         // <duration> and asset-clip <start> (both on the project grid) align to it.
         // A source-fps 1/24s grid would make Final Cut conform-snap those times.
-        let mut e = entry("v24", "shot4k.mp4", ClipType::Video, 0.7, "/media/shot4k.mp4");
+        let mut e = entry(
+            "v24",
+            "shot4k.mp4",
+            ClipType::Video,
+            0.7,
+            "/media/shot4k.mp4",
+        );
         e.source_width = Some(3840);
         e.source_height = Some(2160);
         e.source_fps = Some(24.0);
@@ -2215,8 +2441,14 @@ mod tests {
             fmt_line.contains("frameDuration=\"1/30s\""),
             "asset format must use the project fps grid: {fmt_line}"
         );
-        assert!(!xml.contains("1/24s"), "no source-fps grid anywhere:\n{xml}");
-        assert!(xml.contains("start=\"7/30s\""), "in-point on the project grid:\n{xml}");
+        assert!(
+            !xml.contains("1/24s"),
+            "no source-fps grid anywhere:\n{xml}"
+        );
+        assert!(
+            xml.contains("start=\"7/30s\""),
+            "in-point on the project grid:\n{xml}"
+        );
     }
 
     #[test]
@@ -2248,9 +2480,13 @@ mod tests {
         // A video and its linked audio from the SAME source, same timing/trim/speed,
         // collapse into the single video asset-clip; the audio partner is not emitted.
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let mut vclip = clip("cv", "v1", ClipType::Video, 0, 60);
         vclip.link_group_id = Some("g1".into());
         let mut aclip = clip("ca", "v1", ClipType::Audio, 0, 60);
@@ -2271,12 +2507,20 @@ mod tests {
     fn fcpxml_does_not_collapse_pair_from_different_sources() {
         // Linked, but from DIFFERENT sources → both asset-clips are emitted.
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
-        manifest
-            .entries
-            .push(entry("a1", "music.wav", ClipType::Audio, 10.0, "/media/music.wav"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
+        manifest.entries.push(entry(
+            "a1",
+            "music.wav",
+            ClipType::Audio,
+            10.0,
+            "/media/music.wav",
+        ));
         let mut vclip = clip("cv", "v1", ClipType::Video, 0, 60);
         vclip.link_group_id = Some("g1".into());
         let mut aclip = clip("ca", "a1", ClipType::Audio, 0, 60);
@@ -2298,9 +2542,13 @@ mod tests {
         // A muted audio partner must NOT collapse — folding it into the video's
         // asset-clip (which carries audio) would make the muted audio audible.
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let mut vclip = clip("cv", "v1", ClipType::Video, 0, 60);
         vclip.link_group_id = Some("g1".into());
         let mut aclip = clip("ca", "v1", ClipType::Audio, 0, 60);
@@ -2320,9 +2568,13 @@ mod tests {
     fn fcpxml_asset_deduped_by_media_ref() {
         // Two clips of the same source → a single asset resource.
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        manifest.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let tl = timeline(vec![track(
             ClipType::Video,
             vec![
@@ -2341,8 +2593,11 @@ mod tests {
         let xml = FcpxmlExport::export(&tl, &m);
         // Video clip on lane 1, audio on lane -1; both anchored to the gap.
         assert!(xml.contains("<gap name=\"Gap\" offset=\"0s\" duration=\"120/30s\">"));
-        assert!(xml.contains("ref=\"r3\" lane=\"1\" offset=\"0s\" name=\"shot.mp4\" duration=\"60/30s\""));
-        assert!(xml.contains("ref=\"r4\" lane=\"-1\" offset=\"0s\" name=\"music.wav\" duration=\"120/30s\""));
+        assert!(xml
+            .contains("ref=\"r3\" lane=\"1\" offset=\"0s\" name=\"shot.mp4\" duration=\"60/30s\""));
+        assert!(xml.contains(
+            "ref=\"r4\" lane=\"-1\" offset=\"0s\" name=\"music.wav\" duration=\"120/30s\""
+        ));
     }
 
     #[test]
@@ -2350,15 +2605,29 @@ mod tests {
         // Two video tracks: tracks[0] is the top layer → highest lane (2),
         // tracks[1] → lane 1. Higher positive lane renders above in FCP.
         let tl = timeline(vec![
-            track(ClipType::Video, vec![clip("top", "a", ClipType::Video, 0, 30)]),
-            track(ClipType::Video, vec![clip("bot", "b", ClipType::Video, 0, 30)]),
+            track(
+                ClipType::Video,
+                vec![clip("top", "a", ClipType::Video, 0, 30)],
+            ),
+            track(
+                ClipType::Video,
+                vec![clip("bot", "b", ClipType::Video, 0, 30)],
+            ),
         ]);
         let mut m = MediaManifest::default();
-        m.entries.push(entry("a", "top.mp4", ClipType::Video, 1.0, "/top.mp4"));
-        m.entries.push(entry("b", "bot.mp4", ClipType::Video, 1.0, "/bot.mp4"));
+        m.entries
+            .push(entry("a", "top.mp4", ClipType::Video, 1.0, "/top.mp4"));
+        m.entries
+            .push(entry("b", "bot.mp4", ClipType::Video, 1.0, "/bot.mp4"));
         let xml = FcpxmlExport::export(&tl, &m);
-        assert!(xml.contains("lane=\"2\" offset=\"0s\" name=\"top.mp4\""), "tracks[0] → lane 2");
-        assert!(xml.contains("lane=\"1\" offset=\"0s\" name=\"bot.mp4\""), "tracks[1] → lane 1");
+        assert!(
+            xml.contains("lane=\"2\" offset=\"0s\" name=\"top.mp4\""),
+            "tracks[0] → lane 2"
+        );
+        assert!(
+            xml.contains("lane=\"1\" offset=\"0s\" name=\"bot.mp4\""),
+            "tracks[1] → lane 1"
+        );
     }
 
     #[test]
@@ -2371,8 +2640,13 @@ mod tests {
             ],
         )]);
         let mut m = MediaManifest::default();
-        m.entries
-            .push(entry("v1", "shot.mp4", ClipType::Video, 10.0, "/media/shot.mp4"));
+        m.entries.push(entry(
+            "v1",
+            "shot.mp4",
+            ClipType::Video,
+            10.0,
+            "/media/shot.mp4",
+        ));
         let xml = FcpxmlExport::export(&tl, &m);
         assert_eq!(xml.matches("<asset-clip ").count(), 1, "text clip skipped");
     }
@@ -2392,7 +2666,10 @@ mod tests {
         );
         assert_eq!(recognized_video_format_name(1080, 1920, 30.0), None);
         // Custom (portrait) canvas falls back to Final Cut's generic preset.
-        assert_eq!(sequence_format_name(1080, 1920, 30.0), "FFVideoFormatRateUndefined");
+        assert_eq!(
+            sequence_format_name(1080, 1920, 30.0),
+            "FFVideoFormatRateUndefined"
+        );
     }
 
     #[test]
@@ -2416,7 +2693,10 @@ mod tests {
             .lines()
             .find(|l| l.contains("<asset id=\"r3\""))
             .expect("video asset present");
-        assert!(video_line.contains("format=\"r2\""), "video asset: {video_line}");
+        assert!(
+            video_line.contains("format=\"r2\""),
+            "video asset: {video_line}"
+        );
     }
 
     #[test]

@@ -19,10 +19,10 @@ pub fn format_timecode(frame: i64, fps: i64, drop_frame: bool) -> String {
     let mut f = frame;
     if drop_frame {
         let drop = ((fps as f64) * 0.066666).round() as i64; // 2 @ 30, 4 @ 60
-        // Drop-adjusted divisors: a real minute holds fps*60 - drop frame labels
-        // (2 dropped) and a 10-minute block fps*600 - 9*drop (9 of 10 minutes drop).
-        // Using the nominal fps*60 / fps*600 here under-counts the added labels and
-        // shifts the SMPTE frame field (e.g. frame 1800@30 → ;00 instead of ;02).
+                                                             // Drop-adjusted divisors: a real minute holds fps*60 - drop frame labels
+                                                             // (2 dropped) and a 10-minute block fps*600 - 9*drop (9 of 10 minutes drop).
+                                                             // Using the nominal fps*60 / fps*600 here under-counts the added labels and
+                                                             // shifts the SMPTE frame field (e.g. frame 1800@30 → ;00 instead of ;02).
         let fpm = fps * 60 - drop;
         let fp10m = fps * 600 - 9 * drop;
         let d = f / fp10m;
@@ -323,8 +323,18 @@ fn write_nest_clipitem(
         }
     };
 
-    writeln!(xml, "            <clipitem id=\"{}\">", xml_escape(&clip.id)).ok();
-    writeln!(xml, "              <name>{}</name>", xml_escape(&child.name)).ok();
+    writeln!(
+        xml,
+        "            <clipitem id=\"{}\">",
+        xml_escape(&clip.id)
+    )
+    .ok();
+    writeln!(
+        xml,
+        "              <name>{}</name>",
+        xml_escape(&child.name)
+    )
+    .ok();
     writeln!(xml, "              <enabled>TRUE</enabled>").ok();
     writeln!(xml, "              <duration>{child_total}</duration>").ok();
     writeln!(xml, "              <rate>").ok();
@@ -391,7 +401,12 @@ fn write_fade_transition(xml: &mut String, clip: &Clip, fps: i64, is_left: bool,
     }
     let end_frame = clip.start_frame + clip.duration_frames;
     let (start, end, alignment, cut_frames) = if is_left {
-        (clip.start_frame, clip.start_frame + frames, "start-black", 0)
+        (
+            clip.start_frame,
+            clip.start_frame + frames,
+            "start-black",
+            0,
+        )
     } else {
         (end_frame - frames, end_frame, "end-black", frames)
     };
@@ -402,8 +417,12 @@ fn write_fade_transition(xml: &mut String, clip: &Clip, fps: i64, is_left: bool,
     if !is_audio {
         // Premiere's private cut-point in ticks (254016000000/sec): 0 for a fade-in, the full
         // length for a fade-out.
-        let cut_point_ticks = cut_frames as i64 * (254_016_000_000i64 / fps.max(1));
-        writeln!(xml, "              <cutPointTicks>{cut_point_ticks}</cutPointTicks>").ok();
+        let cut_point_ticks = cut_frames * (254_016_000_000i64 / fps.max(1));
+        writeln!(
+            xml,
+            "              <cutPointTicks>{cut_point_ticks}</cutPointTicks>"
+        )
+        .ok();
     }
     writeln!(xml, "              <rate>").ok();
     writeln!(xml, "                <timebase>{fps}</timebase>").ok();
@@ -412,13 +431,21 @@ fn write_fade_transition(xml: &mut String, clip: &Clip, fps: i64, is_left: bool,
     writeln!(xml, "              <effect>").ok();
     if is_audio {
         writeln!(xml, "                <name>Cross Fade ( 0dB)</name>").ok();
-        writeln!(xml, "                <effectid>KGAudioTransCrossFade0dB</effectid>").ok();
+        writeln!(
+            xml,
+            "                <effectid>KGAudioTransCrossFade0dB</effectid>"
+        )
+        .ok();
         writeln!(xml, "                <effecttype>transition</effecttype>").ok();
         writeln!(xml, "                <mediatype>audio</mediatype>").ok();
     } else {
         writeln!(xml, "                <name>Cross Dissolve</name>").ok();
         writeln!(xml, "                <effectid>Cross Dissolve</effectid>").ok();
-        writeln!(xml, "                <effectcategory>Dissolve</effectcategory>").ok();
+        writeln!(
+            xml,
+            "                <effectcategory>Dissolve</effectcategory>"
+        )
+        .ok();
         writeln!(xml, "                <effecttype>transition</effecttype>").ok();
         writeln!(xml, "                <mediatype>video</mediatype>").ok();
         writeln!(xml, "                <wipecode>0</wipecode>").ok();
@@ -471,7 +498,12 @@ fn write_clip_filters(xml: &mut String, clip: &Clip, _fps: i64) {
                 .collect()
         })
         .unwrap_or_default();
-    write_motion_param(xml, "scale", format!("{:.6}", clip.transform.width), &scale_kf);
+    write_motion_param(
+        xml,
+        "scale",
+        format!("{:.6}", clip.transform.width),
+        &scale_kf,
+    );
 
     let rotation_kf: Vec<(i64, String)> = clip
         .rotation_track
@@ -523,7 +555,10 @@ fn write_clip_filters(xml: &mut String, clip: &Clip, _fps: i64) {
     write_motion_param(
         xml,
         "center",
-        format!("{:.6} {:.6}", clip.transform.center_x, clip.transform.center_y),
+        format!(
+            "{:.6} {:.6}",
+            clip.transform.center_x, clip.transform.center_y
+        ),
         &center_kf,
     );
 
@@ -569,22 +604,25 @@ fn write_clip_filters(xml: &mut String, clip: &Clip, _fps: i64) {
             writeln!(xml, "              <filter>").ok();
             writeln!(xml, "                <effect>").ok();
             writeln!(xml, "                  <name>Opacity</name>").ok();
-            writeln!(xml, "                  <effectcategory>motion</effectcategory>").ok();
-            writeln!(xml, "                  <effecttype>opacity</effecttype>").ok();
-            write_motion_param(
+            writeln!(
                 xml,
-                "opacity",
-                format!("{:.6}", clip.opacity),
-                &opacity_kf,
-            );
+                "                  <effectcategory>motion</effectcategory>"
+            )
+            .ok();
+            writeln!(xml, "                  <effecttype>opacity</effecttype>").ok();
+            write_motion_param(xml, "opacity", format!("{:.6}", clip.opacity), &opacity_kf);
             writeln!(xml, "                </effect>").ok();
             writeln!(xml, "              </filter>").ok();
         }
     }
-
 }
 
-fn write_motion_param(xml: &mut String, id: &str, static_value: String, keyframes: &[(i64, String)]) {
+fn write_motion_param(
+    xml: &mut String,
+    id: &str,
+    static_value: String,
+    keyframes: &[(i64, String)],
+) {
     writeln!(xml, "                  <parameter>").ok();
     writeln!(xml, "                    <parameterid>{id}</parameterid>").ok();
     if keyframes.is_empty() {
@@ -628,8 +666,18 @@ fn write_clip(
         .map(|e| e.name.clone())
         .unwrap_or_else(|| clip.media_ref.clone());
 
-    writeln!(xml, "            <clipitem id=\"{}\">", xml_escape(&clip.id)).ok();
-    writeln!(xml, "              <name>{}</name>", xml_escape(&display_name)).ok();
+    writeln!(
+        xml,
+        "            <clipitem id=\"{}\">",
+        xml_escape(&clip.id)
+    )
+    .ok();
+    writeln!(
+        xml,
+        "              <name>{}</name>",
+        xml_escape(&display_name)
+    )
+    .ok();
     writeln!(
         xml,
         "              <duration>{}</duration>",
@@ -682,7 +730,12 @@ fn write_clip(
         .map(|e| media_src(&e.source))
         .unwrap_or_else(|| clip.media_ref.clone());
     writeln!(xml, "              <file id=\"{}\">", xml_escape(&file_id)).ok();
-    writeln!(xml, "                <name>{}</name>", xml_escape(&display_name)).ok();
+    writeln!(
+        xml,
+        "                <name>{}</name>",
+        xml_escape(&display_name)
+    )
+    .ok();
     writeln!(
         xml,
         "                <pathurl>{}</pathurl>",
@@ -876,7 +929,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![Clip {
                     id: "clip1".into(),
                     media_ref: "asset-video.mp4".into(),
@@ -928,7 +981,7 @@ mod tests {
         Clip {
             id: id.into(),
             media_ref: media_ref.into(),
-            media_type: kind.clone(),
+            media_type: kind,
             source_clip_type: kind,
             start_frame: start,
             duration_frames: 30,
@@ -1039,8 +1092,14 @@ mod tests {
         let timeline = tl_with(vec![mk_clip("c1", "vid-id-123", ClipType::Video, 0)]);
         let m = manifest_with("vid-id-123", "Interview.mp4", "/media/Interview.mp4");
         let xml = XmlExport::export_with_manifest(&timeline, &m);
-        assert!(xml.contains("<name>Interview.mp4</name>"), "resolved name\n{xml}");
-        assert!(!xml.contains("<name>vid-id-123</name>"), "id never used as a name\n{xml}");
+        assert!(
+            xml.contains("<name>Interview.mp4</name>"),
+            "resolved name\n{xml}"
+        );
+        assert!(
+            !xml.contains("<name>vid-id-123</name>"),
+            "id never used as a name\n{xml}"
+        );
     }
 
     #[test]
@@ -1072,7 +1131,10 @@ mod tests {
             xml.contains("<name>A&amp;B&lt;take&gt;.mp4</name>"),
             "clipitem name escaped:\n{xml}"
         );
-        assert!(!xml.contains("<take>"), "no raw metacharacters leak into the XML");
+        assert!(
+            !xml.contains("<take>"),
+            "no raw metacharacters leak into the XML"
+        );
     }
 
     #[test]
@@ -1115,14 +1177,26 @@ mod tests {
             "legacy fade tags removed\n{xml}"
         );
         assert!(xml.contains("<transitionitem>"), "transitionitem emitted");
-        assert!(xml.contains("<name>Cross Dissolve</name>"), "video dissolve");
+        assert!(
+            xml.contains("<name>Cross Dissolve</name>"),
+            "video dissolve"
+        );
         assert!(xml.contains("<effectid>Cross Dissolve</effectid>"));
         // fade-in: start-black, ends at frame 5, cut at 0.
-        assert!(xml.contains("<alignment>start-black</alignment>"), "fade-in edge");
+        assert!(
+            xml.contains("<alignment>start-black</alignment>"),
+            "fade-in edge"
+        );
         assert!(xml.contains("<end>5</end>"), "fade-in ends at 5");
-        assert!(xml.contains("<cutPointTicks>0</cutPointTicks>"), "fade-in cut at 0");
+        assert!(
+            xml.contains("<cutPointTicks>0</cutPointTicks>"),
+            "fade-in cut at 0"
+        );
         // fade-out: end-black, starts at frame 92 (100-8).
-        assert!(xml.contains("<alignment>end-black</alignment>"), "fade-out edge");
+        assert!(
+            xml.contains("<alignment>end-black</alignment>"),
+            "fade-out edge"
+        );
         assert!(xml.contains("<start>92</start>"), "fade-out starts at 92");
     }
 
@@ -1146,7 +1220,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![c],
             }],
             transcription_language: None,
@@ -1154,10 +1228,19 @@ mod tests {
             compound_timelines: Default::default(),
         };
         let xml = XmlExport::export(&tl);
-        assert!(xml.contains("<transitionitem>"), "audio transitionitem\n{xml}");
-        assert!(xml.contains("<name>Cross Fade ( 0dB)</name>"), "cross fade name");
+        assert!(
+            xml.contains("<transitionitem>"),
+            "audio transitionitem\n{xml}"
+        );
+        assert!(
+            xml.contains("<name>Cross Fade ( 0dB)</name>"),
+            "cross fade name"
+        );
         assert!(xml.contains("<effectid>KGAudioTransCrossFade0dB</effectid>"));
-        assert!(!xml.contains("<cutPointTicks>"), "audio omits cutPointTicks");
+        assert!(
+            !xml.contains("<cutPointTicks>"),
+            "audio omits cutPointTicks"
+        );
         assert!(!xml.contains("<wipecode>"), "audio omits video wipe params");
     }
 
@@ -1170,7 +1253,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![Clip {
                 id: "clip2".into(),
                 media_ref: "asset2.mp4".into(),
@@ -1236,7 +1319,7 @@ mod tests {
             muted: true,
             hidden: false,
             sync_locked: true,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![],
         });
         let xml = XmlExport::export(&timeline);
@@ -1288,7 +1371,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![Clip {
                 id: "clip-audio".into(),
                 media_ref: "asset-audio.wav".into(),

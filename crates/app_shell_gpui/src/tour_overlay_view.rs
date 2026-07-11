@@ -333,18 +333,22 @@ impl TourOverlayView {
                     .flex_row()
                     .justify_end()
                     .gap(px(Spacing::SM))
-                    .child(tour_button("tour-intro-skip", "Skip", false).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.flow.end();
-                            cx.notify();
-                        },
-                    )))
-                    .child(tour_button("tour-intro-next", "Next", true).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.flow.advance();
-                            cx.notify();
-                        },
-                    ))),
+                    .child(
+                        tour_button("tour-intro-skip", "Skip", false).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.flow.end();
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        tour_button("tour-intro-next", "Next", true).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.flow.advance();
+                                cx.notify();
+                            },
+                        )),
+                    ),
             )
     }
 
@@ -387,18 +391,22 @@ impl TourOverlayView {
                     .flex_row()
                     .justify_end()
                     .gap(px(Spacing::SM))
-                    .child(tour_button("tour-skip", "Skip", false).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.flow.end();
-                            cx.notify();
-                        },
-                    )))
-                    .child(tour_button("tour-back", "Back", false).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.flow.back();
-                            cx.notify();
-                        },
-                    )))
+                    .child(
+                        tour_button("tour-skip", "Skip", false).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.flow.end();
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        tour_button("tour-back", "Back", false).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.flow.back();
+                                cx.notify();
+                            },
+                        )),
+                    )
                     .child(tour_button("tour-next", "Next", true).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.flow.advance();
@@ -433,16 +441,14 @@ impl TourOverlayView {
                     .text_size(px(FontSize::SM_MD))
                     .child(step.instruction.to_string()),
             )
-            .child(
-                div().flex().flex_row().justify_end().child(
-                    tour_button("tour-done", "Start creating", true).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.flow.end();
-                            cx.notify();
-                        },
-                    )),
-                ),
-            )
+            .child(div().flex().flex_row().justify_end().child(
+                tour_button("tour-done", "Start creating", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.flow.end();
+                        cx.notify();
+                    },
+                )),
+            ))
     }
 }
 

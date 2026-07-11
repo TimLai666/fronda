@@ -139,7 +139,12 @@ pub fn detect_beats(pcm: &[f32], channels: usize, sample_rate: u32) -> BeatAnaly
             best_db_phase = phase;
         }
     }
-    let downbeats: Vec<f64> = beats.iter().skip(best_db_phase).step_by(4).copied().collect();
+    let downbeats: Vec<f64> = beats
+        .iter()
+        .skip(best_db_phase)
+        .step_by(4)
+        .copied()
+        .collect();
 
     BeatAnalysis {
         bpm,
@@ -164,7 +169,7 @@ mod tests {
         let mut t = 0.0f64;
         while t < seconds {
             let start = (t * SR as f64) as usize;
-            let amp = if (k + accent_every - accent_offset) % accent_every == 0 {
+            let amp = if (k + accent_every - accent_offset).is_multiple_of(accent_every) {
                 0.9
             } else {
                 0.4

@@ -44,7 +44,7 @@ jobs:
             clang libclang-dev pkg-config nasm
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.0
 
       - name: Show Rust toolchain
         run: |
@@ -73,7 +73,7 @@ jobs:
         run: brew install ffmpeg pkg-config nasm
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.0
 
       - name: Show Rust toolchain
         run: |

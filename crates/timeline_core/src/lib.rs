@@ -47,10 +47,9 @@ pub use edit::{
 pub use inspector::{
     clamp_crop_visibility, clip_at_point, constrain_crop_aspect, db_from_linear,
     fade_multiplier_at, fit_text_clip_to_content, format_aspect_ratio, format_duration,
-    linear_from_db,
-    resize_preserving_aspect, resize_text_font, resolved_crop_at, resolved_opacity_at,
-    resolved_transform_at, resolved_volume_at, unrotate_crop_delta, AspectConstraint,
-    VOLUME_CEILING_DB, VOLUME_FLOOR_DB,
+    linear_from_db, resize_preserving_aspect, resize_text_font, resolved_crop_at,
+    resolved_opacity_at, resolved_transform_at, resolved_volume_at, unrotate_crop_delta,
+    AspectConstraint, VOLUME_CEILING_DB, VOLUME_FLOOR_DB,
 };
 pub use linking::{
     build_link_index, expand_to_link_group, link_clips, link_group_offsets, linked_partner_ids,
@@ -95,8 +94,8 @@ pub use track_ops::{
     TrackInsertionError, MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT,
 };
 pub use word_cut::{
-    cut_ranges, map_word_stamps, ms_to_frames, plan_word_removal, span_frames,
-    CutAggressiveness, PlannerWord, TimelineWord, WordRemovalPlan,
+    cut_ranges, map_word_stamps, ms_to_frames, plan_word_removal, span_frames, CutAggressiveness,
+    PlannerWord, TimelineWord, WordRemovalPlan,
 };
 pub use workflow::{
     apply_ripple_insert_with_split, compute_ripple_delete, compute_ripple_delete_gap,

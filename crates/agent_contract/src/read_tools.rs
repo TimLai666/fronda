@@ -1024,7 +1024,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![
                         Clip {
                             id: "clip-001".into(),
@@ -1110,7 +1110,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![Clip {
                         id: "clip-003".into(),
                         media_ref: "asset-audio-1".into(),

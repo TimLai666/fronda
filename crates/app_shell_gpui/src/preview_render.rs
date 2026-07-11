@@ -125,7 +125,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![clip],
             }],
             settings_configured: true,
@@ -206,7 +206,15 @@ mod tests {
             folder_id: None,
             compound_timelines: Default::default(),
         };
-        render_frame_png(&timeline, &MediaManifest::default(), &HashMap::new(), &dir, 0, &out).unwrap();
+        render_frame_png(
+            &timeline,
+            &MediaManifest::default(),
+            &HashMap::new(),
+            &dir,
+            0,
+            &out,
+        )
+        .unwrap();
         let decoded = image::open(&out).unwrap();
         assert_eq!(decoded.width(), 16);
         assert_eq!(decoded.height(), 16);

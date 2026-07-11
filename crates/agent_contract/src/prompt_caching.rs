@@ -266,10 +266,7 @@ mod tests {
         assert_eq!(req["system"][0]["text"], "SYS");
         assert_eq!(req["system"][0]["cache_control"]["type"], "ephemeral");
         // Tools array mirrors the tool set.
-        assert_eq!(
-            req["tools"].as_array().unwrap().len(),
-            tools.len()
-        );
+        assert_eq!(req["tools"].as_array().unwrap().len(), tools.len());
         assert!(req["tools"][0]["input_schema"].is_object());
         // Messages preserved; the user message's breakpoint caches its last block.
         assert_eq!(req["messages"][0]["role"], "user");
@@ -279,7 +276,9 @@ mod tests {
             "ephemeral"
         );
         assert_eq!(req["messages"][1]["role"], "assistant");
-        assert!(req["messages"][1]["content"][0].get("cache_control").is_none());
+        assert!(req["messages"][1]["content"][0]
+            .get("cache_control")
+            .is_none());
     }
 
     // ─── Upstream #268: Sonnet 5 output_config.effort = low ───

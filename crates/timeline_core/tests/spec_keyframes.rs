@@ -53,8 +53,16 @@ fn set_duration_rescales_word_timings_on_text_clips() {
     let mut c = clip("t", 0, 30);
     c.media_type = ClipType::Text;
     c.word_timings = Some(vec![
-        WordTiming { text: "Hello".into(), start_frame: 0, end_frame: 15 },
-        WordTiming { text: "World".into(), start_frame: 15, end_frame: 30 },
+        WordTiming {
+            text: "Hello".into(),
+            start_frame: 0,
+            end_frame: 15,
+        },
+        WordTiming {
+            text: "World".into(),
+            start_frame: 15,
+            end_frame: 30,
+        },
     ]);
     // Doubling the duration doubles the word timings (Swift rescaleWordTimings).
     set_clip_duration(&mut c, 60);
@@ -532,8 +540,16 @@ fn stroke_progress_track_rescales_on_fps_change() {
     let mut c = clip("s", 0, 100);
     c.stroke_progress_track = Some(KeyframeTrack {
         keyframes: vec![
-            Keyframe { frame: 0, value: 0.0, interpolation_out: Interpolation::Linear },
-            Keyframe { frame: 50, value: 1.0, interpolation_out: Interpolation::Linear },
+            Keyframe {
+                frame: 0,
+                value: 0.0,
+                interpolation_out: Interpolation::Linear,
+            },
+            Keyframe {
+                frame: 50,
+                value: 1.0,
+                interpolation_out: Interpolation::Linear,
+            },
         ],
     });
     let mut timeline = Timeline {
@@ -546,7 +562,7 @@ fn stroke_progress_track_rescales_on_fps_change() {
             muted: false,
             hidden: false,
             sync_locked: false,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![c],
         }],
         ..Timeline::default()
@@ -566,8 +582,16 @@ fn stroke_progress_track_splits_with_clip() {
     let mut c = clip("s", 0, 100);
     c.stroke_progress_track = Some(KeyframeTrack {
         keyframes: vec![
-            Keyframe { frame: 0, value: 0.0, interpolation_out: Interpolation::Linear },
-            Keyframe { frame: 100, value: 1.0, interpolation_out: Interpolation::Linear },
+            Keyframe {
+                frame: 0,
+                value: 0.0,
+                interpolation_out: Interpolation::Linear,
+            },
+            Keyframe {
+                frame: 100,
+                value: 1.0,
+                interpolation_out: Interpolation::Linear,
+            },
         ],
     });
     let (left, right) = split_all_clip_keyframe_tracks(&c, 40);

@@ -13,7 +13,9 @@ use gpui::{
     SharedString, Window,
 };
 
-use crate::theme::{Background, BorderColors, BorderWidth, FontSize, Radius, Spacing, Status, Text};
+use crate::theme::{
+    Background, BorderColors, BorderWidth, FontSize, Radius, Spacing, Status, Text,
+};
 
 /// Draw order among deferred elements; menus sit above other overlays.
 const MENU_LAYER_PRIORITY: usize = 1;
@@ -34,7 +36,9 @@ impl MenuItem {
     /// Label to render given whether the item is armed for confirmation.
     pub fn display_label(&self, armed: bool) -> SharedString {
         if armed {
-            self.confirm_label.clone().unwrap_or_else(|| self.label.clone())
+            self.confirm_label
+                .clone()
+                .unwrap_or_else(|| self.label.clone())
         } else {
             self.label.clone()
         }

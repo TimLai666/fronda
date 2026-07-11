@@ -172,7 +172,10 @@ fn xml_unescape(s: &str) -> String {
 /// True when the char can legally follow a tag name (so `<track` doesn't match
 /// inside `<trackindex>`).
 fn is_tag_boundary(c: Option<char>) -> bool {
-    matches!(c, Some('>') | Some('/') | Some(' ') | Some('\t') | Some('\n') | Some('\r'))
+    matches!(
+        c,
+        Some('>') | Some('/') | Some(' ') | Some('\t') | Some('\n') | Some('\r')
+    )
 }
 
 /// Every top-level `<tag …>…</tag>` block in `hay`, depth-aware for nested
@@ -190,7 +193,9 @@ fn xml_blocks<'a>(hay: &'a str, tag: &str) -> Vec<(&'a str, &'a str)> {
             i = name_end;
             continue;
         }
-        let Some(g) = hay[start..].find('>') else { break };
+        let Some(g) = hay[start..].find('>') else {
+            break;
+        };
         let gt = start + g;
         let open_full = &hay[start..=gt];
         if open_full.ends_with("/>") {
@@ -237,7 +242,10 @@ fn xml_blocks<'a>(hay: &'a str, tag: &str) -> Vec<(&'a str, &'a str)> {
 
 /// The first `<tag>…</tag>` block's inner content, or None.
 fn first_inner<'a>(hay: &'a str, tag: &str) -> Option<&'a str> {
-    xml_blocks(hay, tag).into_iter().next().map(|(_, inner)| inner)
+    xml_blocks(hay, tag)
+        .into_iter()
+        .next()
+        .map(|(_, inner)| inner)
 }
 
 /// The first `<tag>text</tag>`'s unescaped, trimmed text.
@@ -351,7 +359,11 @@ fn parse_track(
     for (open, clip_inner) in xml_blocks(track_inner, "clipitem") {
         // Nest carriers (clipitem wrapping a <sequence>) aren't reconstructed
         // in v1 — record and skip rather than mis-import.
-        if xml_blocks(clip_inner, "sequence").into_iter().next().is_some() {
+        if xml_blocks(clip_inner, "sequence")
+            .into_iter()
+            .next()
+            .is_some()
+        {
             notes.push(format!(
                 "Skipped nested-sequence clip '{}' (nest import not yet supported)",
                 first_text(clip_inner, "name").unwrap_or_default()
@@ -543,13 +555,12 @@ pub fn parse_fcpxml(content: &str) -> Result<ImportedTimeline, XmlImportError> {
 
     // Scope to the <project> so nested-media <sequence> blocks in <resources>
     // (which appear earlier in the document) don't shadow the real timeline.
-    let (project_open, project) =
-        xml_blocks(content, "project")
-            .into_iter()
-            .next()
-            .ok_or_else(|| XmlImportError::ParseError {
-                reason: "no <project>".into(),
-            })?;
+    let (project_open, project) = xml_blocks(content, "project")
+        .into_iter()
+        .next()
+        .ok_or_else(|| XmlImportError::ParseError {
+            reason: "no <project>".into(),
+        })?;
     let name = attr(project_open, "name").unwrap_or_else(|| "Imported Timeline".into());
     let (seq_open, seq) = xml_blocks(project, "sequence")
         .into_iter()
@@ -578,10 +589,16 @@ pub fn parse_fcpxml(content: &str) -> Result<ImportedTimeline, XmlImportError> {
     for (open, inner) in xml_blocks(gap, "asset-clip") {
         let lane: i64 = attr(open, "lane").and_then(|l| l.parse().ok()).unwrap_or(0);
         let is_audio = lane < 0;
-        let kind = if is_audio { ClipType::Audio } else { ClipType::Video };
+        let kind = if is_audio {
+            ClipType::Audio
+        } else {
+            ClipType::Video
+        };
         let ref_id = attr(open, "ref").unwrap_or_default();
         let asset = assets.get(&ref_id);
-        let media_ref = asset.map(|a| a.name.clone()).unwrap_or_else(|| ref_id.clone());
+        let media_ref = asset
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| ref_id.clone());
 
         let start_frame = attr(open, "offset")
             .and_then(|s| parse_rational_seconds(&s))
@@ -678,7 +695,11 @@ pub fn parse_fcpxml(content: &str) -> Result<ImportedTimeline, XmlImportError> {
     let mut audio_lanes: Vec<i64> = by_lane.keys().copied().filter(|l| *l < 0).collect();
     audio_lanes.sort_unstable_by(|a, b| b.cmp(a)); // -1, -2, … (descending)
     for lane in video_lanes.into_iter().chain(audio_lanes) {
-        let kind = if lane < 0 { ClipType::Audio } else { ClipType::Video };
+        let kind = if lane < 0 {
+            ClipType::Audio
+        } else {
+            ClipType::Video
+        };
         let mut clips = by_lane.remove(&lane).unwrap_or_default();
         clips.sort_by_key(|c| c.start_frame);
         timeline.tracks.push(Track {
@@ -1099,7 +1120,10 @@ mod tests {
         assert_eq!(parse_rational_seconds("0s"), Some(0.0));
         assert_eq!(parse_rational_seconds("5s"), Some(5.0));
         assert_eq!(parse_rational_seconds("120/30s"), Some(4.0));
-        assert_eq!(parse_rational_seconds("1001/30000s"), Some(1001.0 / 30000.0));
+        assert_eq!(
+            parse_rational_seconds("1001/30000s"),
+            Some(1001.0 / 30000.0)
+        );
         assert_eq!(parse_rational_seconds("bad"), None);
         assert_eq!(parse_rational_seconds("1/0s"), None);
     }
@@ -1110,15 +1134,27 @@ mod tests {
         // re-imported: fps, track order/type, placement, trims, and file refs
         // must survive the lane round-trip.
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(fcp_entry("vtop", "top.mp4", ClipType::Video, 20.0, "/media/top.mp4"));
-        manifest
-            .entries
-            .push(fcp_entry("vbot", "bot.mp4", ClipType::Video, 20.0, "/media/bot.mp4"));
-        manifest
-            .entries
-            .push(fcp_entry("aud", "music.wav", ClipType::Audio, 20.0, "/media/music.wav"));
+        manifest.entries.push(fcp_entry(
+            "vtop",
+            "top.mp4",
+            ClipType::Video,
+            20.0,
+            "/media/top.mp4",
+        ));
+        manifest.entries.push(fcp_entry(
+            "vbot",
+            "bot.mp4",
+            ClipType::Video,
+            20.0,
+            "/media/bot.mp4",
+        ));
+        manifest.entries.push(fcp_entry(
+            "aud",
+            "music.wav",
+            ClipType::Audio,
+            20.0,
+            "/media/music.wav",
+        ));
 
         let mut tl = Timeline {
             name: "FCP RT".into(),
@@ -1197,9 +1233,13 @@ mod tests {
     #[test]
     fn fcp_retimed_clip_imports_at_1x_with_note() {
         let mut manifest = MediaManifest::default();
-        manifest
-            .entries
-            .push(fcp_entry("v1", "clip.mp4", ClipType::Video, 20.0, "/media/clip.mp4"));
+        manifest.entries.push(fcp_entry(
+            "v1",
+            "clip.mp4",
+            ClipType::Video,
+            20.0,
+            "/media/clip.mp4",
+        ));
         let mut tl = Timeline {
             fps: 30,
             ..Default::default()

@@ -119,8 +119,7 @@ pub fn mix_timeline_audio_with_timelines(
     let timeline: &Timeline = if !has_nests {
         timeline
     } else {
-        flattened =
-            timeline_core::flatten_nests(timeline, &|id: &str| timelines.get(id).cloned());
+        flattened = timeline_core::flatten_nests(timeline, &|id: &str| timelines.get(id).cloned());
         &flattened
     };
 
@@ -264,7 +263,11 @@ mod tests {
         let source: Vec<f32> = (0..10).map(|i| i as f32 / 10.0).collect();
         let out = mix_timeline_audio(&tl, 30, 1, |_| Some(source.clone()));
         // Placed from frame 0: the trimmed excerpt starts at source frame 2.
-        assert!((out[0] - 0.2).abs() < 1e-6, "trim skips to 0.2, got {}", out[0]);
+        assert!(
+            (out[0] - 0.2).abs() < 1e-6,
+            "trim skips to 0.2, got {}",
+            out[0]
+        );
         assert!((out[3] - 0.5).abs() < 1e-6, "got {}", out[3]);
     }
 
@@ -277,7 +280,11 @@ mod tests {
         let source: Vec<f32> = (0..8).map(|i| i as f32 / 10.0).collect();
         let out = mix_timeline_audio(&tl, 30, 1, |_| Some(source.clone()));
         // Timeline length is 2 frames, so exactly 2 output samples for the clip.
-        assert_eq!(out.len(), 2, "output matches the timeline duration, not the source");
+        assert_eq!(
+            out.len(),
+            2,
+            "output matches the timeline duration, not the source"
+        );
     }
 
     #[test]
@@ -311,7 +318,10 @@ mod tests {
         let tl = timeline_with(vec![track("a", false, vec![clip])]);
         let out = mix_timeline_audio(&tl, 30, 1, |_| Some(vec![1.0, 1.0, 1.0]));
         // dB ramps up over the clip, so the linear samples ramp up.
-        assert!(out[0] < out[1] && out[1] < out[2], "volume automation ramps: {out:?}");
+        assert!(
+            out[0] < out[1] && out[1] < out[2],
+            "volume automation ramps: {out:?}"
+        );
         assert!(out[0] < 0.1, "starts near silent, got {}", out[0]);
     }
 
@@ -325,8 +335,16 @@ mod tests {
         let source: Vec<f32> = vec![1.0, 1.0, 1.0, 1.0];
         let out = mix_timeline_audio(&tl, 30, 1, |_| Some(source.clone()));
         assert_eq!(out.len(), 10);
-        assert!((out[0] - 1.0).abs() < 1e-6, "front is real audio, got {}", out[0]);
-        assert!((out[3] - 1.0).abs() < 1e-6, "front is real audio, got {}", out[3]);
+        assert!(
+            (out[0] - 1.0).abs() < 1e-6,
+            "front is real audio, got {}",
+            out[0]
+        );
+        assert!(
+            (out[3] - 1.0).abs() < 1e-6,
+            "front is real audio, got {}",
+            out[3]
+        );
         assert!(out[9].abs() < 1e-6, "tail must be silent, got {}", out[9]);
     }
 
@@ -349,7 +367,10 @@ mod tests {
     fn muted_track_is_skipped() {
         let tl = timeline_with(vec![track("a", true, vec![audio_clip("c", 0, 3, 1.0)])]);
         let out = mix_timeline_audio(&tl, 30, 1, |_| Some(vec![1.0, 1.0, 1.0]));
-        assert!(out.iter().all(|&s| s == 0.0), "muted track contributes nothing");
+        assert!(
+            out.iter().all(|&s| s == 0.0),
+            "muted track contributes nothing"
+        );
     }
 
     #[test]

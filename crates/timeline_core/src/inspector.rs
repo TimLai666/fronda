@@ -614,8 +614,16 @@ mod tests {
         });
         // Frame 50 → top-left (0.25, 0.25); + size/2 (0.25) → centre (0.5, 0.5).
         let resolved = resolved_transform_at(&clip, 50);
-        assert!((resolved.center_x - 0.5).abs() < 1e-9, "cx={}", resolved.center_x);
-        assert!((resolved.center_y - 0.5).abs() < 1e-9, "cy={}", resolved.center_y);
+        assert!(
+            (resolved.center_x - 0.5).abs() < 1e-9,
+            "cx={}",
+            resolved.center_x
+        );
+        assert!(
+            (resolved.center_y - 0.5).abs() < 1e-9,
+            "cy={}",
+            resolved.center_y
+        );
     }
 
     // INS-002: The top-left→centre conversion uses the *keyframed* size, so a
@@ -640,8 +648,16 @@ mod tests {
         // top-left (0,0) + size/2 (0.25) → centre (0.25, 0.25), using the resolved
         // size, not the static 1.0.
         let resolved = resolved_transform_at(&clip, 0);
-        assert!((resolved.center_x - 0.25).abs() < 1e-9, "cx={}", resolved.center_x);
-        assert!((resolved.center_y - 0.25).abs() < 1e-9, "cy={}", resolved.center_y);
+        assert!(
+            (resolved.center_x - 0.25).abs() < 1e-9,
+            "cx={}",
+            resolved.center_x
+        );
+        assert!(
+            (resolved.center_y - 0.25).abs() < 1e-9,
+            "cy={}",
+            resolved.center_y
+        );
         assert!((resolved.width - 0.5).abs() < 1e-9);
     }
 

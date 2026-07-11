@@ -69,13 +69,11 @@ fn mcp_250_initialize_mints_a_session_id() {
 fn mcp_250_session_routes_and_unknown_is_404() {
     let h = spawn_server();
     let init = post(h.port(), "", INIT);
-    let sid = header_value(&init, "Mcp-Session-Id").expect("sid").to_string();
+    let sid = header_value(&init, "Mcp-Session-Id")
+        .expect("sid")
+        .to_string();
 
-    let ok = post(
-        h.port(),
-        &format!("Mcp-Session-Id: {sid}\r\n"),
-        TOOLS_LIST,
-    );
+    let ok = post(h.port(), &format!("Mcp-Session-Id: {sid}\r\n"), TOOLS_LIST);
     assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
     assert!(ok.contains("\"tools\""), "{ok}");
 
@@ -101,7 +99,9 @@ fn mcp_250_headerless_client_keeps_legacy_behavior() {
 fn mcp_250_delete_terminates_the_session() {
     let h = spawn_server();
     let init = post(h.port(), "", INIT);
-    let sid = header_value(&init, "Mcp-Session-Id").expect("sid").to_string();
+    let sid = header_value(&init, "Mcp-Session-Id")
+        .expect("sid")
+        .to_string();
 
     let del = raw_round_trip(
         h.port(),
@@ -140,7 +140,9 @@ fn mcp_250_body_split_across_packets_is_read_fully() {
 fn mcp_250_sse_stream_receives_tools_list_changed() {
     let h = spawn_server();
     let init = post(h.port(), "", INIT);
-    let sid = header_value(&init, "Mcp-Session-Id").expect("sid").to_string();
+    let sid = header_value(&init, "Mcp-Session-Id")
+        .expect("sid")
+        .to_string();
 
     let mut s = TcpStream::connect(("127.0.0.1", h.port())).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();

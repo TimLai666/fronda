@@ -35,9 +35,15 @@ fn media_entry(id: &str, ty: ClipType, duration: f64, has_audio: bool) -> MediaM
 
 fn harness() -> ToolExecutor {
     let mut manifest = MediaManifest::default();
-    manifest.entries.push(media_entry("camA", ClipType::Video, 120.0, true));
-    manifest.entries.push(media_entry("camB", ClipType::Video, 110.0, true));
-    manifest.entries.push(media_entry("mic1", ClipType::Audio, 130.0, false));
+    manifest
+        .entries
+        .push(media_entry("camA", ClipType::Video, 120.0, true));
+    manifest
+        .entries
+        .push(media_entry("camB", ClipType::Video, 110.0, true));
+    manifest
+        .entries
+        .push(media_entry("mic1", ClipType::Audio, 130.0, false));
     ToolExecutor::new(Timeline::default(), manifest)
 }
 
@@ -93,7 +99,9 @@ fn create_reports_group_and_clips() {
 
     // The group's clips are plain clips in get_timeline; groups list in the payload.
     let tl = payload_of(&exec.execute("get_timeline", &json!({})).unwrap());
-    let groups = tl["multicamGroups"].as_array().expect("multicamGroups listed");
+    let groups = tl["multicamGroups"]
+        .as_array()
+        .expect("multicamGroups listed");
     assert_eq!(groups[0]["angles"], json!(["cam-a", "cam-b"]));
     assert_eq!(groups[0]["mics"], json!(["mic-1"]));
     // Unlinked clips: program video and mic audio each visible on their track.
@@ -122,9 +130,9 @@ fn change_cam_cuts_in_place() {
         .unwrap();
     let payload = payload_of(&res);
     let program = payload["program"].as_array().expect("program rows");
-    assert!(program.iter().any(|row| row[0] == json!("cam-b")
-        && row[1] == json!(600)
-        && row[2] == json!(1200)));
+    assert!(program
+        .iter()
+        .any(|row| row[0] == json!("cam-b") && row[1] == json!(600) && row[2] == json!(1200)));
     assert_eq!(payload["switched"], json!(1));
 
     let read = payload_of(
@@ -134,7 +142,9 @@ fn change_cam_cuts_in_place() {
     );
     let rows = read["program"].as_array().unwrap();
     assert_eq!(
-        rows.iter().map(|r| r[0].as_str().unwrap()).collect::<Vec<_>>(),
+        rows.iter()
+            .map(|r| r[0].as_str().unwrap())
+            .collect::<Vec<_>>(),
         ["cam-a", "cam-b", "cam-a"]
     );
 }
@@ -201,19 +211,17 @@ fn ungroup_leaves_ordinary_clips() {
     let group_id = create_group(&mut exec);
     let clip_count = group_clip_ids(&exec, &group_id).len();
     let res = exec
-        .execute("manage_multicam", &json!({"ungroup": {"groupId": group_id}}))
+        .execute(
+            "manage_multicam",
+            &json!({"ungroup": {"groupId": group_id}}),
+        )
         .unwrap();
     let payload = payload_of(&res);
     assert!(payload["ungrouped"].is_string());
     assert!(group_clip_ids(&exec, &group_id).is_empty());
     assert!(exec.multicam_groups().iter().all(|g| g.id != group_id));
     // Same clips, just unstamped.
-    let survivors: usize = exec
-        .timeline()
-        .tracks
-        .iter()
-        .map(|t| t.clips.len())
-        .sum();
+    let survivors: usize = exec.timeline().tracks.iter().map(|t| t.clips.len()).sum();
     assert_eq!(survivors, clip_count);
 }
 
@@ -249,12 +257,12 @@ fn move_whole_group_allowed() {
         .iter()
         .map(|(id, start)| json!({"clipId": id, "toFrame": start + 300}))
         .collect();
-    exec.execute("move_clips", &json!({"moves": moves})).unwrap();
-    let mut starts: Vec<i64> =
-        timeline_core::multicam_clip_locations(exec.timeline(), &group_id)
-            .into_iter()
-            .map(|(ti, ci)| exec.timeline().tracks[ti].clips[ci].start_frame)
-            .collect();
+    exec.execute("move_clips", &json!({"moves": moves}))
+        .unwrap();
+    let mut starts: Vec<i64> = timeline_core::multicam_clip_locations(exec.timeline(), &group_id)
+        .into_iter()
+        .map(|(ti, ci)| exec.timeline().tracks[ti].clips[ci].start_frame)
+        .collect();
     starts.sort();
     let mut expected: Vec<i64> = before.iter().map(|(_, s)| s + 300).collect();
     expected.sort();
@@ -345,16 +353,12 @@ fn partial_ripple_across_group_refused_via_tool() {
     let group_id = create_group(&mut exec);
     let mic_track = timeline_core::multicam_clip_locations(exec.timeline(), &group_id)
         .into_iter()
-        .find(|(ti, ci)| {
-            exec.timeline().tracks[*ti].clips[*ci].media_type == ClipType::Audio
-        })
+        .find(|(ti, ci)| exec.timeline().tracks[*ti].clips[*ci].media_type == ClipType::Audio)
         .unwrap()
         .0;
     let program_track = timeline_core::multicam_clip_locations(exec.timeline(), &group_id)
         .into_iter()
-        .find(|(ti, ci)| {
-            exec.timeline().tracks[*ti].clips[*ci].media_type != ClipType::Audio
-        })
+        .find(|(ti, ci)| exec.timeline().tracks[*ti].clips[*ci].media_type != ClipType::Audio)
         .unwrap()
         .0;
     let err = exec

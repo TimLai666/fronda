@@ -54,8 +54,7 @@ pub struct TimelineView {
 
 impl TimelineView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let tab_rename_field =
-            cx.new(|cx| crate::text_field::TextField::new(cx, "Timeline name"));
+        let tab_rename_field = cx.new(|cx| crate::text_field::TextField::new(cx, "Timeline name"));
         cx.subscribe(&tab_rename_field, |this, field, event, cx| {
             if matches!(event, crate::text_field::TextFieldEvent::Submitted) {
                 if let Some(id) = this.tab_editing.take() {
@@ -572,10 +571,7 @@ impl Render for TimelineView {
                                         this.tab_rename_field.update(cx, |field, cx| {
                                             field.set_text(rename_seed.clone(), cx);
                                         });
-                                        window.focus(
-                                            &this.tab_rename_field.focus_handle(cx),
-                                            cx,
-                                        );
+                                        window.focus(&this.tab_rename_field.focus_handle(cx), cx);
                                         cx.notify();
                                     }
                                 },
@@ -611,10 +607,7 @@ impl Render for TimelineView {
                             .cursor_pointer()
                             .child("+")
                             .on_click(cx.listener(|_, _, _, cx| {
-                                Self::run_shared_tool(
-                                    "create_timeline",
-                                    serde_json::json!({}),
-                                );
+                                Self::run_shared_tool("create_timeline", serde_json::json!({}));
                                 cx.notify();
                             })),
                     ),
@@ -821,12 +814,10 @@ impl Render for TimelineView {
                                     this.update_asset_drop_hover(e, cx);
                                 },
                             ))
-                            .on_drop::<AssetDrag>(cx.listener(
-                                |this, drag: &AssetDrag, _, cx| {
-                                    let asset_id = drag.asset_id.clone();
-                                    this.commit_asset_drop(&asset_id, cx);
-                                },
-                            ))
+                            .on_drop::<AssetDrag>(cx.listener(|this, drag: &AssetDrag, _, cx| {
+                                let asset_id = drag.asset_id.clone();
+                                this.commit_asset_drop(&asset_id, cx);
+                            }))
                             .child(
                                 div()
                                     .absolute()

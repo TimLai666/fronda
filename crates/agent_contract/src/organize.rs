@@ -98,7 +98,8 @@ pub fn resolve_or_create_folder(
     let mut walked: Vec<String> = Vec::new();
     let mut created: Vec<String> = Vec::new();
     for seg in &segs {
-        let found = match_segment(folders, parent.as_deref(), seg, path)?.map(|f| (f.id.clone(), f.name.trim().to_string()));
+        let found = match_segment(folders, parent.as_deref(), seg, path)?
+            .map(|f| (f.id.clone(), f.name.trim().to_string()));
         match found {
             Some((id, name)) => {
                 walked.push(name);
@@ -153,7 +154,10 @@ mod tests {
 
     #[test]
     fn resolve_is_case_insensitive_per_segment() {
-        let folders = vec![folder("a", "B-roll", None), folder("b", "Sunset", Some("a"))];
+        let folders = vec![
+            folder("a", "B-roll", None),
+            folder("b", "Sunset", Some("a")),
+        ];
         assert_eq!(
             resolve_folder(&folders, "b-roll/SUNSET").unwrap(),
             Some("b".to_string())

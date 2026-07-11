@@ -139,7 +139,9 @@ pub fn max_lag_hops(
     target_count: usize,
 ) -> usize {
     let window_hops = (window_seconds / hop_seconds).round() as usize;
-    window_hops.min(reference_count.min(target_count) / 2).max(1)
+    window_hops
+        .min(reference_count.min(target_count) / 2)
+        .max(1)
 }
 
 // ── Lookup ───────────────────────────────────────────────────────────────
@@ -217,7 +219,11 @@ fn is_program_fragment(clip: &Clip, group: &MulticamSource) -> bool {
 
 /// The BOTTOM-most video track holding a program fragment overlapping `range`
 /// (tracks[0] is the top visual layer; Swift `tracks.last`).
-fn program_track_id(timeline: &Timeline, group: &MulticamSource, range: &Range<i64>) -> Option<String> {
+fn program_track_id(
+    timeline: &Timeline,
+    group: &MulticamSource,
+    range: &Range<i64>,
+) -> Option<String> {
     timeline
         .tracks
         .iter()
@@ -306,8 +312,8 @@ pub fn rewrite(
     let Some(current) = group.member_by_media_ref(&clip.media_ref) else {
         return;
     };
-    let delta = ((current.sync.offset_seconds - member.sync.offset_seconds) * fps as f64).round()
-        as i64;
+    let delta =
+        ((current.sync.offset_seconds - member.sync.offset_seconds) * fps as f64).round() as i64;
     clip.media_ref = member.media_ref.clone();
     clip.trim_start_frame += delta;
     if let Some(duration) = source_durations.get(&member.media_ref) {
@@ -324,7 +330,7 @@ fn split_in_track(track: &mut Track, frame: i64, only_group: Option<&str>) -> bo
     let Some(i) = track.clips.iter().position(|c| {
         frame > c.start_frame
             && frame < c.end_frame()
-            && only_group.map_or(true, |g| c.multicam_group_id.as_deref() == Some(g))
+            && only_group.is_none_or(|g| c.multicam_group_id.as_deref() == Some(g))
     }) else {
         return false;
     };
@@ -434,11 +440,9 @@ fn place_overlay(
     clip.crop = crop;
 
     let program_idx = track_index_by_id(timeline, program_track_id)?;
-    let free = timeline.tracks[..program_idx]
-        .iter()
-        .rposition(|t| {
-            t.r#type == ClipType::Video && !t.clips.iter().any(|c| clip_overlaps(c, range))
-        });
+    let free = timeline.tracks[..program_idx].iter().rposition(|t| {
+        t.r#type == ClipType::Video && !t.clips.iter().any(|c| clip_overlaps(c, range))
+    });
     let idx = match free {
         Some(i) => i,
         None => {
@@ -463,8 +467,7 @@ fn clamp_to_coverage(
     let Some(duration) = source_durations.get(&target.media_ref) else {
         return (wanted.clone(), None);
     };
-    let group_start =
-        fragment.trim_start_frame as f64 / fps as f64 + current.sync.offset_seconds;
+    let group_start = fragment.trim_start_frame as f64 / fps as f64 + current.sync.offset_seconds;
     let project_frame = |group_seconds: f64| -> i64 {
         fragment.start_frame + ((group_seconds - group_start) * fps as f64).round() as i64
     };
@@ -552,8 +555,7 @@ pub fn apply(
             let had_layout = clear_overlays(timeline, &target, &program_id, &group.id) > 0;
             let program_rect = entry.layout.slots().first().map(|s| s.rect);
             let layout_slots = entry.layout.slots();
-            for (slot, slot_member) in layout_slots.iter().skip(1).zip(entry.slots.iter().skip(1))
-            {
+            for (slot, slot_member) in layout_slots.iter().skip(1).zip(entry.slots.iter().skip(1)) {
                 let rect = slot.rect;
                 if let Some(id) = place_overlay(
                     timeline,
@@ -628,8 +630,7 @@ pub fn multicam_audio_bearers<'a>(
         .iter()
         .filter(|m| {
             m.usable()
-                && (m.provides_audio()
-                    || assets.get(&m.media_ref).is_some_and(|a| a.has_audio))
+                && (m.provides_audio() || assets.get(&m.media_ref).is_some_and(|a| a.has_audio))
         })
         .collect()
 }
@@ -850,7 +851,11 @@ fn make_member_clip(
     }
     let head_cut = clamped_start - start;
 
-    let mut clip = base_clip(&member.media_ref, clamped_start, clamped_end - clamped_start);
+    let mut clip = base_clip(
+        &member.media_ref,
+        clamped_start,
+        clamped_end - clamped_start,
+    );
     clip.media_type = media_type;
     clip.source_clip_type = asset.map(|a| a.clip_type).unwrap_or(media_type);
     clip.multicam_group_id = Some(group_id.to_string());
@@ -895,10 +900,7 @@ pub fn create_group(
             media_ref: spec.media_ref.clone(),
             kind: spec.kind,
             angle_label: unique_angle_label(&raw_label, &mut used_labels),
-            sync: sync_maps
-                .get(&spec.media_ref)
-                .cloned()
-                .unwrap_or_default(),
+            sync: sync_maps.get(&spec.media_ref).cloned().unwrap_or_default(),
         });
     }
     let Some(master) = members.iter().find(|m| m.media_ref == master_ref) else {
@@ -972,10 +974,8 @@ pub fn create_group(
     program_spans.sort_by_key(|(_, r)| r.start);
 
     let canvas = (timeline.width, timeline.height);
-    let video_idx =
-        crate::track_ops::insert_track_at(timeline, 0, ClipType::Video).map_err(|e| {
-            format!("Could not create the multicam program track: {e:?}")
-        })?;
+    let video_idx = crate::track_ops::insert_track_at(timeline, 0, ClipType::Video)
+        .map_err(|e| format!("Could not create the multicam program track: {e:?}"))?;
     for (member, span) in &program_spans {
         if let Some(clip) = make_member_clip(
             member,
@@ -1010,8 +1010,9 @@ pub fn create_group(
         ) else {
             continue;
         };
-        let idx = crate::track_ops::insert_track_at(timeline, timeline.tracks.len(), ClipType::Audio)
-            .map_err(|e| format!("Could not create a mic track: {e:?}"))?;
+        let idx =
+            crate::track_ops::insert_track_at(timeline, timeline.tracks.len(), ClipType::Audio)
+                .map_err(|e| format!("Could not create a mic track: {e:?}"))?;
         clip_ids.push(clip.id.clone());
         timeline.tracks[idx].clips.push(clip);
     }
@@ -1146,9 +1147,9 @@ pub fn move_violation(
         .collect();
     let moved_ids: HashSet<&str> = infos.iter().map(|i| i.id.as_str()).collect();
     let horizontal = infos.iter().any(|i| i.start_frame != i.to_frame);
-    let lane_change = infos.iter().any(|i| {
-        i.group_id.is_some() && !i.is_audio && i.current_track != i.to_track
-    });
+    let lane_change = infos
+        .iter()
+        .any(|i| i.group_id.is_some() && !i.is_audio && i.current_track != i.to_track);
     if !horizontal && !lane_change {
         return None;
     }
@@ -1327,8 +1328,7 @@ pub fn multicam_group_offsets(
         entries.sort_by_key(|(_, _, r)| r.start);
         let mut cluster: Vec<&(String, i64, Range<i64>)> = Vec::new();
         let mut cluster_end = i64::MIN;
-        let flush = |cluster: &[&(String, i64, Range<i64>)],
-                         offsets: &mut HashMap<String, i64>| {
+        let flush = |cluster: &[&(String, i64, Range<i64>)], offsets: &mut HashMap<String, i64>| {
             if cluster.len() < 2 {
                 return;
             }

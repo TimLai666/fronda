@@ -252,7 +252,9 @@ impl AudioGenerationPayload {
         // "café" is 5 bytes but 4 characters).
         let prompt_len = self.prompt.trim().chars().count();
         if prompt_len < min_prompt_length {
-            errors.push(format!("Prompt too short ({prompt_len} < {min_prompt_length})"));
+            errors.push(format!(
+                "Prompt too short ({prompt_len} < {min_prompt_length})"
+            ));
         }
         if let Some(ref voice) = self.voice {
             if !supported_voices.is_empty() && !supported_voices.contains(&voice.as_str()) {

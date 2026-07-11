@@ -278,7 +278,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-        display_height: 50.0,
+            display_height: 50.0,
         }
     }
 
@@ -290,7 +290,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-        display_height: 50.0,
+            display_height: 50.0,
         }
     }
 

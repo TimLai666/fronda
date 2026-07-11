@@ -44,7 +44,11 @@ pub enum DragItem {
     Folder(String),
     /// A moment/segment drag: an asset id plus a source-time range in seconds
     /// (`palmier-asset://<id>#<start>-<end>`, from search hits / moment thumbnails).
-    AssetSegment { id: String, start: f64, end: f64 },
+    AssetSegment {
+        id: String,
+        start: f64,
+        end: f64,
+    },
 }
 
 /// Parse result for drag payload strings

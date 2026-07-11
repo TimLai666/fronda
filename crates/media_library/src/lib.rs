@@ -1296,7 +1296,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![make_clip(clip_id, media_ref, 0, 30)],
             }],
             ..Default::default()
@@ -1393,7 +1393,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![
                     make_clip("clip-del", "asset-del", 0, 30),
                     make_clip("clip-keep", "asset-keep", 30, 30),
@@ -1436,7 +1436,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![make_clip("clip-1", "asset-1", 0, 30)],
                 },
                 Track {
@@ -1445,7 +1445,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: true,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![make_clip("clip-2", "asset-2", 0, 60)],
                 },
             ],
@@ -1548,7 +1548,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![make_clip("clip-root", "asset-root", 30, 30)],
         });
 

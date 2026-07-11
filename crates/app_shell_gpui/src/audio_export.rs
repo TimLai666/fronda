@@ -167,7 +167,6 @@ pub fn timeline_audio_envelope(
 /// muxes an AAC stream when there is any non-silent audio (otherwise video-only).
 /// Both streams start at PTS 0, so they stay in sync.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub fn export_project_with_audio(
     timeline: &Timeline,
     manifest: &MediaManifest,
@@ -503,7 +502,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![video_clip("v1", 0, 3)],
                 },
                 Track {
@@ -512,7 +511,7 @@ mod tests {
                     muted: false,
                     hidden: false,
                     sync_locked: false,
-                   display_height: 50.0,
+                    display_height: 50.0,
                     clips: vec![audio_clip("a1", 0, 3)],
                 },
             ],
@@ -558,7 +557,9 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/testclip.mp4");
         let dir = temp_dir("fps-conv");
         let mut manifest = MediaManifest::default();
-        manifest.entries.push(external_entry_video("v1", &video_fixture));
+        manifest
+            .entries
+            .push(external_entry_video("v1", &video_fixture));
         let timeline = Timeline {
             id: String::new(),
             name: String::new(),
@@ -571,7 +572,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![video_clip("v1", 0, 4)],
             }],
             settings_configured: true,
@@ -618,7 +619,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: false,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips: vec![audio_clip("m1", 0, 6)],
             }],
             settings_configured: true,

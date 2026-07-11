@@ -112,7 +112,10 @@ fn tdef_003_schema_snapshot_split_clips() {
         .and_then(|v| v.as_object())
         .expect("split_clips schema has properties");
     assert!(props.contains_key("splits"), "split_clips has splits");
-    assert!(props.contains_key("trackIndex"), "split_clips has trackIndex");
+    assert!(
+        props.contains_key("trackIndex"),
+        "split_clips has trackIndex"
+    );
     assert!(props.contains_key("frames"), "split_clips has frames");
 }
 

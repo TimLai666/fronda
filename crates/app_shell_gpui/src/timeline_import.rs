@@ -29,8 +29,8 @@ pub struct ImportOutcome {
 /// active timeline. Detects the format from content (falling back to the file
 /// extension). Returns a summary or an error string.
 pub fn import_timeline_file_into_shared_state(path: &PathBuf) -> Result<ImportOutcome, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let format = detect_format(&content, path)
         .ok_or_else(|| "unrecognized XML format (not XMEML or FCPXML)".to_string())?;
 
@@ -275,7 +275,9 @@ mod tests {
     fn import_relinks_existing_media_and_registers_missing() {
         // Library already has top.mp4; music.wav is unknown and gets registered.
         let mut manifest = MediaManifest::default();
-        manifest.entries.push(entry("existing-top-id", "top.mp4", ClipType::Video));
+        manifest
+            .entries
+            .push(entry("existing-top-id", "top.mp4", ClipType::Video));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
 
         let out = import_timeline_from_xml(&mut exec, &sample_xmeml(), XmlImportFormat::Xmeml)
@@ -303,7 +305,10 @@ mod tests {
     #[test]
     fn strip_file_url_forms() {
         assert_eq!(strip_file_url("file:///media/a.mp4"), "/media/a.mp4");
-        assert_eq!(strip_file_url("file://localhost/media/a.mp4"), "/media/a.mp4");
+        assert_eq!(
+            strip_file_url("file://localhost/media/a.mp4"),
+            "/media/a.mp4"
+        );
         assert_eq!(strip_file_url("file:///C:/media/a.mp4"), "C:/media/a.mp4");
         assert_eq!(strip_file_url("/plain/path.mp4"), "/plain/path.mp4");
     }

@@ -17,7 +17,11 @@ use project_io::ProjectBundle;
 /// the last saved revision. Rootless (unsaved) projects skip; no advance means
 /// the previous save already covered it, so rapid edits between ticks collapse
 /// to a single save.
-pub fn autosave_should_fire(has_root: bool, current_revision: u64, last_saved_revision: u64) -> bool {
+pub fn autosave_should_fire(
+    has_root: bool,
+    current_revision: u64,
+    last_saved_revision: u64,
+) -> bool {
     has_root && current_revision > last_saved_revision
 }
 
@@ -260,8 +264,11 @@ mod tests {
         {
             let exec = hub.executor();
             let mut exec = exec.lock().unwrap();
-            exec.execute("organize_media", &serde_json::json!({"createFolders": ["B-roll"]}))
-                .unwrap();
+            exec.execute(
+                "organize_media",
+                &serde_json::json!({"createFolders": ["B-roll"]}),
+            )
+            .unwrap();
         }
         let before = hub.revision();
         assert_eq!(before, 1);
@@ -349,7 +356,10 @@ mod tests {
             let exec = hub.executor();
             exec.lock()
                 .unwrap()
-                .execute("organize_media", &serde_json::json!({"createFolders": ["B-roll"]}))
+                .execute(
+                    "organize_media",
+                    &serde_json::json!({"createFolders": ["B-roll"]}),
+                )
                 .unwrap();
         }
         hub.save().unwrap();
@@ -380,7 +390,10 @@ mod tests {
         let exec = hub.executor();
         exec.lock()
             .unwrap()
-            .execute("organize_media", &serde_json::json!({"createFolders": ["B-roll"]}))
+            .execute(
+                "organize_media",
+                &serde_json::json!({"createFolders": ["B-roll"]}),
+            )
             .unwrap();
         hub.save().unwrap();
 
@@ -494,11 +507,17 @@ mod tests {
     #[test]
     fn autosave_should_fire_trigger_logic() {
         // Injected counter (no timers): fires only with a root AND an advance.
-        assert!(!autosave_should_fire(false, 5, 0), "rootless never autosaves");
+        assert!(
+            !autosave_should_fire(false, 5, 0),
+            "rootless never autosaves"
+        );
         assert!(!autosave_should_fire(false, 5, 5), "rootless, no advance");
         assert!(autosave_should_fire(true, 1, 0), "root + advance fires");
         assert!(!autosave_should_fire(true, 3, 3), "no advance coalesces");
-        assert!(!autosave_should_fire(true, 2, 5), "stale tick after save skips");
+        assert!(
+            !autosave_should_fire(true, 2, 5),
+            "stale tick after save skips"
+        );
         assert!(autosave_should_fire(true, 6, 5), "further edit re-arms");
     }
 
@@ -517,7 +536,10 @@ mod tests {
             let exec = hub.executor();
             exec.lock()
                 .unwrap()
-                .execute("organize_media", &serde_json::json!({"createFolders": ["B-roll"]}))
+                .execute(
+                    "organize_media",
+                    &serde_json::json!({"createFolders": ["B-roll"]}),
+                )
                 .unwrap();
         }
         assert!(hub.project_root().is_none());
@@ -538,7 +560,10 @@ mod tests {
             let exec = hub.executor();
             exec.lock()
                 .unwrap()
-                .execute("organize_media", &serde_json::json!({"createFolders": ["B-roll"]}))
+                .execute(
+                    "organize_media",
+                    &serde_json::json!({"createFolders": ["B-roll"]}),
+                )
                 .unwrap();
         }
         // First tick after the edit saves; the next tick coalesces (no advance).
@@ -569,7 +594,10 @@ mod tests {
             let exec = hub.executor();
             exec.lock()
                 .unwrap()
-                .execute("organize_media", &serde_json::json!({"createFolders": ["C-roll"]}))
+                .execute(
+                    "organize_media",
+                    &serde_json::json!({"createFolders": ["C-roll"]}),
+                )
                 .unwrap();
         }
         hub.save_now().unwrap();

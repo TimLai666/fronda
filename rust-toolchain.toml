@@ -1,0 +1,7 @@
+# Pin the toolchain so CI's rustfmt/clippy don't drift with floating `stable`
+# (a moving stable kept flagging pre-existing code and reddening CI). Bump this
+# deliberately, re-running `cargo fmt --all` + `cargo clippy --fix` at the same
+# time so the format/lint baseline moves with it.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

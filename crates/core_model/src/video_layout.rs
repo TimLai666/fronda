@@ -242,7 +242,8 @@ pub fn layout_placement(
 
     match fit {
         LayoutFit::Fill => {
-            let crop = crop_fitting_aspect(source_w, source_h, slot_pixel_aspect, anchor_x, anchor_y);
+            let crop =
+                crop_fitting_aspect(source_w, source_h, slot_pixel_aspect, anchor_x, anchor_y);
             let vw = crop.visible_width_fraction();
             let vh = crop.visible_height_fraction();
             if vw <= 0.0 || vh <= 0.0 {
@@ -274,7 +275,10 @@ pub fn layout_placement(
             let ay = anchor_y.clamp(0.0, 1.0);
             let x = rect.x + (rect.w - draw_w) * ax;
             let y = rect.y + (rect.h - draw_h) * ay;
-            (transform_from_top_left(x, y, draw_w, draw_h), Crop::default())
+            (
+                transform_from_top_left(x, y, draw_w, draw_h),
+                Crop::default(),
+            )
         }
     }
 }
@@ -332,7 +336,10 @@ mod tests {
     fn grid_2x2_slots() {
         let s = VideoLayout::Grid2x2.slots();
         let ids: Vec<&str> = s.iter().map(|x| x.id).collect();
-        assert_eq!(ids, ["top_left", "top_right", "bottom_left", "bottom_right"]);
+        assert_eq!(
+            ids,
+            ["top_left", "top_right", "bottom_left", "bottom_right"]
+        );
         assert_eq!(s[3].rect, LayoutRect::new(0.5, 0.5, 0.5, 0.5));
     }
 
@@ -377,7 +384,10 @@ mod tests {
     #[test]
     fn media_canvas_aspect_relative() {
         // 16:9 source in a 16:9 canvas → 1.0; missing dims → None.
-        assert!(approx(media_canvas_aspect(1920, 1080, 1920, 1080).unwrap(), 1.0));
+        assert!(approx(
+            media_canvas_aspect(1920, 1080, 1920, 1080).unwrap(),
+            1.0
+        ));
         assert_eq!(media_canvas_aspect(0, 1080, 1920, 1080), None);
     }
 
@@ -393,7 +403,10 @@ mod tests {
 
     #[test]
     fn crop_fitting_equal_aspect_is_no_crop() {
-        assert_eq!(crop_fitting_aspect(1920, 1080, 1920.0 / 1080.0, 0.5, 0.5), Crop::default());
+        assert_eq!(
+            crop_fitting_aspect(1920, 1080, 1920.0 / 1080.0, 0.5, 0.5),
+            Crop::default()
+        );
     }
 
     #[test]

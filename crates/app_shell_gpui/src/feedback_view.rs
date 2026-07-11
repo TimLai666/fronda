@@ -33,8 +33,7 @@ pub struct FeedbackView {
 
 impl FeedbackView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let email_field =
-            cx.new(|cx| TextField::new(cx, "you@example.com — so we can reply"));
+        let email_field = cx.new(|cx| TextField::new(cx, "you@example.com — so we can reply"));
         cx.subscribe(&email_field, |this, field, event, cx| {
             if matches!(event, TextFieldEvent::Edited) {
                 this.model.email = field.read(cx).text().to_string();

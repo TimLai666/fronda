@@ -19,3 +19,6 @@ uuid.workspace = true
 [dev-dependencies]
 search_core = { package = "fronda-search-core", path = "../search_core" }
 tempfile.workspace = true
+
+[lints]
+workspace = true

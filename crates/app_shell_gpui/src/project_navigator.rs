@@ -161,7 +161,9 @@ impl ProjectNavigator for AppProjectNavigator {
                 }
             }
         } else {
-            current.clone().ok_or_else(|| "No project is open.".to_string())?
+            current
+                .clone()
+                .ok_or_else(|| "No project is open.".to_string())?
         };
         let is_open = current
             .as_deref()
@@ -199,7 +201,9 @@ mod tests {
     use super::*;
 
     fn temp_env(name: &str) -> (PathBuf, Arc<Mutex<Option<PathBuf>>>, AppProjectNavigator) {
-        let dir = std::env::temp_dir().join("fronda-project-navigator").join(name);
+        let dir = std::env::temp_dir()
+            .join("fronda-project-navigator")
+            .join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let registry = dir.join("registry.json");
@@ -232,9 +236,7 @@ mod tests {
         );
 
         // The registry recorded it, so open-by-id now resolves too.
-        let registry = crate::project_registry_store::load_from(
-            &dir.join("registry.json"),
-        );
+        let registry = crate::project_registry_store::load_from(&dir.join("registry.json"));
         let id = registry.sorted_entries()[0].id.clone();
         let reopened = nav.open(Some(&id), None).unwrap();
         assert_eq!(reopened.name, "Demo");
@@ -316,7 +318,10 @@ mod tests {
         // duplicate guard against a fabricated existing package to avoid
         // touching the real user folder in tests beyond one marker dir.
         let (_dir, _root, nav) = temp_env("create");
-        let base = std::env::home_dir().unwrap().join("Documents").join("Palmier Pro");
+        let base = std::env::home_dir()
+            .unwrap()
+            .join("Documents")
+            .join("Palmier Pro");
         std::fs::create_dir_all(&base).unwrap();
         let marker = base.join("fronda-test-existing.palmier");
         std::fs::create_dir_all(&marker).unwrap();

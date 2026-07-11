@@ -419,7 +419,11 @@ mod tests {
         DateTime::from_timestamp(1_700_000_000, 0).unwrap()
     }
 
-    fn entry_cached_until(id: &str, url: &str, expires_at: Option<DateTime<Utc>>) -> MediaManifestEntry {
+    fn entry_cached_until(
+        id: &str,
+        url: &str,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> MediaManifestEntry {
         let mut e = entry(id, Some(url));
         e.cached_remote_url_expires_at = expires_at;
         e
@@ -492,8 +496,14 @@ mod tests {
         assert!(manifest.is_missing_for("expired", now(), |_| false));
         assert!(!manifest.is_missing_for("fresh", now(), |_| false));
         assert!(!manifest.is_missing_for("undated", now(), |_| false));
-        assert_eq!(manifest.resolve_url_for("expired", now(), |_| false), Some(false));
-        assert_eq!(manifest.resolve_url_for("fresh", now(), |_| false), Some(true));
+        assert_eq!(
+            manifest.resolve_url_for("expired", now(), |_| false),
+            Some(false)
+        );
+        assert_eq!(
+            manifest.resolve_url_for("fresh", now(), |_| false),
+            Some(true)
+        );
     }
 
     #[test]
@@ -506,7 +516,10 @@ mod tests {
             entry_cached_until("a", "u", None).cache_is_fresh(now()),
             "no recorded expiry → treated as fresh"
         );
-        assert!(!entry("a", None).cache_is_fresh(now()), "no cached URL → not fresh");
+        assert!(
+            !entry("a", None).cache_is_fresh(now()),
+            "no cached URL → not fresh"
+        );
     }
 
     #[test]

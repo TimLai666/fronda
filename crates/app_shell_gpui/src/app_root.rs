@@ -689,8 +689,7 @@ impl AppRoot {
         let registry_path = crate::project_registry_store::default_registry_path();
         let mut registry = crate::project_registry_store::load_from(&registry_path);
         if registry.remove(registry_id) {
-            if let Err(reason) = crate::project_registry_store::save_to(&registry_path, &registry)
-            {
+            if let Err(reason) = crate::project_registry_store::save_to(&registry_path, &registry) {
                 eprintln!("Failed to update recents: {reason}");
             }
         }
@@ -718,9 +717,7 @@ impl AppRoot {
     /// Copy a `.palmier` package next to the original as "<name> (Copy).palmier"
     /// (project_io's duplicate plan + a recursive tree copy). Returns the new
     /// package path. Pure host fs I/O — no gpui, so it is unit-testable.
-    fn duplicate_project_package(
-        source: &std::path::Path,
-    ) -> Result<std::path::PathBuf, String> {
+    fn duplicate_project_package(source: &std::path::Path) -> Result<std::path::PathBuf, String> {
         let name = source
             .file_stem()
             .and_then(|s| s.to_str())
@@ -1311,27 +1308,24 @@ impl AppRoot {
                                                     .when(armed, |b| {
                                                         b.font_weight(gpui::FontWeight::SEMIBOLD)
                                                     })
-                                                    .on_click(cx.listener(
-                                                        move |this, _, _, cx| {
-                                                            cx.stop_propagation();
-                                                            if this.armed_delete.as_deref()
-                                                                == Some(trash_id.as_str())
-                                                            {
-                                                                Self::delete_project(
-                                                                    &trash_id,
-                                                                    &trash_path,
-                                                                );
-                                                                this.home_cards_loaded_at =
-                                                                    None;
-                                                                this.armed_delete = None;
-                                                                this.hovered_project = None;
-                                                            } else {
-                                                                this.armed_delete =
-                                                                    Some(trash_id.clone());
-                                                            }
-                                                            cx.notify();
-                                                        },
-                                                    ))
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        cx.stop_propagation();
+                                                        if this.armed_delete.as_deref()
+                                                            == Some(trash_id.as_str())
+                                                        {
+                                                            Self::delete_project(
+                                                                &trash_id,
+                                                                &trash_path,
+                                                            );
+                                                            this.home_cards_loaded_at = None;
+                                                            this.armed_delete = None;
+                                                            this.hovered_project = None;
+                                                        } else {
+                                                            this.armed_delete =
+                                                                Some(trash_id.clone());
+                                                        }
+                                                        cx.notify();
+                                                    }))
                                                     .child(if armed {
                                                         "Confirm Delete".to_string()
                                                     } else {
@@ -1400,33 +1394,29 @@ impl AppRoot {
                                 )
                                 // Hero image area (Swift: welcome-butterfly.jpg,
                                 // gradient fallback — no bundled hero asset yet).
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .h(px(240.0))
-                                        .rounded(px(Radius::MD))
-                                        .bg(gpui::linear_gradient(
-                                            135.0,
-                                            gpui::linear_color_stop(
-                                                gpui::Hsla {
-                                                    h: 0.78,
-                                                    s: 0.45,
-                                                    l: 0.30,
-                                                    a: 1.0,
-                                                },
-                                                0.0,
-                                            ),
-                                            gpui::linear_color_stop(
-                                                gpui::Hsla {
-                                                    h: 0.55,
-                                                    s: 0.55,
-                                                    l: 0.35,
-                                                    a: 1.0,
-                                                },
-                                                1.0,
-                                            ),
-                                        )),
-                                )
+                                .child(div().w_full().h(px(240.0)).rounded(px(Radius::MD)).bg(
+                                    gpui::linear_gradient(
+                                        135.0,
+                                        gpui::linear_color_stop(
+                                            gpui::Hsla {
+                                                h: 0.78,
+                                                s: 0.45,
+                                                l: 0.30,
+                                                a: 1.0,
+                                            },
+                                            0.0,
+                                        ),
+                                        gpui::linear_color_stop(
+                                            gpui::Hsla {
+                                                h: 0.55,
+                                                s: 0.55,
+                                                l: 0.35,
+                                                a: 1.0,
+                                            },
+                                            1.0,
+                                        ),
+                                    ),
+                                ))
                                 .child(
                                     div()
                                         .flex()
@@ -1451,16 +1441,16 @@ impl AppRoot {
                                                 "Watch Tutorial",
                                                 false,
                                             )
-                                            .on_click(cx.listener(
-                                                |this, _, _, cx| {
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
                                                     this.welcome_dismissed = true;
                                                     this.open_editor(cx);
                                                     this.tour_overlay.update(cx, |tour, cx| {
                                                         tour.start(cx);
                                                     });
                                                     cx.notify();
-                                                },
-                                            )),
+                                                }),
+                                            ),
                                         )
                                         .child(
                                             Self::welcome_button(
@@ -1468,12 +1458,12 @@ impl AppRoot {
                                                 "Get started",
                                                 true,
                                             )
-                                            .on_click(cx.listener(
-                                                |this, _, _, cx| {
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
                                                     this.welcome_dismissed = true;
                                                     cx.notify();
-                                                },
-                                            )),
+                                                }),
+                                            ),
                                         ),
                                 ),
                         ),
@@ -1614,18 +1604,26 @@ impl Render for AppRoot {
             .id("fronda-root")
             .track_focus(&self.focus_handle.clone())
             .on_key_down(cx.listener(Self::handle_key_down))
-            .on_action(cx.listener(|this, _: &crate::global_shortcuts::PlayPause, w, cx| {
-                this.perform_menu_action(menu::MenuAction::PlayPause, w, cx)
-            }))
-            .on_action(cx.listener(|this, _: &crate::global_shortcuts::PlayBackward, w, cx| {
-                this.perform_menu_action(menu::MenuAction::PlayBackward, w, cx)
-            }))
-            .on_action(cx.listener(|this, _: &crate::global_shortcuts::PauseJkl, w, cx| {
-                this.perform_menu_action(menu::MenuAction::PauseJkl, w, cx)
-            }))
-            .on_action(cx.listener(|this, _: &crate::global_shortcuts::PlayForward, w, cx| {
-                this.perform_menu_action(menu::MenuAction::PlayForward, w, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &crate::global_shortcuts::PlayPause, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::PlayPause, w, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::global_shortcuts::PlayBackward, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::PlayBackward, w, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::global_shortcuts::PauseJkl, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::PauseJkl, w, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::global_shortcuts::PlayForward, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::PlayForward, w, cx)
+                }),
+            )
             .on_action(cx.listener(
                 |this, _: &crate::global_shortcuts::StepFrameBackward, w, cx| {
                     this.perform_menu_action(menu::MenuAction::StepFrameBackward, w, cx)
@@ -1671,17 +1669,21 @@ impl Render for AppRoot {
                     this.perform_menu_action(menu::MenuAction::MaximizeFocusedPane, w, cx)
                 },
             ))
-            .on_action(cx.listener(|this, _: &crate::global_shortcuts::MarkIn, w, cx| {
-                this.perform_menu_action(menu::MenuAction::MarkIn, w, cx)
-            }))
-            .on_action(cx.listener(|this, _: &crate::global_shortcuts::MarkOut, w, cx| {
-                this.perform_menu_action(menu::MenuAction::MarkOut, w, cx)
-            }))
-            .on_action(cx.listener(
-                |this, _: &crate::global_shortcuts::TimelineZoomIn, w, cx| {
+            .on_action(
+                cx.listener(|this, _: &crate::global_shortcuts::MarkIn, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::MarkIn, w, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::global_shortcuts::MarkOut, w, cx| {
+                    this.perform_menu_action(menu::MenuAction::MarkOut, w, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::global_shortcuts::TimelineZoomIn, w, cx| {
                     this.perform_menu_action(menu::MenuAction::TimelineZoomIn, w, cx)
-                },
-            ))
+                }),
+            )
             .on_action(cx.listener(
                 |this, _: &crate::global_shortcuts::TimelineZoomOut, w, cx| {
                     this.perform_menu_action(menu::MenuAction::TimelineZoomOut, w, cx)
@@ -1782,7 +1784,10 @@ mod tests {
     #[test]
     fn accessible_card_menu_has_open_and_reveal() {
         let ids = entry_ids(&AppRoot::project_card_menu_entries(true));
-        assert_eq!(ids, vec!["open", "reveal", "duplicate", "remove-recents", "delete"]);
+        assert_eq!(
+            ids,
+            vec!["open", "reveal", "duplicate", "remove-recents", "delete"]
+        );
     }
 
     #[test]
@@ -1806,7 +1811,10 @@ mod tests {
         let dest = AppRoot::duplicate_project_package(&src).unwrap();
         assert_eq!(dest, base.join("My Project (Copy).palmier"));
         assert!(dest.join("project.json").is_file(), "project.json copied");
-        assert_eq!(std::fs::read(dest.join("media").join("a.txt")).unwrap(), b"hi");
+        assert_eq!(
+            std::fs::read(dest.join("media").join("a.txt")).unwrap(),
+            b"hi"
+        );
         // The original is untouched.
         assert!(src.join("project.json").is_file());
         let _ = std::fs::remove_dir_all(&base);

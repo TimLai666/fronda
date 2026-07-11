@@ -81,7 +81,11 @@ fn composite_over(dst: &mut RgbaImage, src: &RgbaImage) {
     if dst.width != src.width || dst.height != src.height {
         return;
     }
-    for (d, s) in dst.pixels.chunks_exact_mut(4).zip(src.pixels.chunks_exact(4)) {
+    for (d, s) in dst
+        .pixels
+        .chunks_exact_mut(4)
+        .zip(src.pixels.chunks_exact(4))
+    {
         let sa = s[3] as f32 / 255.0;
         if sa <= 0.0 {
             continue;
@@ -159,7 +163,9 @@ pub fn render_text(
 
     let lines: Vec<&str> = text.split('\n').collect();
     let line_width = |line: &str| -> f32 {
-        line.chars().map(|c| sf.h_advance(font.glyph_id(c)) + letter).sum()
+        line.chars()
+            .map(|c| sf.h_advance(font.glyph_id(c)) + letter)
+            .sum()
     };
     let max_width = lines.iter().map(|l| line_width(l)).fold(0.0f32, f32::max);
 
@@ -311,7 +317,10 @@ mod tests {
             color,
             alignment: align,
             // Off by default so tests opt in; TextStyle's Default enables a shadow.
-            shadow: core_model::TextShadow { enabled: false, ..Default::default() },
+            shadow: core_model::TextShadow {
+                enabled: false,
+                ..Default::default()
+            },
             background: Default::default(),
             border: Default::default(),
             font_weight: 400.0,
@@ -328,8 +337,20 @@ mod tests {
 
     #[test]
     fn renders_visible_glyphs() {
-        let red = TextRgba { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
-        let img = render_text("Hi", &style(120.0, red, TextAlignment::Center), 400, 1080, 0.5, 0.5);
+        let red = TextRgba {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        let img = render_text(
+            "Hi",
+            &style(120.0, red, TextAlignment::Center),
+            400,
+            1080,
+            0.5,
+            0.5,
+        );
         let painted = any_opaque(&img);
         assert!(painted > 20, "glyphs painted some pixels, got {painted}");
         // A painted pixel carries the text colour (red-dominant).
@@ -346,8 +367,14 @@ mod tests {
         assert!(std::ptr::eq(font_for("Geist Mono", false), GEIST_MONO));
         assert!(std::ptr::eq(font_for("DM Sans", false), DM_SANS));
         assert!(std::ptr::eq(font_for("Caveat", false), CAVEAT));
-        assert!(std::ptr::eq(font_for("Playfair Display", false), PLAYFAIR_DISPLAY));
-        assert!(std::ptr::eq(font_for("Space Grotesk", false), SPACE_GROTESK));
+        assert!(std::ptr::eq(
+            font_for("Playfair Display", false),
+            PLAYFAIR_DISPLAY
+        ));
+        assert!(std::ptr::eq(
+            font_for("Space Grotesk", false),
+            SPACE_GROTESK
+        ));
         // Variable families ignore the bold flag (weight is an axis, not a file).
         assert!(std::ptr::eq(font_for("Inter", true), INTER));
     }
@@ -358,7 +385,12 @@ mod tests {
         // bold threshold, so font_for returns the SAME file — any rendering
         // difference must come from the applied wght axis, not a Regular/Bold
         // file swap. Issue #65.
-        let white = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let white = TextRgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
         let mut light = style(300.0, white, TextAlignment::Center);
         light.font_name = "Inter".into();
         light.font_weight = 100.0;
@@ -367,14 +399,20 @@ mod tests {
         let l = any_opaque(&render_text("B", &light, 800, 1080, 0.5, 0.5));
         let h = any_opaque(&render_text("B", &heavy, 800, 1080, 0.5, 0.5));
         assert!(l > 0 && h > 0, "both render (light={l}, heavy={h})");
-        assert!(h > l, "heavier wght paints thicker strokes: light={l}, heavy={h}");
+        assert!(
+            h > l,
+            "heavier wght paints thicker strokes: light={l}, heavy={h}"
+        );
     }
 
     #[test]
     fn font_for_maps_bundled_families_and_defaults() {
         assert!(std::ptr::eq(font_for("Anton", false), ANTON));
         assert!(std::ptr::eq(font_for("Bebas Neue", false), BEBAS_NEUE));
-        assert!(std::ptr::eq(font_for("Permanent Marker", false), PERMANENT_MARKER));
+        assert!(std::ptr::eq(
+            font_for("Permanent Marker", false),
+            PERMANENT_MARKER
+        ));
         // Unknown / system font → Poppins (regular vs bold by weight flag).
         assert!(std::ptr::eq(font_for("Helvetica-Bold", true), POPPINS_BOLD));
         assert!(std::ptr::eq(font_for("Whatever", false), POPPINS_REGULAR));
@@ -383,19 +421,36 @@ mod tests {
     #[test]
     fn empty_text_is_blank() {
         let c = TextRgba::default();
-        let img = render_text("   ", &style(40.0, c, TextAlignment::Left), 100, 50, 0.5, 0.5);
+        let img = render_text(
+            "   ",
+            &style(40.0, c, TextAlignment::Left),
+            100,
+            50,
+            0.5,
+            0.5,
+        );
         assert_eq!(any_opaque(&img), 0);
     }
 
     #[test]
     fn shadow_adds_painted_pixels() {
         use core_model::TextShadow;
-        let w = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let w = TextRgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
         let mut s = style(120.0, w, TextAlignment::Center);
         let no_shadow = render_text("Hi", &s, 400, 1080, 0.5, 0.5);
         s.shadow = TextShadow {
             enabled: true,
-            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+            color: TextRgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
             offset_x: 6.0,
             offset_y: 6.0,
             blur: 0.0,
@@ -410,17 +465,30 @@ mod tests {
         s.shadow.blur = 8.0;
         let blurred = render_text("Hi", &s, 400, 1080, 0.5, 0.5);
         assert!(any_opaque(&blurred) > 0, "blurred shadow renders");
-        assert!(blurred.pixels != with_shadow.pixels, "blur changed the shadow");
+        assert!(
+            blurred.pixels != with_shadow.pixels,
+            "blur changed the shadow"
+        );
     }
 
     #[test]
     fn background_fills_behind_text() {
         use core_model::TextFill;
-        let black = TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+        let black = TextRgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
         let mut s = style(120.0, black, TextAlignment::Center);
         s.background = TextFill {
             enabled: true,
-            color: TextRgba { r: 0.0, g: 0.5, b: 1.0, a: 1.0 },
+            color: TextRgba {
+                r: 0.0,
+                g: 0.5,
+                b: 1.0,
+                a: 1.0,
+            },
             padding: Some(8.0),
             corner_radius: None,
         };
@@ -448,11 +516,21 @@ mod tests {
     fn border_outlines_the_text() {
         use core_model::TextFill;
         // White text with a black outline: black pixels appear around the glyphs.
-        let white = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let white = TextRgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
         let mut s = style(120.0, white, TextAlignment::Center);
         s.border = TextFill {
             enabled: true,
-            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+            color: TextRgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
             padding: Some(3.0),
             corner_radius: None,
         };
@@ -467,10 +545,28 @@ mod tests {
 
     #[test]
     fn multiline_paints_more_than_single_line() {
-        let w = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
-        let one = render_text("AA", &style(120.0, w, TextAlignment::Center), 400, 1080, 0.5, 0.5);
-        let two =
-            render_text("AA\nAA", &style(120.0, w, TextAlignment::Center), 400, 1080, 0.5, 0.5);
+        let w = TextRgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let one = render_text(
+            "AA",
+            &style(120.0, w, TextAlignment::Center),
+            400,
+            1080,
+            0.5,
+            0.5,
+        );
+        let two = render_text(
+            "AA\nAA",
+            &style(120.0, w, TextAlignment::Center),
+            400,
+            1080,
+            0.5,
+            0.5,
+        );
         assert!(any_opaque(&two) > any_opaque(&one), "two lines paint more");
     }
 
@@ -492,11 +588,21 @@ mod tests {
         // A big rightward shadow offset dominates the horizontal span. At a 2x canvas
         // the offset must double with the glyphs, so the span ~doubles; if the offset
         // stayed fixed the span would grow far less.
-        let w = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let w = TextRgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
         let mut s = style(40.0, w, TextAlignment::Center);
         s.shadow = TextShadow {
             enabled: true,
-            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+            color: TextRgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
             offset_x: 200.0,
             offset_y: 0.0,
             blur: 0.0,
@@ -515,11 +621,21 @@ mod tests {
         use core_model::TextFill;
         // A thick outline extends the span by its stroke width per side. At a 2x
         // canvas the stroke must double, so the span ~doubles.
-        let w = TextRgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+        let w = TextRgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
         let mut s = style(40.0, w, TextAlignment::Center);
         s.border = TextFill {
             enabled: true,
-            color: TextRgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+            color: TextRgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
             padding: Some(100.0),
             corner_radius: None,
         };

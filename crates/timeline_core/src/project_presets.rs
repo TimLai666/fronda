@@ -21,12 +21,36 @@ impl AspectPreset {
 
 /// Aspect presets in Swift menu order.
 pub const ASPECT_PRESETS: &[AspectPreset] = &[
-    AspectPreset { label: "16:9", width: 1920, height: 1080 },
-    AspectPreset { label: "9:14", width: 1080, height: 1680 },
-    AspectPreset { label: "9:16", width: 1080, height: 1920 },
-    AspectPreset { label: "1:1", width: 1080, height: 1080 },
-    AspectPreset { label: "4:3", width: 1440, height: 1080 },
-    AspectPreset { label: "2.4:1", width: 2560, height: 1080 },
+    AspectPreset {
+        label: "16:9",
+        width: 1920,
+        height: 1080,
+    },
+    AspectPreset {
+        label: "9:14",
+        width: 1080,
+        height: 1680,
+    },
+    AspectPreset {
+        label: "9:16",
+        width: 1080,
+        height: 1920,
+    },
+    AspectPreset {
+        label: "1:1",
+        width: 1080,
+        height: 1080,
+    },
+    AspectPreset {
+        label: "4:3",
+        width: 1440,
+        height: 1080,
+    },
+    AspectPreset {
+        label: "2.4:1",
+        width: 2560,
+        height: 1080,
+    },
 ];
 
 /// Selectable project frame rates (Swift `[24, 25, 30, 50, 60]`).
@@ -70,10 +94,22 @@ impl QualityPreset {
 
 /// Quality presets in Swift menu order.
 pub const QUALITY_PRESETS: &[QualityPreset] = &[
-    QualityPreset { label: "720p", short_edge: 720 },
-    QualityPreset { label: "1080p", short_edge: 1080 },
-    QualityPreset { label: "2K", short_edge: 1440 },
-    QualityPreset { label: "4K", short_edge: 2160 },
+    QualityPreset {
+        label: "720p",
+        short_edge: 720,
+    },
+    QualityPreset {
+        label: "1080p",
+        short_edge: 1080,
+    },
+    QualityPreset {
+        label: "2K",
+        short_edge: 1440,
+    },
+    QualityPreset {
+        label: "4K",
+        short_edge: 2160,
+    },
 ];
 
 /// A preview zoom preset. `Fit` scales to the viewport rather than a fixed
@@ -87,13 +123,41 @@ pub struct ZoomPreset {
 
 /// Zoom presets in Swift menu order.
 pub const ZOOM_PRESETS: &[ZoomPreset] = &[
-    ZoomPreset { label: "25%", value: 0.25, fit: false },
-    ZoomPreset { label: "50%", value: 0.50, fit: false },
-    ZoomPreset { label: "75%", value: 0.75, fit: false },
-    ZoomPreset { label: "Fit", value: 1.0, fit: true },
-    ZoomPreset { label: "125%", value: 1.25, fit: false },
-    ZoomPreset { label: "150%", value: 1.50, fit: false },
-    ZoomPreset { label: "200%", value: 2.0, fit: false },
+    ZoomPreset {
+        label: "25%",
+        value: 0.25,
+        fit: false,
+    },
+    ZoomPreset {
+        label: "50%",
+        value: 0.50,
+        fit: false,
+    },
+    ZoomPreset {
+        label: "75%",
+        value: 0.75,
+        fit: false,
+    },
+    ZoomPreset {
+        label: "Fit",
+        value: 1.0,
+        fit: true,
+    },
+    ZoomPreset {
+        label: "125%",
+        value: 1.25,
+        fit: false,
+    },
+    ZoomPreset {
+        label: "150%",
+        value: 1.50,
+        fit: false,
+    },
+    ZoomPreset {
+        label: "200%",
+        value: 2.0,
+        fit: false,
+    },
 ];
 
 #[cfg(test)]

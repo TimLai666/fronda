@@ -169,7 +169,7 @@ pub fn build_envelope(before: &Timeline, after: &Timeline, extras: Value) -> Val
         obj.insert("track".into(), json!(ti));
         rows.push((*ti, clip.start_frame, Value::Object(obj)));
     }
-    rows.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    rows.sort_by_key(|a| (a.0, a.1));
     let total_changed = rows.len();
     let clips: Vec<Value> = rows
         .into_iter()
@@ -462,11 +462,7 @@ mod tests {
         ]);
         let mut after = before.clone();
         after.tracks.swap(0, 1);
-        let env = build_envelope(
-            &before,
-            &after,
-            json!({"moved": 4, "notes": ["tool note"]}),
-        );
+        let env = build_envelope(&before, &after, json!({"moved": 4, "notes": ["tool note"]}));
         assert_eq!(env["moved"], json!(4));
         assert_eq!(env["notes"], json!(["tool note", TRACKS_SHIFTED_NOTE]));
     }

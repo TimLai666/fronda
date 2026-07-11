@@ -292,7 +292,7 @@ impl Default for AudioCaps {
             durations: None,
             min_prompt_length: 1,
             pricing: AudioPricing::Unknown,
-                    min_seconds: None,
+            min_seconds: None,
             max_seconds: None,
         }
     }
@@ -340,8 +340,26 @@ pub fn default_model(kind: ModelKind, is_paid: bool) -> Result<&'static ModelCon
 // ── The catalog ─────────────────────────────────────────────────
 
 const ELEVENLABS_VOICES: &[&str] = &[
-    "Rachel", "Aria", "Roger", "Sarah", "Laura", "Charlie", "George", "Callum", "River", "Liam",
-    "Charlotte", "Alice", "Matilda", "Will", "Jessica", "Eric", "Chris", "Brian", "Daniel", "Lily",
+    "Rachel",
+    "Aria",
+    "Roger",
+    "Sarah",
+    "Laura",
+    "Charlie",
+    "George",
+    "Callum",
+    "River",
+    "Liam",
+    "Charlotte",
+    "Alice",
+    "Matilda",
+    "Will",
+    "Jessica",
+    "Eric",
+    "Chris",
+    "Brian",
+    "Daniel",
+    "Lily",
     "Bill",
 ];
 
@@ -824,8 +842,7 @@ pub fn aspect_ratio_display_label(id: &str) -> String {
     }
     if parts.len() >= 2 {
         let n = parts.len();
-        if let (Ok(width), Ok(height)) =
-            (parts[n - 2].parse::<i64>(), parts[n - 1].parse::<i64>())
+        if let (Ok(width), Ok(height)) = (parts[n - 2].parse::<i64>(), parts[n - 1].parse::<i64>())
         {
             parts.truncate(n - 2);
             parts.push(format!("{width}:{height}"));
@@ -888,7 +905,12 @@ mod tests {
             ("image", "grok-imagine", "Grok Imagine", false),
             ("image", "recraft-v4", "Recraft V4", false),
             ("audio", "elevenlabs-tts-v3", "ElevenLabs v3 TTS", false),
-            ("audio", "gemini-3.1-flash-tts", "Gemini 3.1 Flash TTS", false),
+            (
+                "audio",
+                "gemini-3.1-flash-tts",
+                "Gemini 3.1 Flash TTS",
+                false,
+            ),
             ("audio", "minimax-music-v2.6", "MiniMax Music 2.6", false),
             ("audio", "elevenlabs-music", "ElevenLabs Music", false),
         ];
@@ -920,14 +942,21 @@ mod tests {
     fn seedance_caps_transcribed() {
         let c = video("seedance-2");
         assert_eq!(c.durations, (4..=15).collect::<Vec<_>>());
-        assert_eq!(c.resolutions.as_deref(), Some(&["480p", "720p", "1080p"][..]));
+        assert_eq!(
+            c.resolutions.as_deref(),
+            Some(&["480p", "720p", "1080p"][..])
+        );
         assert_eq!(
             c.aspect_ratios,
             vec!["auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
         );
         assert!(c.supports_first_frame && c.supports_last_frame);
         assert_eq!(
-            (c.max_reference_images, c.max_reference_videos, c.max_reference_audios),
+            (
+                c.max_reference_images,
+                c.max_reference_videos,
+                c.max_reference_audios
+            ),
             (9, 3, 3)
         );
         assert_eq!(c.max_total_references, Some(12));
@@ -942,7 +971,10 @@ mod tests {
         );
         let fast = video("seedance-2-fast");
         assert_eq!(fast.resolutions.as_deref(), Some(&["480p", "720p"][..]));
-        assert_eq!(fast.price_per_second, vec![("480p", 0.0843), ("720p", 0.2427)]);
+        assert_eq!(
+            fast.price_per_second,
+            vec![("480p", 0.0843), ("720p", 0.2427)]
+        );
     }
 
     #[test]
@@ -1006,7 +1038,10 @@ mod tests {
     #[test]
     fn image_caps_transcribed() {
         let gpt = image("gpt-image-2");
-        assert_eq!(gpt.qualities.as_deref(), Some(&["low", "medium", "high"][..]));
+        assert_eq!(
+            gpt.qualities.as_deref(),
+            Some(&["low", "medium", "high"][..])
+        );
         assert_eq!(gpt.resolutions.as_ref().unwrap().len(), 6);
         assert!(gpt.aspect_ratios.is_empty());
         assert_eq!(gpt.max_images, 1);
@@ -1065,7 +1100,10 @@ mod tests {
 
     #[test]
     fn default_model_first_available_per_kind() {
-        assert_eq!(default_model(ModelKind::Video, false).unwrap().id, "seedance-2");
+        assert_eq!(
+            default_model(ModelKind::Video, false).unwrap().id,
+            "seedance-2"
+        );
         assert_eq!(
             default_model(ModelKind::Image, false).unwrap().id,
             "nano-banana-pro"
@@ -1093,15 +1131,27 @@ mod tests {
 
     #[test]
     fn video_cost_by_resolution() {
-        approx(video_cost(video("seedance-2"), 5, Some("720p"), true), 1.512);
-        approx(video_cost(video("seedance-2"), 5, Some("1080p"), true), 3.40);
-        approx(video_cost(video("veo3.1-lite"), 8, Some("720p"), true), 0.40);
+        approx(
+            video_cost(video("seedance-2"), 5, Some("720p"), true),
+            1.512,
+        );
+        approx(
+            video_cost(video("seedance-2"), 5, Some("1080p"), true),
+            3.40,
+        );
+        approx(
+            video_cost(video("veo3.1-lite"), 8, Some("720p"), true),
+            0.40,
+        );
     }
 
     #[test]
     fn video_cost_audio_discount() {
         // kling-o3: 0.14 * 0.8 * 10
-        approx(video_cost(video("kling-o3"), 10, Some("1080p"), false), 1.12);
+        approx(
+            video_cost(video("kling-o3"), 10, Some("1080p"), false),
+            1.12,
+        );
         // no discount entry for 4k and no "" default → full rate
         approx(video_cost(video("kling-o3"), 10, Some("4k"), false), 4.20);
         // veo: "" default discount 2/3 applies at any resolution
@@ -1146,7 +1196,10 @@ mod tests {
             "quality-priced model without a quality → no estimate"
         );
         // Resolution-keyed (Nano Banana Pro), multiplied by count.
-        approx(image_cost(image("nano-banana-pro"), Some("4K"), None, 3), 0.90);
+        approx(
+            image_cost(image("nano-banana-pro"), Some("4K"), None, 3),
+            0.90,
+        );
         // Flat "" key (Grok), count clamped to ≥1.
         approx(image_cost(image("grok-imagine"), None, None, 4), 0.08);
         approx(image_cost(image("grok-imagine"), None, None, 0), 0.02);
@@ -1169,13 +1222,19 @@ mod tests {
             None,
             "empty prompt → no per-char estimate"
         );
-        approx(audio_cost(audio("elevenlabs-music"), "beat", Some(60)), 0.12);
+        approx(
+            audio_cost(audio("elevenlabs-music"), "beat", Some(60)),
+            0.12,
+        );
         assert_eq!(
             audio_cost(audio("elevenlabs-music"), "beat", None),
             None,
             "per-second pricing needs a duration"
         );
-        approx(audio_cost(audio("minimax-music-v2.6"), "lofi hip hop", None), 0.03);
+        approx(
+            audio_cost(audio("minimax-music-v2.6"), "lofi hip hop", None),
+            0.03,
+        );
         let unknown = AudioCaps::default();
         assert_eq!(audio_cost(&unknown, "prompt", Some(30)), None);
     }
@@ -1256,18 +1315,26 @@ mod tests {
             ),
         ];
         assert_eq!(got, expected);
-        assert!(upscale_catalog().iter().all(|m| m.kind() == ModelKind::Upscale));
+        assert!(upscale_catalog()
+            .iter()
+            .all(|m| m.kind() == ModelKind::Upscale));
     }
 
     #[test]
     fn upscale_models_for_filters_by_type() {
         use core_model::ClipType;
-        let video: Vec<&str> = upscale_models_for(ClipType::Video).iter().map(|m| m.id).collect();
+        let video: Vec<&str> = upscale_models_for(ClipType::Video)
+            .iter()
+            .map(|m| m.id)
+            .collect();
         assert_eq!(
             video,
             vec!["bytedance-upscaler", "seedvr-upscaler", "topaz-upscaler"]
         );
-        let image: Vec<&str> = upscale_models_for(ClipType::Image).iter().map(|m| m.id).collect();
+        let image: Vec<&str> = upscale_models_for(ClipType::Image)
+            .iter()
+            .map(|m| m.id)
+            .collect();
         assert_eq!(image, vec!["seedvr-image-upscaler", "topaz-image-upscaler"]);
         assert!(upscale_models_for(ClipType::Audio).is_empty());
     }

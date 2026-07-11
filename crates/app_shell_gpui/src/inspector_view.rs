@@ -17,10 +17,12 @@ use crate::field_components::{
 use crate::inspector_model::{InspectorState, InspectorTab};
 use crate::keyframes_view::KeyframesView;
 use crate::text_area::{TextArea, TextAreaEvent};
-use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text};
+use crate::theme::{
+    Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text,
+};
 use core_model::{Clip, ClipType, MediaManifestEntry, TextAlignment, TextFill, TextStyle};
 use gpui::{
-    div, prelude::*, px, App, AnyElement, Context, DragMoveEvent, Entity, FocusHandle, Focusable,
+    div, prelude::*, px, AnyElement, App, Context, DragMoveEvent, Entity, FocusHandle, Focusable,
     Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
     SharedString, Styled, Window,
 };
@@ -142,9 +144,7 @@ fn scrub_commit_args(
     canvas_w: i64,
     canvas_h: i64,
 ) -> Option<(&'static str, serde_json::Value)> {
-    let props = |properties: serde_json::Value| {
-        serde_json::json!({ "clipIds": [clip.id], "properties": properties })
-    };
+    let props = |properties: serde_json::Value| serde_json::json!({ "clipIds": [clip.id], "properties": properties });
     match field {
         "volume" => {
             let db = value.clamp(
@@ -415,7 +415,11 @@ pub struct InspectorView {
 
 impl InspectorView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let content_area = cx.new(|cx| TextArea::new(cx, "Text").with_min_lines(4).with_max_lines(8));
+        let content_area = cx.new(|cx| {
+            TextArea::new(cx, "Text")
+                .with_min_lines(4)
+                .with_max_lines(8)
+        });
         cx.subscribe(&content_area, |this: &mut Self, area, event, cx| {
             if matches!(event, TextAreaEvent::Edited) {
                 if let Some(id) = this.text_synced_clip.clone() {
@@ -690,7 +694,11 @@ impl InspectorView {
 
     /// Toggle a flip flag on every selected clip.
     fn toggle_flip(&mut self, horizontal: bool, current: bool, cx: &mut Context<Self>) {
-        let key = if horizontal { "flipHorizontal" } else { "flipVertical" };
+        let key = if horizontal {
+            "flipHorizontal"
+        } else {
+            "flipVertical"
+        };
         let ids = self.selected_clip_ids.clone();
         if ids.is_empty() {
             return;
@@ -711,7 +719,8 @@ impl InspectorView {
         self.text_synced_clip = Some(clip.id.clone());
         let style = clip.text_style.clone().unwrap_or_default();
         let content = clip.text_content.clone().unwrap_or_default();
-        self.content_area.update(cx, |a, cx| a.set_text(content, cx));
+        self.content_area
+            .update(cx, |a, cx| a.set_text(content, cx));
         self.font_picker
             .update(cx, |f, cx| f.set_current(style.font_name.clone(), cx));
         self.text_color_field
@@ -781,7 +790,11 @@ impl InspectorView {
             )
             .child(
                 div()
-                    .text_color(if enabled { Accent::PRIMARY } else { Text::MUTED })
+                    .text_color(if enabled {
+                        Accent::PRIMARY
+                    } else {
+                        Text::MUTED
+                    })
                     .text_size(px(FontSize::XS))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .when(enabled, |el| el.cursor_pointer())
@@ -1043,7 +1056,11 @@ fn icon_toggle(id: String, glyph: &'static str, is_on: bool) -> gpui::Stateful<g
         })
         .cursor_pointer()
         .text_size(px(FontSize::SM))
-        .text_color(if is_on { Accent::PRIMARY } else { Text::SECONDARY })
+        .text_color(if is_on {
+            Accent::PRIMARY
+        } else {
+            Text::SECONDARY
+        })
         .child(glyph)
 }
 
@@ -1179,7 +1196,8 @@ impl InspectorView {
                 gen_section = gen_section.child(prop_row("Resolution", res));
             }
             if gen.duration > 0 {
-                gen_section = gen_section.child(prop_row("Duration", &format!("{}s", gen.duration)));
+                gen_section =
+                    gen_section.child(prop_row("Duration", &format!("{}s", gen.duration)));
             }
             body = body.child(gen_section);
 
@@ -1303,7 +1321,11 @@ impl InspectorView {
             .w_full()
             .px(px(Spacing::LG))
             .h(px(22.0))
-            .opacity(if enabled { Opacity::OPAQUE } else { Opacity::MEDIUM })
+            .opacity(if enabled {
+                Opacity::OPAQUE
+            } else {
+                Opacity::MEDIUM
+            })
             .child(
                 div()
                     .flex_1()
@@ -1374,7 +1396,11 @@ impl InspectorView {
             .w_full()
             .px(px(Spacing::LG))
             .h(px(22.0))
-            .opacity(if enabled { Opacity::OPAQUE } else { Opacity::MEDIUM })
+            .opacity(if enabled {
+                Opacity::OPAQUE
+            } else {
+                Opacity::MEDIUM
+            })
             .child(
                 div()
                     .flex_1()
@@ -1388,16 +1414,20 @@ impl InspectorView {
                     .flex_row()
                     .items_center()
                     .gap(px(Spacing::XS))
-                    .child(icon_toggle("flip-h".into(), "↔", flip_h).when(enabled, |el| {
-                        el.on_click(cx.listener(move |this, _, _, cx| {
-                            this.toggle_flip(true, flip_h, cx);
-                        }))
-                    }))
-                    .child(icon_toggle("flip-v".into(), "↕", flip_v).when(enabled, |el| {
-                        el.on_click(cx.listener(move |this, _, _, cx| {
-                            this.toggle_flip(false, flip_v, cx);
-                        }))
-                    })),
+                    .child(
+                        icon_toggle("flip-h".into(), "↔", flip_h).when(enabled, |el| {
+                            el.on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_flip(true, flip_h, cx);
+                            }))
+                        }),
+                    )
+                    .child(
+                        icon_toggle("flip-v".into(), "↕", flip_v).when(enabled, |el| {
+                            el.on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_flip(false, flip_v, cx);
+                            }))
+                        }),
+                    ),
             )
             .into_any_element()
     }
@@ -1493,7 +1523,11 @@ impl InspectorView {
                     })
                     .cursor_pointer()
                     .text_size(px(FontSize::XXS))
-                    .text_color(if active { Text::PRIMARY } else { Text::TERTIARY })
+                    .text_color(if active {
+                        Text::PRIMARY
+                    } else {
+                        Text::TERTIARY
+                    })
                     .on_click(cx.listener(move |_, _, _, cx| {
                         Self::run_tool(
                             "update_text",
@@ -1555,8 +1589,26 @@ impl InspectorView {
 
         let size_row = self.scrub_row("text_size", "Size", 12.0, 300.0, 0.5, false, true, cx);
         let opacity_row = self.scrub_row("opacity", "Opacity", 0.0, 100.0, 0.5, false, true, cx);
-        let pos_x_row = self.scrub_row("position_x", "Position X", -9999.0, 9999.0, 2.0, false, true, cx);
-        let pos_y_row = self.scrub_row("position_y", "Position Y", -9999.0, 9999.0, 2.0, false, true, cx);
+        let pos_x_row = self.scrub_row(
+            "position_x",
+            "Position X",
+            -9999.0,
+            9999.0,
+            2.0,
+            false,
+            true,
+            cx,
+        );
+        let pos_y_row = self.scrub_row(
+            "position_y",
+            "Position Y",
+            -9999.0,
+            9999.0,
+            2.0,
+            false,
+            true,
+            cx,
+        );
 
         div()
             .flex()
@@ -1566,26 +1618,26 @@ impl InspectorView {
             // Content
             .child(section_title("Content"))
             .child(
-                div()
-                    .w_full()
-                    .px(px(Spacing::LG))
-                    .child(
-                        div()
-                            .w_full()
-                            .p(px(Spacing::XS))
-                            .rounded(px(Radius::SM))
-                            .bg(Hsla {
-                                h: 0.0,
-                                s: 0.0,
-                                l: 1.0,
-                                a: Opacity::HINT,
-                            })
-                            .child(self.content_area.clone()),
-                    ),
+                div().w_full().px(px(Spacing::LG)).child(
+                    div()
+                        .w_full()
+                        .p(px(Spacing::XS))
+                        .rounded(px(Radius::SM))
+                        .bg(Hsla {
+                            h: 0.0,
+                            s: 0.0,
+                            l: 1.0,
+                            a: Opacity::HINT,
+                        })
+                        .child(self.content_area.clone()),
+                ),
             )
             // Typography
             .child(section_title("Typography"))
-            .child(label_row("Font", self.font_picker.clone().into_any_element()))
+            .child(label_row(
+                "Font",
+                self.font_picker.clone().into_any_element(),
+            ))
             .child(size_row)
             // Appearance
             .child(section_title("Appearance"))
@@ -1634,8 +1686,8 @@ impl Render for InspectorView {
         let volume_expanded = self.state.volume_expanded;
         let kf_visible = self.state.keyframes_visible;
         let has_clip = self.has_clip_selected || !self.selected_clip_ids.is_empty();
-        let has_asset = !has_clip
-            && (self.has_media_asset_selected || self.selected_media_asset_id.is_some());
+        let has_asset =
+            !has_clip && (self.has_media_asset_selected || self.selected_media_asset_id.is_some());
         let title = if has_asset {
             "Source"
         } else if has_clip {
@@ -1705,10 +1757,20 @@ impl Render for InspectorView {
 
         // Build interactive scrub rows for all numeric fields
         // Volume: -60 dB (floor) to +15 dB, 0.5 dB/px sensitivity (matches Swift VolumeScale)
-        let vol_row = self.scrub_row("volume", "Volume", -60.0, 15.0, 0.5, false, rows_enabled, cx);
+        let vol_row = self.scrub_row(
+            "volume",
+            "Volume",
+            -60.0,
+            15.0,
+            0.5,
+            false,
+            rows_enabled,
+            cx,
+        );
         // Fade rows are display-bound only: the tool surface has no fade write yet.
         let fade_in_row = self.scrub_row("fade_in", "Fade In", 0.0, 10.0, 0.05, false, false, cx);
-        let fade_out_row = self.scrub_row("fade_out", "Fade Out", 0.0, 10.0, 0.05, false, false, cx);
+        let fade_out_row =
+            self.scrub_row("fade_out", "Fade Out", 0.0, 10.0, 0.05, false, false, cx);
         let pos_x_row = self.scrub_row(
             "position_x",
             "Position X",
@@ -1729,8 +1791,7 @@ impl Render for InspectorView {
             rows_enabled,
             cx,
         );
-        let scale_row =
-            self.scrub_row("scale", "Scale", 1.0, 1000.0, 1.0, true, rows_enabled, cx);
+        let scale_row = self.scrub_row("scale", "Scale", 1.0, 1000.0, 1.0, true, rows_enabled, cx);
         let rotation_row = self.scrub_row(
             "rotation",
             "Rotation",
@@ -1752,8 +1813,7 @@ impl Render for InspectorView {
             cx,
         );
         // Speed: 0.25× to 4.0×, 0.01/px sensitivity (matches Swift speedRange 0.25...4.0, suffix "x")
-        let speed_row =
-            self.scrub_row("speed", "Speed", 0.25, 4.0, 0.01, false, rows_enabled, cx);
+        let speed_row = self.scrub_row("speed", "Speed", 0.25, 4.0, 0.01, false, rows_enabled, cx);
 
         let crop_row = self.crop_row(first_clip.as_ref(), cx);
         let flip_row = self.flip_row(first_clip.as_ref(), cx);
@@ -1770,17 +1830,18 @@ impl Render for InspectorView {
                     .items_center()
                     .w_full()
                     .child(
-                        div()
-                            .flex_1()
-                            .child(section_header("section-levels", "Levels", volume_expanded)
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_volume(cx)))),
+                        div().flex_1().child(
+                            section_header("section-levels", "Levels", volume_expanded)
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_volume(cx))),
+                        ),
                     )
                     .when(volume_expanded && rows_enabled, |el| {
-                        el.child(div().pr(px(Spacing::LG)).child(
-                            reset_button("reset-levels").on_click(
-                                cx.listener(|this, _, _, cx| this.reset_levels(cx)),
+                        el.child(
+                            div().pr(px(Spacing::LG)).child(
+                                reset_button("reset-levels")
+                                    .on_click(cx.listener(|this, _, _, cx| this.reset_levels(cx))),
                             ),
-                        ))
+                        )
                     }),
             )
             .when(volume_expanded, |el| {
@@ -1805,11 +1866,13 @@ impl Render for InspectorView {
                         ),
                     )
                     .when(transform_expanded && rows_enabled, |el| {
-                        el.child(div().pr(px(Spacing::LG)).child(
-                            reset_button("reset-transform").on_click(
-                                cx.listener(|this, _, _, cx| this.reset_transform(cx)),
+                        el.child(
+                            div().pr(px(Spacing::LG)).child(
+                                reset_button("reset-transform").on_click(
+                                    cx.listener(|this, _, _, cx| this.reset_transform(cx)),
+                                ),
                             ),
-                        ))
+                        )
                     }),
             )
             .when(transform_expanded, |el| {
@@ -1823,26 +1886,31 @@ impl Render for InspectorView {
             });
 
         // Speed section (↺ resets)
-        let speed_section = div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .w_full()
-                    .child(div().flex_1().child(section_header("section-playback", "Playback", true)))
-                    .when(rows_enabled, |el| {
-                        el.child(div().pr(px(Spacing::LG)).child(
-                            reset_button("reset-playback").on_click(
-                                cx.listener(|this, _, _, cx| this.reset_playback(cx)),
-                            ),
-                        ))
-                    }),
-            )
-            .child(speed_row);
+        let speed_section =
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .w_full()
+                        .child(div().flex_1().child(section_header(
+                            "section-playback",
+                            "Playback",
+                            true,
+                        )))
+                        .when(rows_enabled, |el| {
+                            el.child(div().pr(px(Spacing::LG)).child(
+                                reset_button("reset-playback").on_click(
+                                    cx.listener(|this, _, _, cx| this.reset_playback(cx)),
+                                ),
+                            ))
+                        }),
+                )
+                .child(speed_row);
 
         // Chroma Key section (visual clips): enable toggle, key-colour swatch +
         // Green/Blue presets + preview eyedropper, and tolerance/softness/spill
@@ -1858,12 +1926,36 @@ impl Render for InspectorView {
         let chroma_hue = chroma_ctrls.key_hue() as f32;
         let sampling_active = crate::chroma_sampling::sampling_clip().is_some();
         let chroma_rows_on = rows_enabled && chroma_enabled;
-        let tol_row =
-            self.scrub_row("chroma_tolerance", "Tolerance", 0.0, 1.0, 0.004, false, chroma_rows_on, cx);
-        let soft_row =
-            self.scrub_row("chroma_softness", "Softness", 0.0, 1.0, 0.004, false, chroma_rows_on, cx);
-        let spill_row =
-            self.scrub_row("chroma_spill", "Spill", 0.0, 1.0, 0.004, false, chroma_rows_on, cx);
+        let tol_row = self.scrub_row(
+            "chroma_tolerance",
+            "Tolerance",
+            0.0,
+            1.0,
+            0.004,
+            false,
+            chroma_rows_on,
+            cx,
+        );
+        let soft_row = self.scrub_row(
+            "chroma_softness",
+            "Softness",
+            0.0,
+            1.0,
+            0.004,
+            false,
+            chroma_rows_on,
+            cx,
+        );
+        let spill_row = self.scrub_row(
+            "chroma_spill",
+            "Spill",
+            0.0,
+            1.0,
+            0.004,
+            false,
+            chroma_rows_on,
+            cx,
+        );
         let chroma_section = div()
             .flex()
             .flex_col()
@@ -1888,9 +1980,7 @@ impl Render for InspectorView {
                                 Text::MUTED
                             })
                             .child(if chroma_enabled { "On" } else { "Off" })
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.toggle_chroma_enabled(cx)),
-                            ),
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_chroma_enabled(cx))),
                     ),
             )
             .child(
@@ -1965,10 +2055,12 @@ impl Render for InspectorView {
                             } else {
                                 Text::SECONDARY
                             })
-                            .child(if sampling_active { "Click preview…" } else { "⦿ Pick" })
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.start_chroma_sampling(cx)),
-                            ),
+                            .child(if sampling_active {
+                                "Click preview…"
+                            } else {
+                                "⦿ Pick"
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.start_chroma_sampling(cx))),
                     ),
             )
             .child(tol_row)
@@ -2166,37 +2258,38 @@ impl Render for InspectorView {
                                                     )),
                                             )
                                     };
-                                    let vol_row2 = div()
-                                        .flex()
-                                        .flex_col()
-                                        .w_full()
-                                        .child(
-                                            section_header(
-                                                "section-levels-audio",
-                                                "Levels",
-                                                volume_expanded,
+                                    let vol_row2 =
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .w_full()
+                                            .child(
+                                                section_header(
+                                                    "section-levels-audio",
+                                                    "Levels",
+                                                    volume_expanded,
+                                                )
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.toggle_volume(cx)
+                                                })),
                                             )
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.toggle_volume(cx)
-                                            })),
-                                        )
-                                        .when(volume_expanded, |el| {
-                                            el.child(audio_static_row(
-                                                "scrub-volume-audio",
-                                                "Volume",
-                                                "volume",
-                                            ))
-                                            .child(audio_static_row(
-                                                "scrub-fade_in-audio",
-                                                "Fade In",
-                                                "fade_in",
-                                            ))
-                                            .child(audio_static_row(
-                                                "scrub-fade_out-audio",
-                                                "Fade Out",
-                                                "fade_out",
-                                            ))
-                                        });
+                                            .when(volume_expanded, |el| {
+                                                el.child(audio_static_row(
+                                                    "scrub-volume-audio",
+                                                    "Volume",
+                                                    "volume",
+                                                ))
+                                                .child(audio_static_row(
+                                                    "scrub-fade_in-audio",
+                                                    "Fade In",
+                                                    "fade_in",
+                                                ))
+                                                .child(audio_static_row(
+                                                    "scrub-fade_out-audio",
+                                                    "Fade Out",
+                                                    "fade_out",
+                                                ))
+                                            });
                                     let spd_row2 =
                                         audio_static_row("scrub-speed-audio", "Speed", "speed");
                                     div()
@@ -2242,8 +2335,9 @@ impl Render for InspectorView {
                                         })
                                         .into_any_element()
                                 }
-                                InspectorTab::Text => text_tab
-                                    .unwrap_or_else(|| div().into_any_element()),
+                                InspectorTab::Text => {
+                                    text_tab.unwrap_or_else(|| div().into_any_element())
+                                }
                                 InspectorTab::AiEdit => ai_edit_entity.clone().into_any_element(),
                             })
                     }),
@@ -2286,7 +2380,10 @@ mod tests {
         assert!((v["position_x"]).abs() < 1e-3, "default top-left x = 0 px");
         assert!((v["position_y"]).abs() < 1e-3);
         assert!((v["fade_in"]).abs() < 1e-6);
-        assert!((v["text_size"] - 96.0).abs() < 1e-4, "TextStyle default 96pt");
+        assert!(
+            (v["text_size"] - 96.0).abs() < 1e-4,
+            "TextStyle default 96pt"
+        );
     }
 
     #[test]
@@ -2365,7 +2462,14 @@ mod tests {
             "speed clamps to the Swift 0.25–4.0 range"
         );
         let (_, args) = scrub_commit_args("rotation", 90.0, &clip, 1920, 1080).unwrap();
-        assert!((args["properties"]["transform"]["rotation"].as_f64().unwrap() - 90.0).abs() < 1e-9);
+        assert!(
+            (args["properties"]["transform"]["rotation"]
+                .as_f64()
+                .unwrap()
+                - 90.0)
+                .abs()
+                < 1e-9
+        );
     }
 
     #[test]

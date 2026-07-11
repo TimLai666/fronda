@@ -72,14 +72,16 @@ pub fn nest_clips(
     let max_idx = clip_indices[clip_indices.len() - 1];
     if max_idx - min_idx + 1 != clip_indices.len() {
         return Err(
-            "The selected clips must be adjacent (no other clip between them) to nest."
-                .to_string(),
+            "The selected clips must be adjacent (no other clip between them) to nest.".to_string(),
         );
     }
 
     let track = &timeline.tracks[track_index];
     let track_type = track.r#type;
-    let grouped: Vec<Clip> = clip_indices.iter().map(|&i| track.clips[i].clone()).collect();
+    let grouped: Vec<Clip> = clip_indices
+        .iter()
+        .map(|&i| track.clips[i].clone())
+        .collect();
 
     let min_start = grouped.iter().map(|c| c.start_frame).min().unwrap_or(0);
     let max_end = grouped
@@ -187,7 +189,9 @@ pub fn decompose_nest(
     child: &Timeline,
 ) -> Result<Vec<String>, String> {
     let Some(loc) = find_clip(timeline, carrier_id) else {
-        return Err(format!("Clip '{carrier_id}' was not found on the timeline."));
+        return Err(format!(
+            "Clip '{carrier_id}' was not found on the timeline."
+        ));
     };
     let carrier = timeline.tracks[loc.track_index].clips[loc.clip_index].clone();
     if carrier.source_clip_type != ClipType::Sequence {
@@ -240,7 +244,8 @@ fn remap_into_window(clip: &Clip, carrier: &Clip) -> Option<Clip> {
         // Same conventions as split_single_clip's right half: keyframes shift,
         // the cut becomes source trim, and the fade on the cut edge clears.
         let (_, mut right) = crate::keyframes::split_all_clip_keyframe_tracks(clip, head_cut);
-        right.trim_start_frame = clip.trim_start_frame + (head_cut as f64 * clip.speed).round() as i64;
+        right.trim_start_frame =
+            clip.trim_start_frame + (head_cut as f64 * clip.speed).round() as i64;
         right.fade_in_frames = 0;
         right
     } else {
@@ -265,10 +270,7 @@ fn remap_into_window(clip: &Clip, carrier: &Clip) -> Option<Clip> {
 ///
 /// The carrier's static opacity/volume multiply onto constituents; flattened
 /// clip ids become `"{carrier_id}/{clip_id}"` (Swift NestFlattener).
-pub fn flatten_nests(
-    timeline: &Timeline,
-    resolve: &dyn Fn(&str) -> Option<Timeline>,
-) -> Timeline {
+pub fn flatten_nests(timeline: &Timeline, resolve: &dyn Fn(&str) -> Option<Timeline>) -> Timeline {
     flatten_nests_inner(timeline, resolve, 0, &mut Vec::new())
 }
 
@@ -373,7 +375,7 @@ mod tests {
             compound_timeline_id: None,
             blend_mode: Default::default(),
             chroma_key: None,
-        multicam_group_id: None,
+            multicam_group_id: None,
         }
     }
 
@@ -385,7 +387,7 @@ mod tests {
                 muted: false,
                 hidden: false,
                 sync_locked: true,
-               display_height: 50.0,
+                display_height: 50.0,
                 clips,
             }],
             ..Default::default()
@@ -398,11 +400,7 @@ mod tests {
 
     #[test]
     fn nest_groups_contiguous_clips_into_a_sequence_carrier() {
-        let mut tl = timeline_with(vec![
-            clip("a", 0, 30),
-            clip("b", 30, 30),
-            clip("c", 60, 30),
-        ]);
+        let mut tl = timeline_with(vec![clip("a", 0, 30), clip("b", 30, 30), clip("c", 60, 30)]);
         let nest = nest_clips(&mut tl, &["a".into(), "b".into()], Some("Scene 1")).unwrap();
 
         assert_eq!(tl.tracks[0].clips.len(), 2);
@@ -413,7 +411,10 @@ mod tests {
             .unwrap();
         assert_eq!(carrier.media_type, ClipType::Sequence);
         assert_eq!(carrier.source_clip_type, ClipType::Sequence);
-        assert_eq!(carrier.media_ref, nest.child.id, "carrier points at the child");
+        assert_eq!(
+            carrier.media_ref, nest.child.id,
+            "carrier points at the child"
+        );
         assert_eq!(carrier.start_frame, 0);
         assert_eq!(carrier.duration_frames, 60);
         assert!(carrier.compound_timeline_id.is_none(), "no legacy field");
@@ -426,11 +427,7 @@ mod tests {
 
     #[test]
     fn nest_refusals() {
-        let mut tl = timeline_with(vec![
-            clip("a", 0, 30),
-            clip("b", 30, 30),
-            clip("c", 60, 30),
-        ]);
+        let mut tl = timeline_with(vec![clip("a", 0, 30), clip("b", 30, 30), clip("c", 60, 30)]);
         let err = nest_clips(&mut tl, &["a".into(), "c".into()], None).unwrap_err();
         assert!(err.contains("adjacent"), "{err}");
         let err = nest_clips(&mut tl, &["ghost".into()], None).unwrap_err();
@@ -441,7 +438,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![clip("d", 0, 30)],
         });
         let err = nest_clips(&mut tl, &["a".into(), "d".into()], None).unwrap_err();
@@ -534,7 +531,10 @@ mod tests {
         let resolve = resolver_of(vec![cyclic.clone()]);
         let flat = flatten_nests(&tl, &resolve);
         // The self-referencing carrier inside the child is dropped; a's remap survives.
-        assert!(flat.tracks[0].clips.iter().all(|c| c.media_ref != cyclic.id));
+        assert!(flat.tracks[0]
+            .clips
+            .iter()
+            .all(|c| c.media_ref != cyclic.id));
     }
 
     #[test]
@@ -561,7 +561,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![{
                 let mut a = clip("asrc", 0, 30);
                 a.media_type = ClipType::Audio;
@@ -582,7 +582,7 @@ mod tests {
             muted: false,
             hidden: false,
             sync_locked: true,
-           display_height: 50.0,
+            display_height: 50.0,
             clips: vec![carrier],
         });
 

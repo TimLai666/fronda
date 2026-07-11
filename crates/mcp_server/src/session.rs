@@ -196,7 +196,11 @@ mod tests {
         store.insert("b".into(), 2, now);
         store.get("a", now); // "a" becomes most-recent by seq; "b" is the LRU
         let evicted = store.insert("c".into(), 3, now);
-        assert_eq!(evicted.as_deref(), Some("b"), "true LRU evicted on a timestamp tie");
+        assert_eq!(
+            evicted.as_deref(),
+            Some("b"),
+            "true LRU evicted on a timestamp tie"
+        );
         assert!(store.contains("a"));
         assert!(store.contains("c"));
     }

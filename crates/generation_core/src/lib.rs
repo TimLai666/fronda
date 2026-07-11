@@ -435,11 +435,7 @@ impl GenerationMachine {
 
     /// GEN-017: Mark download failure with pending retry. `placeholder_id` is the
     /// specific placeholder whose download failed (not inferred by position).
-    pub fn mark_download_failed(
-        state: &mut DownloadingState,
-        placeholder_id: String,
-        url: String,
-    ) {
+    pub fn mark_download_failed(state: &mut DownloadingState, placeholder_id: String, url: String) {
         state.failed_placeholder_ids.push(placeholder_id);
         state.failed_downloads.push(url);
     }
@@ -2765,7 +2761,9 @@ mod tests {
         }
     }
 
-    fn recovery_manifest(entries: Vec<core_model::MediaManifestEntry>) -> core_model::MediaManifest {
+    fn recovery_manifest(
+        entries: Vec<core_model::MediaManifestEntry>,
+    ) -> core_model::MediaManifest {
         core_model::MediaManifest {
             entries,
             ..Default::default()
@@ -2844,8 +2842,11 @@ mod tests {
 
     #[test]
     fn rec_failure_recorded_without_result_urls() {
-        let mut manifest =
-            recovery_manifest(vec![recovery_entry("a", Some("downloading"), Some("job-1"))]);
+        let mut manifest = recovery_manifest(vec![recovery_entry(
+            "a",
+            Some("downloading"),
+            Some("job-1"),
+        )]);
         apply_generation_outcome(
             &mut manifest,
             "a",

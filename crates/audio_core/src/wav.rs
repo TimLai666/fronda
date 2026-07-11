@@ -62,8 +62,7 @@ mod tests {
         let channels = u16::from_le_bytes([bytes[22], bytes[23]]);
         let sample_rate = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
         assert_eq!(&bytes[36..40], b"data");
-        let data_len =
-            u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]) as usize;
+        let data_len = u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]) as usize;
         let mut samples = Vec::with_capacity(data_len / 2);
         for chunk in bytes[44..44 + data_len].chunks_exact(2) {
             samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
