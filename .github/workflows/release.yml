@@ -9,6 +9,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
+# softprops/action-gh-release needs write access to create/attach the Release;
+# the default GITHUB_TOKEN is read-only, which 403s the attach step.
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build ${{ matrix.archive }}
