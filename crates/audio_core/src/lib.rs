@@ -1,3 +1,4 @@
+pub mod audio_meter;
 pub mod beat_detector;
 pub mod audio_mixer;
 pub mod audio_sync_correlator;
