@@ -48,6 +48,7 @@ pub mod keyframes_view;
 pub mod matte_writer;
 pub mod mcp_service;
 pub mod chroma_controls;
+pub mod chroma_sampling;
 pub mod media_import;
 pub mod timeline_import;
 pub mod media_panel_model;

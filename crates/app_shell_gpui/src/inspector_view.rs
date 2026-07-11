@@ -69,6 +69,9 @@ fn default_scrub_values() -> HashMap<&'static str, f32> {
         ("opacity", 100.0),
         ("speed", 1.0), // 1.0× = normal speed
         ("text_size", 96.0),
+        ("chroma_tolerance", 0.15),
+        ("chroma_softness", 0.1),
+        ("chroma_spill", 0.5),
     ]
     .into_iter()
     .collect()
@@ -109,6 +112,7 @@ fn derive_scrub_values(
         .as_ref()
         .map(|s| s.font_size)
         .unwrap_or_else(|| TextStyle::default().font_size);
+    let chroma = crate::chroma_controls::ChromaControls::from_chroma_key(clip.chroma_key.as_ref());
 
     [
         ("volume", volume_db as f32),
@@ -121,6 +125,9 @@ fn derive_scrub_values(
         ("opacity", (opacity * 100.0) as f32),
         ("speed", clip.speed as f32),
         ("text_size", text_size as f32),
+        ("chroma_tolerance", chroma.tolerance as f32),
+        ("chroma_softness", chroma.softness as f32),
+        ("chroma_spill", chroma.spill as f32),
     ]
     .into_iter()
     .collect()
@@ -196,6 +203,19 @@ fn scrub_commit_args(
                 serde_json::json!({ "clipIds": [clip.id], "fontSize": value.clamp(12.0, 300.0) }),
             ))
         }
+        "chroma_tolerance" | "chroma_softness" | "chroma_spill" => {
+            // Chroma params write the whole key.chroma effect (apply_effect), so
+            // carry the other params + colour + enabled from the clip's key.
+            let mut c =
+                crate::chroma_controls::ChromaControls::from_chroma_key(clip.chroma_key.as_ref());
+            let v = value.clamp(0.0, 1.0);
+            match field {
+                "chroma_tolerance" => c.tolerance = v,
+                "chroma_softness" => c.softness = v,
+                _ => c.spill = v,
+            }
+            Some(("apply_effect", c.apply_args(&[clip.id.clone()])))
+        }
         _ => None, // fade_in / fade_out: no fade tool in the agent surface yet
     }
 }
@@ -217,6 +237,8 @@ fn fmt_scrub(field: &'static str, v: f32) -> String {
         }
         // Speed uses multiplier notation (0.25×–4.0×)
         "speed" => format!("{:.2}×", v),
+        // Chroma params are 0..1 shown as percent.
+        "chroma_tolerance" | "chroma_softness" | "chroma_spill" => format!("{:.0}%", v * 100.0),
         _ => format!("{:.0}%", v), // scale, opacity
     }
 }
@@ -491,6 +513,51 @@ impl InspectorView {
 
     pub fn select_tab(&mut self, tab: InspectorTab, cx: &mut Context<Self>) {
         self.state.select_tab(tab);
+        cx.notify();
+    }
+
+    /// The first selected clip that can carry a chroma key (visual), with its
+    /// current chroma controls (defaults when the clip has no key yet).
+    fn first_chroma_clip(&self) -> Option<(String, crate::chroma_controls::ChromaControls)> {
+        let snap = self.selection();
+        snap.clips
+            .iter()
+            .find(|c| matches!(c.media_type, ClipType::Video | ClipType::Image))
+            .map(|c| {
+                (
+                    c.id.clone(),
+                    crate::chroma_controls::ChromaControls::from_chroma_key(c.chroma_key.as_ref()),
+                )
+            })
+    }
+
+    /// Update the selected visual clip's chroma key via `apply_effect`.
+    fn apply_chroma(&self, update: impl FnOnce(&mut crate::chroma_controls::ChromaControls)) {
+        if let Some((id, mut c)) = self.first_chroma_clip() {
+            update(&mut c);
+            Self::run_tool("apply_effect", c.apply_args(&[id]));
+        }
+    }
+
+    fn toggle_chroma_enabled(&mut self, cx: &mut Context<Self>) {
+        self.apply_chroma(|c| c.enabled = !c.enabled);
+        cx.notify();
+    }
+
+    /// Set the key colour from a hue preset and enable the key.
+    fn set_chroma_hue(&mut self, hue: f64, cx: &mut Context<Self>) {
+        self.apply_chroma(|c| {
+            *c = c.with_hue(hue);
+            c.enabled = true;
+        });
+        cx.notify();
+    }
+
+    /// Arm the preview eyedropper for the selected visual clip.
+    fn start_chroma_sampling(&mut self, cx: &mut Context<Self>) {
+        if let Some((id, _)) = self.first_chroma_clip() {
+            crate::chroma_sampling::set_sampling(Some(id));
+        }
         cx.notify();
     }
 
@@ -1777,6 +1844,137 @@ impl Render for InspectorView {
             )
             .child(speed_row);
 
+        // Chroma Key section (visual clips): enable toggle, key-colour swatch +
+        // Green/Blue presets + preview eyedropper, and tolerance/softness/spill
+        // scrub rows. Writes the key.chroma effect the compositor renders soft.
+        let is_visual = first_clip
+            .as_ref()
+            .map(|c| matches!(c.media_type, ClipType::Video | ClipType::Image))
+            .unwrap_or(false);
+        let chroma_ctrls = crate::chroma_controls::ChromaControls::from_chroma_key(
+            first_clip.as_ref().and_then(|c| c.chroma_key.as_ref()),
+        );
+        let chroma_enabled = chroma_ctrls.enabled;
+        let chroma_hue = chroma_ctrls.key_hue() as f32;
+        let sampling_active = crate::chroma_sampling::sampling_clip().is_some();
+        let chroma_rows_on = rows_enabled && chroma_enabled;
+        let tol_row =
+            self.scrub_row("chroma_tolerance", "Tolerance", 0.0, 1.0, 0.004, false, chroma_rows_on, cx);
+        let soft_row =
+            self.scrub_row("chroma_softness", "Softness", 0.0, 1.0, 0.004, false, chroma_rows_on, cx);
+        let spill_row =
+            self.scrub_row("chroma_spill", "Spill", 0.0, 1.0, 0.004, false, chroma_rows_on, cx);
+        let chroma_section = div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .w_full()
+                    .child(div().flex_1().child(section_title("Chroma Key")))
+                    .child(
+                        div()
+                            .id("chroma-enable")
+                            .pr(px(Spacing::LG))
+                            .cursor_pointer()
+                            .text_size(px(FontSize::XS))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(if chroma_enabled {
+                                Accent::PRIMARY
+                            } else {
+                                Text::MUTED
+                            })
+                            .child(if chroma_enabled { "On" } else { "Off" })
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.toggle_chroma_enabled(cx)),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(Spacing::SM))
+                    .w_full()
+                    .px(px(Spacing::LG))
+                    .h(px(26.0))
+                    .child(
+                        div()
+                            .w(px(16.0))
+                            .h(px(16.0))
+                            .rounded(px(Radius::XS))
+                            .border_1()
+                            .border_color(BorderColors::PRIMARY)
+                            .bg(gpui::hsla(chroma_hue, 0.9, 0.5, 1.0)),
+                    )
+                    .child(
+                        div()
+                            .id("chroma-green")
+                            .px(px(Spacing::SM))
+                            .h(px(18.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(Radius::XS))
+                            .cursor_pointer()
+                            .bg(Background::RAISED)
+                            .text_size(px(FontSize::XS))
+                            .text_color(Text::SECONDARY)
+                            .child("Green")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.set_chroma_hue(1.0 / 3.0, cx)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("chroma-blue")
+                            .px(px(Spacing::SM))
+                            .h(px(18.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(Radius::XS))
+                            .cursor_pointer()
+                            .bg(Background::RAISED)
+                            .text_size(px(FontSize::XS))
+                            .text_color(Text::SECONDARY)
+                            .child("Blue")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.set_chroma_hue(2.0 / 3.0, cx)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("chroma-eyedropper")
+                            .px(px(Spacing::SM))
+                            .h(px(18.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(Radius::XS))
+                            .cursor_pointer()
+                            .text_size(px(FontSize::XS))
+                            .bg(if sampling_active {
+                                Accent::PRIMARY
+                            } else {
+                                Background::RAISED
+                            })
+                            .text_color(if sampling_active {
+                                Background::BASE
+                            } else {
+                                Text::SECONDARY
+                            })
+                            .child(if sampling_active { "Click preview…" } else { "⦿ Pick" })
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.start_chroma_sampling(cx)),
+                            ),
+                    ),
+            )
+            .child(tol_row)
+            .child(soft_row)
+            .child(spill_row);
+
         let text_tab = if has_clip && active_tab == InspectorTab::Text {
             Some(self.text_tab_content(first_clip.as_ref(), cx))
         } else {
@@ -1912,6 +2110,7 @@ impl Render for InspectorView {
                                     .child(levels_section)
                                     .child(transform_section)
                                     .child(speed_section)
+                                    .when(is_visual, |el| el.child(chroma_section))
                                     .child(
                                         div()
                                             .flex()

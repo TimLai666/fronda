@@ -10,9 +10,27 @@ use crate::theme::{
 };
 use crate::transform_overlay_view::TransformOverlayView;
 use gpui::{
-    div, prelude::*, px, svg, App, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, Window,
+    canvas, div, prelude::*, px, svg, App, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render, Styled,
+    Window,
 };
+
+/// Read the RGB (0..1) of the composited frame PNG at normalized (u, v).
+fn sample_png_pixel(path: &std::path::Path, u: f64, v: f64) -> Option<(f64, f64, f64)> {
+    let img = image::open(path).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let x = ((u * w as f64) as i64).clamp(0, w as i64 - 1) as u32;
+    let y = ((v * h as f64) as i64).clamp(0, h as i64 - 1) as u32;
+    let p = img.get_pixel(x, y);
+    Some((
+        p[0] as f64 / 255.0,
+        p[1] as f64 / 255.0,
+        p[2] as f64 / 255.0,
+    ))
+}
 
 /// Canvas overlay state — mirrors Swift PreviewView offline/generating/failed states.
 #[derive(Debug, Clone, PartialEq)]
@@ -194,6 +212,9 @@ pub struct PreviewView {
     /// A background render is in flight; blocks a second one so playback renders
     /// best-effort (latest frame when the previous finishes) without flooding.
     rendering: bool,
+    /// Preview-canvas bounds captured during paint (window coords), so the
+    /// chroma eyedropper can map a click to a frame pixel.
+    canvas_bounds: std::sync::Arc<std::sync::Mutex<Option<gpui::Bounds<gpui::Pixels>>>>,
 }
 
 impl PreviewView {
@@ -215,7 +236,66 @@ impl PreviewView {
             frame_png: None,
             rendered_key: None,
             rendering: false,
+            canvas_bounds: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// Chroma eyedropper: when sampling is armed, map a preview click to a frame
+    /// pixel, read its colour, and apply `key.chroma` with that hue to the
+    /// armed clip. Assumes Fit (canvas_zoom = 1.0); other zooms may be slightly
+    /// off. Returns true when a sample was taken (so the click is consumed).
+    fn try_sample_chroma(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if crate::chroma_sampling::sampling_clip().is_none() {
+            return false;
+        }
+        let bounds = match self.canvas_bounds.lock().ok().and_then(|b| *b) {
+            Some(b) => b,
+            None => return false,
+        };
+        let path = match self.frame_png.clone() {
+            Some(p) => p,
+            None => {
+                crate::chroma_sampling::set_sampling(None);
+                return true;
+            }
+        };
+        let (aspect, _cw, _ch) = {
+            let hub = crate::editor_state_hub::EditorStateHub::global();
+            let exec = hub.executor();
+            let guard = match exec.lock() {
+                Ok(g) => g,
+                Err(_) => return true,
+            };
+            let t = guard.timeline();
+            (t.width as f64 / t.height.max(1) as f64, t.width, t.height)
+        };
+        let rel = (
+            position.x.as_f32() - bounds.origin.x.as_f32(),
+            position.y.as_f32() - bounds.origin.y.as_f32(),
+        );
+        let canvas = (bounds.size.width.as_f32(), bounds.size.height.as_f32());
+        let clip_id = crate::chroma_sampling::take_sampling();
+        if let (Some((u, v)), Some(clip_id)) =
+            (crate::chroma_controls::frame_uv_from_click(rel, canvas, aspect), clip_id)
+        {
+            if let Some((r, g, b)) = sample_png_pixel(&path, u, v) {
+                let hue = crate::chroma_controls::rgb_to_hue(r, g, b);
+                // Swift commit resets tolerance/softness on sample (fresh key).
+                let mut ctrls = crate::chroma_controls::ChromaControls::default().with_hue(hue);
+                ctrls.enabled = true;
+                let args = ctrls.apply_args(&[clip_id]);
+                let hub = crate::editor_state_hub::EditorStateHub::global();
+                if let Ok(mut exec) = hub.executor().lock() {
+                    let _ = exec.execute("apply_effect", &args);
+                }
+            }
+        }
+        cx.notify();
+        true
     }
 
     /// If the current playhead frame hasn't been composited yet, kick a
@@ -879,6 +959,28 @@ impl Render for PreviewView {
                     .relative()
                     .overflow_hidden()
                     .bg(Background::BASE)
+                    // Capture the canvas bounds each paint so the chroma
+                    // eyedropper can map a click to a frame pixel.
+                    .child({
+                        let slot = self.canvas_bounds.clone();
+                        canvas(
+                            move |bounds, _, _| {
+                                if let Ok(mut b) = slot.lock() {
+                                    *b = Some(bounds);
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full()
+                    })
+                    // While the eyedropper is armed, a click samples the frame.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            this.try_sample_chroma(e.position, cx);
+                        }),
+                    )
                     // Composited frame (or placeholder) — hidden when an overlay is
                     // shown. The zoom wrapper scales the fitted frame by
                     // canvas_zoom (Swift: fitSize * editor.canvasZoom, clipped).
