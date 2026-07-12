@@ -153,6 +153,19 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 
 ## Upstream PR management
 
+- **Merged upstream/main v0.6.1 → v0.6.5 on 2026-07-12** (upstream HEAD
+  `f0f5b473`, merge commit brings the Swift baseline current; the Rust
+  `crates/` workspace was untouched by the merge). A **Rust-porting re-audit
+  is PENDING** for the commits `771b63e..f0f5b473`. New PRs to triage (not yet
+  in the porting table below): **#294** elevenlabs voice isolator + dubbing
+  (generation — likely Rust port), **#296** allow 65-point `.cube` LUTs
+  (Rust-relevant if LUT support exists), **#288** validate video-to-audio span
+  in the agent path (bug fix — check `agent_contract`), **#297** track tools
+  called / **#290** analytics / **#292** hosted Sonnet 5 (telemetry/config —
+  mostly skip or already covered by #243). Already ported before this merge:
+  #293 audio meter, #291 chroma eyedropper, #283 multicam v2, #138 HDR export,
+  #176 duplicate_clips, #284 aspect labels, #263 tool-surface v2, #274 beat
+  detection. Full new-commit list: `git --no-pager log 771b63e..f0f5b473 --oneline`.
 - Upstream PRs were re-audited on 2026-07-05 (upstream HEAD `771b63e`, v0.6.1),
   covering the 6 new commits `9a3ae50..771b63e`: **#251 Audio Enhancer/Denoise**
   (ported — `denoise_audio` tool; no model change, denoise is an `audio.denoise`
