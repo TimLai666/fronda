@@ -58,6 +58,8 @@ pub mod mention_popover_view;
 pub mod menu;
 pub mod multi_session;
 pub mod pane;
+pub mod pane_resize;
+pub mod pane_tree;
 pub mod platform_adapter;
 pub mod preview_guides;
 pub mod preview_model;

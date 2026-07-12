@@ -26,23 +26,25 @@ use gpui::{
     Window, WindowBounds, WindowOptions,
 };
 
-/// Drag token for timeline panel resize.
+/// Drag token for pane divider resize.
 #[derive(Debug, Clone)]
-struct TimelineResizeDrag;
+struct PaneResizeDrag;
 
 /// Invisible drag preview.
-struct TimelineResizePreview;
-impl gpui::Render for TimelineResizePreview {
+struct PaneResizePreview;
+impl gpui::Render for PaneResizePreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
         div()
     }
 }
 
-/// Timeline resize drag session.
-#[derive(Debug, Clone)]
-struct TimelineResizeDragSession {
-    start_y: f32,
-    start_height: f32,
+/// Active pane-divider drag session.
+#[derive(Debug, Clone, Copy)]
+struct PaneDragSession {
+    target: crate::pane_resize::ResizeTarget,
+    /// Pointer x (columns) or y (timeline) at mouse-down.
+    start_pos: f32,
+    start_size: f32,
 }
 
 /// Which screen the app is showing.
@@ -83,9 +85,16 @@ pub struct AppRoot {
     /// Recent projects list (Swift: ProjectRegistry.sortedEntries).
     /// True when a user is signed in (controls sidebar Sign in button).
     is_signed_in: bool,
-    /// Timeline panel height in pixels (draggable).
+    /// Draggable pane sizes; negative = unresolved sentinel (preset initial
+    /// value computed from the viewport on next render).
     timeline_height: f32,
-    timeline_resize_drag: Option<TimelineResizeDragSession>,
+    agent_width: f32,
+    media_width: f32,
+    inspector_width: f32,
+    vertical_left_width: f32,
+    /// Editor content size captured each render, for drag clamping.
+    last_viewport: (f32, f32),
+    pane_drag: Option<PaneDragSession>,
     /// Editor panel entities — created lazily on first open_editor() call.
     titlebar_view: Option<Entity<TitleBarView>>,
     chat_view: Option<Entity<ChatView>>,
@@ -139,8 +148,13 @@ impl AppRoot {
             inspector_view: None,
             tour_overlay: cx.new(|cx| TourOverlayView::new(cx)),
             update_overlay: cx.new(|cx| UpdateOverlayView::new(cx)),
-            timeline_height: 200.0,
-            timeline_resize_drag: None,
+            timeline_height: -1.0,
+            agent_width: crate::pane_resize::AGENT_MIN,
+            media_width: -1.0,
+            inspector_width: crate::theme::Layout::INSPECTOR_DEFAULT,
+            vertical_left_width: -1.0,
+            last_viewport: (0.0, 0.0),
+            pane_drag: None,
             project_menu: crate::context_menu::ContextMenuState::new(),
             hovered_project: None,
             armed_delete: None,
@@ -149,12 +163,287 @@ impl AppRoot {
         }
     }
 
+    /// WelcomeOverlay — first-launch welcome over Home, structured after
+    /// Swift WelcomeOverlay: centered 520pt card, title + subtitle, hero
+    /// image area (shrinks on short windows so the buttons always fit),
+    /// Skip / Watch Tutorial / Get started.
+    fn render_welcome_overlay(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .id("welcome-overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(px(Spacing::XXL))
+            .bg(gpui::Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.0,
+                a: crate::theme::Opacity::STRONG,
+            })
+            .child(
+                div()
+                    .id("welcome-card")
+                    .flex()
+                    .flex_col()
+                    .gap(px(Spacing::LG))
+                    .w(px(520.0))
+                    .max_w_full()
+                    .max_h_full()
+                    .p(px(Spacing::XXL))
+                    .rounded(px(Radius::MD_LG))
+                    .bg(Background::SURFACE)
+                    .border_1()
+                    .border_color(BorderColors::PRIMARY)
+                    .shadow_lg()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .flex_col()
+                            .gap(px(Spacing::SM))
+                            .child(
+                                div()
+                                    .text_size(px(FontSize::TITLE_2))
+                                    .font_weight(gpui::FontWeight::LIGHT)
+                                    .text_color(Text::PRIMARY)
+                                    .child("Welcome to Fronda"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(FontSize::SM_MD))
+                                    .text_color(Text::SECONDARY)
+                                    .child(
+                                        "A video editor built for AI. Generate, \
+                                         and edit all in one place.",
+                                    ),
+                            ),
+                    )
+                    // Hero image area (Swift: welcome-butterfly.jpg, gradient
+                    // fallback — no bundled hero asset yet). Shrinks first.
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(240.0))
+                            .min_h(px(40.0))
+                            .flex_shrink()
+                            .rounded(px(Radius::MD))
+                            .bg(gpui::linear_gradient(
+                                135.0,
+                                gpui::linear_color_stop(
+                                    gpui::Hsla {
+                                        h: 0.78,
+                                        s: 0.45,
+                                        l: 0.30,
+                                        a: 1.0,
+                                    },
+                                    0.0,
+                                ),
+                                gpui::linear_color_stop(
+                                    gpui::Hsla {
+                                        h: 0.55,
+                                        s: 0.55,
+                                        l: 0.35,
+                                        a: 1.0,
+                                    },
+                                    1.0,
+                                ),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Spacing::SM))
+                            .pt(px(Spacing::LG))
+                            .child(
+                                Self::welcome_button("welcome-skip", "Skip", false).on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.welcome_dismissed = true;
+                                        cx.notify();
+                                    }),
+                                ),
+                            )
+                            .child(div().flex_1())
+                            // Swift opens a downloaded sample with the tour;
+                            // samples are network-gated, so this starts the
+                            // tour in a new project.
+                            .child(
+                                Self::welcome_button("welcome-tutorial", "Watch Tutorial", false)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.welcome_dismissed = true;
+                                        this.open_editor(cx);
+                                        this.tour_overlay.update(cx, |tour, cx| {
+                                            tour.start(cx);
+                                        });
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Self::welcome_button("welcome-get-started", "Get started", true)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.welcome_dismissed = true;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Reset preset-scoped pane sizes so the next render recomputes the
+    /// preset's initial proportions (Swift rebuilds splits on preset switch).
+    fn reset_pane_sizes(&mut self) {
+        self.timeline_height = -1.0;
+        self.media_width = -1.0;
+        self.inspector_width = crate::theme::Layout::INSPECTOR_DEFAULT;
+        self.vertical_left_width = -1.0;
+    }
+
+    fn pane_size(&self, target: crate::pane_resize::ResizeTarget) -> f32 {
+        use crate::pane_resize::ResizeTarget::*;
+        match target {
+            AgentWidth => self.agent_width,
+            MediaWidth => self.media_width,
+            InspectorWidth => self.inspector_width,
+            TimelineHeight => self.timeline_height,
+            VerticalLeftWidth => self.vertical_left_width,
+        }
+    }
+
+    fn set_pane_size(&mut self, target: crate::pane_resize::ResizeTarget, v: f32) {
+        use crate::pane_resize::ResizeTarget::*;
+        match target {
+            AgentWidth => self.agent_width = v,
+            MediaWidth => self.media_width = v,
+            InspectorWidth => self.inspector_width = v,
+            TimelineHeight => self.timeline_height = v,
+            VerticalLeftWidth => self.vertical_left_width = v,
+        }
+    }
+
+    /// Clamp frame for a divider drag, from the current layout state.
+    fn resize_bounds(&self, target: crate::pane_resize::ResizeTarget) -> crate::pane_resize::ResizeBounds {
+        use crate::pane_resize::*;
+        let (vw, vh) = self.last_viewport;
+        let vis = |id: PaneId| self.pane_layout.is_visible(id);
+        let rail = crate::theme::MediaPanel::TAB_RAIL_WIDTH;
+        let vertical = self.pane_layout.preset == LayoutPreset::Vertical;
+        match target {
+            ResizeTarget::TimelineHeight => ResizeBounds {
+                area: vh,
+                others: 0.0,
+                neighbor_min: PREVIEW_MIN_H,
+                rail_w: 0.0,
+            },
+            // Vertical preset: media lives inside the left column and
+            // squeezes the inspector, not the preview.
+            ResizeTarget::MediaWidth if vertical => ResizeBounds {
+                area: self.vertical_left_width,
+                others: 0.0,
+                neighbor_min: INSPECTOR_MIN,
+                rail_w: rail,
+            },
+            _ => {
+                let mut others = 0.0;
+                if vis(PaneId::Agent) && target != ResizeTarget::AgentWidth {
+                    others += self.agent_width;
+                }
+                if vertical {
+                    if target != ResizeTarget::VerticalLeftWidth {
+                        others += self.vertical_left_width;
+                    }
+                } else {
+                    if vis(PaneId::Media) && target != ResizeTarget::MediaWidth {
+                        others += self.media_width;
+                    }
+                    if vis(PaneId::Inspector) && target != ResizeTarget::InspectorWidth {
+                        others += self.inspector_width;
+                    }
+                }
+                ResizeBounds {
+                    area: vw,
+                    others,
+                    neighbor_min: PREVIEW_MIN_W,
+                    rail_w: rail,
+                }
+            }
+        }
+    }
+
+    /// 5px seam hitbox overlaying the gap between two pane cards. The anchor
+    /// node in the tree is zero-sized; this element rides the seam via a
+    /// half-gap negative offset.
+    fn build_divider(
+        &self,
+        target: crate::pane_resize::ResizeTarget,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        use crate::pane_resize::ResizeTarget::*;
+        let horizontal = target != TimelineHeight;
+        let gap = crate::theme::Layout::PANEL_GAP;
+        let id: &'static str = match target {
+            AgentWidth => "divider-agent",
+            MediaWidth => "divider-media",
+            InspectorWidth => "divider-inspector",
+            TimelineHeight => "divider-timeline",
+            VerticalLeftWidth => "divider-vertical-left",
+        };
+        let hit = div()
+            .id(id)
+            .absolute()
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this: &mut AppRoot, e: &MouseDownEvent, _, _| {
+                    let start_pos = if horizontal {
+                        e.position.x.as_f32()
+                    } else {
+                        e.position.y.as_f32()
+                    };
+                    this.pane_drag = Some(PaneDragSession {
+                        target,
+                        start_pos,
+                        start_size: this.pane_size(target),
+                    });
+                }),
+            )
+            .on_drag(PaneResizeDrag, |_, _, _, cx| cx.new(|_| PaneResizePreview));
+        if horizontal {
+            hit.left(px(-gap / 2.0))
+                .top_0()
+                .w(px(gap))
+                .h_full()
+                .cursor_col_resize()
+                .into_any_element()
+        } else {
+            hit.top(px(-gap / 2.0))
+                .left_0()
+                .h(px(gap))
+                .w_full()
+                .cursor_ns_resize()
+                .into_any_element()
+        }
+    }
+
     /// Open the editor for a project.
     pub fn open_editor(&mut self, cx: &mut Context<Self>) {
         self.project_menu.close();
         self.active_screen = ActiveScreen::Editor;
         if self.chat_view.is_none() {
-            self.titlebar_view = Some(cx.new(|cx| TitleBarView::new(cx)));
+            let titlebar = cx.new(|cx| TitleBarView::new(cx));
+            cx.subscribe(&titlebar, |this, _, event, cx| match event {
+                crate::titlebar_view::TitleBarEvent::RunMenu(action) => {
+                    this.dispatch_menu_action(action.clone(), cx);
+                }
+            })
+            .detach();
+            self.titlebar_view = Some(titlebar);
             self.chat_view = Some(cx.new(|cx| ChatView::new(cx)));
             let toolbar = cx.new(|cx| ToolbarView::new(cx));
             cx.subscribe(&toolbar, |this, _, event, cx| match event {
@@ -356,6 +645,12 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.dispatch_menu_action(action, cx);
+    }
+
+    /// Window-free menu dispatch (no menu action currently needs the window);
+    /// the title-bar menu bar routes here since its subscription has no window.
+    pub fn dispatch_menu_action(&mut self, action: menu::MenuAction, cx: &mut Context<Self>) {
         match action {
             menu::MenuAction::NewProject => {
                 // Fresh shared state so the UI and MCP observe the same new project.
@@ -400,12 +695,15 @@ impl AppRoot {
             }
             menu::MenuAction::LayoutDefault => {
                 self.pane_layout.apply_preset(LayoutPreset::Default);
+                self.reset_pane_sizes();
             }
             menu::MenuAction::LayoutMedia => {
                 self.pane_layout.apply_preset(LayoutPreset::Media);
+                self.reset_pane_sizes();
             }
             menu::MenuAction::LayoutVertical => {
                 self.pane_layout.apply_preset(LayoutPreset::Vertical);
+                self.reset_pane_sizes();
             }
             menu::MenuAction::EnterFullScreen => {}
             menu::MenuAction::Quit => {}
@@ -806,7 +1104,6 @@ impl AppRoot {
             ("Documentary", 0.43),
         ];
 
-        let welcome_dismissed = self.welcome_dismissed;
         let project_menu_open = self.project_menu.open_menu().cloned();
         let hovered_project = self.hovered_project.clone();
         let armed_delete = self.armed_delete.clone();
@@ -1337,138 +1634,6 @@ impl AppRoot {
                             )),
                     ),
             )
-            // WelcomeOverlay — first-launch welcome over Home, structured after
-            // Swift WelcomeOverlay: 520pt leading-aligned card, title + subtitle,
-            // hero image area, Skip / Watch Tutorial / Get started.
-            .when(!welcome_dismissed, |el| {
-                el.child(
-                    div()
-                        .id("welcome-overlay")
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .bg(gpui::Hsla {
-                            h: 0.0,
-                            s: 0.0,
-                            l: 0.0,
-                            a: crate::theme::Opacity::STRONG,
-                        })
-                        .child(
-                            div()
-                                .id("welcome-card")
-                                .flex()
-                                .flex_col()
-                                .gap(px(Spacing::LG))
-                                .w(px(520.0))
-                                .p(px(Spacing::XXL))
-                                .rounded(px(Radius::MD_LG))
-                                .bg(Background::SURFACE)
-                                .border_1()
-                                .border_color(BorderColors::PRIMARY)
-                                .shadow_lg()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(Spacing::SM))
-                                        .child(
-                                            div()
-                                                .text_size(px(FontSize::TITLE_2))
-                                                .font_weight(gpui::FontWeight::LIGHT)
-                                                .text_color(Text::PRIMARY)
-                                                .child("Welcome to Fronda"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(FontSize::SM_MD))
-                                                .text_color(Text::SECONDARY)
-                                                .child(
-                                                    "A video editor built for AI. Generate, \
-                                                     and edit all in one place.",
-                                                ),
-                                        ),
-                                )
-                                // Hero image area (Swift: welcome-butterfly.jpg,
-                                // gradient fallback — no bundled hero asset yet).
-                                .child(div().w_full().h(px(240.0)).rounded(px(Radius::MD)).bg(
-                                    gpui::linear_gradient(
-                                        135.0,
-                                        gpui::linear_color_stop(
-                                            gpui::Hsla {
-                                                h: 0.78,
-                                                s: 0.45,
-                                                l: 0.30,
-                                                a: 1.0,
-                                            },
-                                            0.0,
-                                        ),
-                                        gpui::linear_color_stop(
-                                            gpui::Hsla {
-                                                h: 0.55,
-                                                s: 0.55,
-                                                l: 0.35,
-                                                a: 1.0,
-                                            },
-                                            1.0,
-                                        ),
-                                    ),
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .gap(px(Spacing::SM))
-                                        .pt(px(Spacing::LG))
-                                        .child(
-                                            Self::welcome_button("welcome-skip", "Skip", false)
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.welcome_dismissed = true;
-                                                    cx.notify();
-                                                })),
-                                        )
-                                        .child(div().flex_1())
-                                        // Swift opens a downloaded sample with the tour;
-                                        // samples are network-gated, so this starts the
-                                        // tour in a new project.
-                                        .child(
-                                            Self::welcome_button(
-                                                "welcome-tutorial",
-                                                "Watch Tutorial",
-                                                false,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| {
-                                                    this.welcome_dismissed = true;
-                                                    this.open_editor(cx);
-                                                    this.tour_overlay.update(cx, |tour, cx| {
-                                                        tour.start(cx);
-                                                    });
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            Self::welcome_button(
-                                                "welcome-get-started",
-                                                "Get started",
-                                                true,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| {
-                                                    this.welcome_dismissed = true;
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                        ),
-                                ),
-                        ),
-                )
-            })
             // Project-card context menu (deferred popover, above everything)
             .when_some(project_menu_open, |el, open| {
                 el.child(crate::context_menu::render_context_menu(
@@ -1531,28 +1696,55 @@ impl Render for AppRoot {
                     self.timeline_view.clone(),
                     self.inspector_view.clone(),
                 );
-                let tl_height = self.timeline_height;
+                // Editor content area (viewport minus the custom title bar);
+                // stored for divider-drag clamping between renders.
+                let viewport = window.viewport_size();
+                let vw = viewport.width.as_f32();
+                let vh = viewport.height.as_f32() - crate::theme::Layout::TOOLBAR_HEIGHT;
+                self.last_viewport = (vw, vh);
+                let preset_w = (vw - if layout.is_visible(PaneId::Agent) {
+                    self.agent_width
+                } else {
+                    0.0
+                })
+                .max(0.0);
+                // Resolve sentinel sizes to the preset's initial proportions
+                // (Swift applyAfterLayout setPosition calls).
+                if self.timeline_height < 0.0 {
+                    self.timeline_height =
+                        crate::pane_resize::initial_timeline_height(layout.preset, vh);
+                }
+                if self.media_width < 0.0 {
+                    // Swift buildMediaLayout: media column = 30% of the preset area.
+                    self.media_width = match layout.preset {
+                        LayoutPreset::Media => (preset_w * 0.3).round(),
+                        _ => crate::theme::Layout::MEDIA_PANEL_DEFAULT,
+                    };
+                }
+                if self.vertical_left_width < 0.0 {
+                    // Swift buildVerticalLayout: left column = 50% of the preset area.
+                    self.vertical_left_width = (preset_w * 0.5).round();
+                }
+                let sizes = crate::pane_tree::ResolvedSizes {
+                    agent_width: self.agent_width,
+                    media_width: self.media_width,
+                    inspector_width: self.inspector_width,
+                    timeline_height: self.timeline_height,
+                    vertical_left_width: self.vertical_left_width,
+                };
 
-                // Resize handle: 5px draggable strip between toolbar and timeline
-                let resize_handle = div()
-                    .id("timeline-resize-handle")
-                    .w_full()
-                    .h(px(5.0))
-                    .bg(crate::theme::BorderColors::PRIMARY)
-                    .cursor_ns_resize()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this: &mut AppRoot, e: &MouseDownEvent, _, _| {
-                            this.timeline_resize_drag = Some(TimelineResizeDragSession {
-                                start_y: e.position.y.as_f32(),
-                                start_height: this.timeline_height,
-                            });
-                        }),
-                    )
-                    .on_drag(TimelineResizeDrag, |_, _, _, cx| {
-                        cx.new(|_| TimelineResizePreview)
-                    })
-                    .into_any_element();
+                // Pre-built divider hitboxes; the tree decides which appear.
+                use crate::pane_resize::ResizeTarget;
+                let dividers: editor_view::DividerElements = [
+                    ResizeTarget::AgentWidth,
+                    ResizeTarget::MediaWidth,
+                    ResizeTarget::InspectorWidth,
+                    ResizeTarget::TimelineHeight,
+                    ResizeTarget::VerticalLeftWidth,
+                ]
+                .into_iter()
+                .map(|t| (t, self.build_divider(t, cx)))
+                .collect();
 
                 let weak = cx.entity().downgrade();
 
@@ -1566,21 +1758,27 @@ impl Render for AppRoot {
                         div()
                             .flex()
                             .flex_1()
-                            // Global handler for timeline resize drag
-                            .on_drag_move::<TimelineResizeDrag>(
-                                move |event: &DragMoveEvent<TimelineResizeDrag>,
-                                      _,
-                                      cx: &mut App| {
+                            // Global handler for pane divider drags
+                            .on_drag_move::<PaneResizeDrag>(
+                                move |event: &DragMoveEvent<PaneResizeDrag>, _, cx: &mut App| {
                                     let _ = weak.update(cx, |this: &mut AppRoot, inner_cx| {
-                                        if let Some(ref session) = this.timeline_resize_drag {
-                                            let dy =
-                                                event.event.position.y.as_f32() - session.start_y;
-                                            // Drag UP increases timeline height (timeline is below)
-                                            let new_h = (session.start_height - dy).clamp(
-                                                crate::theme::Layout::TIMELINE_MIN_HEIGHT,
-                                                crate::theme::Layout::TIMELINE_MAX_HEIGHT,
+                                        if let Some(session) = this.pane_drag {
+                                            let horizontal = session.target
+                                                != crate::pane_resize::ResizeTarget::TimelineHeight;
+                                            let pos = if horizontal {
+                                                event.event.position.x.as_f32()
+                                            } else {
+                                                event.event.position.y.as_f32()
+                                            };
+                                            let delta = (pos - session.start_pos)
+                                                * crate::pane_resize::drag_direction(session.target);
+                                            let bounds = this.resize_bounds(session.target);
+                                            let new_size = crate::pane_resize::clamp_resize(
+                                                session.target,
+                                                session.start_size + delta,
+                                                &bounds,
                                             );
-                                            this.timeline_height = new_h;
+                                            this.set_pane_size(session.target, new_size);
                                             inner_cx.notify();
                                         }
                                     });
@@ -1589,8 +1787,8 @@ impl Render for AppRoot {
                             .child(editor_view::render_pane_layout(
                                 &layout,
                                 &contents,
-                                tl_height,
-                                resize_handle,
+                                &sizes,
+                                dividers,
                             )),
                     )
                     .into_any_element()
@@ -1694,11 +1892,27 @@ impl Render for AppRoot {
                     this.perform_menu_action(menu::MenuAction::TimelineFitToWindow, w, cx)
                 },
             ))
+            // Ctrl-modifier menu shortcuts (Windows/Linux; macOS uses the
+            // system menu path).
+            .on_action(cx.listener(
+                |this, a: &crate::global_shortcuts::RunMenuAction, w, cx| {
+                    this.perform_menu_action(a.action.clone(), w, cx)
+                },
+            ))
             .flex()
             .flex_col()
             .size_full()
             .relative()
             .child(content)
+            // First-launch welcome overlay — window-level so the card centers
+            // in the full window regardless of the Home content layout.
+            .when(
+                self.active_screen == ActiveScreen::Home && !self.welcome_dismissed,
+                |el| {
+                    let overlay = self.render_welcome_overlay(cx);
+                    el.child(overlay)
+                },
+            )
             // Tour overlay stacks on top of everything at launch
             .child(div().absolute().top_0().left_0().size_full().child(tour))
             // Update changelog overlay — shown once after a new version installs
@@ -1737,16 +1951,49 @@ pub fn open_main_window(cx: &mut App) {
     }
 
     let cfg = WindowConfig::for_home();
-    let size = size(px(cfg.default_width as f32), px(cfg.default_height as f32));
+    // Dev/verification seam: FRONDA_WINDOW_SIZE=WxH overrides the default
+    // (gpui-ce on Windows currently treats these as device px; see notes).
+    let (dw, dh) = std::env::var("FRONDA_WINDOW_SIZE")
+        .ok()
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or((cfg.default_width as f32, cfg.default_height as f32));
+    let size = size(px(dw), px(dh));
     let mut bounds = Bounds::centered(None, size, cx);
     bounds.origin.y = bounds.origin.y + px(220.0);
+    // The +220 nudge (Swift Home placement) must not push the window off
+    // small displays — keep it fully on screen.
+    if let Some(display) = cx.primary_display() {
+        let db = display.bounds();
+        let max_y = db.origin.y + db.size.height - size.height;
+        if bounds.origin.y > max_y {
+            bounds.origin.y = max_y.max(db.origin.y);
+        }
+    }
 
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()
         },
-        |_, cx| cx.new(|cx| AppRoot::new(cx)),
+        |_, cx| {
+            cx.new(|cx| {
+                let mut root = AppRoot::new(cx);
+                // Dev/verification seam: boot straight into an empty editor
+                // (same path as Home's New Project button).
+                if std::env::var("FRONDA_OPEN_EDITOR").is_ok_and(|v| v == "1") {
+                    crate::editor_state_hub::EditorStateHub::global().load_project(
+                        core_model::Timeline::default(),
+                        core_model::MediaManifest::default(),
+                    );
+                    root.welcome_dismissed = true;
+                    root.open_editor(cx);
+                }
+                root
+            })
+        },
     )
     .unwrap();
 

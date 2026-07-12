@@ -15,9 +15,9 @@ use crate::theme::{
 use core_model::{ClipType, MediaFolder, MediaManifest, MediaManifestEntry, Timeline};
 use generation_core::model_catalog::{self, AudioCategory, ModelCaps, ModelConfig};
 use gpui::{
-    deferred, div, prelude::*, px, AnyElement, App, ClickEvent, Context, DragMoveEvent, Entity,
-    ExternalPaths, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement, Render, SharedString, Styled, Window,
+    deferred, div, prelude::*, px, svg, AnyElement, App, ClickEvent, Context, DragMoveEvent,
+    Entity, ExternalPaths, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement, Render, SharedString, Styled, Window,
 };
 use std::sync::OnceLock;
 use timeline_core::{AssetDrag, TimelineMathExt};
@@ -1470,7 +1470,7 @@ impl Focusable for MediaPanelView {
 /// Tab button: 26px square (Swift: IconSize.lg = 26).
 /// Active: white@10% bg + 2.5px left-edge capsule in BorderColors::PRIMARY
 /// (Swift: HoverHighlight(isActive) + Capsule overlay on leading edge).
-fn tab_btn(id: &str, label: &str, is_active: bool) -> gpui::Stateful<gpui::Div> {
+fn tab_btn(id: &str, icon: &'static str, is_active: bool) -> gpui::Stateful<gpui::Div> {
     let btn_size = IconSize::LG; // 26px
     let bg = if is_active {
         gpui::Hsla {
@@ -1503,8 +1503,17 @@ fn tab_btn(id: &str, label: &str, is_active: bool) -> gpui::Stateful<gpui::Div> 
         } else {
             Text::TERTIARY
         })
-        .text_size(px(FontSize::SM_MD))
-        .child(label.to_string())
+        .child(
+            svg()
+                .path(icon)
+                .w(px(IconSize::SM_MD))
+                .h(px(IconSize::SM_MD))
+                .text_color(if is_active {
+                    Text::PRIMARY
+                } else {
+                    Text::TERTIARY
+                }),
+        )
         // Left-edge accent capsule (Swift: Capsule overlay at topLeading)
         .when(is_active, |el| {
             el.child(
@@ -3819,7 +3828,7 @@ impl Render for MediaPanelView {
                             .gap(px(Spacing::XS))
                             .bg(Background::RAISED)
                             .child(
-                                tab_btn("tab-media", "M", media_active)
+                                tab_btn("tab-media", "icons/folder.svg", media_active)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.select_tab(MediaPanelTab::Media, cx);
                                     }))
@@ -3831,7 +3840,7 @@ impl Render for MediaPanelView {
                                     }),
                             )
                             .child(
-                                tab_btn("tab-captions", "C", captions_active)
+                                tab_btn("tab-captions", "icons/captions.svg", captions_active)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.select_tab(MediaPanelTab::Captions, cx);
                                     }))
@@ -3843,7 +3852,7 @@ impl Render for MediaPanelView {
                                     }),
                             )
                             .child(
-                                tab_btn("tab-music", "♪", music_active)
+                                tab_btn("tab-music", "icons/music_note.svg", music_active)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.select_tab(MediaPanelTab::Music, cx);
                                     }))

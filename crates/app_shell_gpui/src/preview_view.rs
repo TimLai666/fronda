@@ -6,7 +6,8 @@ use crate::crop_overlay_view::CropOverlayView;
 use crate::preview_guides::{ViewerGuide, ViewerGuideState};
 use crate::preview_model::PlaybackState;
 use crate::theme::{
-    Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Status, Text,
+    Accent, Background, BorderColors, BorderWidth, FontSize, Layout, Opacity, Radius, Spacing,
+    Status, Text,
 };
 use crate::transform_overlay_view::TransformOverlayView;
 use gpui::{
@@ -224,6 +225,28 @@ pub fn zoom_badge_label(canvas_zoom: f64) -> String {
     } else {
         format!("{}%", (canvas_zoom * 100.0) as i64)
     }
+}
+
+/// Aspect-fit rect `(x, y, w, h)` for a `frame_aspect` (w/h) frame centered in
+/// a `canvas` (w, h) box — same fit semantics as
+/// `chroma_controls::frame_uv_from_click`.
+pub fn aspect_fit_rect(canvas: (f32, f32), frame_aspect: f64) -> Option<(f32, f32, f32, f32)> {
+    let (cw, ch) = (canvas.0 as f64, canvas.1 as f64);
+    if cw <= 0.0 || ch <= 0.0 || frame_aspect <= 0.0 {
+        return None;
+    }
+    let canvas_aspect = cw / ch;
+    let (fw, fh) = if frame_aspect >= canvas_aspect {
+        (cw, cw / frame_aspect)
+    } else {
+        (ch * frame_aspect, ch)
+    };
+    Some((
+        ((cw - fw) / 2.0) as f32,
+        ((ch - fh) / 2.0) as f32,
+        fw as f32,
+        fh as f32,
+    ))
 }
 
 /// File name for a captured frame PNG in the project media directory.
@@ -952,7 +975,7 @@ impl Render for PreviewView {
             .flex_col()
             .relative()
             .size_full()
-            .bg(Background::BASE)
+            .bg(Background::SURFACE)
             // Header tab bar (matches Swift PreviewContainerView.tabBar)
             .child(
                 div()
@@ -1089,7 +1112,7 @@ impl Render for PreviewView {
                     .w_full()
                     .relative()
                     .overflow_hidden()
-                    .bg(Background::BASE)
+                    .bg(Background::SURFACE)
                     // Capture the canvas bounds each paint so the chroma
                     // eyedropper can map a click to a frame pixel.
                     .child({
@@ -1112,9 +1135,10 @@ impl Render for PreviewView {
                             this.try_sample_chroma(e.position, cx);
                         }),
                     )
-                    // Composited frame (or placeholder) — hidden when an overlay is
-                    // shown. The zoom wrapper scales the fitted frame by
-                    // canvas_zoom (Swift: fitSize * editor.canvasZoom, clipped).
+                    // Composited frame (or empty-state canvas rect) — hidden when
+                    // an overlay is shown. The zoom wrapper scales the fitted
+                    // frame by canvas_zoom (Swift: fitSize * editor.canvasZoom,
+                    // clipped).
                     .when(
                         canvas_overlay == CanvasOverlay::None,
                         |el| match &frame_png {
@@ -1133,12 +1157,38 @@ impl Render for PreviewView {
                                             .object_fit(gpui::ObjectFit::Contain),
                                     ),
                             ),
-                            None => el.child(
-                                div()
-                                    .text_color(Text::MUTED)
-                                    .text_size(px(FontSize::SM))
-                                    .child("Preview"),
-                            ),
+                            // No composited frame: draw the timeline-aspect canvas
+                            // bounds so an empty project still shows the canvas.
+                            None => {
+                                let aspect = tl_width as f64 / tl_height.max(1) as f64;
+                                el.child(
+                                    canvas(
+                                        |_, _, _| {},
+                                        move |bounds, _, window, _| {
+                                            let avail = (
+                                                bounds.size.width.as_f32(),
+                                                bounds.size.height.as_f32(),
+                                            );
+                                            if let Some((x, y, w, h)) =
+                                                aspect_fit_rect(avail, aspect)
+                                            {
+                                                let rect = gpui::Bounds {
+                                                    origin: bounds.origin
+                                                        + gpui::point(px(x), px(y)),
+                                                    size: gpui::size(px(w), px(h)),
+                                                };
+                                                window.paint_quad(
+                                                    gpui::fill(rect, Background::BASE)
+                                                        .border_widths(px(BorderWidth::THIN))
+                                                        .border_color(BorderColors::SUBTLE),
+                                                );
+                                            }
+                                        },
+                                    )
+                                    .absolute()
+                                    .size_full(),
+                                )
+                            }
                         },
                     )
                     // Offline overlay (Swift: "Media Offline" message)
@@ -1612,6 +1662,35 @@ mod tests {
         assert_eq!(zoom_badge_label(1.005), "Fit"); // within 0.01 tolerance
         assert_eq!(zoom_badge_label(0.25), "25%");
         assert_eq!(zoom_badge_label(2.0), "200%");
+    }
+
+    #[test]
+    fn aspect_fit_rect_letterboxes_and_pillarboxes() {
+        // Wide frame in a square canvas → full width, letterbox top/bottom.
+        let (x, y, w, h) = aspect_fit_rect((100.0, 100.0), 16.0 / 9.0).unwrap();
+        assert_eq!((x, w), (0.0, 100.0));
+        assert!((h - 56.25).abs() < 1e-3 && (y - 21.875).abs() < 1e-3);
+        // Tall frame in a wide canvas → full height, pillarbox left/right.
+        let (x, y, w, h) = aspect_fit_rect((200.0, 100.0), 9.0 / 16.0).unwrap();
+        assert_eq!((y, h), (0.0, 100.0));
+        assert!((w - 56.25).abs() < 1e-3 && (x - 71.875).abs() < 1e-3);
+        // Degenerate inputs draw nothing.
+        assert!(aspect_fit_rect((0.0, 100.0), 1.0).is_none());
+        assert!(aspect_fit_rect((100.0, 0.0), 1.0).is_none());
+        assert!(aspect_fit_rect((100.0, 100.0), 0.0).is_none());
+    }
+
+    #[test]
+    fn aspect_fit_rect_agrees_with_chroma_fit() {
+        // The empty-state rect and the eyedropper share fit semantics: the
+        // rect centre must map to frame uv (0.5, 0.5).
+        let aspect = 16.0 / 9.0;
+        let canvas = (313.0f32, 545.0f32);
+        let (x, y, w, h) = aspect_fit_rect(canvas, aspect).unwrap();
+        let (u, v) =
+            crate::chroma_controls::frame_uv_from_click((x + w / 2.0, y + h / 2.0), canvas, aspect)
+                .unwrap();
+        assert!((u - 0.5).abs() < 1e-3 && (v - 0.5).abs() < 1e-3);
     }
 
     #[test]

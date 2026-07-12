@@ -262,25 +262,25 @@ impl DropZone {
 pub struct Layout;
 impl Layout {
     pub const MEDIA_PANEL_DEFAULT: f32 = 500.0;
-    pub const MEDIA_PANEL_MIN: f32 = 280.0;
+    pub const MEDIA_PANEL_MIN: f32 = crate::pane_resize::MEDIA_MIN;
     pub const INSPECTOR_DEFAULT: f32 = 260.0;
-    pub const INSPECTOR_MIN: f32 = 150.0;
-    pub const AGENT_PANEL_MIN: f32 = 240.0;
-    pub const AGENT_PANEL_MAX: f32 = 640.0;
+    pub const INSPECTOR_MIN: f32 = crate::pane_resize::INSPECTOR_MIN;
+    pub const AGENT_PANEL_MIN: f32 = crate::pane_resize::AGENT_MIN;
+    pub const AGENT_PANEL_MAX: f32 = crate::pane_resize::AGENT_MAX;
     pub const CHAT_COLUMN_MAX: f32 = 640.0;
     pub const PANEL_HEADER_HEIGHT: f32 = 28.0;
     pub const TOOLBAR_HEIGHT: f32 = 38.0;
     pub const PANEL_GAP: f32 = 5.0;
-    pub const TIMELINE_MIN_HEIGHT: f32 = 100.0;
-    pub const TIMELINE_MAX_HEIGHT: f32 = 700.0;
+    pub const TIMELINE_MIN_HEIGHT: f32 = crate::pane_resize::TIMELINE_MIN;
+    pub const TIMELINE_MAX_HEIGHT: f32 = crate::pane_resize::TIMELINE_MAX;
     pub const TRACK_HEIGHT: f32 = 50.0;
     pub const RULER_HEIGHT: f32 = 24.0;
     pub const TRACK_HEADER_WIDTH: f32 = 100.0;
     pub const DROP_ZONE_HEIGHT: f32 = 60.0;
     pub const INSERT_THRESHOLD: f32 = 10.0;
     pub const DRAG_THRESHOLD: f32 = 3.0;
-    pub const PREVIEW_MIN_WIDTH: f32 = 400.0;
-    pub const PREVIEW_MIN_HEIGHT: f32 = 320.0;
+    pub const PREVIEW_MIN_WIDTH: f32 = crate::pane_resize::PREVIEW_MIN_W;
+    pub const PREVIEW_MIN_HEIGHT: f32 = crate::pane_resize::PREVIEW_MIN_H;
     pub const MEDIA_PANEL_DEFAULT_DEFAULT: f32 = 250.0;
 }
 

@@ -7,6 +7,33 @@
 
 use gpui::{actions, App, KeyBinding};
 
+/// Menu-shortcut dispatch: one action carrying the target MenuAction, bound
+/// per shortcut on non-macOS (macOS routes through the system menu).
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = fronda_menu, no_json)]
+pub struct RunMenuAction {
+    pub action: crate::menu::MenuAction,
+}
+
+/// Register menu-shortcut keybindings (Ctrl-modifier chords). No-op on
+/// macOS. Call once at boot, before the window opens.
+pub fn bind_menu_shortcut_keys(cx: &mut App) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let bindings: Vec<KeyBinding> = crate::menu::menu_keybinding_shortcuts()
+        .into_iter()
+        .map(|s| {
+            KeyBinding::new(
+                &s.keystroke(),
+                RunMenuAction { action: s.action },
+                None,
+            )
+        })
+        .collect();
+    cx.bind_keys(bindings);
+}
+
 actions!(
     fronda_shortcuts,
     [

@@ -1,9 +1,10 @@
 use crate::chat_view::ChatView;
 use crate::inspector_view::InspectorView;
 use crate::media_panel_view::MediaPanelView;
-use crate::pane::{LayoutPreset, PaneId, PaneLayout};
+use crate::pane::{PaneId, PaneLayout};
+use crate::pane_tree::{PaneNode, PaneNodeKind, PaneSize};
 use crate::preview_view::PreviewView;
-use crate::theme::{Background, BorderColors, Layout, Text};
+use crate::theme::{Background, Layout, Radius, Text};
 use crate::timeline_view::TimelineView;
 use crate::toolbar_view::ToolbarView;
 use gpui::{div, prelude::*, px, AnyElement, Entity, IntoElement, ParentElement, Styled};
@@ -130,227 +131,126 @@ fn inspector_content(contents: &PaneContents) -> gpui::AnyElement {
         .unwrap_or_else(|| pane_div(PaneId::Inspector).into_any_element())
 }
 
-// ── Layout builders ──
+// ── Tree-driven rendering ──
 
-/// Default preset: [Agent left?] | Media | Preview + Toolbar + Timeline | Inspector
-///
-/// Agent panel is a LEFT column sibling to the rest (matches Swift layout).
-fn build_default(
-    layout: &PaneLayout,
-    contents: &PaneContents,
-    timeline_height: f32,
-    resize_handle: AnyElement,
-) -> impl IntoElement {
-    let mut root = div().id("layout-default").flex().flex_row().size_full();
-
-    // Agent panel: LEFT column (240px min, Swift: AGENT_PANEL_MIN=240)
-    if layout.is_visible(PaneId::Agent) {
-        root = root.child(
-            div()
-                .w(px(Layout::AGENT_PANEL_MIN))
-                .h_full()
-                .border_r_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(agent_content(contents)),
-        );
-    }
-
-    // Media panel: 500px default (Layout::MEDIA_PANEL_DEFAULT)
-    if layout.is_visible(PaneId::Media) {
-        root = root.child(
-            div()
-                .w(px(Layout::MEDIA_PANEL_DEFAULT))
-                .h_full()
-                .border_r_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(media_panel_content(contents)),
-        );
-    }
-
-    // Center column: Preview + Toolbar + Timeline
-    let mut center = div().flex().flex_col().flex_1().h_full();
-
-    if layout.is_visible(PaneId::Preview) {
-        center = center.child(
-            div()
-                .flex_1()
-                .border_b_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(preview_content(contents)),
-        );
-    }
-
-    // Toolbar between Preview and Timeline (UIX-001)
-    center = center.child(toolbar_content(contents));
-
-    if layout.is_visible(PaneId::Timeline) {
-        center = center.child(
-            div()
-                .flex()
-                .flex_col()
-                .h(px(timeline_height))
-                // Resize handle: 5px draggable strip at top of timeline slot
-                .child(resize_handle)
-                .child(
-                    div()
-                        .flex_1()
-                        .border_t_1()
-                        .border_color(BorderColors::PRIMARY)
-                        .child(timeline_content(contents)),
-                ),
-        );
-    }
-
-    root = root.child(center);
-
-    // Inspector: Layout::INSPECTOR_DEFAULT = 260px
-    if layout.is_visible(PaneId::Inspector) {
-        root = root.child(
-            div()
-                .w(px(Layout::INSPECTOR_DEFAULT))
-                .h_full()
-                .border_l_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(inspector_content(contents)),
-        );
-    }
-
-    root
+/// Swift makeHosting panel shell: surface rounded card inset by half the
+/// panel gap against the base background, so adjacent panes show a 5px seam.
+fn pane_card(inner: AnyElement) -> gpui::Div {
+    div().size_full().p(px(Layout::PANEL_GAP / 2.0)).child(
+        div()
+            .size_full()
+            .bg(Background::SURFACE)
+            .rounded(px(Radius::SM))
+            .overflow_hidden()
+            .child(inner),
+    )
 }
 
-/// Media preset: media (wide) | preview + timeline (matches Swift buildMediaLayout).
-fn build_media(
-    layout: &PaneLayout,
-    contents: &PaneContents,
-    timeline_height: f32,
-    resize_handle: AnyElement,
-) -> impl IntoElement {
-    let mut root = div().id("layout-media").flex().flex_row().size_full();
-
-    if layout.is_visible(PaneId::Media) {
-        root = root.child(
-            div()
-                .flex_1()
-                .h_full()
-                .border_r_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(media_panel_content(contents)),
-        );
+fn pane_content(id: PaneId, contents: &PaneContents) -> AnyElement {
+    match id {
+        PaneId::Agent => agent_content(contents),
+        PaneId::Media => media_panel_content(contents),
+        PaneId::Preview => preview_content(contents),
+        PaneId::Inspector => inspector_content(contents),
+        // Timeline renders through TimelineRegion, never as a bare leaf.
+        PaneId::Timeline => timeline_content(contents),
     }
-
-    // Right column: Preview + optional Timeline (matches Swift buildMediaLayout)
-    let mut right_col = div().flex().flex_col().flex_1().h_full();
-
-    if layout.is_visible(PaneId::Preview) {
-        right_col = right_col.child(
-            div()
-                .flex_1()
-                .border_b_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(preview_content(contents)),
-        );
-    }
-
-    if layout.is_visible(PaneId::Timeline) {
-        right_col = right_col.child(
-            div()
-                .flex()
-                .flex_col()
-                .h(px(timeline_height))
-                .child(resize_handle)
-                .child(
-                    div()
-                        .flex_1()
-                        .border_t_1()
-                        .border_color(BorderColors::PRIMARY)
-                        .child(timeline_content(contents)),
-                ),
-        );
-    }
-
-    root = root.child(right_col);
-    root
 }
 
-/// Vertical preset (Swift: Media+Inspector stacked left / Toolbar+Timeline right | Preview right).
-fn build_vertical(
-    layout: &PaneLayout,
+fn apply_size(node_div: gpui::Div, size: PaneSize, horizontal_axis: bool) -> gpui::Div {
+    match (size, horizontal_axis) {
+        (PaneSize::Fixed(v), true) => node_div.w(px(v)).h_full(),
+        (PaneSize::Fixed(v), false) => node_div.h(px(v)).w_full(),
+        (PaneSize::Flex, _) => node_div.flex_1().min_w(px(0.0)).min_h(px(0.0)),
+    }
+}
+
+/// Pre-built divider hitbox elements, one per resize target (a tree contains
+/// each target at most once). Built by the host so listeners bind to it.
+pub type DividerElements = Vec<(crate::pane_resize::ResizeTarget, AnyElement)>;
+
+/// Recursively render a PaneNode. `horizontal_axis` is the PARENT's axis
+/// (true = this node's size applies to width). Divider leaves consume their
+/// pre-built element from `dividers`.
+fn render_node(
+    node: &PaneNode,
     contents: &PaneContents,
-    timeline_height: f32,
-    resize_handle: AnyElement,
-) -> impl IntoElement {
-    let mut root = div().id("layout-vertical").flex().flex_row().size_full();
-
-    // Left stack: media + inspector (stacked vertically)
-    let mut left = div().flex().flex_col().w(px(300.0)).h_full();
-
-    if layout.is_visible(PaneId::Media) {
-        left = left.child(
-            div()
-                .flex_1()
-                .border_b_1()
-                .border_color(BorderColors::PRIMARY)
-                .child(media_panel_content(contents)),
-        );
-    }
-
-    if layout.is_visible(PaneId::Inspector) {
-        left = left.child(div().h(px(240.0)).child(inspector_content(contents)));
-    }
-
-    root = root.child(left.border_r_1().border_color(BorderColors::PRIMARY));
-
-    // Right: Preview + Toolbar + resizable Timeline
-    if layout.is_visible(PaneId::Preview) {
-        let mut right = div()
-            .flex_1()
-            .h_full()
-            .flex()
-            .flex_col()
-            .child(div().flex_1().child(preview_content(contents)))
-            .child(toolbar_content(contents));
-
-        if layout.is_visible(PaneId::Timeline) {
-            right = right.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .h(px(timeline_height))
-                    .child(resize_handle)
-                    .child(
-                        div()
-                            .flex_1()
-                            .border_t_1()
-                            .border_color(BorderColors::PRIMARY)
-                            .child(timeline_content(contents)),
-                    ),
-            );
+    dividers: &mut DividerElements,
+    horizontal_axis: bool,
+) -> AnyElement {
+    match &node.kind {
+        PaneNodeKind::Row(children) => {
+            let mut row = div().flex().flex_row();
+            row = apply_size(row, node.size, horizontal_axis);
+            for child in children {
+                row = row.child(render_node(child, contents, dividers, true));
+            }
+            row.into_any_element()
         }
-
-        root = root.child(right);
+        PaneNodeKind::Column(children) => {
+            let mut col = div().flex().flex_col();
+            col = apply_size(col, node.size, horizontal_axis);
+            for child in children {
+                col = col.child(render_node(child, contents, dividers, false));
+            }
+            col.into_any_element()
+        }
+        PaneNodeKind::Pane(id) => {
+            let card = pane_card(pane_content(*id, contents));
+            apply_size(card, node.size, horizontal_axis).into_any_element()
+        }
+        // Toolbar + Timeline composite card (Swift timelineHC VStack).
+        PaneNodeKind::TimelineRegion => {
+            let inner = div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(toolbar_content(contents))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(timeline_content(contents)),
+                );
+            let card = pane_card(inner.into_any_element());
+            apply_size(card, node.size, horizontal_axis).into_any_element()
+        }
+        // Zero-sized seam anchor; the host's hitbox overlays the gap.
+        PaneNodeKind::Divider { target, .. } => {
+            let elem = dividers
+                .iter()
+                .position(|(t, _)| t == target)
+                .map(|i| dividers.remove(i).1);
+            let anchor = if horizontal_axis {
+                div().w(px(0.0)).h_full()
+            } else {
+                div().h(px(0.0)).w_full()
+            };
+            anchor
+                .flex_none()
+                .relative()
+                .children(elem)
+                .into_any_element()
+        }
     }
-
-    root
 }
 
-/// Render the full editor pane layout.
+/// Render the full editor pane layout from the pure description tree.
 pub fn render_pane_layout(
     layout: &PaneLayout,
     contents: &PaneContents,
-    timeline_height: f32,
-    resize_handle: AnyElement,
+    sizes: &crate::pane_tree::ResolvedSizes,
+    mut dividers: DividerElements,
 ) -> impl IntoElement {
-    match layout.preset {
-        LayoutPreset::Default => {
-            build_default(layout, contents, timeline_height, resize_handle).into_any_element()
-        }
-        LayoutPreset::Media => {
-            build_media(layout, contents, timeline_height, resize_handle).into_any_element()
-        }
-        LayoutPreset::Vertical => {
-            build_vertical(layout, contents, timeline_height, resize_handle).into_any_element()
-        }
-    }
+    let tree = crate::pane_tree::build_pane_tree(layout, sizes);
+    div()
+        .id("editor-pane-layout")
+        .size_full()
+        .flex()
+        .bg(Background::BASE)
+        // Outer half-gap so the window edge shows the same seam as between panes.
+        .p(px(Layout::PANEL_GAP / 2.0))
+        .child(render_node(&tree, contents, &mut dividers, true))
 }
 
 #[cfg(test)]

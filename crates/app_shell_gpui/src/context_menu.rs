@@ -30,6 +30,8 @@ pub struct MenuItem {
     pub destructive: bool,
     /// Present ⇒ activation arms a confirm step first; shown while armed.
     pub confirm_label: Option<SharedString>,
+    /// Right-aligned shortcut hint (e.g. "Ctrl+N").
+    pub hint: Option<SharedString>,
 }
 
 impl MenuItem {
@@ -59,6 +61,21 @@ impl MenuEntry {
             label: label.into(),
             destructive: false,
             confirm_label: None,
+            hint: None,
+        })
+    }
+
+    pub fn item_with_hint(
+        id: &'static str,
+        label: impl Into<SharedString>,
+        hint: Option<SharedString>,
+    ) -> Self {
+        Self::Item(MenuItem {
+            id,
+            label: label.into(),
+            destructive: false,
+            confirm_label: None,
+            hint,
         })
     }
 
@@ -68,6 +85,7 @@ impl MenuEntry {
             label: label.into(),
             destructive: true,
             confirm_label: None,
+            hint: None,
         })
     }
 
@@ -81,6 +99,7 @@ impl MenuEntry {
             label: label.into(),
             destructive: true,
             confirm_label: Some(confirm_label.into()),
+            hint: None,
         })
     }
 
@@ -230,6 +249,10 @@ pub fn render_context_menu<V: 'static>(
                 menu = menu.child(
                     div()
                         .id(("context-menu-item", i))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(Spacing::LG))
                         .px(px(Spacing::MD))
                         .py(px(Spacing::XS))
                         .cursor_pointer()
@@ -240,7 +263,15 @@ pub fn render_context_menu<V: 'static>(
                         .on_click(cx.listener(move |this, _, window: &mut Window, cx| {
                             on_activate(this, i, window, cx);
                         }))
-                        .child(item.display_label(armed)),
+                        .child(div().flex_1().child(item.display_label(armed)))
+                        .when_some(item.hint.clone(), |el, hint| {
+                            el.child(
+                                div()
+                                    .text_color(Text::TERTIARY)
+                                    .text_size(px(FontSize::XS))
+                                    .child(hint),
+                            )
+                        }),
                 );
             }
         }

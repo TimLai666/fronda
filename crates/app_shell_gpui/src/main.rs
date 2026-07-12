@@ -15,6 +15,7 @@ fn main() {
             app_shell_gpui::text_field::bind_text_field_keys(cx);
             app_shell_gpui::text_area::bind_text_area_keys(cx);
             app_shell_gpui::global_shortcuts::bind_global_shortcut_keys(cx);
+            app_shell_gpui::global_shortcuts::bind_menu_shortcut_keys(cx);
             open_main_window(cx);
         });
 }

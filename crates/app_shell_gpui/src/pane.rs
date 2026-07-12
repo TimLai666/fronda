@@ -63,21 +63,9 @@ impl PaneLayout {
     }
 
     pub fn apply_preset(&mut self, preset: LayoutPreset) {
+        // Swift rebuilds the split tree on preset change but keeps each pane's
+        // visibility flag; only explicit toggles/maximize touch visibility.
         self.preset = preset;
-        match preset {
-            LayoutPreset::Default | LayoutPreset::Vertical => {
-                self.visibility = PaneVisibility::all_visible();
-            }
-            LayoutPreset::Media => {
-                self.visibility = PaneVisibility {
-                    media: true,
-                    preview: true,
-                    inspector: false,
-                    timeline: false,
-                    agent: false,
-                };
-            }
-        }
     }
 
     pub fn toggle_pane(&mut self, pane: PaneId) {
@@ -194,11 +182,28 @@ mod tests {
         let mut layout = PaneLayout::new();
         layout.apply_preset(LayoutPreset::Media);
         assert_eq!(layout.preset, LayoutPreset::Media);
+        // Preset switches rearrange panes but never touch visibility (Swift parity).
         assert!(layout.visibility.media);
         assert!(layout.visibility.preview);
-        assert!(!layout.visibility.inspector);
-        assert!(!layout.visibility.timeline);
-        assert!(!layout.visibility.agent);
+        assert!(layout.visibility.inspector);
+        assert!(layout.visibility.timeline);
+        assert!(layout.visibility.agent);
+    }
+
+    #[test]
+    fn preset_switch_preserves_visibility() {
+        let mut layout = PaneLayout::new();
+        layout.toggle_pane(PaneId::Agent);
+        layout.toggle_pane(PaneId::Inspector);
+        let before = layout.visibility.clone();
+        for preset in [
+            LayoutPreset::Media,
+            LayoutPreset::Vertical,
+            LayoutPreset::Default,
+        ] {
+            layout.apply_preset(preset);
+            assert_eq!(layout.visibility, before, "visibility changed by {preset:?}");
+        }
     }
 
     #[test]

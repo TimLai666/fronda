@@ -150,6 +150,144 @@ impl Shortcut {
             action,
         )
     }
+
+    /// gpui keystroke string for non-macOS keybindings; the cmd modifier
+    /// maps to the platform primary modifier Ctrl.
+    pub fn keystroke(&self) -> String {
+        let mut s = String::new();
+        if self.modifiers.command || self.modifiers.control {
+            s.push_str("ctrl-");
+        }
+        if self.modifiers.option {
+            s.push_str("alt-");
+        }
+        if self.modifiers.shift {
+            s.push_str("shift-");
+        }
+        s.push_str(&self.key);
+        s
+    }
+
+    /// Human-readable hint for menu items ("Ctrl+Shift+S").
+    pub fn display_hint(&self) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        if self.modifiers.command || self.modifiers.control {
+            parts.push("Ctrl");
+        }
+        if self.modifiers.option {
+            parts.push("Alt");
+        }
+        if self.modifiers.shift {
+            parts.push("Shift");
+        }
+        let key = match self.key.as_str() {
+            "backspace" => "⌫".to_string(),
+            "space" => "Space".to_string(),
+            "left" => "←".to_string(),
+            "right" => "→".to_string(),
+            k => k.to_uppercase(),
+        };
+        let mut out = parts.join("+");
+        if !out.is_empty() {
+            out.push('+');
+        }
+        out.push_str(&key);
+        out
+    }
+}
+
+/// Menu shortcuts to bind as global keybindings on non-macOS builds: the
+/// command-modifier entries, minus the plain-Ctrl combos text inputs own
+/// (Ctrl+A/C/V/X/Z/Y — spec "Windows menu shortcuts" exclusion clause).
+pub fn menu_keybinding_shortcuts() -> Vec<Shortcut> {
+    const TEXT_INPUT_OWNED: [&str; 6] = ["a", "c", "v", "x", "z", "y"];
+    all_shortcuts()
+        .into_iter()
+        .filter(|s| s.modifiers.command)
+        .filter(|s| {
+            let plain_ctrl = !s.modifiers.shift && !s.modifiers.option && !s.modifiers.control;
+            !(plain_ctrl && TEXT_INPUT_OWNED.contains(&s.key.as_str()))
+        })
+        .collect()
+}
+
+/// Shortcut display hint for a menu action, if it has one.
+pub fn shortcut_hint_for(action: &MenuAction) -> Option<String> {
+    all_shortcuts()
+        .into_iter()
+        .find(|s| &s.action == action)
+        .map(|s| s.display_hint())
+}
+
+impl MenuGroup {
+    /// Title-bar menu label (Swift MainMenu top-level titles).
+    pub fn label(&self) -> &'static str {
+        match self {
+            MenuGroup::App => "Fronda",
+            MenuGroup::File => "File",
+            MenuGroup::Edit => "Edit",
+            MenuGroup::View => "View",
+            MenuGroup::Help => "Help",
+        }
+    }
+}
+
+impl MenuAction {
+    /// Menu-item display label (Swift MainMenu item titles).
+    pub fn label(&self) -> &'static str {
+        match self {
+            MenuAction::About => "About Fronda",
+            MenuAction::CheckForUpdates => "Check for Updates…",
+            MenuAction::Settings => "Settings…",
+            MenuAction::Quit => "Quit Fronda",
+            MenuAction::NewProject => "New Project",
+            MenuAction::OpenProject => "Open Project…",
+            MenuAction::SaveProject => "Save Project",
+            MenuAction::SaveProjectAs => "Save Project As…",
+            MenuAction::ImportMedia => "Import Media…",
+            MenuAction::ImportTimeline => "Import Timeline…",
+            MenuAction::Export => "Export…",
+            MenuAction::Undo => "Undo",
+            MenuAction::Redo => "Redo",
+            MenuAction::Cut => "Cut",
+            MenuAction::Copy => "Copy",
+            MenuAction::Paste => "Paste",
+            MenuAction::SelectAll => "Select All",
+            MenuAction::SplitAtPlayhead => "Split at Playhead",
+            MenuAction::TrimStartToPlayhead => "Trim Start to Playhead",
+            MenuAction::TrimEndToPlayhead => "Trim End to Playhead",
+            MenuAction::Delete => "Delete",
+            MenuAction::RippleDelete => "Ripple Delete",
+            MenuAction::ToggleMediaPanel => "Toggle Media Panel",
+            MenuAction::ToggleInspector => "Toggle Inspector",
+            MenuAction::ToggleAgentPanel => "Toggle Agent Panel",
+            MenuAction::MaximizeFocusedPane => "Maximize Focused Panel",
+            MenuAction::EnterFullScreen => "Enter Full Screen",
+            MenuAction::LayoutDefault => "Layout: Default",
+            MenuAction::LayoutMedia => "Layout: Media",
+            MenuAction::LayoutVertical => "Layout: Vertical",
+            MenuAction::Tutorial => "Tutorial",
+            MenuAction::KeyboardShortcuts => "Keyboard Shortcuts",
+            MenuAction::McpInstructions => "MCP Instructions",
+            MenuAction::SendFeedback => "Send Feedback…",
+            MenuAction::PlayPause => "Play/Pause",
+            MenuAction::PlayBackward => "Play Backward",
+            MenuAction::PauseJkl => "Pause",
+            MenuAction::PlayForward => "Play Forward",
+            MenuAction::StepFrameBackward => "Step Frame Backward",
+            MenuAction::StepFrameForward => "Step Frame Forward",
+            MenuAction::SkipFramesBackward => "Skip Frames Backward",
+            MenuAction::SkipFramesForward => "Skip Frames Forward",
+            MenuAction::MarkIn => "Mark In",
+            MenuAction::MarkOut => "Mark Out",
+            MenuAction::ClearMarkIn => "Clear Mark In",
+            MenuAction::ClearMarkOut => "Clear Mark Out",
+            MenuAction::ClearMarks => "Clear Marks",
+            MenuAction::TimelineZoomIn => "Zoom In",
+            MenuAction::TimelineZoomOut => "Zoom Out",
+            MenuAction::TimelineFitToWindow => "Fit Timeline to Window",
+        }
+    }
 }
 
 /// Returns all menu items organized by group matching MENU-001 to MENU-007.
@@ -356,6 +494,62 @@ pub fn is_text_conflicting(modifiers: &Modifiers) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menu_keybindings_exclude_text_input_combos() {
+        let bindings = menu_keybinding_shortcuts();
+        for owned in ["a", "c", "v", "x", "z", "y"] {
+            assert!(
+                !bindings.iter().any(|s| s.key == owned
+                    && s.modifiers.command
+                    && !s.modifiers.shift
+                    && !s.modifiers.option),
+                "plain Ctrl+{owned} must stay with text inputs"
+            );
+        }
+        // Representative menu shortcuts survive, including shifted Z (redo).
+        assert!(bindings
+            .iter()
+            .any(|s| s.action == MenuAction::NewProject && s.keystroke() == "ctrl-n"));
+        assert!(bindings
+            .iter()
+            .any(|s| s.action == MenuAction::SaveProjectAs && s.keystroke() == "ctrl-shift-s"));
+        assert!(bindings
+            .iter()
+            .any(|s| s.action == MenuAction::Redo && s.keystroke() == "ctrl-shift-z"));
+        // Modifier-free shortcuts are global_shortcuts' job, not menu bindings.
+        assert!(bindings.iter().all(|s| s.modifiers.command));
+    }
+
+    #[test]
+    fn keystroke_strings_map_cmd_to_ctrl() {
+        assert_eq!(
+            Shortcut::cmd("n", MenuAction::NewProject).keystroke(),
+            "ctrl-n"
+        );
+        assert_eq!(
+            Shortcut::cmd_shift("s", MenuAction::SaveProjectAs).keystroke(),
+            "ctrl-shift-s"
+        );
+        assert_eq!(
+            Shortcut::cmd_option("0", MenuAction::ToggleInspector).keystroke(),
+            "ctrl-alt-0"
+        );
+        assert_eq!(
+            Shortcut::cmd("n", MenuAction::NewProject).display_hint(),
+            "Ctrl+N"
+        );
+    }
+
+    #[test]
+    fn all_menu_actions_have_labels_and_group_labels() {
+        for (group, actions) in all_menus() {
+            assert!(!group.label().is_empty());
+            for action in actions {
+                assert!(!action.label().is_empty(), "missing label for {action:?}");
+            }
+        }
+    }
 
     fn find_group_items(group: MenuGroup, items: &[(MenuGroup, Vec<MenuAction>)]) -> &[MenuAction] {
         items

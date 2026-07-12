@@ -5,13 +5,23 @@
 //!
 //! macOS has a native NSToolbar; the gpui cross-platform version uses a 28px strip.
 
+use crate::menu::MenuAction;
 use crate::pane::{PaneId, PaneLayout};
 use crate::theme::{Accent, Background, BorderColors, FontSize, Layout, Radius, Spacing, Text};
 use gpui::Hsla;
 use gpui::{
-    div, prelude::*, px, svg, App, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
-    ParentElement, Render, SharedString, Styled, Window,
+    anchored, deferred, div, prelude::*, px, svg, App, ClickEvent, Context, FocusHandle,
+    Focusable, InteractiveElement, MouseDownEvent, ParentElement, Render, SharedString, Styled,
+    Window,
 };
+
+/// Events the host (AppRoot) subscribes to.
+pub enum TitleBarEvent {
+    /// A title-bar menu item was activated.
+    RunMenu(MenuAction),
+}
+
+impl gpui::EventEmitter<TitleBarEvent> for TitleBarView {}
 
 /// State carried by the title bar.
 #[derive(Debug, Clone)]
@@ -39,6 +49,8 @@ impl Default for TitleBarState {
 pub struct TitleBarView {
     pub state: TitleBarState,
     focus_handle: FocusHandle,
+    /// Index into `menu::all_menus()` of the open title-bar menu, if any.
+    open_menu: Option<usize>,
 }
 
 impl TitleBarView {
@@ -46,7 +58,113 @@ impl TitleBarView {
         Self {
             state: TitleBarState::default(),
             focus_handle: cx.focus_handle(),
+            open_menu: None,
         }
+    }
+
+    /// Title-bar menu bar (non-macOS; macOS routes through the system menu).
+    fn render_menu_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let open_index = self.open_menu;
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(Spacing::XXS))
+            .children(crate::menu::all_menus().into_iter().enumerate().map(
+                |(i, (group, actions))| {
+                    let is_open = open_index == Some(i);
+                    div()
+                        .id(("menubar-btn", i))
+                        .relative()
+                        .px(px(Spacing::SM))
+                        .py(px(Spacing::XXS))
+                        .rounded(px(Radius::XS_SM))
+                        .text_size(px(FontSize::SM))
+                        .text_color(if is_open {
+                            Text::PRIMARY
+                        } else {
+                            Text::SECONDARY
+                        })
+                        .when(is_open, |el| el.bg(Background::PROMINENT))
+                        .hover(|s| s.bg(Background::PROMINENT))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.open_menu = if this.open_menu == Some(i) {
+                                None
+                            } else {
+                                Some(i)
+                            };
+                            cx.notify();
+                        }))
+                        .child(group.label())
+                        .when(is_open, |el| {
+                            el.child(
+                                div()
+                                    .absolute()
+                                    .top(px(Layout::PANEL_HEADER_HEIGHT - Spacing::XXS))
+                                    .left_0()
+                                    .child(Self::render_menu_dropdown(actions, cx)),
+                            )
+                        })
+                },
+            ))
+    }
+
+    fn render_menu_dropdown(
+        actions: Vec<MenuAction>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        deferred(
+            anchored().snap_to_window_with_margin(px(Spacing::SM_MD)).child(
+                div()
+                    .id("menubar-dropdown")
+                    .occlude()
+                    .flex()
+                    .flex_col()
+                    .min_w(px(230.0))
+                    .py(px(Spacing::XS))
+                    .bg(Background::RAISED)
+                    .border_1()
+                    .border_color(BorderColors::SUBTLE)
+                    .rounded(px(Radius::SM))
+                    .shadow_lg()
+                    .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.open_menu = None;
+                        cx.notify();
+                    }))
+                    .children(actions.into_iter().enumerate().map(|(j, action)| {
+                        let hint: Option<SharedString> =
+                            crate::menu::shortcut_hint_for(&action).map(Into::into);
+                        let label = action.label();
+                        div()
+                            .id(("menubar-item", j))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Spacing::LG))
+                            .px(px(Spacing::MD))
+                            .py(px(Spacing::XS))
+                            .cursor_pointer()
+                            .text_size(px(FontSize::SM))
+                            .text_color(Text::PRIMARY)
+                            .hover(|s| s.bg(Background::PROMINENT))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_menu = None;
+                                cx.emit(TitleBarEvent::RunMenu(action.clone()));
+                                cx.notify();
+                            }))
+                            .child(div().flex_1().child(label))
+                            .when_some(hint, |el, h| {
+                                el.child(
+                                    div()
+                                        .text_color(Text::TERTIARY)
+                                        .text_size(px(FontSize::XS))
+                                        .child(h),
+                                )
+                            })
+                    })),
+            ),
+        )
     }
 
     /// Returns the color of the chat-bubble icon.
@@ -77,6 +195,8 @@ impl Render for TitleBarView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let icon_color = self.agent_icon_color();
         let project_name = self.state.project_name.clone();
+        // Windows/Linux get an in-window menu bar; macOS uses the system menu.
+        let show_menu_bar = !cfg!(target_os = "macos");
 
         div()
             .id("titlebar")
@@ -126,6 +246,7 @@ impl Render for TitleBarView {
                             ),
                     ),
             )
+            .when(show_menu_bar, |el| el.child(self.render_menu_bar(cx)))
             // ── Center: project name ──
             .child(
                 div()

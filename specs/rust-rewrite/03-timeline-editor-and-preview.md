@@ -142,10 +142,14 @@ Scope sources:
 ## J. Editor shell and layout behavior
 
 - [x] `EDT-001`: The editor keeps the current five functional panes: media, preview, inspector, timeline, and agent.
-- [x] `EDT-002`: Layout presets remain `default`, `media`, and `vertical`.
+- [x] `EDT-002`: Layout presets remain `default`, `media`, and `vertical`. Switching a preset rearranges the split tree only; it MUST NOT change any pane's visibility (Swift `buildLayout` honors the existing visibility flags — an earlier Rust `apply_preset` that hid inspector/timeline/agent on the `media` preset was a divergence, removed in change `editor-shell-parity`).
 - [x] `EDT-003`: Pane visibility state for media/inspector/agent persists across launches.
 - [x] `EDT-004`: Maximizing a pane collapses ancestor/sibling panes and unmaximizing restores visibility state rather than forcing everything visible.
 - [x] `EDT-005`: The editor keeps independent playhead state for timeline preview and source-media preview tabs.
+- [x] `EDT-006`: The editor shell reproduces Swift `EditorView.swift`'s nested split structure per preset (change `editor-shell-parity`, pure `pane_tree::build_pane_tree`). The Agent pane is always the outermost left column. `default`: Agent | (Media | Preview | Inspector upper 70% / Toolbar+Timeline full-width lower 30%). `media`: Agent | Media(30% width) | (Preview | Inspector upper 55% / Toolbar+Timeline lower). `vertical`: Agent | (Media | Inspector upper 55% / Toolbar+Timeline lower)(left 50% width) | Preview. The Toolbar+Timeline region spans the full preset-area width in `default`, and flex-fills when its upper row is empty. Timeline region initial height = 30% (`default`) / 45% (`media`,`vertical`) of the preset area.
+- [x] `EDT-007`: Every visible pane renders as a surface-colored rounded card inset by half `PANEL_GAP` against the base background, so adjacent panes show a `PANEL_GAP`-wide base seam (Swift `makeHosting` panel shell; the focus ring is deferred pending a pane-focus tracking system).
+- [x] `EDT-008`: The seams between the Agent/Media/Inspector columns and the seam above the Toolbar+Timeline region are draggable dividers (pure `pane_resize::clamp_resize`). Clamps: agent 240–640, media ≥ 280 + tab-rail width, inspector ≥ 150, timeline height 100–700, and no drag reduces the Preview column below 400 wide (or the Preview region below 320 tall). The pane's own minimum wins over the space guard on tiny windows.
+- [x] `EDT-009`: On non-macOS platforms the editor exposes menu actions through Ctrl-modifier keyboard shortcuts (cmd→Ctrl; the text-input-owned combos Ctrl+A/C/V/X/Z/Y are excluded) and a title-bar menu bar (File/Edit/View/Window/Help sourced from `menu::all_menus`, items show shortcut hints and run their `MenuAction`). macOS continues to use the system menu (change `editor-shell-parity`). The gpui-ce Windows platform-layer input/window defects (intermittent click loss, maximize hit-test offset, restore black-screen, editor-entry crash) are out of scope and tracked separately.
 
 ## Upstream change tracking
 
