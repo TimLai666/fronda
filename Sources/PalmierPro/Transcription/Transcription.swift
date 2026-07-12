@@ -2,18 +2,44 @@ import AVFoundation
 import Foundation
 import Speech
 
+enum TranscriptionProvider: String, CaseIterable, Sendable, Codable {
+    case local
+    case cloud
+
+    var label: String {
+        switch self {
+        case .local: "Local"
+        case .cloud: "Cloud"
+        }
+    }
+}
+
 struct TranscriptionWord: Sendable, Codable {
     let text: String
     let start: Double?
     let end: Double?
+    let speaker: String?
+
+    init(text: String, start: Double?, end: Double?, speaker: String? = nil) {
+        self.text = text
+        self.start = start
+        self.end = end
+        self.speaker = speaker
+    }
 }
 
-/// One natural utterance the transcriber endpointed on its own (pause/sentence
-/// boundary). `text` carries the model's punctuation and casing.
 struct TranscriptionSegment: Sendable, Codable {
     let text: String
     let start: Double
     let end: Double
+    let speaker: String?
+
+    init(text: String, start: Double, end: Double, speaker: String? = nil) {
+        self.text = text
+        self.start = start
+        self.end = end
+        self.speaker = speaker
+    }
 }
 
 struct TranscriptionResult: Sendable, Codable {
@@ -29,10 +55,15 @@ struct TranscriptionResult: Sendable, Codable {
             text: text,
             language: language,
             words: words.map {
-                TranscriptionWord(text: $0.text, start: $0.start.map { $0 + offset }, end: $0.end.map { $0 + offset })
+                TranscriptionWord(
+                    text: $0.text,
+                    start: $0.start.map { $0 + offset },
+                    end: $0.end.map { $0 + offset },
+                    speaker: $0.speaker
+                )
             },
             segments: segments.map {
-                TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset)
+                TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset, speaker: $0.speaker)
             }
         )
     }
@@ -62,6 +93,8 @@ enum TranscriptionError: LocalizedError {
 }
 
 enum Transcription {
+    private static let audioExtractionGate = AsyncSemaphore(value: 2)
+
     static func transcribeVideoAudio(videoURL: URL, censorProfanity: Bool = false, preferredLocale: Locale? = nil, sourceRange: ClosedRange<Double>? = nil) async throws -> TranscriptionResult {
         let tempAudioURL = try await extractAudioTrack(from: videoURL, range: sourceRange)
         defer { try? FileManager.default.removeItem(at: tempAudioURL) }
@@ -205,73 +238,47 @@ enum Transcription {
     }
 
     /// Decode the asset's audio track to a PCM file with AVAssetReader
-    private static func extractAudioTrack(from videoURL: URL, range: ClosedRange<Double>? = nil) async throws -> URL {
-        let asset = AVURLAsset(url: videoURL)
-        guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
-            throw TranscriptionError.audioExtractionFailed("No audio track in \(videoURL.lastPathComponent)")
-        }
-
-        let reader: AVAssetReader
-        do { reader = try AVAssetReader(asset: asset) } catch {
-            throw TranscriptionError.audioExtractionFailed(error.localizedDescription)
-        }
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: 16_000,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false,
-        ])
-        guard reader.canAdd(output) else {
-            throw TranscriptionError.audioExtractionFailed("Cannot read audio from \(videoURL.lastPathComponent)")
-        }
-        reader.add(output)
-        if let range {
-            reader.timeRange = CMTimeRange(
-                start: CMTime(seconds: range.lowerBound, preferredTimescale: 600),
-                end: CMTime(seconds: range.upperBound, preferredTimescale: 600)
-            )
-        }
-
+    static func extractAudioTrack(
+        from videoURL: URL,
+        range: ClosedRange<Double>? = nil,
+        fileExtension: String = "caf"
+    ) async throws -> URL {
         let outURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("palmier-stt-\(UUID().uuidString).caf")
+            .appendingPathComponent("palmier-stt-\(UUID().uuidString).\(fileExtension)")
+        try await audioExtractionGate.wait()
+        defer { Task { await audioExtractionGate.signal() } }
+
         Log.transcription.notice(
             "extract start video=\(videoURL.lastPathComponent)",
             telemetry: "Transcription audio extraction started",
             data: ["hasRange": range != nil, "rangeSeconds": range.map { $0.upperBound - $0.lowerBound } ?? 0]
         )
 
-        guard reader.startReading() else {
-            throw TranscriptionError.audioExtractionFailed(reader.error?.localizedDescription ?? "Reader could not start")
-        }
-
         var audioFile: AVAudioFile?
-        while let sample = output.copyNextSampleBuffer() {
-            guard let desc = CMSampleBufferGetFormatDescription(sample),
-                  let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc),
-                  let format = AVAudioFormat(streamDescription: asbd) else { continue }
-            let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(sample))
-            guard frames > 0, let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { continue }
-            pcm.frameLength = frames
-            CMSampleBufferCopyPCMDataIntoAudioBufferList(
-                sample, at: 0, frameCount: Int32(frames), into: pcm.mutableAudioBufferList
-            )
-            if audioFile == nil {
-                audioFile = try AVAudioFile(
-                    forWriting: outURL,
-                    settings: format.settings,
-                    commonFormat: format.commonFormat,
-                    interleaved: format.isInterleaved
-                )
+        do {
+            try await AudioTrackReader.read(from: videoURL, outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 16_000,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ], range: range) { pcm in
+                if audioFile == nil {
+                    audioFile = try AVAudioFile(
+                        forWriting: outURL,
+                        settings: pcm.format.settings,
+                        commonFormat: pcm.format.commonFormat,
+                        interleaved: pcm.format.isInterleaved
+                    )
+                }
+                try audioFile?.write(from: pcm)
             }
-            try audioFile?.write(from: pcm)
+        } catch let error as AudioTrackReader.ReadError {
+            throw TranscriptionError.audioExtractionFailed(error.message)
         }
 
-        if reader.status == .failed {
-            throw TranscriptionError.audioExtractionFailed(reader.error?.localizedDescription ?? "Read failed")
-        }
         guard audioFile != nil else {
             throw TranscriptionError.audioExtractionFailed("No audio samples in \(videoURL.lastPathComponent)")
         }
@@ -303,7 +310,8 @@ enum Transcription {
                 segments.append(TranscriptionSegment(
                     text: segmentText,
                     start: result.range.start.seconds,
-                    end: result.range.end.seconds
+                    end: result.range.end.seconds,
+                    speaker: nil
                 ))
             }
 
@@ -314,7 +322,7 @@ enum Transcription {
                 let range = run.audioTimeRange
                 let start = range.map(\.start.seconds)
                 let end = range.map { ($0.start + $0.duration).seconds }
-                words.append(TranscriptionWord(text: trimmed, start: start, end: end))
+                words.append(TranscriptionWord(text: trimmed, start: start, end: end, speaker: nil))
             }
         }
 

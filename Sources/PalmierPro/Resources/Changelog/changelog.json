@@ -2,29 +2,14 @@
   "changelogURL": "https://github.com/palmier-io/palmier-pro/releases",
   "entries": [
     {
-      "version": "0.3.5",
-      "date": "2026-06-19",
+      "version": "0.6.4",
+      "date": "2026-07-09",
       "sections": [
         {
           "heading": "New",
           "items": [
-            "Import entire folders to your Palmier project.",
-            "More agent's capabilities - undo edits, ripple delete, ripple insert.",
-          ]
-        },
-        {
-          "heading": "Improved",
-          "items": [
-            "Better image and video generation prompts.",
-            "Improved agent tools - more compact context, accurate clip operations.",
-            "Better transcription-based editing - more accurate and faster."
-          ]
-        },
-        {
-          "heading": "Fixed",
-          "items": [
-            "Fixed crashes when tracks changed, captions picked a stale source, or animated opacity rendered during export.",
-            "Splitting an animated clip now keeps the motion and visual changes intact on both sides."
+            "Multicam editing: Agent can now work with multiple camera footage with better tools. Especially useful for podcast or other multi-camera setups.",
+            "10-bit HDR export: New HEVC 10-bit HDR export option."
           ]
         }
       ]

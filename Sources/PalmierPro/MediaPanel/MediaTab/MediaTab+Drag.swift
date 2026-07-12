@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 extension MediaTab {
     static let folderDragScheme = "palmier-folder://"
     static let assetDragScheme = "palmier-asset://"
+    static let timelineDragScheme = "palmier-timeline://"
 
     static func folderDragString(forFolderId id: String) -> String {
         folderDragScheme + id
@@ -14,6 +15,14 @@ extension MediaTab {
 
     static func folderId(fromDragString line: String) -> String? {
         line.hasPrefix(folderDragScheme) ? String(line.dropFirst(folderDragScheme.count)) : nil
+    }
+
+    static func timelineDragString(forTimelineId id: String) -> String {
+        timelineDragScheme + id
+    }
+
+    static func timelineId(fromDragString line: String) -> String? {
+        line.hasPrefix(timelineDragScheme) ? String(line.dropFirst(timelineDragScheme.count)) : nil
     }
 
     static func assetDragString(forAssetId id: String) -> String {
@@ -98,12 +107,14 @@ extension MediaTab {
 extension MediaTab {
     @MainActor
     func handlePanelFinderDrop(urls: [URL]) {
-        Self.handlePanelFinderDrop(urls: urls, into: currentFolderId, editor: editor)
+        Task { @MainActor in
+            await Self.handlePanelFinderDrop(urls: urls, into: currentFolderId, editor: editor)
+        }
     }
 
     @MainActor
-    static func handlePanelFinderDrop(urls: [URL], into destFolderId: String?, editor: EditorViewModel) {
-        editor.importFinderItems(urls, into: destFolderId)
+    static func handlePanelFinderDrop(urls: [URL], into destFolderId: String?, editor: EditorViewModel) async {
+        await editor.importFinderItems(urls, into: destFolderId)
     }
 
     func handleProviderDrop(_ providers: [NSItemProvider], into destFolderId: String?) {
@@ -113,7 +124,7 @@ extension MediaTab {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url else { return }
                     Task { @MainActor in
-                        editor.importFinderItems([url], into: destFolderId)
+                        await Self.handlePanelFinderDrop(urls: [url], into: destFolderId, editor: editor)
                     }
                 }
                 continue
@@ -137,18 +148,20 @@ extension MediaTab {
 
     @MainActor
     func handleClipboardPaste() {
-        Self.handleClipboardPaste(pasteboard: .general, into: currentFolderId, editor: editor)
+        Task { @MainActor in
+            await Self.handleClipboardPaste(pasteboard: .general, into: currentFolderId, editor: editor)
+        }
     }
 
     @MainActor
-    static func handleClipboardPaste(pasteboard pb: NSPasteboard, into destFolderId: String?, editor: EditorViewModel) {
+    static func handleClipboardPaste(pasteboard pb: NSPasteboard, into destFolderId: String?, editor: EditorViewModel) async {
         if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
-            handlePanelFinderDrop(urls: urls, into: destFolderId, editor: editor)
+            await handlePanelFinderDrop(urls: urls, into: destFolderId, editor: editor)
             return
         }
         for (type, ext): (NSPasteboard.PasteboardType, String) in [(.png, "png"), (.tiff, "tiff")] {
             guard let data = pb.data(forType: type),
-                  let asset = editor.importPastedImageData(data, fileExtension: ext) else { continue }
+                  let asset = await editor.importPastedImageData(data, fileExtension: ext) else { continue }
             if let folderId = destFolderId {
                 editor.moveAssetsToFolder(assetIds: [asset.id], folderId: folderId)
             }
@@ -160,9 +173,13 @@ extension MediaTab {
     static func resolveTextDrop(_ text: String, into destFolderId: String?, editor: EditorViewModel) {
         var assetIds: Set<String> = []
         var folderIds: Set<String> = []
+        var timelineIds: Set<String> = []
         for line in text.split(separator: "\n").map(String.init) where !line.isEmpty {
             if let folderId = folderId(fromDragString: line) {
                 folderIds.insert(folderId)
+            } else if let timelineId = timelineId(fromDragString: line),
+                      editor.timeline(for: timelineId) != nil {
+                timelineIds.insert(timelineId)
             } else if let id = assetId(fromDragString: line),
                       editor.mediaAssets.contains(where: { $0.id == id }) {
                 assetIds.insert(id)
@@ -173,6 +190,9 @@ extension MediaTab {
         }
         if !folderIds.isEmpty {
             editor.moveFoldersToFolder(folderIds: folderIds, parentFolderId: destFolderId)
+        }
+        if !timelineIds.isEmpty {
+            editor.moveTimelinesToFolder(timelineIds: timelineIds, folderId: destFolderId)
         }
     }
 }

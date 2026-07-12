@@ -16,11 +16,15 @@ struct ShortcutsPane: View {
             ("C", "Razor Tool"),
         ]),
         ShortcutGroup(title: "Editing", shortcuts: [
+            ("A", "Select Forward on Track"),
+            ("Shift + A", "Select Forward on All Tracks"),
             ("Cmd + K", "Split at Playhead"),
             ("[ or Q", "Trim Start to Playhead"),
             ("] or W", "Trim End to Playhead"),
             ("Backspace", "Delete"),
             ("Shift + Backspace", "Ripple Delete"),
+            ("Shift + Drag Edge", "Ripple Trim"),
+            ("Cmd + Drag Media", "Ripple Insert"),
             ("Opt + Drag", "Duplicate Clip"),
         ]),
         ShortcutGroup(title: "Timeline", shortcuts: [
@@ -77,7 +81,7 @@ struct ShortcutsPane: View {
             ForEach(groups, id: \.title) { group in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(group.title)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: AppTheme.FontSize.xs, weight: .semibold))
                         .foregroundStyle(AppTheme.Text.tertiaryColor)
                         .textCase(.uppercase)
                         .tracking(0.3)
@@ -92,7 +96,7 @@ struct ShortcutsPane: View {
                                     .frame(width: Self.shortcutKeyColumnWidth, alignment: .leading)
 
                                 Text(description)
-                                    .font(.system(size: 11))
+                                    .font(.system(size: AppTheme.FontSize.sm))
                                     .foregroundStyle(AppTheme.Text.secondaryColor)
                                     .fixedSize(horizontal: true, vertical: false)
                             }

@@ -1,60 +1,83 @@
 import AVFoundation
 import AppKit
-
-enum ExportFormat {
-    case h264, h265, prores, xml
-
-    var fileExtension: String {
-        switch self {
-        case .h264, .h265: "mp4"
-        case .prores: "mov"
-        case .xml: "xml"
-        }
-    }
-
-    var utType: AVFileType? {
-        switch self {
-        case .h264, .h265: .mp4
-        case .prores: .mov
-        case .xml: nil
-        }
-    }
-}
-
-enum ExportResolution: String, CaseIterable, Identifiable {
-    case r720p = "720p"
-    case r1080p = "1080p"
-    case r4k = "4K"
-
-    var id: String { rawValue }
-
-    var shortSidePixels: Int {
-        switch self {
-        case .r720p: 720
-        case .r1080p: 1080
-        case .r4k: 2160
-        }
-    }
-
-    func renderSize(for canvas: CGSize) -> CGSize {
-        let canvasShort = min(canvas.width, canvas.height)
-        guard canvasShort > 0 else { return canvas }
-        let scale = Double(shortSidePixels) / Double(canvasShort)
-        let w = (Int((canvas.width * scale).rounded()) / 2) * 2
-        let h = (Int((canvas.height * scale).rounded()) / 2) * 2
-        return CGSize(width: max(2, w), height: max(2, h))
-    }
-}
+import CoreImage
 
 enum ExportError: LocalizedError {
     case unsupportedPreset
     case invalidFormat
+    case xmlEncodingFailed
 
     var errorDescription: String? {
         switch self {
         case .unsupportedPreset: "Export preset not supported on this system"
         case .invalidFormat: "Invalid export format"
+        case .xmlEncodingFailed: "Couldn't encode the timeline as XML"
         }
+    }
+}
+
+struct ExportRunReport {
+    let outputSize: CGSize
+    let offlineMediaRefs: Set<String>
+    let unprocessableMediaRefs: Set<String>
+}
+
+struct ExportAnalyticsContext {
+    var source: String = "manual"
+    var projectId: String?
+}
+
+private struct ExportAnalyticsRun {
+    private let basePayload: [String: Any]
+    private let started: ContinuousClock.Instant
+
+    init(
+        mode: String,
+        format: ExportFormat,
+        resolution: ExportResolution?,
+        context: ExportAnalyticsContext
+    ) {
+        self.basePayload = [
+            "source": context.source,
+            "project_id": context.projectId ?? "unknown",
+            "mode": mode,
+            "format": format.displayName,
+            "resolution": resolution?.rawValue ?? "n/a",
+        ]
+        self.started = ContinuousClock.now
+    }
+
+    init(palmierContext context: ExportAnalyticsContext) {
+        self.basePayload = [
+            "source": context.source,
+            "project_id": context.projectId ?? "unknown",
+            "mode": "palmier",
+            "format": "Palmier",
+        ]
+        self.started = ContinuousClock.now
+    }
+
+    func begin() {
+        Analytics.capture(.exportStarted, properties: basePayload)
+    }
+
+    func finish() {
+        Analytics.capture(.exportFinished, properties: timedPayload())
+    }
+
+    func fail() {
+        Analytics.capture(.exportFailed, properties: timedPayload())
+    }
+
+    private func timedPayload() -> [String: Any] {
+        var payload = basePayload
+        payload["export_duration_seconds"] = Self.durationSeconds(since: started)
+        return payload
+    }
+
+    private static func durationSeconds(since started: ContinuousClock.Instant) -> Double {
+        let duration = started.duration(to: .now)
+        return Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
     }
 }
 
@@ -62,36 +85,88 @@ enum ExportError: LocalizedError {
 @MainActor
 final class ExportService {
     var progress: Double = 0
-    var isExporting = false {
-        didSet {
-            guard isExporting != oldValue else { return }
-            isExporting ? SearchIndexCoordinator.exportDidBegin() : SearchIndexCoordinator.exportDidEnd()
-        }
-    }
+    var isExporting = false
     var error: String?
+    var lastReport: ExportRunReport?
 
     func export(
         timeline: Timeline,
         resolver: MediaResolver,
+        resolveTimeline: @escaping @Sendable (String) -> Timeline? = { _ in nil },
         format: ExportFormat,
         resolution: ExportResolution,
-        outputURL: URL
+        fcpxmlVersion: FCPXMLVersion = .default,
+        fcpxmlTarget: FCPXMLTarget = .default,
+        missingMediaRefs: Set<String> = [],
+        outputURL: URL,
+        acquireSlot: Bool = true,
+        analyticsContext: ExportAnalyticsContext = .init()
     ) async {
-        if format == .xml {
-            Log.export.notice(
-                "export requested format=xml",
-                telemetry: "Export started",
-                data: ["format": "xml", "tracks": timeline.tracks.count, "clips": timeline.tracks.reduce(0) { $0 + $1.clips.count }]
+        error = nil
+        lastReport = nil
+        isExporting = true
+        progress = 0
+        defer { isExporting = false }
+
+        if format == .xml || format == .fcpxml {
+            let name = format.fileExtension
+            let analytics = ExportAnalyticsRun(
+                mode: name,
+                format: format,
+                resolution: nil,
+                context: analyticsContext
             )
-            XMLExporter.export(timeline: timeline, resolver: resolver, outputURL: outputURL)
-            progress = 1.0
-            Log.export.notice("export ok format=xml", telemetry: "Export finished", data: ["format": "xml"])
+            analytics.begin()
+            Log.export.notice(
+                "export requested format=\(name)",
+                telemetry: "Export started",
+                data: ["format": name, "tracks": timeline.tracks.count, "clips": timeline.tracks.reduce(0) { $0 + $1.clips.count }]
+            )
+            do {
+                if format == .xml {
+                    try await XMLExporter.export(timeline: timeline, resolver: resolver, resolveTimeline: resolveTimeline, outputURL: outputURL)
+                } else {
+                    try await FCPXMLExporter.export(timeline: timeline, resolver: resolver, resolveTimeline: resolveTimeline,
+                                                    version: fcpxmlVersion, target: fcpxmlTarget, outputURL: outputURL)
+                }
+                progress = 1.0
+                Log.export.notice("export ok format=\(name)", telemetry: "Export finished", data: ["format": name])
+                analytics.finish()
+            } catch {
+                self.error = Log.detail(error)
+                Log.export.error(
+                    "export failed format=\(name): \(Log.detail(error))",
+                    telemetry: "Export failed",
+                    data: ["format": name, "error": Log.detail(error)]
+                )
+                analytics.fail()
+            }
+            return
+        }
+        let videoAnalytics = ExportAnalyticsRun(
+            mode: "video",
+            format: format,
+            resolution: resolution,
+            context: analyticsContext
+        )
+        if acquireSlot {
+            await ExportCoordinator.acquireExport()
+        }
+        defer { if acquireSlot { ExportCoordinator.endExport() } }
+
+        if format.isHDR {
+            videoAnalytics.begin()
+            await exportHDR(
+                timeline: timeline,
+                resolver: resolver,
+                resolution: resolution,
+                missingMediaRefs: missingMediaRefs,
+                outputURL: outputURL,
+                analytics: videoAnalytics
+            )
             return
         }
 
-        isExporting = true
-        progress = 0
-        error = nil
         Log.export.notice(
             "export requested format=\(String(describing: format)) resolution=\(resolution.rawValue)",
             telemetry: "Export started",
@@ -104,12 +179,15 @@ final class ExportService {
                 "fps": timeline.fps
             ]
         )
+        videoAnalytics.begin()
 
         do {
-            let session = try await makeExportSession(
-                timeline: timeline, resolver: resolver,
-                format: format, resolution: resolution
+            let prepared = try await makeExportSession(
+                timeline: timeline, resolver: resolver, resolveTimeline: resolveTimeline,
+                format: format, resolution: resolution,
+                missingMediaRefs: missingMediaRefs
             )
+            let session = prepared.session
             guard let fileType = format.utType else { throw ExportError.invalidFormat }
 
             // AVAssetExportSession fails if the file already exists
@@ -126,12 +204,19 @@ final class ExportService {
 
             do {
                 try await session.export(to: outputURL, as: fileType)
+                let outputSize = await Self.encodedVideoSize(of: outputURL) ?? prepared.renderSize
+                lastReport = ExportRunReport(
+                    outputSize: outputSize,
+                    offlineMediaRefs: prepared.result.offlineMediaRefs,
+                    unprocessableMediaRefs: prepared.result.unprocessableMediaRefs
+                )
                 progress = 1.0
                 Log.export.notice(
                     "export ok",
                     telemetry: "Export finished",
                     data: ["format": String(describing: format), "resolution": resolution.rawValue]
                 )
+                videoAnalytics.finish()
             } catch {
                 if (error as NSError).domain == NSCocoaErrorDomain && (error as NSError).code == NSUserCancelledError {
                     self.error = "Export was cancelled"
@@ -147,6 +232,7 @@ final class ExportService {
                         telemetry: "Export failed",
                         data: ["format": String(describing: format), "resolution": resolution.rawValue, "error": Log.detail(error)]
                     )
+                    videoAnalytics.fail()
                 }
             }
 
@@ -158,39 +244,49 @@ final class ExportService {
                 telemetry: "Export setup failed",
                 data: ["format": String(describing: format), "resolution": resolution.rawValue, "error": Log.detail(error)]
             )
+            videoAnalytics.fail()
         }
 
-        isExporting = false
     }
 
     /// Writes a self-contained `.palmier` bundle (all media collected internally).
     @discardableResult
     func exportPalmierProject(
-        timeline: Timeline,
+        projectFile: ProjectFile,
         manifest: MediaManifest,
         generationLog: GenerationLog,
         sourceProjectURL: URL?,
-        outputURL: URL
+        outputURL: URL,
+        acquireSlot: Bool = true,
+        analyticsContext: ExportAnalyticsContext = .init()
     ) async -> PalmierProjectExporter.Report? {
         isExporting = true
         progress = 0
         error = nil
+        lastReport = nil
         defer { isExporting = false }
+        let analytics = ExportAnalyticsRun(palmierContext: analyticsContext)
+
+        if acquireSlot {
+            await ExportCoordinator.acquireExport()
+        }
+        defer { if acquireSlot { ExportCoordinator.endExport() } }
 
         do {
+            analytics.begin()
             Log.export.notice(
                 "palmier export start url=\(outputURL.lastPathComponent)",
                 telemetry: "Palmier project export started",
                 data: [
-                    "tracks": timeline.tracks.count,
-                    "clips": timeline.tracks.reduce(0) { $0 + $1.clips.count },
+                    "timelines": projectFile.timelines.count,
+                    "clips": projectFile.timelines.reduce(0) { $0 + $1.tracks.reduce(0) { $0 + $1.clips.count } },
                     "media": manifest.entries.count,
                     "generationLogEntries": generationLog.entries.count
                 ]
             )
             let report = try await Task.detached(priority: .userInitiated) {
                 try PalmierProjectExporter.export(
-                    timeline: timeline, manifest: manifest, generationLog: generationLog,
+                    projectFile: projectFile, manifest: manifest, generationLog: generationLog,
                     sourceProjectURL: sourceProjectURL, to: outputURL,
                     progress: { p in Task { @MainActor in self.progress = p } }
                 )
@@ -201,6 +297,7 @@ final class ExportService {
                 telemetry: "Palmier project export finished",
                 data: ["collected": report.collected.count, "missing": report.missing.count]
             )
+            analytics.finish()
             return report
         } catch {
             self.error = Log.detail(error)
@@ -209,22 +306,98 @@ final class ExportService {
                 telemetry: "Palmier project export failed",
                 data: ["error": Log.detail(error)]
             )
+            analytics.fail()
             return nil
         }
+    }
+
+    /// Encode HEVC Main10 HDR; `HDRVideoExporter` converts the composition's SDR 709 frames to HLG.
+    private func exportHDR(
+        timeline: Timeline,
+        resolver: MediaResolver,
+        resolution: ExportResolution,
+        missingMediaRefs: Set<String>,
+        outputURL: URL,
+        analytics: ExportAnalyticsRun
+    ) async {
+        isExporting = true
+        progress = 0
+        error = nil
+        defer { isExporting = false }
+        do {
+            let renderSize = resolution.renderSize(for: CGSize(width: timeline.width, height: timeline.height))
+            let result = try await CompositionBuilder.build(
+                timeline: timeline,
+                resolveURL: { resolver.resolveURL(for: $0) },
+                missingMediaRefs: missingMediaRefs,
+                renderSize: renderSize
+            )
+            try? FileManager.default.removeItem(at: outputURL)
+            Log.export.notice("hdr export start size=\(Int(renderSize.width))x\(Int(renderSize.height)) url=\(outputURL.lastPathComponent)")
+            let inputs = HDRVideoExporter.Inputs(
+                composition: result.composition,
+                videoComposition: result.videoComposition,
+                audioMix: result.audioMix
+            )
+            try await HDRVideoExporter.export(
+                inputs, renderSize: renderSize, transfer: .hlg, to: outputURL,
+                onProgress: { [weak self] p in Task { @MainActor in self?.progress = p } }
+            )
+            let outputSize = await Self.encodedVideoSize(of: outputURL) ?? renderSize
+            lastReport = ExportRunReport(
+                outputSize: outputSize,
+                offlineMediaRefs: result.offlineMediaRefs,
+                unprocessableMediaRefs: result.unprocessableMediaRefs
+            )
+            progress = 1.0
+            Log.export.notice("hdr export ok")
+            analytics.finish()
+        } catch {
+            self.error = Log.detail(error)
+            Log.export.error("hdr export failed: \(Log.detail(error))")
+            analytics.fail()
+        }
+    }
+
+    /// Encoded dimensions of the written file (natural size with preferred
+    /// transform applied), the source of truth when a preset clamped the size.
+    private static func encodedVideoSize(of url: URL) async -> CGSize? {
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let naturalSize = try? await track.load(.naturalSize),
+              let transform = try? await track.load(.preferredTransform) else { return nil }
+        let size = naturalSize.applying(transform)
+        return CGSize(width: abs(size.width), height: abs(size.height))
     }
 
     private func makeExportSession(
         timeline: Timeline,
         resolver: MediaResolver,
+        resolveTimeline: @escaping @Sendable (String) -> Timeline? = { _ in nil },
         format: ExportFormat,
-        resolution: ExportResolution
-    ) async throws -> AVAssetExportSession {
+        resolution: ExportResolution,
+        missingMediaRefs: Set<String>
+    ) async throws -> (session: AVAssetExportSession, result: CompositionResult, renderSize: CGSize) {
         let timelineCanvas = CGSize(width: timeline.width, height: timeline.height)
         let renderSize = resolution.renderSize(for: timelineCanvas)
+        let mediaURLs = resolver.expectedURLMap()
+
+        for track in timeline.tracks {
+            for clip in track.clips where clip.hasDenoiseEnabled && clip.denoiseAmount > 0 {
+                guard !missingMediaRefs.contains(clip.mediaRef), let url = mediaURLs[clip.mediaRef] else { continue }
+                do {
+                    _ = try await AudioEnhancer.denoisedAudio(for: url, mediaRef: clip.mediaRef)
+                } catch {
+                    Log.export.error("denoise bake failed — exporting original audio. mediaRef=\(clip.mediaRef): \(Log.detail(error))")
+                }
+            }
+        }
 
         let result = try await CompositionBuilder.build(
             timeline: timeline,
-            resolveURL: { resolver.resolveURL(for: $0) },
+            resolveURL: { mediaURLs[$0] },
+            resolveTimeline: resolveTimeline,
+            missingMediaRefs: missingMediaRefs,
             renderSize: renderSize
         )
 
@@ -233,20 +406,8 @@ final class ExportService {
             throw ExportError.unsupportedPreset
         }
         session.audioMix = result.audioMix
-
-        // Bake text clips into the export via AVVideoCompositionCoreAnimationTool
-        let (parent, videoLayer) = TextLayerController.buildForExport(
-            timeline: timeline,
-            fps: timeline.fps,
-            renderSize: renderSize
-        )
-        let mutableVC = result.videoComposition.mutableCopy() as! AVMutableVideoComposition
-        mutableVC.animationTool = AVVideoCompositionCoreAnimationTool(
-            postProcessingAsVideoLayer: videoLayer,
-            in: parent
-        )
-        session.videoComposition = mutableVC
-        return session
+        session.videoComposition = result.videoComposition
+        return (session, result, renderSize)
     }
 
     // MARK: - Export preset mapping
@@ -258,17 +419,21 @@ final class ExportService {
             case .r720p: AVAssetExportPreset1280x720
             case .r1080p: AVAssetExportPreset1920x1080
             case .r4k: AVAssetExportPreset3840x2160
+            // Size-named presets clamp dimensions; HighestQuality honours the
+            // composition's renderSize, so 2K / Match Timeline export at their true size.
+            case .r1440p, .matchTimeline: AVAssetExportPresetHighestQuality
             }
         case .h265:
             switch resolution {
             case .r720p: AVAssetExportPresetHEVCHighestQuality
             case .r1080p: AVAssetExportPresetHEVC1920x1080
             case .r4k: AVAssetExportPresetHEVC3840x2160
+            case .r1440p, .matchTimeline: AVAssetExportPresetHEVCHighestQuality
             }
         case .prores:
             AVAssetExportPresetAppleProRes422LPCM
-        case .xml:
-            AVAssetExportPresetPassthrough // unreachable — XML returns early
+        case .xml, .fcpxml, .hevcHDR:
+            AVAssetExportPresetPassthrough // unreachable — timeline formats and HDR return early
         }
     }
 }
