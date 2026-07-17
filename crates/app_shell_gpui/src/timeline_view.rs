@@ -3,8 +3,8 @@
 //! Covers UIX-009 (track sizes), UIX-010 (layout constants), from spec 07.
 
 use crate::theme::{
-    Accent, Background, BorderColors, BorderWidth, ComponentSize, FontSize, Radius, Spacing, Text,
-    TrackColor,
+    Accent, Background, BorderColors, BorderWidth, ComponentSize, FontSize, Opacity, Radius,
+    Spacing, Text, TrackColor,
 };
 use crate::timeline_model::{TimelineState, TrackKind, TrimEdge, RULER_HEIGHT, TRACK_HEADER_WIDTH};
 use gpui::{
@@ -54,6 +54,9 @@ pub struct TimelineView {
     /// Clip id → source clip type, captured at sync time so clip fills follow
     /// Swift's per-clip `ClipType.themeColor` (#281) without widening ClipSlot.
     clip_types: std::collections::HashMap<String, core_model::ClipType>,
+    /// Clip id → multicam angle label, captured at sync time (Swift
+    /// TimelineView `cachedAngleLabels`).
+    multicam_angles: std::collections::HashMap<String, String>,
 }
 
 impl TimelineView {
@@ -85,6 +88,7 @@ impl TimelineView {
             tab_rename_field,
             asset_drop_hover: None,
             clip_types: std::collections::HashMap::new(),
+            multicam_angles: std::collections::HashMap::new(),
         };
         view.sync_from_shared_state();
         view
@@ -341,6 +345,7 @@ impl TimelineView {
             .flat_map(|t| t.clips.iter())
             .map(|c| (c.id.clone(), c.source_clip_type))
             .collect();
+        self.multicam_angles = multicam_angle_labels(exec.timeline(), exec.multicam_groups());
         let mut next = TimelineState::from_core(exec.timeline(), exec.media_manifest());
         next.zoom_scale = self.state.zoom_scale;
         next.scroll_x = self.state.scroll_x;
@@ -482,6 +487,7 @@ impl Render for TimelineView {
         let tracks = self.state.tracks.clone();
         let clips = self.state.clips.clone();
         let clip_types = self.clip_types.clone();
+        let multicam_angles = self.multicam_angles.clone();
         let selected_ids = self.state.selected_clip_ids.clone();
         let drag_clip_id = self.state.clip_drag.as_ref().map(|d| d.clip_id.clone());
         let drag_proposed_start = self.state.clip_drag.as_ref().map(|d| d.proposed_start);
@@ -899,6 +905,14 @@ impl Render for TimelineView {
                                                     clip_types.get(clip.id.as_str()).copied(),
                                                     color,
                                                 );
+                                                let angle = multicam_angles
+                                                    .get(clip.id.as_str())
+                                                    .cloned();
+                                                let marker = multicam_marker(
+                                                    angle.is_some(),
+                                                    clip_w,
+                                                    is_selected,
+                                                );
                                                 let clip_id = clip.id.clone();
                                                 div()
                                                     .id(format!("clip-{}", clip.id))
@@ -951,11 +965,46 @@ impl Render for TimelineView {
                                                     })
                                                     .child(
                                                         div()
+                                                            .flex()
+                                                            .flex_row()
+                                                            .items_center()
+                                                            .gap(px(Spacing::XXS))
                                                             .px(px(Spacing::XS))
                                                             .pt(px(Spacing::XXS))
-                                                            .text_size(px(FontSize::SM))
-                                                            .text_color(Text::PRIMARY)
-                                                            .child(clip.label.clone()),
+                                                            .when(
+                                                                marker == MulticamMarker::Badge,
+                                                                |el| {
+                                                                    el.child(multicam_badge(
+                                                                        angle
+                                                                            .clone()
+                                                                            .unwrap_or_default(),
+                                                                    ))
+                                                                },
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(FontSize::SM))
+                                                                    .text_color(Text::PRIMARY)
+                                                                    .child(clip.label.clone()),
+                                                            ),
+                                                    )
+                                                    // Narrow multicam clip: red
+                                                    // dot stand-in (Swift
+                                                    // ClipRenderer dot branch).
+                                                    .when(
+                                                        marker == MulticamMarker::Dot,
+                                                        |el| {
+                                                            el.child(
+                                                                div()
+                                                                    .absolute()
+                                                                    .top(px(Spacing::XXS))
+                                                                    .left(px(Spacing::XXS))
+                                                                    .w(px(MULTICAM_DOT_SIZE))
+                                                                    .h(px(MULTICAM_DOT_SIZE))
+                                                                    .rounded_full()
+                                                                    .bg(TrackColor::MULTICAM),
+                                                            )
+                                                        },
                                                     )
                                                     .child(trim_handle(
                                                         cx,
@@ -988,6 +1037,91 @@ impl Render for TimelineView {
                     ),
             )
     }
+}
+
+// Swift AppTheme.ComponentSize values the Rust theme does not carry yet
+// (theme.rs is outside this change's file boundary — promote these there
+// next time it is touched).
+/// Swift `timelineClipLabelMinWidth`.
+const MULTICAM_LABEL_MIN_WIDTH: f32 = 56.0;
+/// Swift `ClipRenderer.drawLabelBar` minimum clip width guard.
+const MULTICAM_LABEL_BAR_MIN_WIDTH: f32 = 20.0;
+/// Swift `timelineDotSize`.
+const MULTICAM_DOT_SIZE: f32 = 5.0;
+/// Swift `timelineBadgePadH` / `timelineBadgePadV`.
+const MULTICAM_BADGE_PAD_H: f32 = 4.0;
+const MULTICAM_BADGE_PAD_V: f32 = 1.0;
+
+/// How a multicam clip marks its angle (Swift ClipRenderer: label-bar pill
+/// when the label shows, red dot on narrow clips, nothing on slivers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MulticamMarker {
+    Badge,
+    Dot,
+    None,
+}
+
+/// Marker decision, mirroring Swift `ClipRenderer.draw`: `showLabel =
+/// isSelected || width >= timelineClipLabelMinWidth` routes to the label-bar
+/// badge (which itself needs `width > 20`); otherwise a dot on clips at least
+/// the border-min width.
+fn multicam_marker(has_angle: bool, clip_w: f32, is_selected: bool) -> MulticamMarker {
+    if !has_angle {
+        return MulticamMarker::None;
+    }
+    let show_label = is_selected || clip_w >= MULTICAM_LABEL_MIN_WIDTH;
+    if show_label {
+        if clip_w > MULTICAM_LABEL_BAR_MIN_WIDTH {
+            MulticamMarker::Badge
+        } else {
+            MulticamMarker::None
+        }
+    } else if clip_w >= ComponentSize::TIMELINE_CLIP_BORDER_MIN_WIDTH {
+        MulticamMarker::Dot
+    } else {
+        MulticamMarker::None
+    }
+}
+
+/// Clip id → angle label for every multicam-stamped clip whose group still
+/// resolves (Swift TimelineView `cachedAngleLabels` + `angleLabel(_:)`).
+fn multicam_angle_labels(
+    timeline: &core_model::Timeline,
+    groups: &[core_model::MulticamSource],
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for track in &timeline.tracks {
+        for clip in &track.clips {
+            let Some(gid) = clip.multicam_group_id.as_deref() else {
+                continue;
+            };
+            let Some(group) = groups.iter().find(|g| g.id == gid) else {
+                continue;
+            };
+            if let Some(member) = group.member_by_media_ref(&clip.media_ref) {
+                out.insert(clip.id.clone(), member.angle_label.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Angle-label pill (Swift `ClipRenderer.drawPill` with the multicam fill).
+fn multicam_badge(label: String) -> impl IntoElement {
+    div()
+        .px(px(MULTICAM_BADGE_PAD_H))
+        .py(px(MULTICAM_BADGE_PAD_V))
+        .rounded(px(Radius::XS))
+        .bg(TrackColor::MULTICAM)
+        .text_size(px(FontSize::XXS))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: Opacity::PROMINENT,
+        })
+        .child(label)
 }
 
 /// Clip fill by source clip type — fully opaque, mirroring Swift
@@ -1212,5 +1346,77 @@ mod tests {
             clip_stroke(2.0, true),
             Some((Text::PRIMARY, BorderWidth::MEDIUM))
         );
+    }
+
+    // ── Multicam markers (D7) ─────────────────────────────────────────────
+
+    // Swift ClipRenderer thresholds: pill in the label bar on wide (or
+    // selected, >20px) clips; red dot from border-min width; nothing below.
+    #[test]
+    fn multicam_marker_mirrors_swift_thresholds() {
+        use MulticamMarker as M;
+        assert_eq!(multicam_marker(false, 200.0, true), M::None);
+        assert_eq!(multicam_marker(true, 56.0, false), M::Badge);
+        assert_eq!(multicam_marker(true, 200.0, false), M::Badge);
+        // Selected narrow clip shows the label bar once it clears 20px.
+        assert_eq!(multicam_marker(true, 21.0, true), M::Badge);
+        assert_eq!(multicam_marker(true, 20.0, true), M::None);
+        // Unselected 8..56px: dot.
+        assert_eq!(multicam_marker(true, 8.0, false), M::Dot);
+        assert_eq!(multicam_marker(true, 55.9, false), M::Dot);
+        // Sliver: nothing.
+        assert_eq!(multicam_marker(true, 7.9, false), M::None);
+    }
+
+    fn stamped_timeline() -> core_model::Timeline {
+        let mut t = core_model::Timeline::default();
+        let track: core_model::Track = serde_json::from_value(serde_json::json!({
+            "type": "video",
+            "clips": [
+                {"id": "p1", "mediaRef": "camA", "mediaType": "video",
+                 "sourceClipType": "video", "startFrame": 0,
+                 "durationFrames": 100, "multicamGroupId": "g1"},
+                {"id": "plain", "mediaRef": "other", "mediaType": "video",
+                 "sourceClipType": "video", "startFrame": 100,
+                 "durationFrames": 50},
+                {"id": "stale", "mediaRef": "camA", "mediaType": "video",
+                 "sourceClipType": "video", "startFrame": 150,
+                 "durationFrames": 50, "multicamGroupId": "gone"},
+            ],
+        }))
+        .unwrap();
+        t.tracks.push(track);
+        t
+    }
+
+    fn test_group() -> core_model::MulticamSource {
+        core_model::MulticamSource {
+            id: "g1".into(),
+            name: "Pod".into(),
+            members: vec![core_model::MulticamMember {
+                id: "m1".into(),
+                media_ref: "camA".into(),
+                kind: core_model::MulticamMemberKind::Angle,
+                angle_label: "cam-a".into(),
+                sync: core_model::MulticamSyncMap {
+                    offset_seconds: 0.0,
+                    confidence: 1.0,
+                    locked: false,
+                },
+            }],
+            master_member_id: "m1".into(),
+        }
+    }
+
+    // Stamped clips map to their member's angle label; unstamped clips and
+    // stale group ids stay out of the map (Swift cachedAngleLabels).
+    #[test]
+    fn multicam_angle_labels_cover_only_resolvable_stamps() {
+        let labels = multicam_angle_labels(&stamped_timeline(), &[test_group()]);
+        assert_eq!(labels.get("p1").map(String::as_str), Some("cam-a"));
+        assert!(!labels.contains_key("plain"));
+        assert!(!labels.contains_key("stale"));
+        // No groups at all → empty map.
+        assert!(multicam_angle_labels(&stamped_timeline(), &[]).is_empty());
     }
 }

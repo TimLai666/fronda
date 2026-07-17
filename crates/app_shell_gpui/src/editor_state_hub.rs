@@ -156,6 +156,10 @@ impl EditorStateHub {
             exec.set_audio_source(std::sync::Arc::new(
                 crate::audio_source::ProjectAudioSource::new(root.clone()),
             ));
+            #[cfg(feature = "vad")]
+            exec.set_speech_analyzer(std::sync::Arc::new(crate::vad::VadSpeechAnalyzer::new(
+                root.clone(),
+            )));
             exec.set_export_host(std::sync::Arc::new(
                 crate::export_host::AgentExportHost::new(root.clone()),
             ));

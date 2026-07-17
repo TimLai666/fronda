@@ -22,8 +22,8 @@ use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
 use gpui::{
     div, prelude::*, px, size, App, Bounds, Context, DragMoveEvent, Entity, FocusHandle, Focusable,
-    InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions, Window,
-    WindowBounds, WindowOptions,
+    InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent,
+    PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
 
 /// Drag token for pane divider resize.
@@ -66,6 +66,43 @@ struct ProjectMenuTarget {
 /// Frames for the default 3-second text clip (Swift: Defaults.textDurationSeconds).
 fn default_text_duration_frames(fps: i64) -> i64 {
     ((3.0 * fps.max(1) as f64).round() as i64).max(1)
+}
+
+/// A pane size worth persisting — the negative preset sentinels are not.
+fn persistable_size(v: f32) -> Option<f32> {
+    (v.is_finite() && v > 0.0).then_some(v)
+}
+
+/// Maximize acts on the focused pane (Swift toggleMaximizePanelAction). Swift
+/// disables the menu item with no focus; the Rust shortcut instead keeps its
+/// pre-focus-tracking Preview fallback so it never goes dead.
+fn maximize_target(focused: Option<PaneId>) -> PaneId {
+    focused.unwrap_or(PaneId::Preview)
+}
+
+/// Apply persisted (already statically clamped) sizes over the boot
+/// defaults/sentinels. Returns whether anything was applied, so the first
+/// editor render knows to run the viewport-aware clamp.
+fn apply_persisted_sizes(
+    saved: &crate::pane_prefs::PersistedPaneSizes,
+    agent: &mut f32,
+    media: &mut f32,
+    inspector: &mut f32,
+    timeline: &mut f32,
+) -> bool {
+    let mut applied = false;
+    for (value, slot) in [
+        (saved.agent, agent),
+        (saved.media, media),
+        (saved.inspector, inspector),
+        (saved.timeline_height, timeline),
+    ] {
+        if let Some(v) = value {
+            *slot = v;
+            applied = true;
+        }
+    }
+    applied
 }
 
 /// Prompt handed off from the media tabs (agent-chat seam), drained on the
@@ -135,8 +172,13 @@ pub struct AppRoot {
     focus_handle: FocusHandle,
     active_screen: ActiveScreen,
     pane_layout: PaneLayout,
+    /// Pane owning the focus ring (EDT-007); set by card clicks + maximize.
+    focused_pane: Option<PaneId>,
     /// preferences.json for EDT-003 visibility persistence (test-injectable).
     pane_prefs_path: std::path::PathBuf,
+    /// Persisted sizes were applied at boot; the first editor render (when
+    /// the viewport is known) runs the full space-guard clamp once.
+    pane_sizes_need_clamp: bool,
     home: HomeView,
     samples_expanded: bool,
     welcome_dismissed: bool,
@@ -200,11 +242,30 @@ impl AppRoot {
         if let Some(saved) = crate::pane_prefs::load_pane_visibility(&pane_prefs_path) {
             saved.apply_to(&mut pane_layout.visibility);
         }
+        // Persisted divider positions (statically clamped here; the
+        // viewport-aware clamp runs on the first editor render).
+        let mut agent_width = crate::pane_resize::AGENT_MIN;
+        let mut media_width = -1.0;
+        let mut inspector_width = crate::theme::Layout::INSPECTOR_DEFAULT;
+        let mut timeline_height = -1.0;
+        let pane_sizes_need_clamp = crate::pane_prefs::load_pane_sizes(&pane_prefs_path)
+            .map(|saved| {
+                apply_persisted_sizes(
+                    &saved.clamped(),
+                    &mut agent_width,
+                    &mut media_width,
+                    &mut inspector_width,
+                    &mut timeline_height,
+                )
+            })
+            .unwrap_or(false);
         Self {
             focus_handle: handle.clone(),
             active_screen: ActiveScreen::Home,
             pane_layout,
+            focused_pane: None,
             pane_prefs_path,
+            pane_sizes_need_clamp,
             home: HomeView::new(handle),
             samples_expanded: true,
             welcome_dismissed: false,
@@ -218,10 +279,10 @@ impl AppRoot {
             inspector_view: None,
             tour_overlay: cx.new(|cx| TourOverlayView::new(cx)),
             update_overlay: cx.new(|cx| UpdateOverlayView::new(cx)),
-            timeline_height: -1.0,
-            agent_width: crate::pane_resize::AGENT_MIN,
-            media_width: -1.0,
-            inspector_width: crate::theme::Layout::INSPECTOR_DEFAULT,
+            timeline_height,
+            agent_width,
+            media_width,
+            inspector_width,
             vertical_left_width: -1.0,
             last_viewport: (0.0, 0.0),
             pane_drag: None,
@@ -377,6 +438,20 @@ impl AppRoot {
         crate::pane_prefs::save_pane_visibility(
             &self.pane_prefs_path,
             crate::pane_prefs::PersistedPaneVisibility::from_layout(&self.pane_layout.visibility),
+        );
+    }
+
+    /// Persist the resolved divider positions (paneSizes). Unresolved preset
+    /// sentinels are skipped; the merge-save keeps their stored values.
+    fn persist_pane_sizes(&self) {
+        crate::pane_prefs::save_pane_sizes(
+            &self.pane_prefs_path,
+            crate::pane_prefs::PersistedPaneSizes {
+                agent: persistable_size(self.agent_width),
+                media: persistable_size(self.media_width),
+                inspector: persistable_size(self.inspector_width),
+                timeline_height: persistable_size(self.timeline_height),
+            },
         );
     }
 
@@ -892,21 +967,28 @@ impl AppRoot {
             menu::MenuAction::ToggleMediaPanel => {
                 self.pane_layout.toggle_pane(PaneId::Media);
                 self.persist_pane_visibility();
+                self.persist_pane_sizes();
             }
             menu::MenuAction::ToggleInspector => {
                 self.pane_layout.toggle_pane(PaneId::Inspector);
                 self.persist_pane_visibility();
+                self.persist_pane_sizes();
             }
             menu::MenuAction::ToggleAgentPanel => {
                 self.pane_layout.toggle_pane(PaneId::Agent);
                 self.persist_pane_visibility();
+                self.persist_pane_sizes();
             }
             menu::MenuAction::MaximizeFocusedPane => {
                 if self.pane_layout.is_maximized() {
                     self.pane_layout.unmaximize();
                     self.persist_pane_visibility();
+                    self.persist_pane_sizes();
                 } else {
-                    self.pane_layout.maximize(PaneId::Preview);
+                    let target = maximize_target(self.focused_pane);
+                    self.pane_layout.maximize(target);
+                    // The maximized pane takes the focus ring (design D8).
+                    self.focused_pane = Some(target);
                 }
             }
             menu::MenuAction::LayoutDefault => {
@@ -1920,6 +2002,21 @@ impl Render for AppRoot {
                     // Swift buildVerticalLayout: left column = 50% of the preset area.
                     self.vertical_left_width = (preset_w * 0.5).round();
                 }
+                if self.pane_sizes_need_clamp {
+                    // First editor render after boot-applying persisted sizes:
+                    // the viewport is now known, so the full clamp (preview
+                    // minimum space guard) runs once.
+                    self.pane_sizes_need_clamp = false;
+                    use crate::pane_resize::ResizeTarget::*;
+                    for target in [AgentWidth, MediaWidth, InspectorWidth, TimelineHeight] {
+                        let clamped = crate::pane_resize::clamp_resize(
+                            target,
+                            self.pane_size(target),
+                            &self.resize_bounds(target),
+                        );
+                        self.set_pane_size(target, clamped);
+                    }
+                }
                 let sizes = crate::pane_tree::ResolvedSizes {
                     agent_width: self.agent_width,
                     media_width: self.media_width,
@@ -1940,6 +2037,22 @@ impl Render for AppRoot {
                 .into_iter()
                 .map(|t| (t, self.build_divider(t, cx)))
                 .collect();
+
+                // Panel focus wiring (EDT-007): card clicks move the ring.
+                let focus = editor_view::PaneFocus {
+                    focused: self.focused_pane,
+                    on_mouse_down: {
+                        let weak = cx.entity().downgrade();
+                        std::rc::Rc::new(move |pane, _window, cx| {
+                            let _ = weak.update(cx, |this: &mut AppRoot, cx| {
+                                if this.focused_pane != Some(pane) {
+                                    this.focused_pane = Some(pane);
+                                    cx.notify();
+                                }
+                            });
+                        })
+                    },
+                };
 
                 let weak = cx.entity().downgrade();
 
@@ -1981,8 +2094,29 @@ impl Render for AppRoot {
                                     });
                                 },
                             )
+                            // Divider drag end: clear the session and persist
+                            // the resolved sizes (any plain click no-ops).
+                            .capture_any_mouse_up(cx.listener(
+                                |this: &mut AppRoot, e: &MouseUpEvent, _, _| {
+                                    if e.button == MouseButton::Left
+                                        && this.pane_drag.take().is_some()
+                                    {
+                                        this.persist_pane_sizes();
+                                    }
+                                },
+                            ))
+                            // Release outside the editor area (e.g. over the
+                            // title bar or off-window) still ends the drag.
+                            .on_mouse_up_out(
+                                MouseButton::Left,
+                                cx.listener(|this: &mut AppRoot, _: &MouseUpEvent, _, _| {
+                                    if this.pane_drag.take().is_some() {
+                                        this.persist_pane_sizes();
+                                    }
+                                }),
+                            )
                             .child(editor_view::render_pane_layout(
-                                &layout, &contents, &sizes, dividers,
+                                &layout, &contents, &focus, &sizes, dividers,
                             )),
                     )
                     .into_any_element()
@@ -2209,6 +2343,53 @@ mod tests {
     fn active_screen_starts_at_home() {
         assert_eq!(ActiveScreen::Home, ActiveScreen::Home);
         assert_ne!(ActiveScreen::Home, ActiveScreen::Editor);
+    }
+
+    #[test]
+    fn maximize_targets_focused_pane_with_preview_fallback() {
+        assert_eq!(maximize_target(Some(PaneId::Timeline)), PaneId::Timeline);
+        assert_eq!(maximize_target(Some(PaneId::Agent)), PaneId::Agent);
+        assert_eq!(maximize_target(None), PaneId::Preview);
+    }
+
+    #[test]
+    fn persistable_size_filters_sentinels() {
+        assert_eq!(persistable_size(320.0), Some(320.0));
+        assert_eq!(persistable_size(-1.0), None);
+        assert_eq!(persistable_size(0.0), None);
+        assert_eq!(persistable_size(f32::NAN), None);
+    }
+
+    #[test]
+    fn apply_persisted_sizes_overrides_only_present_fields() {
+        let saved = crate::pane_prefs::PersistedPaneSizes {
+            agent: Some(300.0),
+            media: None,
+            inspector: Some(280.0),
+            timeline_height: None,
+        };
+        let mut agent = crate::pane_resize::AGENT_MIN;
+        let mut media = -1.0;
+        let mut inspector = crate::theme::Layout::INSPECTOR_DEFAULT;
+        let mut timeline = -1.0;
+        assert!(apply_persisted_sizes(
+            &saved,
+            &mut agent,
+            &mut media,
+            &mut inspector,
+            &mut timeline
+        ));
+        assert_eq!(agent, 300.0);
+        assert_eq!(media, -1.0, "missing key keeps the preset sentinel");
+        assert_eq!(inspector, 280.0);
+        assert_eq!(timeline, -1.0);
+        assert!(!apply_persisted_sizes(
+            &crate::pane_prefs::PersistedPaneSizes::default(),
+            &mut agent,
+            &mut media,
+            &mut inspector,
+            &mut timeline
+        ));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::pane::PaneVisibility;
 
 pub const PANE_VISIBILITY_KEY: &str = "paneVisibility";
+pub const PANE_SIZES_KEY: &str = "paneSizes";
 
 /// Default preferences file, shared with mcp_service.
 pub fn default_prefs_path() -> PathBuf {
@@ -38,6 +39,110 @@ impl PersistedPaneVisibility {
     }
 }
 
+/// Divider positions persisted under `paneSizes` (Swift NSSplitView autosave
+/// parity). `None` = key absent or unusable; the caller keeps its default
+/// (or preset sentinel) for that pane.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PersistedPaneSizes {
+    pub agent: Option<f32>,
+    pub media: Option<f32>,
+    pub inspector: Option<f32>,
+    pub timeline_height: Option<f32>,
+}
+
+impl PersistedPaneSizes {
+    /// Viewport-independent clamp to the pane_resize limits. The media tab
+    /// rail and the preview-min space guard need the live viewport, so the
+    /// first editor render runs the full `clamp_resize` afterwards.
+    pub fn clamped(self) -> Self {
+        use crate::pane_resize as pr;
+        Self {
+            agent: self.agent.map(|v| v.clamp(pr::AGENT_MIN, pr::AGENT_MAX)),
+            media: self.media.map(|v| v.max(pr::MEDIA_MIN)),
+            inspector: self.inspector.map(|v| v.max(pr::INSPECTOR_MIN)),
+            timeline_height: self
+                .timeline_height
+                .map(|v| v.clamp(pr::TIMELINE_MIN, pr::TIMELINE_MAX)),
+        }
+    }
+}
+
+/// A stored size is only usable when it is a finite positive number — the
+/// negative preset sentinels must never round-trip.
+fn usable_size(v: f32) -> Option<f32> {
+    (v.is_finite() && v > 0.0).then_some(v)
+}
+
+fn size_field(pane: &serde_json::Value, key: &str) -> Option<f32> {
+    usable_size(pane.get(key)?.as_f64()? as f32)
+}
+
+/// Missing file, unreadable JSON, or a missing/malformed `paneSizes` object
+/// → `None`. Individual missing/malformed/non-positive fields degrade to
+/// `None` per field.
+pub fn load_pane_sizes(path: &Path) -> Option<PersistedPaneSizes> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let pane = value.get(PANE_SIZES_KEY)?;
+    Some(PersistedPaneSizes {
+        agent: size_field(pane, "agent"),
+        media: size_field(pane, "media"),
+        inspector: size_field(pane, "inspector"),
+        timeline_height: size_field(pane, "timelineHeight"),
+    })
+}
+
+/// Read-modify-write like [`save_pane_visibility`], but merging per field:
+/// a `None` (unresolved) size never erases a previously stored one.
+pub fn save_pane_sizes(path: &Path, sizes: PersistedPaneSizes) {
+    let mut root = read_prefs_root(path);
+    let mut obj = match root.get(PANE_SIZES_KEY) {
+        Some(serde_json::Value::Object(existing)) => existing.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in [
+        ("agent", sizes.agent),
+        ("media", sizes.media),
+        ("inspector", sizes.inspector),
+        ("timelineHeight", sizes.timeline_height),
+    ] {
+        if let Some(v) = value.and_then(usable_size) {
+            obj.insert(key.to_string(), serde_json::json!(v));
+        }
+    }
+    root[PANE_SIZES_KEY] = serde_json::Value::Object(obj);
+    write_prefs_root(path, &root);
+}
+
+/// Current prefs JSON root; a missing or corrupt file rebuilds from scratch.
+fn read_prefs_root(path: &Path) -> serde_json::Value {
+    let mut root = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+    root
+}
+
+/// Atomic write (sibling temp file + rename, project_io convention).
+fn write_prefs_root(path: &Path, root: &serde_json::Value) {
+    let Ok(mut bytes) = serde_json::to_vec_pretty(root) else {
+        return;
+    };
+    bytes.push(b'\n');
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut tmp_os = path.as_os_str().to_owned();
+    tmp_os.push(".tmp");
+    let tmp = PathBuf::from(tmp_os);
+    if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
 /// Missing file, unreadable JSON, or a missing/malformed `paneVisibility`
 /// object → `None`; boot keeps the defaults.
 pub fn load_pane_visibility(path: &Path) -> Option<PersistedPaneVisibility> {
@@ -55,31 +160,13 @@ pub fn load_pane_visibility(path: &Path) -> Option<PersistedPaneVisibility> {
 /// key is preserved. A missing or corrupt file is rebuilt from scratch. The
 /// write is atomic (sibling temp file + rename, project_io convention).
 pub fn save_pane_visibility(path: &Path, visibility: PersistedPaneVisibility) {
-    let mut root = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if !root.is_object() {
-        root = serde_json::json!({});
-    }
+    let mut root = read_prefs_root(path);
     root[PANE_VISIBILITY_KEY] = serde_json::json!({
         "media": visibility.media,
         "inspector": visibility.inspector,
         "agent": visibility.agent,
     });
-    let Ok(mut bytes) = serde_json::to_vec_pretty(&root) else {
-        return;
-    };
-    bytes.push(b'\n');
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut tmp_os = path.as_os_str().to_owned();
-    tmp_os.push(".tmp");
-    let tmp = PathBuf::from(tmp_os);
-    if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
+    write_prefs_root(path, &root);
 }
 
 #[cfg(test)]
@@ -203,6 +290,162 @@ mod tests {
         let mut tmp_os = path.as_os_str().to_owned();
         tmp_os.push(".tmp");
         assert!(!PathBuf::from(tmp_os).exists(), "temp file must be renamed away");
+    }
+
+    #[test]
+    fn load_pane_sizes_missing_file_returns_none() {
+        let path = temp_prefs("sizes-missing.json");
+        assert_eq!(load_pane_sizes(&path), None);
+    }
+
+    #[test]
+    fn load_pane_sizes_without_key_returns_none() {
+        let path = temp_prefs("sizes-no-key.json");
+        std::fs::write(&path, r#"{"paneVisibility": {"media": true}}"#).unwrap();
+        assert_eq!(load_pane_sizes(&path), None);
+    }
+
+    #[test]
+    fn pane_sizes_round_trip() {
+        let path = temp_prefs("sizes-roundtrip.json");
+        let saved = PersistedPaneSizes {
+            agent: Some(320.0),
+            media: Some(500.0),
+            inspector: Some(280.0),
+            timeline_height: Some(260.0),
+        };
+        save_pane_sizes(&path, saved);
+        assert_eq!(load_pane_sizes(&path), Some(saved));
+    }
+
+    #[test]
+    fn sizes_and_visibility_coexist_and_preserve_other_keys() {
+        let path = temp_prefs("sizes-coexist.json");
+        std::fs::write(&path, r#"{"mcpServerEnabled": true}"#).unwrap();
+        let vis = PersistedPaneVisibility {
+            media: false,
+            inspector: true,
+            agent: true,
+        };
+        let sizes = PersistedPaneSizes {
+            agent: Some(300.0),
+            media: Some(420.0),
+            inspector: Some(260.0),
+            timeline_height: Some(300.0),
+        };
+        save_pane_visibility(&path, vis);
+        save_pane_sizes(&path, sizes);
+        assert_eq!(load_pane_visibility(&path), Some(vis));
+        assert_eq!(load_pane_sizes(&path), Some(sizes));
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            value.get("mcpServerEnabled"),
+            Some(&serde_json::Value::Bool(true)),
+            "unrelated keys must survive both saves"
+        );
+    }
+
+    #[test]
+    fn save_pane_sizes_merges_unresolved_fields() {
+        // A save from a session where media/timeline are still preset
+        // sentinels must not erase the stored values.
+        let path = temp_prefs("sizes-merge.json");
+        std::fs::write(
+            &path,
+            r#"{"paneSizes": {"media": 500.0, "timelineHeight": 240.0}}"#,
+        )
+        .unwrap();
+        save_pane_sizes(
+            &path,
+            PersistedPaneSizes {
+                agent: Some(300.0),
+                media: None,
+                inspector: Some(260.0),
+                timeline_height: None,
+            },
+        );
+        assert_eq!(
+            load_pane_sizes(&path),
+            Some(PersistedPaneSizes {
+                agent: Some(300.0),
+                media: Some(500.0),
+                inspector: Some(260.0),
+                timeline_height: Some(240.0),
+            })
+        );
+    }
+
+    #[test]
+    fn load_pane_sizes_filters_malformed_and_nonpositive_fields() {
+        let path = temp_prefs("sizes-malformed.json");
+        std::fs::write(
+            &path,
+            r#"{"paneSizes": {"agent": "wide", "media": -5.0, "inspector": 0.0, "timelineHeight": 250.0}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_pane_sizes(&path),
+            Some(PersistedPaneSizes {
+                agent: None,
+                media: None,
+                inspector: None,
+                timeline_height: Some(250.0),
+            })
+        );
+    }
+
+    #[test]
+    fn save_pane_sizes_drops_sentinel_values() {
+        // Defensive: a negative sentinel handed to save must not reach disk.
+        let path = temp_prefs("sizes-sentinel.json");
+        save_pane_sizes(
+            &path,
+            PersistedPaneSizes {
+                agent: Some(-1.0),
+                media: Some(f32::NAN),
+                inspector: Some(260.0),
+                timeline_height: None,
+            },
+        );
+        assert_eq!(
+            load_pane_sizes(&path),
+            Some(PersistedPaneSizes {
+                agent: None,
+                media: None,
+                inspector: Some(260.0),
+                timeline_height: None,
+            })
+        );
+    }
+
+    #[test]
+    fn clamped_applies_static_pane_limits() {
+        use crate::pane_resize as pr;
+        let clamped = PersistedPaneSizes {
+            agent: Some(100.0),
+            media: Some(10.0),
+            inspector: Some(10.0),
+            timeline_height: Some(900.0),
+        }
+        .clamped();
+        assert_eq!(clamped.agent, Some(pr::AGENT_MIN));
+        assert_eq!(clamped.media, Some(pr::MEDIA_MIN));
+        assert_eq!(clamped.inspector, Some(pr::INSPECTOR_MIN));
+        assert_eq!(clamped.timeline_height, Some(pr::TIMELINE_MAX));
+        let upper = PersistedPaneSizes {
+            agent: Some(900.0),
+            media: Some(2000.0),
+            inspector: None,
+            timeline_height: Some(50.0),
+        }
+        .clamped();
+        assert_eq!(upper.agent, Some(pr::AGENT_MAX));
+        // Media/inspector upper bound is the viewport space guard, applied on
+        // the first editor render — not statically.
+        assert_eq!(upper.media, Some(2000.0));
+        assert_eq!(upper.inspector, None);
+        assert_eq!(upper.timeline_height, Some(pr::TIMELINE_MIN));
     }
 
     #[test]

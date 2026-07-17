@@ -4,10 +4,12 @@ use crate::media_panel_view::MediaPanelView;
 use crate::pane::{PaneId, PaneLayout};
 use crate::pane_tree::{PaneNode, PaneNodeKind, PaneSize};
 use crate::preview_view::PreviewView;
-use crate::theme::{Background, Layout, Radius, Text};
+use crate::theme::{Accent, Background, BorderWidth, Layout, Radius, Text};
 use crate::timeline_view::TimelineView;
 use crate::toolbar_view::ToolbarView;
-use gpui::{div, prelude::*, px, AnyElement, Entity, IntoElement, ParentElement, Styled};
+use gpui::{
+    div, prelude::*, px, AnyElement, Entity, IntoElement, MouseButton, ParentElement, Styled,
+};
 
 /// Human-readable label for each pane.
 fn pane_label(id: PaneId) -> &'static str {
@@ -133,16 +135,64 @@ fn inspector_content(contents: &PaneContents) -> gpui::AnyElement {
 
 // ── Tree-driven rendering ──
 
+/// Host hook a pane card's left mouse-down runs (capture phase) to move
+/// panel focus; AppRoot updates `focused_pane` in it.
+pub type PaneFocusHandler = std::rc::Rc<dyn Fn(PaneId, &mut gpui::Window, &mut gpui::App)>;
+
+/// Focus wiring for pane cards (EDT-007): which pane owns the focus ring,
+/// and the handler that moves it on click.
+pub struct PaneFocus {
+    pub focused: Option<PaneId>,
+    pub on_mouse_down: PaneFocusHandler,
+}
+
+/// Swift PanelFocusRing stroke: `Accent.primary` at the 0.6 opacity literal
+/// PanelFocusRing hardcodes (EditorView.swift).
+pub(crate) const FOCUS_RING_OPACITY: f32 = 0.6;
+pub(crate) const FOCUS_RING_WIDTH: f32 = BorderWidth::MEDIUM;
+pub(crate) const FOCUS_RING_RADIUS: f32 = Radius::SM;
+
+pub(crate) fn focus_ring_color() -> gpui::Hsla {
+    gpui::Hsla {
+        a: FOCUS_RING_OPACITY,
+        ..Accent::PRIMARY
+    }
+}
+
+/// Non-interactive accent ring overlaying a focused card (Swift
+/// PanelFocusRing; the easeOut fade is a known gpui gap).
+fn focus_ring() -> gpui::Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .rounded(px(FOCUS_RING_RADIUS))
+        .border(px(FOCUS_RING_WIDTH))
+        .border_color(focus_ring_color())
+}
+
 /// Swift makeHosting panel shell: surface rounded card inset by half the
 /// panel gap against the base background, so adjacent panes show a 5px seam.
-fn pane_card(inner: AnyElement) -> gpui::Div {
+/// Left mouse-down (capture, non-consuming) moves panel focus to `id`;
+/// the focused card draws the accent ring.
+fn pane_card(id: PaneId, focus: &PaneFocus, inner: AnyElement) -> gpui::Div {
+    let handler = focus.on_mouse_down.clone();
+    let focused = focus.focused == Some(id);
     div().size_full().p(px(Layout::PANEL_GAP / 2.0)).child(
         div()
             .size_full()
+            .relative()
             .bg(Background::SURFACE)
             .rounded(px(Radius::SM))
             .overflow_hidden()
-            .child(inner),
+            .capture_any_mouse_down(move |event, window, cx| {
+                if event.button == MouseButton::Left {
+                    handler(id, window, cx);
+                }
+            })
+            .child(inner)
+            .when(focused, |el| el.child(focus_ring())),
     )
 }
 
@@ -175,6 +225,7 @@ pub type DividerElements = Vec<(crate::pane_resize::ResizeTarget, AnyElement)>;
 fn render_node(
     node: &PaneNode,
     contents: &PaneContents,
+    focus: &PaneFocus,
     dividers: &mut DividerElements,
     horizontal_axis: bool,
 ) -> AnyElement {
@@ -183,7 +234,7 @@ fn render_node(
             let mut row = div().flex().flex_row();
             row = apply_size(row, node.size, horizontal_axis);
             for child in children {
-                row = row.child(render_node(child, contents, dividers, true));
+                row = row.child(render_node(child, contents, focus, dividers, true));
             }
             row.into_any_element()
         }
@@ -191,12 +242,12 @@ fn render_node(
             let mut col = div().flex().flex_col();
             col = apply_size(col, node.size, horizontal_axis);
             for child in children {
-                col = col.child(render_node(child, contents, dividers, false));
+                col = col.child(render_node(child, contents, focus, dividers, false));
             }
             col.into_any_element()
         }
         PaneNodeKind::Pane(id) => {
-            let card = pane_card(pane_content(*id, contents));
+            let card = pane_card(*id, focus, pane_content(*id, contents));
             apply_size(card, node.size, horizontal_axis).into_any_element()
         }
         // Toolbar + Timeline composite card (Swift timelineHC VStack).
@@ -212,7 +263,7 @@ fn render_node(
                         .min_h(px(0.0))
                         .child(timeline_content(contents)),
                 );
-            let card = pane_card(inner.into_any_element());
+            let card = pane_card(PaneId::Timeline, focus, inner.into_any_element());
             apply_size(card, node.size, horizontal_axis).into_any_element()
         }
         // Zero-sized seam anchor; the host's hitbox overlays the gap.
@@ -239,6 +290,7 @@ fn render_node(
 pub fn render_pane_layout(
     layout: &PaneLayout,
     contents: &PaneContents,
+    focus: &PaneFocus,
     sizes: &crate::pane_tree::ResolvedSizes,
     mut dividers: DividerElements,
 ) -> impl IntoElement {
@@ -250,7 +302,7 @@ pub fn render_pane_layout(
         .bg(Background::BASE)
         // Outer half-gap so the window edge shows the same seam as between panes.
         .p(px(Layout::PANEL_GAP / 2.0))
-        .child(render_node(&tree, contents, &mut dividers, true))
+        .child(render_node(&tree, contents, focus, &mut dividers, true))
 }
 
 #[cfg(test)]
@@ -264,6 +316,19 @@ mod tests {
         assert_eq!(pane_label(PaneId::Inspector), "Inspector");
         assert_eq!(pane_label(PaneId::Timeline), "Timeline");
         assert_eq!(pane_label(PaneId::Agent), "Agent");
+    }
+
+    #[test]
+    fn focus_ring_matches_swift_panel_focus_ring() {
+        // Swift PanelFocusRing: Accent.primary stroke, BorderWidth.medium
+        // line width, Radius.sm continuous corner, 0.6 opacity when focused.
+        let color = focus_ring_color();
+        assert_eq!(color.h, Accent::PRIMARY.h);
+        assert_eq!(color.s, Accent::PRIMARY.s);
+        assert_eq!(color.l, Accent::PRIMARY.l);
+        assert!((color.a - 0.6).abs() < 1e-6);
+        assert_eq!(FOCUS_RING_WIDTH, BorderWidth::MEDIUM);
+        assert_eq!(FOCUS_RING_RADIUS, Radius::SM);
     }
 
     #[test]

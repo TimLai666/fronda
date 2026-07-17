@@ -26,7 +26,9 @@ use crate::theme::{
     Accent, Background, BorderColors, EditorPanel, FontSize, IconSize, Layout, Opacity, Radius,
     Spacing, Text, TrackColor,
 };
-use core_model::{Clip, ClipType, MediaManifestEntry, TextAlignment, TextFill, TextStyle};
+use core_model::{
+    Clip, ClipType, MediaManifestEntry, TextAlignment, TextFill, TextStyle, VideoLayout,
+};
 use gpui::{
     div, prelude::*, px, AnyElement, App, Context, DragMoveEvent, Entity, FocusHandle, Focusable,
     Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
@@ -345,6 +347,143 @@ fn model_display_name(model_id: &str) -> String {
         .unwrap_or_else(|| model_id.to_string())
 }
 
+// ── Multicam tab operations (D7) ──────────────────────────────────────────────
+
+/// What the selected multicam clip is, classified the way
+/// `timeline_core::switch_segment` does: the program-lane video fragment is
+/// the one `change_cam` can retarget; mics and overlays need the (untooled)
+/// rewrite path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MulticamTargetKind {
+    Program,
+    Overlay,
+    Audio,
+}
+
+/// The selected group clip the Multicam tab operates on.
+#[derive(Debug, Clone)]
+struct MulticamTarget {
+    clip_id: String,
+    /// Timeline `[start, end)` of the fragment (Swift `switchMulticamSegment`
+    /// switches exactly this range).
+    range: (i64, i64),
+    /// The fragment's current member angle label, if it resolves.
+    current_angle: Option<String>,
+    kind: MulticamTargetKind,
+}
+
+/// Classify a group clip. Program track = the bottom-most video lane holding
+/// group video fragments (mirrors `timeline_core::switch_segment`).
+fn classify_multicam_clip(
+    timeline: &core_model::Timeline,
+    group: &core_model::MulticamSource,
+    clip_id: &str,
+) -> Option<MulticamTarget> {
+    let (track_index, clip) = timeline.tracks.iter().enumerate().find_map(|(ti, track)| {
+        track.clips.iter().find(|c| c.id == clip_id).map(|c| (ti, c))
+    })?;
+    let program_track = timeline_core::multicam_clip_locations(timeline, &group.id)
+        .into_iter()
+        .filter(|(ti, ci)| {
+            timeline.tracks[*ti].r#type == ClipType::Video
+                && timeline.tracks[*ti].clips[*ci].media_type != ClipType::Audio
+        })
+        .map(|(ti, _)| ti)
+        .max();
+    let kind = if clip.media_type == ClipType::Audio {
+        MulticamTargetKind::Audio
+    } else if Some(track_index) == program_track {
+        MulticamTargetKind::Program
+    } else {
+        MulticamTargetKind::Overlay
+    };
+    Some(MulticamTarget {
+        clip_id: clip.id.clone(),
+        range: (clip.start_frame, clip.start_frame + clip.duration_frames),
+        current_angle: group
+            .member_by_media_ref(&clip.media_ref)
+            .map(|m| m.angle_label.clone()),
+        kind,
+    })
+}
+
+/// change_cam full-frame switch over the fragment's range (Swift
+/// `switchMulticamSegment` on a program fragment).
+fn change_cam_switch_args(clip_id: &str, range: (i64, i64), angle: &str) -> serde_json::Value {
+    serde_json::json!({
+        "clipId": clip_id,
+        "entries": [{ "range": [range.0, range.1], "angle": angle }],
+    })
+}
+
+/// Swift `applyMulticamLayout` angle order: the fragment's current angle in
+/// slot 1, other synced angles fill the remaining slots (partial fill is fine).
+fn multicam_layout_angles(
+    group: &core_model::MulticamSource,
+    current: Option<&str>,
+    slot_count: usize,
+) -> Vec<String> {
+    let mut ordered: Vec<String> = group
+        .angles()
+        .iter()
+        .map(|m| m.angle_label.clone())
+        .collect();
+    if let Some(current) = current {
+        if let Some(idx) = ordered.iter().position(|l| l == current) {
+            ordered.swap(0, idx);
+        }
+    }
+    ordered.truncate(slot_count);
+    ordered
+}
+
+/// change_cam entry for a layout pick. `Full` exits multi-angle via a
+/// full-frame switch to the current angle — the tool models "full" that way
+/// (its layout enum deliberately excludes it).
+fn change_cam_layout_args(
+    group: &core_model::MulticamSource,
+    target: &MulticamTarget,
+    layout: VideoLayout,
+) -> Option<serde_json::Value> {
+    if layout == VideoLayout::Full {
+        let current = target.current_angle.as_deref()?;
+        return Some(change_cam_switch_args(&target.clip_id, target.range, current));
+    }
+    let angles = multicam_layout_angles(group, target.current_angle.as_deref(), layout.slots().len());
+    if angles.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "clipId": target.clip_id,
+        "entries": [{
+            "range": [target.range.0, target.range.1],
+            "layout": layout.as_str(),
+            "angles": angles,
+        }],
+    }))
+}
+
+/// manage_multicam ungroup (Swift "Ungroup Multicam" menu item).
+fn multicam_ungroup_args(group_id: &str) -> serde_json::Value {
+    serde_json::json!({ "ungroup": { "groupId": group_id } })
+}
+
+/// Swift `VideoLayout.displayName`.
+fn layout_display_name(layout: VideoLayout) -> &'static str {
+    match layout {
+        VideoLayout::Full => "Full Frame",
+        VideoLayout::SideBySide => "Side by Side",
+        VideoLayout::TopBottom => "Top / Bottom",
+        VideoLayout::PipBottomRight => "PiP Bottom Right",
+        VideoLayout::PipBottomLeft => "PiP Bottom Left",
+        VideoLayout::PipTopRight => "PiP Top Right",
+        VideoLayout::PipTopLeft => "PiP Top Left",
+        VideoLayout::Grid2x2 => "Grid 2×2",
+        VideoLayout::MainSidebar => "Main + Sidebar",
+        VideoLayout::ThreeUp => "Three-Up",
+    }
+}
+
 // ── Shared-state snapshots ────────────────────────────────────────────────────
 
 /// Selected clips + project format cloned out of the shared executor.
@@ -356,6 +495,8 @@ struct SelectionSnapshot {
     /// Group of the first stamped clip in the selection, if it still resolves
     /// (Swift `selectedMulticamGroupId`).
     multicam_group: Option<core_model::MulticamSource>,
+    /// That same clip, classified for the Multicam tab's operations.
+    multicam_target: Option<MulticamTarget>,
 }
 
 impl SelectionSnapshot {
@@ -398,17 +539,22 @@ fn snapshot_selected_clips(selected_ids: &[String]) -> SelectionSnapshot {
         .filter(|c| selected_ids.iter().any(|id| id == &c.id))
         .cloned()
         .collect();
-    let multicam_group = clips
+    let (multicam_group, multicam_target) = clips
         .iter()
-        .filter_map(|c| c.multicam_group_id.as_deref())
-        .find_map(|gid| guard.multicam_groups().iter().find(|g| g.id == gid))
-        .cloned();
+        .find_map(|c| {
+            let gid = c.multicam_group_id.as_deref()?;
+            let group = guard.multicam_groups().iter().find(|g| g.id == gid)?;
+            Some((group.clone(), classify_multicam_clip(t, group, &c.id)))
+        })
+        .map(|(g, target)| (Some(g), target))
+        .unwrap_or((None, None));
     SelectionSnapshot {
         clips,
         fps: t.fps,
         canvas_w: t.width,
         canvas_h: t.height,
         multicam_group,
+        multicam_target,
     }
 }
 
@@ -2072,8 +2218,12 @@ impl InspectorView {
             .into_any_element()
     }
 
-    /// Multicam tab (Swift MulticamTab): read-only member roster for the
-    /// selected clip's group. Functional multicam UI stays deferred.
+    /// Multicam tab: the Swift MulticamTab member roster, plus the operations
+    /// Swift keeps in the timeline context menu (D7 moves them here — the
+    /// Rust timeline has no context menu): Switch Angle and Layout on the
+    /// selected program fragment via change_cam, Ungroup via manage_multicam.
+    /// Mic/overlay switching needs the untooled `switch_segment` rewrite path
+    /// and stays read-only.
     fn multicam_tab(&mut self, snap: &SelectionSnapshot, cx: &mut Context<Self>) -> AnyElement {
         let Some(group) = snap.multicam_group.clone() else {
             return div().into_any_element();
@@ -2089,6 +2239,92 @@ impl InspectorView {
         for member in &group.members {
             panel = panel.child(multicam_member_row(member, &group));
         }
+
+        let program_target = snap
+            .multicam_target
+            .clone()
+            .filter(|t| t.kind == MulticamTargetKind::Program);
+        if let Some(target) = program_target {
+            // Switch Angle (Swift switchMemberItem gate: another member exists).
+            let angles: Vec<String> = group
+                .angles()
+                .iter()
+                .map(|m| m.angle_label.clone())
+                .collect();
+            let has_other = angles
+                .iter()
+                .any(|l| Some(l.as_str()) != target.current_angle.as_deref());
+            if !angles.is_empty() && has_other {
+                let mut row = div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .w_full()
+                    .gap(px(Spacing::XXS));
+                for label in &angles {
+                    let active = Some(label.as_str()) == target.current_angle.as_deref();
+                    let args = change_cam_switch_args(&target.clip_id, target.range, label);
+                    row = row.child(
+                        multicam_action_button(
+                            SharedString::from(format!("mc-angle-{label}")),
+                            SharedString::from(label.clone()),
+                            active,
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            Self::run_tool("change_cam", args.clone());
+                            cx.notify();
+                        })),
+                    );
+                }
+                panel = panel
+                    .child(multicam_section_label("Switch Angle"))
+                    .child(row);
+            }
+
+            // Layout (Swift layoutItem gate: video fragment + ≥2 angles).
+            if angles.len() >= 2 {
+                let mut row = div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .w_full()
+                    .gap(px(Spacing::XXS));
+                for layout in VideoLayout::ALL {
+                    let Some(args) = change_cam_layout_args(&group, &target, layout) else {
+                        continue;
+                    };
+                    row = row.child(
+                        multicam_action_button(
+                            SharedString::from(format!("mc-layout-{}", layout.as_str())),
+                            SharedString::from(layout_display_name(layout)),
+                            false,
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            Self::run_tool("change_cam", args.clone());
+                            cx.notify();
+                        })),
+                    );
+                }
+                panel = panel.child(multicam_section_label("Layout")).child(row);
+            }
+        }
+
+        // Ungroup (Swift "Ungroup Multicam"; clips stay put, unstamped).
+        let ungroup_args = multicam_ungroup_args(&group.id);
+        panel = panel.child(
+            multicam_action_button(
+                SharedString::from("mc-ungroup"),
+                SharedString::from("Ungroup Multicam"),
+                false,
+            )
+            .on_click(cx.listener(move |_, _, _, cx| {
+                Self::run_tool("manage_multicam", ungroup_args.clone());
+                cx.notify();
+            })),
+        );
+
         div()
             .flex()
             .flex_col()
@@ -2096,6 +2332,44 @@ impl InspectorView {
             .child(panel)
             .into_any_element()
     }
+}
+
+/// Muted section caption inside the multicam panel.
+fn multicam_section_label(text: &'static str) -> impl IntoElement {
+    div()
+        .pt(px(Spacing::XS))
+        .text_size(px(FontSize::XXS))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(Text::MUTED)
+        .child(text)
+}
+
+/// Small action chip (chroma-preset styling); `active` marks the current angle.
+fn multicam_action_button(
+    id: SharedString,
+    label: SharedString,
+    active: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .px(px(Spacing::SM))
+        .h(px(IconSize::SM))
+        .flex()
+        .items_center()
+        .rounded(px(Radius::XS))
+        .cursor_pointer()
+        .bg(if active {
+            Accent::PRIMARY
+        } else {
+            Background::RAISED
+        })
+        .text_size(px(FontSize::XS))
+        .text_color(if active {
+            Background::BASE
+        } else {
+            Text::SECONDARY
+        })
+        .child(label)
 }
 
 /// One multicam member row (Swift MulticamTab.memberRow).
@@ -2202,6 +2476,7 @@ impl Render for InspectorView {
                 canvas_w: 1920,
                 canvas_h: 1080,
                 multicam_group: None,
+                multicam_target: None,
             }
         };
         let first_clip = snap.clips.first().cloned();
@@ -2610,5 +2885,270 @@ mod tests {
     #[test]
     fn model_display_name_falls_back_to_raw_id() {
         assert_eq!(model_display_name("not-a-real-model"), "not-a-real-model");
+    }
+
+    // ── Multicam tab operations (D7) ──────────────────────────────────────
+
+    fn mc_member(id: &str, media_ref: &str, label: &str) -> core_model::MulticamMember {
+        core_model::MulticamMember {
+            id: id.into(),
+            media_ref: media_ref.into(),
+            kind: core_model::MulticamMemberKind::Angle,
+            angle_label: label.into(),
+            sync: core_model::MulticamSyncMap {
+                offset_seconds: 0.0,
+                confidence: 1.0,
+                locked: false,
+            },
+        }
+    }
+
+    fn mc_group() -> core_model::MulticamSource {
+        core_model::MulticamSource {
+            id: "g1".into(),
+            name: "Pod".into(),
+            members: vec![
+                mc_member("m1", "camA", "cam-a"),
+                mc_member("m2", "camB", "cam-b"),
+                mc_member("m3", "camC", "cam-c"),
+            ],
+            master_member_id: "m1".into(),
+        }
+    }
+
+    /// tracks[0] = overlay lane (top layer), tracks[1] = program lane,
+    /// tracks[2] = mic audio — the shape change_cam layouts produce.
+    fn mc_timeline() -> core_model::Timeline {
+        let mut t = core_model::Timeline::default();
+        for spec in [
+            serde_json::json!({"type": "video", "clips": [
+                {"id": "ov", "mediaRef": "camB", "mediaType": "video",
+                 "sourceClipType": "video", "startFrame": 20,
+                 "durationFrames": 30, "multicamGroupId": "g1"}]}),
+            serde_json::json!({"type": "video", "clips": [
+                {"id": "prog", "mediaRef": "camA", "mediaType": "video",
+                 "sourceClipType": "video", "startFrame": 0,
+                 "durationFrames": 100, "multicamGroupId": "g1"}]}),
+            serde_json::json!({"type": "audio", "clips": [
+                {"id": "mic", "mediaRef": "camC", "mediaType": "audio",
+                 "sourceClipType": "video", "startFrame": 0,
+                 "durationFrames": 100, "multicamGroupId": "g1"}]}),
+        ] {
+            t.tracks.push(serde_json::from_value(spec).unwrap());
+        }
+        t
+    }
+
+    // Program = bottom-most video lane with group video fragments; overlays
+    // sit above it; audio classifies as Audio (switch_segment's routing).
+    #[test]
+    fn classify_multicam_clip_kinds() {
+        let t = mc_timeline();
+        let g = mc_group();
+        let prog = classify_multicam_clip(&t, &g, "prog").unwrap();
+        assert_eq!(prog.kind, MulticamTargetKind::Program);
+        assert_eq!(prog.range, (0, 100));
+        assert_eq!(prog.current_angle.as_deref(), Some("cam-a"));
+        let ov = classify_multicam_clip(&t, &g, "ov").unwrap();
+        assert_eq!(ov.kind, MulticamTargetKind::Overlay);
+        let mic = classify_multicam_clip(&t, &g, "mic").unwrap();
+        assert_eq!(mic.kind, MulticamTargetKind::Audio);
+        assert!(classify_multicam_clip(&t, &g, "nope").is_none());
+    }
+
+    #[test]
+    fn change_cam_switch_args_shape() {
+        let args = change_cam_switch_args("prog", (0, 100), "cam-b");
+        assert_eq!(args["clipId"], "prog");
+        assert_eq!(args["entries"][0]["range"], serde_json::json!([0, 100]));
+        assert_eq!(args["entries"][0]["angle"], "cam-b");
+        assert!(args["entries"][0].get("layout").is_none());
+    }
+
+    // Swift applyMulticamLayout: current angle swaps to slot 1, then the list
+    // truncates to the layout's slot count.
+    #[test]
+    fn layout_angles_put_current_first_and_truncate() {
+        let g = mc_group();
+        assert_eq!(
+            multicam_layout_angles(&g, Some("cam-b"), 2),
+            vec!["cam-b".to_string(), "cam-a".to_string()]
+        );
+        assert_eq!(
+            multicam_layout_angles(&g, None, 2),
+            vec!["cam-a".to_string(), "cam-b".to_string()]
+        );
+        assert_eq!(multicam_layout_angles(&g, Some("cam-a"), 4).len(), 3);
+    }
+
+    #[test]
+    fn layout_args_full_falls_back_to_full_frame_switch() {
+        let g = mc_group();
+        let target = MulticamTarget {
+            clip_id: "prog".into(),
+            range: (0, 100),
+            current_angle: Some("cam-a".into()),
+            kind: MulticamTargetKind::Program,
+        };
+        let full = change_cam_layout_args(&g, &target, VideoLayout::Full).unwrap();
+        assert_eq!(full["entries"][0]["angle"], "cam-a");
+        assert!(full["entries"][0].get("layout").is_none());
+        let sbs = change_cam_layout_args(&g, &target, VideoLayout::SideBySide).unwrap();
+        assert_eq!(sbs["entries"][0]["layout"], "side_by_side");
+        assert_eq!(
+            sbs["entries"][0]["angles"],
+            serde_json::json!(["cam-a", "cam-b"])
+        );
+        // Full without a resolvable current angle has nothing to switch to.
+        let anon = MulticamTarget {
+            current_angle: None,
+            ..target
+        };
+        assert!(change_cam_layout_args(&g, &anon, VideoLayout::Full).is_none());
+    }
+
+    #[test]
+    fn ungroup_args_shape() {
+        assert_eq!(
+            multicam_ungroup_args("g1"),
+            serde_json::json!({"ungroup": {"groupId": "g1"}})
+        );
+    }
+
+    #[test]
+    fn layout_display_names_mirror_swift() {
+        assert_eq!(layout_display_name(VideoLayout::Full), "Full Frame");
+        assert_eq!(layout_display_name(VideoLayout::Grid2x2), "Grid 2×2");
+        assert_eq!(layout_display_name(VideoLayout::MainSidebar), "Main + Sidebar");
+    }
+
+    // ── e2e: the tab's args through the real executor ─────────────────────
+
+    fn mc_media_entry(id: &str, ty: ClipType, duration: f64) -> MediaManifestEntry {
+        MediaManifestEntry {
+            id: id.into(),
+            name: format!("{id}.mov"),
+            r#type: ty,
+            source: core_model::MediaSource::External {
+                absolute_path: format!("/{id}"),
+            },
+            duration,
+            generation_input: None,
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: Some(true),
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+            generation_status: None,
+        }
+    }
+
+    /// Executor with a real multicam group (pinned offsets — the same
+    /// no-correlation path the agent_contract multicam e2e suite uses).
+    fn mc_executor() -> (agent_contract::tool_exec::ToolExecutor, String) {
+        let mut manifest = core_model::MediaManifest::default();
+        manifest
+            .entries
+            .push(mc_media_entry("camA", ClipType::Video, 120.0));
+        manifest
+            .entries
+            .push(mc_media_entry("camB", ClipType::Video, 110.0));
+        let mut exec = agent_contract::tool_exec::ToolExecutor::new(
+            core_model::Timeline::default(),
+            manifest,
+        );
+        exec.execute(
+            "manage_multicam",
+            &serde_json::json!({"create": {
+                "name": "Pod",
+                "members": [
+                    {"mediaRef": "camA", "kind": "both", "angleLabel": "cam-a", "offsetSeconds": 0},
+                    {"mediaRef": "camB", "kind": "angle", "angleLabel": "cam-b", "offsetSeconds": 5},
+                ],
+                "master": "cam-a",
+                "startFrame": 0,
+            }}),
+        )
+        .expect("create succeeds");
+        let group_id = exec.multicam_groups()[0].id.clone();
+        (exec, group_id)
+    }
+
+    fn program_clip_id(
+        exec: &agent_contract::tool_exec::ToolExecutor,
+        group: &core_model::MulticamSource,
+    ) -> String {
+        let t = exec.timeline();
+        t.tracks
+            .iter()
+            .flat_map(|track| track.clips.iter())
+            .find_map(|c| {
+                classify_multicam_clip(t, group, &c.id)
+                    .filter(|tgt| tgt.kind == MulticamTargetKind::Program)
+                    .map(|tgt| tgt.clip_id)
+            })
+            .expect("group has a program fragment")
+    }
+
+    // The Switch Angle chip's exact args mutate the program the way the
+    // engine tests promise: the switch clamps to cam-b's coverage and the
+    // program rows re-read cam-a / cam-b / cam-a.
+    #[test]
+    fn switch_chip_args_cut_program_through_executor() {
+        let (mut exec, _gid) = mc_executor();
+        let group = exec.multicam_groups()[0].clone();
+        let clip_id = program_clip_id(&exec, &group);
+        let target = classify_multicam_clip(exec.timeline(), &group, &clip_id).unwrap();
+        assert_eq!(target.current_angle.as_deref(), Some("cam-a"));
+
+        let args = change_cam_switch_args(&target.clip_id, target.range, "cam-b");
+        exec.execute("change_cam", &args).expect("switch succeeds");
+
+        let rows = timeline_core::multicam_program_rows(exec.timeline(), &group, None);
+        let labels: Vec<&str> = rows.iter().map(|(l, _, _)| l.as_str()).collect();
+        // cam-b starts 5s in (offset), so the head clamps back to cam-a.
+        assert_eq!(labels, ["cam-a", "cam-b", "cam-a"]);
+    }
+
+    // A layout chip's args are accepted end-to-end and land overlay clips.
+    #[test]
+    fn layout_chip_args_place_overlays_through_executor() {
+        let (mut exec, _gid) = mc_executor();
+        let group = exec.multicam_groups()[0].clone();
+        let clip_id = program_clip_id(&exec, &group);
+        let mut target = classify_multicam_clip(exec.timeline(), &group, &clip_id).unwrap();
+        // Keep the request inside both cameras' coverage.
+        target.range = (600, 1200);
+        let args = change_cam_layout_args(&group, &target, VideoLayout::SideBySide).unwrap();
+        let res = exec.execute("change_cam", &args).expect("layout succeeds");
+        let payload: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(
+            !payload["overlayClipIds"].as_array().unwrap().is_empty(),
+            "side-by-side lands the second angle as an overlay clip"
+        );
+    }
+
+    // The Ungroup chip's args strip stamps and drop the group.
+    #[test]
+    fn ungroup_chip_args_unstamp_through_executor() {
+        let (mut exec, gid) = mc_executor();
+        exec.execute("manage_multicam", &multicam_ungroup_args(&gid))
+            .expect("ungroup succeeds");
+        assert!(exec.multicam_groups().is_empty());
+        assert!(exec
+            .timeline()
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .all(|c| c.multicam_group_id.is_none()));
     }
 }
