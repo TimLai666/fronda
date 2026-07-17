@@ -236,10 +236,15 @@ impl Default for ImageCaps {
     }
 }
 
+/// Swift `AudioModelConfig.Category`. Raw values are the wire category
+/// strings (#294 made the enum String-backed and added cleanup/dubbing).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AudioCategory {
     Tts,
     Music,
+    Sfx,
+    Cleanup,
+    Dubbing,
 }
 
 impl AudioCategory {
@@ -247,6 +252,38 @@ impl AudioCategory {
         match self {
             AudioCategory::Tts => "tts",
             AudioCategory::Music => "music",
+            AudioCategory::Sfx => "sfx",
+            AudioCategory::Cleanup => "cleanup",
+            AudioCategory::Dubbing => "dubbing",
+        }
+    }
+
+    /// Swift `Category.label`.
+    pub fn label(&self) -> &'static str {
+        match self {
+            AudioCategory::Tts => "Speech",
+            AudioCategory::Music => "Music",
+            AudioCategory::Sfx => "Sound Effects",
+            AudioCategory::Cleanup => "Voice Cleanup",
+            AudioCategory::Dubbing => "Dubbing",
+        }
+    }
+}
+
+/// Swift `AudioModelConfig.Input` raw values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AudioInput {
+    Text,
+    Audio,
+    Video,
+}
+
+impl AudioInput {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AudioInput::Text => "text",
+            AudioInput::Audio => "audio",
+            AudioInput::Video => "video",
         }
     }
 }
@@ -278,6 +315,12 @@ pub struct AudioCaps {
     /// (1s .. 600s) apply; the Fal-era catalog carries no per-model values.
     pub min_seconds: Option<f64>,
     pub max_seconds: Option<f64>,
+    /// Swift `caps.inputs` (#294 added "audio"). None = the "text" default.
+    pub inputs: Option<Vec<AudioInput>>,
+    /// Swift `caps.targetLanguages` / `caps.defaultTargetLanguage` (#294,
+    /// dubbing). Server-catalog data; the static catalog carries none.
+    pub target_languages: Option<Vec<&'static str>>,
+    pub default_target_language: Option<&'static str>,
 }
 
 impl Default for AudioCaps {
@@ -294,8 +337,126 @@ impl Default for AudioCaps {
             pricing: AudioPricing::Unknown,
             min_seconds: None,
             max_seconds: None,
+            inputs: None,
+            target_languages: None,
+            default_target_language: None,
         }
     }
+}
+
+impl AudioCaps {
+    /// Swift `AudioModelConfig.inputs`: `caps.inputs ?? ["text"]`.
+    pub fn effective_inputs(&self) -> &[AudioInput] {
+        const DEFAULT: &[AudioInput] = &[AudioInput::Text];
+        self.inputs.as_deref().unwrap_or(DEFAULT)
+    }
+
+    /// Swift `acceptsSourceMedia`.
+    pub fn accepts_source_media(&self) -> bool {
+        let inputs = self.effective_inputs();
+        inputs.contains(&AudioInput::Audio) || inputs.contains(&AudioInput::Video)
+    }
+
+    /// Swift `usesSourceURL`: cleanup/dubbing transform an uploaded source.
+    pub fn uses_source_url(&self) -> bool {
+        matches!(
+            self.category,
+            AudioCategory::Cleanup | AudioCategory::Dubbing
+        )
+    }
+
+    /// Swift `acceptsSource(_:)`. Non-A/V clip types (image, text, lottie,
+    /// sequence — plus Rust's shape) are never source media.
+    pub fn accepts_source(&self, clip_type: core_model::ClipType) -> bool {
+        match clip_type {
+            core_model::ClipType::Audio => self.effective_inputs().contains(&AudioInput::Audio),
+            core_model::ClipType::Video => self.effective_inputs().contains(&AudioInput::Video),
+            _ => false,
+        }
+    }
+}
+
+/// Swift global `unsupportedValue(model:field:value:allowed:)`.
+pub fn unsupported_value(display_name: &str, field: &str, value: &str, allowed: &[String]) -> String {
+    format!(
+        "{display_name} does not support {field} '{value}'. Valid: {}.",
+        allowed.join(", ")
+    )
+}
+
+/// Swift `AudioModelConfig.validate(spanSeconds:)` (#294 wording: "source
+/// media"). Bounds default to Swift's `minSeconds ?? 1` / `maxSeconds ?? 600`.
+pub fn audio_validate_span_seconds(
+    display_name: &str,
+    caps: &AudioCaps,
+    span_seconds: f64,
+) -> Option<String> {
+    let s = span_seconds.round() as i64;
+    let min = caps.min_seconds.unwrap_or(1.0).round() as i64;
+    let max = caps.max_seconds.unwrap_or(600.0).round() as i64;
+    if s < min {
+        return Some(format!(
+            "{display_name} needs at least {min}s of source media (selection is {s}s)."
+        ));
+    }
+    if s > max {
+        return Some(format!(
+            "{display_name} accepts at most {max}s of source media (selection is {s}s)."
+        ));
+    }
+    None
+}
+
+/// Swift `AudioModelConfig.validate(params:)` (#294: the prompt-length check
+/// applies only to text-input models; targetLanguages gates dubbing).
+pub fn audio_validate_params(
+    display_name: &str,
+    caps: &AudioCaps,
+    params: &crate::generation_payload::AudioGenerationPayload,
+) -> Option<String> {
+    let prompt_len = params.prompt.trim().chars().count() as i64;
+    if caps.effective_inputs().contains(&AudioInput::Text) && prompt_len < caps.min_prompt_length {
+        return Some(format!(
+            "{display_name} requires prompt ≥ {} characters (got {prompt_len}).",
+            caps.min_prompt_length
+        ));
+    }
+    if let (Some(allowed), Some(v)) = (&caps.voices, &params.voice) {
+        if !v.is_empty() && !allowed.iter().any(|a| a == v) {
+            let mut shown: Vec<String> = allowed.iter().take(6).map(|s| s.to_string()).collect();
+            if allowed.len() > 6 {
+                shown.push("…".to_string());
+            }
+            return Some(unsupported_value(display_name, "voice", v, &shown));
+        }
+    }
+    if let (Some(allowed), Some(d)) = (&caps.durations, params.duration_seconds) {
+        if !allowed.iter().any(|&a| a as f64 == d) {
+            let shown: Vec<String> = allowed.iter().map(|a| format!("{a}s")).collect();
+            return Some(unsupported_value(
+                display_name,
+                "duration",
+                &format!("{}s", d as i64),
+                &shown,
+            ));
+        }
+    }
+    if let Some(allowed) = &caps.target_languages {
+        let lang = params.target_language.as_deref().unwrap_or("");
+        if lang.is_empty() {
+            return Some("Choose a target language.".to_string());
+        }
+        if !allowed.contains(&lang) {
+            let shown: Vec<String> = allowed.iter().map(|s| s.to_string()).collect();
+            return Some(unsupported_value(
+                display_name,
+                "target language",
+                lang,
+                &shown,
+            ));
+        }
+    }
+    None
 }
 
 // ── Gating (upstream #249) ──────────────────────────────────────
@@ -1361,6 +1522,180 @@ mod tests {
             "\"\" key is the default"
         );
         assert_eq!(video("seedance-2").audio_discount(Some("720p")), None);
+    }
+
+    // ── #294 source-based audio categories ──────────────────────────
+
+    #[test]
+    fn audio_category_raw_values_and_labels_match_swift() {
+        // Swift Category rawValues (String-backed since #294) + labels.
+        let cases = [
+            (AudioCategory::Tts, "tts", "Speech"),
+            (AudioCategory::Music, "music", "Music"),
+            (AudioCategory::Sfx, "sfx", "Sound Effects"),
+            (AudioCategory::Cleanup, "cleanup", "Voice Cleanup"),
+            (AudioCategory::Dubbing, "dubbing", "Dubbing"),
+        ];
+        for (cat, raw, label) in cases {
+            assert_eq!(cat.as_str(), raw);
+            assert_eq!(cat.label(), label);
+        }
+        assert_eq!(AudioInput::Text.as_str(), "text");
+        assert_eq!(AudioInput::Audio.as_str(), "audio");
+        assert_eq!(AudioInput::Video.as_str(), "video");
+    }
+
+    #[test]
+    fn audio_inputs_default_and_source_acceptance() {
+        use core_model::ClipType;
+        let default_caps = AudioCaps::default();
+        assert_eq!(default_caps.effective_inputs(), &[AudioInput::Text]);
+        assert!(!default_caps.accepts_source_media());
+        assert!(!default_caps.uses_source_url());
+        assert!(!default_caps.accepts_source(ClipType::Video));
+
+        let dubbing = AudioCaps {
+            category: AudioCategory::Dubbing,
+            inputs: Some(vec![AudioInput::Audio, AudioInput::Video]),
+            ..Default::default()
+        };
+        assert!(dubbing.accepts_source_media());
+        assert!(dubbing.uses_source_url());
+        assert!(dubbing.accepts_source(ClipType::Audio));
+        assert!(dubbing.accepts_source(ClipType::Video));
+        for t in [
+            ClipType::Image,
+            ClipType::Text,
+            ClipType::Lottie,
+            ClipType::Shape,
+            ClipType::Sequence,
+        ] {
+            assert!(!dubbing.accepts_source(t), "{t:?} is never source media");
+        }
+
+        let cleanup = AudioCaps {
+            category: AudioCategory::Cleanup,
+            ..Default::default()
+        };
+        assert!(cleanup.uses_source_url());
+        let sfx = AudioCaps {
+            category: AudioCategory::Sfx,
+            inputs: Some(vec![AudioInput::Text, AudioInput::Video]),
+            ..Default::default()
+        };
+        assert!(!sfx.uses_source_url());
+        assert!(sfx.accepts_source_media());
+    }
+
+    #[test]
+    fn audio_validate_span_seconds_messages_match_swift() {
+        let caps = AudioCaps {
+            min_seconds: Some(5.0),
+            max_seconds: Some(30.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            audio_validate_span_seconds("Test SFX", &caps, 3.2),
+            Some("Test SFX needs at least 5s of source media (selection is 3s).".to_string())
+        );
+        assert_eq!(
+            audio_validate_span_seconds("Test SFX", &caps, 700.0),
+            Some("Test SFX accepts at most 30s of source media (selection is 700s).".to_string())
+        );
+        assert_eq!(audio_validate_span_seconds("Test SFX", &caps, 10.0), None);
+        // Swift defaults: minSeconds ?? 1, maxSeconds ?? 600.
+        let defaults = AudioCaps::default();
+        assert_eq!(audio_validate_span_seconds("M", &defaults, 0.2), Some(
+            "M needs at least 1s of source media (selection is 0s).".to_string()
+        ));
+        assert_eq!(audio_validate_span_seconds("M", &defaults, 600.4), None);
+    }
+
+    #[test]
+    fn audio_validate_params_swift_parity() {
+        use crate::generation_payload::AudioGenerationPayload;
+        let params = |prompt: &str,
+                      voice: Option<&str>,
+                      duration: Option<f64>,
+                      lang: Option<&str>| AudioGenerationPayload {
+            prompt: prompt.into(),
+            voice: voice.map(String::from),
+            lyrics: None,
+            style_instructions: None,
+            instrumental: false,
+            duration_seconds: duration,
+            video_url: None,
+            source_url: None,
+            target_language: lang.map(String::from),
+        };
+
+        // Prompt-length check fires for text-input models only (#294).
+        let text_caps = AudioCaps {
+            min_prompt_length: 10,
+            ..Default::default()
+        };
+        assert_eq!(
+            audio_validate_params("MiniMax", &text_caps, &params("hey", None, None, None)),
+            Some("MiniMax requires prompt ≥ 10 characters (got 3).".to_string())
+        );
+        let cleanup_caps = AudioCaps {
+            category: AudioCategory::Cleanup,
+            inputs: Some(vec![AudioInput::Audio, AudioInput::Video]),
+            min_prompt_length: 10,
+            ..Default::default()
+        };
+        assert_eq!(
+            audio_validate_params("Isolator", &cleanup_caps, &params("", None, None, None)),
+            None,
+            "no prompt check for non-text models"
+        );
+
+        // Voice gate: first 6 shown, ellipsis beyond.
+        let voiced = AudioCaps {
+            voices: Some(vec!["A", "B", "C", "D", "E", "F", "G"]),
+            min_prompt_length: 0,
+            ..Default::default()
+        };
+        assert_eq!(
+            audio_validate_params("TTS", &voiced, &params("hi", Some("Zed"), None, None)),
+            Some("TTS does not support voice 'Zed'. Valid: A, B, C, D, E, F, ….".to_string())
+        );
+
+        // Duration gate.
+        let timed = AudioCaps {
+            durations: Some(vec![15, 30]),
+            min_prompt_length: 0,
+            ..Default::default()
+        };
+        assert_eq!(
+            audio_validate_params("Music", &timed, &params("x", None, Some(45.0), None)),
+            Some("Music does not support duration '45s'. Valid: 15s, 30s.".to_string())
+        );
+
+        // Target-language gate (dubbing).
+        let dubbing = AudioCaps {
+            category: AudioCategory::Dubbing,
+            inputs: Some(vec![AudioInput::Audio, AudioInput::Video]),
+            target_languages: Some(vec!["es", "fr"]),
+            default_target_language: Some("es"),
+            ..Default::default()
+        };
+        assert_eq!(
+            audio_validate_params("Dub", &dubbing, &params("", None, None, None)),
+            Some("Choose a target language.".to_string())
+        );
+        assert_eq!(
+            audio_validate_params("Dub", &dubbing, &params("", None, None, Some(""))),
+            Some("Choose a target language.".to_string())
+        );
+        assert_eq!(
+            audio_validate_params("Dub", &dubbing, &params("", None, None, Some("xx"))),
+            Some("Dub does not support target language 'xx'. Valid: es, fr.".to_string())
+        );
+        assert_eq!(
+            audio_validate_params("Dub", &dubbing, &params("", None, None, Some("es"))),
+            None
+        );
     }
 
     #[test]

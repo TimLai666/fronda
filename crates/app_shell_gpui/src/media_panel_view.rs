@@ -8,9 +8,13 @@ use crate::generation_view::{
     interpret_submission, GenerationView, SubmitOutcome,
 };
 use crate::media_panel_model::{MediaPanelState, MediaPanelTab};
+use crate::panel_components::{
+    editor_action_footer, editor_primary_button, editor_value_field, footer_note, panel_row,
+    EditorPanelGroup, GroupStates,
+};
 use crate::theme::{
     Accent, Background, BorderColors, BorderWidth, ComponentSize, DropZone, FontSize, IconSize,
-    Layout, MediaPanel, Opacity, Radius, Spacing, Status, Text,
+    Layout, MediaPanel, Opacity, Radius, Spacing, Text,
 };
 use core_model::{ClipType, MediaFolder, MediaManifest, MediaManifestEntry, Timeline};
 use generation_core::model_catalog::{self, AudioCategory, ModelCaps, ModelConfig};
@@ -995,6 +999,8 @@ pub struct MediaPanelView {
     music_menu: Option<MusicMenu>,
     /// Scrub drag in progress on a captions/music numeric field.
     tab_scrub: Option<TabScrubSession>,
+    /// Session-scoped collapse state for the captions/music panel groups (#327).
+    groups: GroupStates,
     /// Snapshot of the shared timeline (rebuilt on revision bumps).
     timeline: Timeline,
 }
@@ -1059,6 +1065,7 @@ impl MediaPanelView {
             captions_menu: None,
             music_menu: None,
             tab_scrub: None,
+            groups: GroupStates::default(),
             timeline: Timeline::default(),
         };
         view.sync_from_shared_state();
@@ -2530,45 +2537,14 @@ impl MediaPanelView {
     }
 }
 
-fn section_label(text: &str) -> impl IntoElement {
-    div()
-        .text_color(Text::MUTED)
-        .text_size(px(FontSize::XXS))
-        .child(text.to_uppercase())
-}
-
-/// Label + right-aligned control row (Swift InspectorRow).
+/// Label + right-aligned control row (Swift InspectorRow, #327 layout).
 fn tab_row(label: &str, control: AnyElement) -> gpui::Div {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .gap(px(Spacing::SM))
-        .min_h(px(Layout::PANEL_HEADER_HEIGHT))
-        .child(
-            div()
-                .text_color(Text::TERTIARY)
-                .text_size(px(FontSize::SM))
-                .child(label.to_string()),
-        )
-        .child(control)
+    panel_row(label, control)
 }
 
-/// Menu value button (Swift menuValueLabel): "value ↕".
+/// Menu value chip (Swift EditorMenuValue, expanded to the row width).
 fn menu_value_button(id: &str, value: String) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id.to_string())
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(Spacing::XXS))
-        .cursor_pointer()
-        .text_color(Text::TERTIARY)
-        .text_size(px(FontSize::SM))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .child(value)
-        .child(div().text_size(px(FontSize::XXS)).child("↕"))
+    crate::panel_components::editor_menu_value(id.to_string(), value, true)
 }
 
 /// Inline dropdown panel below a row. Mouse-downs stay inside so the scroll
@@ -2623,15 +2599,6 @@ fn toggle_switch(id: &str, on: bool) -> gpui::Stateful<gpui::Div> {
                 .rounded_full()
                 .bg(Background::BASE),
         )
-}
-
-/// Note line above the generate bar buttons (Swift error-red note).
-fn generate_note(note: &str) -> gpui::Div {
-    div()
-        .text_color(Status::ERROR)
-        .text_size(px(FontSize::XS))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .child(note.to_string())
 }
 
 /// Full-tab overlay shown while a real run is in flight (Swift GeneratingOverlay).
@@ -3005,12 +2972,14 @@ impl MediaPanelView {
         let disabled =
             effective_count == 0 || self.captions.is_generating || !transcription_available;
 
-        // ── Source section ──
-        let mut source_section = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::XS))
-            .child(section_label("Source"))
+        // ── Source group (Swift CaptionTab.sourceSection; the Mode/provider
+        // row needs a transcription-provider choice the Rust build lacks) ──
+        let mut source_section = EditorPanelGroup::new("group-captions-source", "Source")
+            .expanded(self.groups.expanded("captions-source", true))
+            .on_toggle(cx.listener(|this, _, _, cx| {
+                this.groups.toggle("captions-source", true);
+                cx.notify();
+            }))
             .child(tab_row(
                 "Source",
                 menu_value_button("captions-source-btn", source_summary)
@@ -3073,19 +3042,28 @@ impl MediaPanelView {
             }
             source_section = source_section.child(panel);
         }
-        source_section = source_section.child(tab_row(
-            "Language",
-            menu_value_button("captions-language-btn", language_label)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.captions_menu = match this.captions_menu {
-                        Some(CaptionsMenu::Language) => None,
-                        _ => Some(CaptionsMenu::Language),
-                    };
-                    cx.notify();
-                }))
-                .into_any_element(),
-        ));
+
+        // ── Settings group (Swift settingsSection: Language / Censor; the Max
+        // words row needs a words-per-caption binding the Rust tab lacks) ──
+        let mut settings_section = EditorPanelGroup::new("group-captions-settings", "Settings")
+            .expanded(self.groups.expanded("captions-settings", true))
+            .on_toggle(cx.listener(|this, _, _, cx| {
+                this.groups.toggle("captions-settings", true);
+                cx.notify();
+            }))
+            .child(tab_row(
+                "Language",
+                menu_value_button("captions-language-btn", language_label)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.captions_menu = match this.captions_menu {
+                            Some(CaptionsMenu::Language) => None,
+                            _ => Some(CaptionsMenu::Language),
+                        };
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            ));
         if self.captions_menu == Some(CaptionsMenu::Language) {
             let mut panel = tab_menu_panel().child(
                 menu_row(
@@ -3119,15 +3097,27 @@ impl MediaPanelView {
                     })),
                 );
             }
-            source_section = source_section.child(panel);
+            settings_section = settings_section.child(panel);
         }
+        settings_section = settings_section.child(tab_row(
+            "Censor profanity",
+            toggle_switch("captions-censor-toggle", self.captions.censor_profanity)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.captions.censor_profanity = !this.captions.censor_profanity;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        ));
 
-        // ── Style section ──
-        let mut style_section = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::XS))
-            .child(section_label("Style"))
+        // ── Style group (Swift styleSection → TextStyleControls "Style",
+        // collapsed by default) ──
+        let mut style_section = EditorPanelGroup::new("group-captions-style", "Style")
+            .expanded(self.groups.expanded("captions-style", false))
+            .on_toggle(cx.listener(|this, _, _, cx| {
+                this.groups.toggle("captions-style", false);
+                cx.notify();
+            }))
             .child(tab_row(
                 "Font",
                 menu_value_button("captions-font-btn", self.captions.font_name.clone())
@@ -3238,23 +3228,13 @@ impl MediaPanelView {
             }
             style_section = style_section.child(panel);
         }
-        style_section = style_section.child(tab_row(
-            "Censor profanity",
-            toggle_switch("captions-censor-toggle", self.captions.censor_profanity)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.captions.censor_profanity = !this.captions.censor_profanity;
-                    cx.notify();
-                }))
-                .into_any_element(),
-        ));
-
-        // ── Placement section ──
-        let placement_section = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::XS))
-            .child(section_label("Placement"))
+        // ── Placement group (Swift placementSection) ──
+        let placement_section = EditorPanelGroup::new("group-captions-placement", "Placement")
+            .expanded(self.groups.expanded("captions-placement", true))
+            .on_toggle(cx.listener(|this, _, _, cx| {
+                this.groups.toggle("captions-placement", true);
+                cx.notify();
+            }))
             .child(self.render_caption_preview())
             .child(
                 div()
@@ -3305,15 +3285,8 @@ impl MediaPanelView {
                     ),
             );
 
-        // ── Generate bar ──
-        let mut bar = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::SM))
-            .px(px(Spacing::LG_XL))
-            .py(px(Spacing::MD))
-            .border_t_1()
-            .border_color(BorderColors::SUBTLE);
+        // ── Action footer (Swift EditorActionFooter) ──
+        let mut bar = editor_action_footer();
         if !transcription_available {
             bar = bar.child(
                 div()
@@ -3323,7 +3296,7 @@ impl MediaPanelView {
                     .child("Auto-captions are coming soon — transcription isn't connected in this build."),
             );
         } else if let Some(note) = &self.captions.note {
-            bar = bar.child(generate_note(note));
+            bar = bar.child(footer_note(note));
         }
         bar = bar.child(
             div()
@@ -3332,25 +3305,9 @@ impl MediaPanelView {
                 .items_center()
                 .gap(px(Spacing::SM))
                 .child(
-                    div()
-                        .id("btn-gen-captions")
+                    editor_primary_button("btn-gen-captions", "Generate Captions".into(), !disabled)
                         .flex_1()
                         .h(px(GENERATE_BUTTON_HEIGHT))
-                        .rounded(px(Radius::SM))
-                        .bg(Accent::PRIMARY)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .text_color(Background::BASE)
-                        .text_size(px(FontSize::SM))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .opacity(if disabled {
-                            Opacity::MEDIUM
-                        } else {
-                            Opacity::OPAQUE
-                        })
-                        .child("Generate Captions")
                         .when(!disabled, |el| {
                             el.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
@@ -3381,10 +3338,6 @@ impl MediaPanelView {
                     .flex_col()
                     .flex_1()
                     .overflow_y_scroll()
-                    .px(px(Spacing::LG_XL))
-                    .pt(px(Spacing::MD))
-                    .pb(px(Spacing::MD))
-                    .gap(px(Spacing::MD_LG))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -3394,6 +3347,7 @@ impl MediaPanelView {
                         }),
                     )
                     .child(source_section)
+                    .child(settings_section)
                     .child(style_section)
                     .child(placement_section),
             )
@@ -3556,14 +3510,16 @@ impl MediaPanelView {
             .map(|m| m.display_name.to_string())
             .unwrap_or_else(|| "None".to_string());
 
-        // ── Source section ──
-        let mut source_section = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::XS))
-            .child(section_label("Source"));
+        // ── Single "Music" group (Swift MusicTab.musicSection: sourceControls
+        // + modelControl + promptControl) ──
+        let mut music_group = EditorPanelGroup::new("group-music", "Music")
+            .expanded(self.groups.expanded("music-music", true))
+            .on_toggle(cx.listener(|this, _, _, cx| {
+                this.groups.toggle("music-music", true);
+                cx.notify();
+            }));
         if model.is_some_and(music_supports_text_mode) {
-            source_section = source_section.child(tab_row(
+            music_group = music_group.child(tab_row(
                 "Input",
                 menu_value_button("music-input-btn", mode_label)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -3594,11 +3550,11 @@ impl MediaPanelView {
                         })),
                     );
                 }
-                source_section = source_section.child(panel);
+                music_group = music_group.child(panel);
             }
         }
         if text_mode {
-            source_section = source_section.child(tab_row(
+            music_group = music_group.child(tab_row(
                 "Duration",
                 self.scrub_value_el(
                     "music-duration",
@@ -3609,7 +3565,7 @@ impl MediaPanelView {
                 .into_any_element(),
             ));
         } else {
-            source_section = source_section.child(tab_row(
+            music_group = music_group.child(tab_row(
                 "Video",
                 div()
                     .text_color(Text::TERTIARY)
@@ -3620,25 +3576,20 @@ impl MediaPanelView {
             ));
         }
 
-        // ── Model section ──
-        let mut model_section = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::XS))
-            .child(section_label("Model"))
-            .child(tab_row(
-                "Model",
-                menu_value_button("music-model-btn", model_label)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.music_menu = match this.music_menu {
-                            Some(MusicMenu::Model) => None,
-                            _ => Some(MusicMenu::Model),
-                        };
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-            ));
+        // Model row (Swift modelControl).
+        music_group = music_group.child(tab_row(
+            "Model",
+            menu_value_button("music-model-btn", model_label)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.music_menu = match this.music_menu {
+                        Some(MusicMenu::Model) => None,
+                        _ => Some(MusicMenu::Model),
+                    };
+                    cx.notify();
+                }))
+                .into_any_element(),
+        ));
         if self.music_menu == Some(MusicMenu::Model) {
             let mut panel = tab_menu_panel();
             for m in music_models() {
@@ -3658,37 +3609,34 @@ impl MediaPanelView {
                     })),
                 );
             }
-            model_section = model_section.child(panel);
+            music_group = music_group.child(panel);
         }
 
-        // ── Prompt section ──
-        let prompt_section = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::XS))
-            .child(section_label("Prompt"))
-            .child(
-                div()
-                    .rounded(px(Radius::SM))
-                    .border_1()
-                    .border_color(BorderColors::SUBTLE)
-                    .bg(Background::RAISED)
-                    .px(px(Spacing::SM_MD))
-                    .py(px(Spacing::SM))
-                    .child(self.music_prompt_area.clone()),
-            );
+        // Prompt (Swift promptControl: label above an editorValueField editor).
+        music_group = music_group.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(Spacing::XS))
+                .child(
+                    div()
+                        .text_color(Text::SECONDARY)
+                        .text_size(px(FontSize::SM))
+                        .child("Prompt"),
+                )
+                .child(
+                    editor_value_field()
+                        .w_full()
+                        .px(px(Spacing::SM_MD))
+                        .py(px(Spacing::SM))
+                        .child(self.music_prompt_area.clone()),
+                ),
+        );
 
-        // ── Generate bar ──
-        let mut bar = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::SM))
-            .px(px(Spacing::LG_XL))
-            .py(px(Spacing::MD))
-            .border_t_1()
-            .border_color(BorderColors::SUBTLE);
+        // ── Action footer (Swift EditorActionFooter) ──
+        let mut bar = editor_action_footer();
         if let Some(note) = &note {
-            bar = bar.child(generate_note(note));
+            bar = bar.child(footer_note(note));
         }
         bar = bar.child(
             div()
@@ -3697,25 +3645,9 @@ impl MediaPanelView {
                 .items_center()
                 .gap(px(Spacing::SM))
                 .child(
-                    div()
-                        .id("btn-gen-music")
+                    editor_primary_button("btn-gen-music", music_generate_label(cost), can_generate)
                         .flex_1()
                         .h(px(GENERATE_BUTTON_HEIGHT))
-                        .rounded(px(Radius::SM))
-                        .bg(Accent::PRIMARY)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .text_color(Background::BASE)
-                        .text_size(px(FontSize::SM))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .opacity(if can_generate {
-                            Opacity::OPAQUE
-                        } else {
-                            Opacity::MEDIUM
-                        })
-                        .child(music_generate_label(cost))
                         .when(can_generate, |el| {
                             el.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
@@ -3746,10 +3678,6 @@ impl MediaPanelView {
                     .flex_col()
                     .flex_1()
                     .overflow_y_scroll()
-                    .px(px(Spacing::LG_XL))
-                    .pt(px(Spacing::MD))
-                    .pb(px(Spacing::MD))
-                    .gap(px(Spacing::MD_LG))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -3758,9 +3686,7 @@ impl MediaPanelView {
                             }
                         }),
                     )
-                    .child(source_section)
-                    .child(model_section)
-                    .child(prompt_section),
+                    .child(music_group),
             )
             .child(bar)
             .when(

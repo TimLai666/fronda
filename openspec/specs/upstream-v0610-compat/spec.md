@@ -529,3 +529,37 @@ code:
   - crates/app_shell_gpui/src/video_export.rs
   - crates/agent_contract/src/tool_exec.rs
 -->
+
+---
+### Requirement: generate_audio supports source-based categories per Swift v0.6.10
+
+generate_audio SHALL accept sourceMediaRef and targetLanguage, gate cleanup/dubbing categories on a source asset (rejecting silent-video sources with the upstream message and deriving duration from the source), emit list_models audio entries with inputs/minSeconds/maxSeconds/targetLanguages when present, and expand sourceMediaRef through the short-id system, while keeping the honest backend-absent error (upstream #294 contract layer; catalog entries stay dormant until a generation backend exists).
+
+#### Scenario: Dubbing requires a source
+
+- **WHEN** generate_audio targets a dubbing-category model without sourceMediaRef
+- **THEN** the call fails with the upstream source-required error
+
+#### Scenario: Silent video source rejected
+
+- **WHEN** sourceMediaRef points at a video whose has_audio is false
+- **THEN** the call fails with the upstream no-audio message before any backend interaction
+
+<!-- @trace
+source: generate-audio-v0610
+updated: 2026-07-17
+code:
+  - crates/generation_core/src/generation_payload.rs
+  - crates/app_shell_gpui/src/media_panel_view.rs
+  - AGENTS.md
+  - crates/app_shell_gpui/src/inspector_view.rs
+  - crates/app_shell_gpui/src/lib.rs
+  - crates/agent_contract/src/tool_exec.rs
+  - crates/app_shell_gpui/src/theme.rs
+  - crates/agent_contract/src/id_short.rs
+  - crates/app_shell_gpui/src/pane_resize.rs
+  - crates/app_shell_gpui/src/panel_components.rs
+  - crates/generation_core/src/model_catalog.rs
+  - specs/rust-rewrite/03-timeline-editor-and-preview.md
+  - crates/agent_contract/src/tools.rs
+-->

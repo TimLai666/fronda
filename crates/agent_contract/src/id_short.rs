@@ -90,6 +90,7 @@ pub const SCALAR_ID_KEYS: &[&str] = &[
     "endFrameMediaRef",
     "sourceVideoMediaRef",
     "videoSourceMediaRef",
+    "sourceMediaRef",
     "captionGroupId",
     "timelineId",
     "trackId",

@@ -9,7 +9,7 @@ pub const AGENT_MIN: f32 = 240.0;
 pub const AGENT_MAX: f32 = 640.0;
 /// Media content minimum; the tab rail width adds on top at call time.
 pub const MEDIA_MIN: f32 = 280.0;
-pub const INSPECTOR_MIN: f32 = 150.0;
+pub const INSPECTOR_MIN: f32 = 240.0; // #327: Swift inspectorMin = EditorPanel.minimumWidth
 pub const PREVIEW_MIN_W: f32 = 400.0;
 pub const PREVIEW_MIN_H: f32 = 320.0;
 pub const TIMELINE_MIN: f32 = 100.0;
@@ -45,7 +45,7 @@ pub struct ResizeBounds {
     /// Sum of the OTHER fixed siblings' current sizes along the axis.
     pub others: f32,
     /// Minimum size of the flexible neighbor being squeezed (Preview column
-    /// 400 / Preview region 320 / Inspector 150 in the Vertical upper-left).
+    /// 400 / Preview region 320 / Inspector 240 in the Vertical upper-left).
     pub neighbor_min: f32,
     /// Media tab-rail width (adds to the media/left-column minimum).
     pub rail_w: f32,
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn inspector_minimum() {
-        assert_eq!(clamp_resize(ResizeTarget::InspectorWidth, 20.0, &bounds()), 150.0);
+        assert_eq!(clamp_resize(ResizeTarget::InspectorWidth, 20.0, &bounds()), 240.0);
     }
 
     #[test]
@@ -181,14 +181,14 @@ mod tests {
     #[test]
     fn vertical_media_squeezes_against_inspector_minimum() {
         // Inside the Vertical left column (600 wide): media may grow until
-        // the inspector hits its 150 minimum.
+        // the inspector hits its 240 minimum.
         let inner = ResizeBounds {
             area: 600.0,
             others: 0.0,
             neighbor_min: INSPECTOR_MIN,
             rail_w: 40.0,
         };
-        assert_eq!(clamp_resize(ResizeTarget::MediaWidth, 500.0, &inner), 450.0);
+        assert_eq!(clamp_resize(ResizeTarget::MediaWidth, 500.0, &inner), 360.0);
         assert_eq!(clamp_resize(ResizeTarget::MediaWidth, 100.0, &inner), 320.0);
     }
 

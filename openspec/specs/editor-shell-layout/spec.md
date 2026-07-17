@@ -187,7 +187,7 @@ code:
 ---
 ### Requirement: Draggable pane dividers
 
-The gaps between the Agent/Media/Inspector columns and their neighbors, and the gap above the Toolbar + Timeline region, SHALL act as drag handles that resize the adjacent pane. Dragging SHALL clamp so that: the Agent width stays within 240 to 640 points, the Media width is at least 280 points plus the tab-rail width, the Inspector width is at least 150 points, the Timeline height stays within its existing 100 to 700 point limits, and no drag reduces the Preview column below 400 points wide.
+The gaps between the Agent/Media/Inspector columns and their neighbors, and the gap above the Toolbar + Timeline region, SHALL act as drag handles that resize the adjacent pane. Dragging SHALL clamp so that: the Agent width stays within 240 to 640 points, the Media width is at least 280 points plus the tab-rail width, the Inspector width is at least 240 points (raised from 150 by upstream #327), the Timeline height stays within its existing 100 to 700 point limits, and no drag reduces the Preview column below 400 points wide.
 
 #### Scenario: Dragging the media divider resizes within limits
 

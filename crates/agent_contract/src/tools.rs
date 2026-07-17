@@ -560,15 +560,17 @@ fn organize_media() -> ToolDefinition {
 }
 
 /// tool-surface-v2 (absorbs generate_music). Description verbatim from
-/// upstream@141c69b.
+/// upstream #294 @0e53593b (source transforms: Voice Cleanup, Dubbing);
+/// the duration text drops upstream's catalog-absent model callouts, per
+/// the established adaptation convention.
 fn generate_audio() -> ToolDefinition {
     ToolDefinition {
         name: "generate_audio",
-        description: "Starts an async AI audio generation: text-to-speech, text-to-music, or video-to-music (scoring a video). Returns a placeholder asset ID immediately; the asset appears in get_media and becomes usable in add_clips once ready. TTS models convert the prompt into speech and accept a 'voice'. Music models generate tracks from a prompt; pass 'lyrics' for vocals where supported, or set 'instrumental' true when the selected model supports it. Video-to-audio models (inputs include 'video' — see list_models) generate audio that matches a VIDEO: provide a timeline span via videoSourceStartFrame+videoSourceEndFrame (e.g. to score the timeline), or a video asset via videoSourceMediaRef; the prompt is then an optional style guide. PLACEMENT: when you pass a timeline span, the result is placed on the timeline automatically at that span (no add_clips needed); for a media-asset source or a plain text-to-speech/music result, the asset lands in the library and you place it with add_clips. Use list_models with type='audio' to see each model's 'inputs', category, and voices. Costs real money and is not undoable.",
+        description: "Starts an async AI audio generation or transformation. Returns a placeholder asset ID immediately; the asset appears in get_media and becomes usable in add_clips once ready. TTS converts text into speech. Music and sound-effects models generate audio from a prompt or video. Voice Cleanup isolates speech from background audio. Dubbing translates source speech while preserving speaker delivery; pass targetLanguage. For models whose inputs include audio or video, provide sourceMediaRef. Video-to-audio scoring models also accept videoSourceStartFrame+videoSourceEndFrame and place the result on the timeline automatically. Other results land in the media library for placement with add_clips. Use list_models with type='audio' to inspect inputs, category, voices, and limits. Costs real money and is not undoable.",
         input_schema: object_optional(&[
             (
                 "prompt",
-                string("Required for TTS (the text to speak) and text-to-music (style/mood/genre). Optional style guide for video-to-music models."),
+                string("Required for text-driven models. TTS uses it as spoken text; music and sound-effects models use it as the description. Omit for Voice Cleanup and Dubbing."),
             ),
             (
                 "name",
@@ -596,7 +598,15 @@ fn generate_audio() -> ToolDefinition {
             ),
             (
                 "duration",
-                integer("Length in seconds. Supported ranges vary by model; for a video source, defaults to the span/clip length. Ignored by TTS."),
+                integer("Length in seconds. Supported ranges vary by model. Video-to-audio models default to the source span; pass a value to request a different output length. Voice Cleanup and Dubbing always preserve the source length. Ignored by TTS."),
+            ),
+            (
+                "sourceMediaRef",
+                string("Source audio or video asset ID for models whose inputs include audio or video. Required for Voice Cleanup and Dubbing."),
+            ),
+            (
+                "targetLanguage",
+                string("Required for Dubbing. ISO language code such as 'es', 'fr', 'de', or 'ja'."),
             ),
             (
                 "videoSourceStartFrame",
@@ -1985,6 +1995,34 @@ mod tests {
             "manage_project is MCP-only"
         );
         assert!(in_app_names.contains(&"read_skill"));
+    }
+
+    #[test]
+    fn generate_audio_schema_carries_source_transform_keys() {
+        // Upstream #294: sourceMediaRef + targetLanguage (descriptions
+        // verbatim @0e53593b) and the transform-aware tool description.
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t.name == "generate_audio").unwrap();
+        assert!(tool.description.contains("Voice Cleanup isolates speech"));
+        assert!(tool.description.contains("Dubbing translates source speech"));
+        let prop = |key: &str| {
+            tool.input_schema
+                .pointer(&format!("/properties/{key}/description"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("{key} missing from generate_audio schema"))
+        };
+        assert_eq!(
+            prop("sourceMediaRef"),
+            "Source audio or video asset ID for models whose inputs include audio or video. Required for Voice Cleanup and Dubbing."
+        );
+        assert_eq!(
+            prop("targetLanguage"),
+            "Required for Dubbing. ISO language code such as 'es', 'fr', 'de', or 'ja'."
+        );
+        assert!(
+            crate::id_short::SCALAR_ID_KEYS.contains(&"sourceMediaRef"),
+            "sourceMediaRef expands through the short-id system"
+        );
     }
 
     #[test]

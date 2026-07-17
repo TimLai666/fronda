@@ -191,6 +191,8 @@ impl TrackColor {
     pub const TEXT: Hsla = Self::IMAGE;
     pub const LOTTIE: Hsla = hsla_from_hex(0xA07822);
     pub const SEQUENCE: Hsla = hsla_from_hex(0xB9B29A);
+    /// Swift `NSColor.systemRed` (#FF3B30).
+    pub const MULTICAM: Hsla = hsla_from_hex(0xFF3B30);
 }
 
 /// Corner radii (matching Swift `AppTheme.Radius`).
@@ -266,6 +268,22 @@ impl MediaPanel {
     pub const CONTEXT_ROW_HEIGHT: f32 = IconSize::MD;
 }
 
+/// Editor panel metrics (matching Swift `AppTheme.EditorPanel`, upstream #327).
+pub struct EditorPanel;
+impl EditorPanel {
+    pub const DEFAULT_WIDTH: f32 = 340.0;
+    pub const MINIMUM_WIDTH: f32 = 240.0;
+    pub const LABEL_COLUMN_WIDTH: f32 = 88.0;
+    pub const ROW_MIN_HEIGHT: f32 = 22.0;
+    pub const GROUP_HEADER_HEIGHT: f32 = 28.0;
+    pub const TAB_BAR_HEIGHT: f32 = 34.0;
+    pub const FIELD_MIN_HEIGHT: f32 = 22.0;
+    pub const NUMERIC_FIELD_WIDTH: f32 = 56.0;
+    pub const COMPACT_NUMERIC_FIELD_WIDTH: f32 = 36.0;
+    pub const FONT_MENU_WIDTH: f32 = 160.0;
+    pub const TEXT_EDITOR_MIN_HEIGHT: f32 = 96.0;
+}
+
 /// Accent colors (matching Swift `AppTheme.Accent`).
 pub struct Accent;
 impl Accent {
@@ -312,7 +330,8 @@ pub struct Layout;
 impl Layout {
     pub const MEDIA_PANEL_DEFAULT: f32 = 500.0;
     pub const MEDIA_PANEL_MIN: f32 = crate::pane_resize::MEDIA_MIN;
-    pub const INSPECTOR_DEFAULT: f32 = 260.0;
+    // #327: Swift Layout.inspectorDefault now reads AppTheme.EditorPanel.defaultWidth.
+    pub const INSPECTOR_DEFAULT: f32 = EditorPanel::DEFAULT_WIDTH;
     pub const INSPECTOR_MIN: f32 = crate::pane_resize::INSPECTOR_MIN;
     pub const AGENT_PANEL_MIN: f32 = crate::pane_resize::AGENT_MIN;
     pub const AGENT_PANEL_MAX: f32 = crate::pane_resize::AGENT_MAX;
@@ -548,6 +567,31 @@ mod tests {
         assert!((Opacity::HIGH - 0.70).abs() < 1e-6);
         assert!(Opacity::STRONG < Opacity::HIGH && Opacity::HIGH < Opacity::PROMINENT);
         assert_eq!(ComponentSize::TIMELINE_CLIP_BORDER_MIN_WIDTH, 8.0);
+    }
+
+    // #327: AppTheme.EditorPanel values copied verbatim from Swift.
+    #[test]
+    fn editor_panel_constants_match_swift_327() {
+        assert_eq!(EditorPanel::DEFAULT_WIDTH, 340.0);
+        assert_eq!(EditorPanel::MINIMUM_WIDTH, 240.0);
+        assert_eq!(EditorPanel::LABEL_COLUMN_WIDTH, 88.0);
+        assert_eq!(EditorPanel::ROW_MIN_HEIGHT, 22.0);
+        assert_eq!(EditorPanel::GROUP_HEADER_HEIGHT, 28.0);
+        assert_eq!(EditorPanel::TAB_BAR_HEIGHT, 34.0);
+        assert_eq!(EditorPanel::FIELD_MIN_HEIGHT, 22.0);
+        assert_eq!(EditorPanel::NUMERIC_FIELD_WIDTH, 56.0);
+        assert_eq!(EditorPanel::COMPACT_NUMERIC_FIELD_WIDTH, 36.0);
+        assert_eq!(EditorPanel::FONT_MENU_WIDTH, 160.0);
+        assert_eq!(EditorPanel::TEXT_EDITOR_MIN_HEIGHT, 96.0);
+        // Swift Constants.swift: inspectorDefault = EditorPanel.defaultWidth.
+        assert_eq!(Layout::INSPECTOR_DEFAULT, EditorPanel::DEFAULT_WIDTH);
+    }
+
+    #[test]
+    fn multicam_track_color_is_system_red() {
+        // NSColor.systemRed ≈ #FF3B30, opaque.
+        assert!((TrackColor::MULTICAM.a - 1.0).abs() < 1e-6);
+        assert!(TrackColor::MULTICAM.l > 0.0 && TrackColor::MULTICAM.s > 0.9);
     }
 
     #[test]

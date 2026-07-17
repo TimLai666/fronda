@@ -715,6 +715,11 @@ pub struct ToolExecutor {
     /// Unreferenced groups stay in memory (undo can restore their clips) but
     /// are filtered from saves via `saved_multicam_groups`.
     multicam_groups: Vec<MulticamSource>,
+    /// Synthetic generation models for tests (#294): cleanup/dubbing entries
+    /// live in the server catalog, so the static catalog has none to test
+    /// against. Consulted by `resolve_generation_model` before the catalog.
+    #[cfg(test)]
+    test_extra_models: Vec<&'static model_catalog::ModelConfig>,
 }
 
 /// Read-only tools: successful execution does not bump the revision.
@@ -811,7 +816,14 @@ impl ToolExecutor {
             current_frame: 0,
             beat_cache: std::collections::HashMap::new(),
             multicam_groups: Vec::new(),
+            #[cfg(test)]
+            test_extra_models: Vec::new(),
         }
+    }
+
+    #[cfg(test)]
+    fn add_test_model(&mut self, m: &'static model_catalog::ModelConfig) {
+        self.test_extra_models.push(m);
     }
 
     /// Report the user's playhead position (get_timeline v2 `currentFrame`).
@@ -4893,6 +4905,14 @@ impl ToolExecutor {
             }
             model_catalog::ModelCaps::Audio(c) => {
                 obj.insert("category".into(), json!(c.category.as_str()));
+                obj.insert(
+                    "inputs".into(),
+                    json!(c
+                        .effective_inputs()
+                        .iter()
+                        .map(|i| i.as_str())
+                        .collect::<Vec<_>>()),
+                );
                 obj.insert("minPromptLength".into(), json!(c.min_prompt_length));
                 obj.insert("supportsLyrics".into(), json!(c.supports_lyrics));
                 obj.insert(
@@ -4913,6 +4933,21 @@ impl ToolExecutor {
                 }
                 if let Some(d) = &c.durations {
                     obj.insert("durations".into(), json!(d));
+                }
+                // #294: source-based models advertise their span bounds and
+                // (for dubbing) target languages.
+                if c.accepts_source_media() {
+                    obj.insert(
+                        "minSeconds".into(),
+                        json!(c.min_seconds.unwrap_or(1.0).round() as i64),
+                    );
+                    obj.insert(
+                        "maxSeconds".into(),
+                        json!(c.max_seconds.unwrap_or(600.0).round() as i64),
+                    );
+                }
+                if let Some(tl) = &c.target_languages {
+                    obj.insert("targetLanguages".into(), json!(tl));
                 }
             }
         }
@@ -4937,6 +4972,17 @@ impl ToolExecutor {
         kind: generation_core::ModelKind,
         requested: Option<&str>,
     ) -> Result<&'static model_catalog::ModelConfig, String> {
+        #[cfg(test)]
+        if let Some(id) = requested {
+            if let Some(m) = self
+                .test_extra_models
+                .iter()
+                .find(|m| m.id == id && m.kind() == kind)
+            {
+                self.gate_model(m)?;
+                return Ok(m);
+            }
+        }
         let model = match requested {
             Some(id) => {
                 let same_kind = || {
@@ -8492,12 +8538,14 @@ impl ToolExecutor {
         }))
     }
 
-    /// GENERATE_AUDIO v2 (absorbs generate_music): TTS, text-to-music, and
-    /// video-to-audio through one tool. The model resolves from the audio
-    /// catalog (music-category models included); generation itself still
+    /// GENERATE_AUDIO v2 (absorbs generate_music): TTS, text-to-music,
+    /// video-to-audio, and the #294 source transforms (Voice Cleanup,
+    /// Dubbing) through one tool. Gating mirrors Swift `generateAudio`
+    /// (source resolution, silent-video rejection, span + params validation,
+    /// duration-from-source for cleanup/dubbing); generation itself still
     /// needs the remote backend, reported honestly.
     fn cmd_generate_audio(&mut self, args: &Value) -> Result<Value, String> {
-        let prompt = args.get("prompt").and_then(|v| v.as_str());
+        use model_catalog::AudioInput;
         let model = match args.get("model").and_then(|v| v.as_str()) {
             Some(id) => {
                 self.resolve_generation_model(generation_core::ModelKind::Audio, Some(id))?
@@ -8511,74 +8559,162 @@ impl ToolExecutor {
                     .ok_or_else(|| model_catalog::no_available_model_message("audio"))?
             }
         };
-        let is_music = matches!(&model.caps, model_catalog::ModelCaps::Audio(c)
-            if c.category == model_catalog::AudioCategory::Music);
-        let has_video_source = args.get("videoSourceMediaRef").is_some()
-            || args.get("videoSourceStartFrame").is_some();
-        if prompt.is_none() && !has_video_source {
-            return Err(
-                "Missing prompt (required for TTS and text-to-music; optional only for video-to-audio models)."
-                    .to_string(),
-            );
-        }
-        let duration = args.get("duration").and_then(|v| v.as_f64());
-        // Upstream #288: validate the video-to-audio span against the model's
-        // caps BEFORE the backend gap — a too-long/short span must fail fast.
-        if has_video_source {
-            let span_seconds =
-                if let Some(mref) = args.get("videoSourceMediaRef").and_then(|v| v.as_str()) {
-                    let entry = self
-                        .media_manifest
-                        .entry_for(mref)
-                        .ok_or_else(|| format!("Media '{mref}' was not found in the library."))?;
-                    Some(entry.duration)
-                } else {
-                    let start = args.get("videoSourceStartFrame").and_then(|v| v.as_i64());
-                    let end = args.get("videoSourceEndFrame").and_then(|v| v.as_i64());
-                    match (start, end) {
-                        (Some(s0), Some(e0)) if e0 > s0 => {
-                            Some((e0 - s0) as f64 / self.timeline.fps.max(1) as f64)
-                        }
-                        (Some(_), Some(_)) => {
-                            return Err(
-                                "videoSourceEndFrame must be greater than videoSourceStartFrame."
-                                    .to_string(),
-                            )
-                        }
-                        _ => None,
-                    }
-                };
-            if let (Some(span), model_catalog::ModelCaps::Audio(c)) = (span_seconds, &model.caps) {
-                // #288 defaults when the catalog carries no per-model bounds.
-                let min = c.min_seconds.unwrap_or(1.0);
-                let max = c.max_seconds.unwrap_or(600.0);
-                if span < min {
-                    return Err(format!(
-                        "Video-to-audio span is {span:.1}s; {} needs at least {min:.0}s.",
-                        model.id
-                    ));
-                }
-                if span > max {
-                    return Err(format!(
-                        "Video-to-audio span is {span:.1}s; {} allows at most {max:.0}s.",
-                        model.id
-                    ));
-                }
-            }
-        }
-        let _ = (
-            args.get("voice").and_then(|v| v.as_str()),
-            args.get("lyrics").and_then(|v| v.as_str()),
-            args.get("instrumental").and_then(|v| v.as_bool()),
-            args.get("styleInstructions").and_then(|v| v.as_str()),
-        );
+        let model_catalog::ModelCaps::Audio(caps) = &model.caps else {
+            return Err(format!("Model '{}' is not an audio model.", model.id));
+        };
 
+        let prompt = args
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let accepts_video = caps.effective_inputs().contains(&AudioInput::Video);
+        let explicit_source_ref = args.get("sourceMediaRef").and_then(|v| v.as_str());
+        let source_media_ref =
+            explicit_source_ref.or(args.get("videoSourceMediaRef").and_then(|v| v.as_str()));
+        let frames = (
+            args.get("videoSourceStartFrame").and_then(|v| v.as_i64()),
+            args.get("videoSourceEndFrame").and_then(|v| v.as_i64()),
+        );
+        let mut span_seconds: Option<f64> = None;
+        let mut has_source_asset = false;
+        let mut has_frames_span = false;
+
+        if let Some(r) = source_media_ref {
+            let entry = self
+                .media_manifest
+                .entry_for(r)
+                .ok_or_else(|| format!("Source media not found: {r}"))?;
+            let (ty, duration, has_audio) = (entry.r#type, entry.duration, entry.has_audio);
+            if explicit_source_ref.is_none() && ty != ClipType::Video {
+                return Err(format!(
+                    "videoSourceMediaRef must be a video asset (got {}).",
+                    ty.name()
+                ));
+            }
+            if !caps.accepts_source(ty) {
+                return Err(format!(
+                    "Model '{}' does not accept {} source media.",
+                    model.id,
+                    ty.name()
+                ));
+            }
+            // Swift maps a nil manifest hasAudio to false; Rust stays lenient
+            // on None (matching Swift's video-import default of true) — the
+            // spec pins only the explicit-false rejection.
+            if caps.uses_source_url() && ty == ClipType::Video && has_audio == Some(false) {
+                return Err(format!(
+                    "{} requires source video with an audio track.",
+                    model.display_name
+                ));
+            }
+            if let Some(err) =
+                model_catalog::audio_validate_span_seconds(model.display_name, caps, duration)
+            {
+                return Err(err);
+            }
+            span_seconds = Some(duration);
+            has_source_asset = true;
+        } else if let (Some(start), Some(end)) = frames {
+            if !accepts_video {
+                return Err(format!(
+                    "Model '{}' does not accept a video input (see list_models 'inputs').",
+                    model.id
+                ));
+            }
+            if caps.uses_source_url() {
+                return Err(format!("Use sourceMediaRef for {}.", model.display_name));
+            }
+            if start < 0 || end <= start {
+                return Err(
+                    "videoSourceEndFrame must be greater than videoSourceStartFrame (>= 0)."
+                        .to_string(),
+                );
+            }
+            let span = (end - start) as f64 / self.timeline.fps.max(1) as f64;
+            if let Some(err) =
+                model_catalog::audio_validate_span_seconds(model.display_name, caps, span)
+            {
+                return Err(err);
+            }
+            span_seconds = Some(span);
+            // Swift renders + uploads the span here (videoURL); rendering is
+            // backend/host work, so only the presence flag carries forward.
+            has_frames_span = true;
+        }
+
+        if caps.accepts_source_media()
+            && !caps.effective_inputs().contains(&AudioInput::Text)
+            && !has_source_asset
+            && !has_frames_span
+        {
+            return Err(format!(
+                "Model '{}' needs source media. Provide sourceMediaRef.",
+                model.id
+            ));
+        }
+
+        // #294: cleanup/dubbing always preserve the source length; other
+        // models prefer the requested duration, falling back to the span.
+        let requested_duration = args.get("duration").and_then(|v| v.as_i64());
+        let source_duration = span_seconds.map(|s| (s.round() as i64).max(1));
+        let duration_seconds = if caps.uses_source_url() {
+            source_duration
+        } else {
+            requested_duration.or(source_duration)
+        };
+
+        let params = generation_core::generation_payload::AudioGenerationPayload {
+            prompt: prompt.to_string(),
+            voice: if caps.voices.is_some() {
+                args.get("voice")
+                    .and_then(|v| v.as_str())
+                    .or(caps.default_voice)
+                    .map(String::from)
+            } else {
+                None
+            },
+            lyrics: if caps.supports_lyrics {
+                args.get("lyrics").and_then(|v| v.as_str()).map(String::from)
+            } else {
+                None
+            },
+            style_instructions: if caps.supports_style_instructions {
+                args.get("styleInstructions")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            } else {
+                None
+            },
+            instrumental: caps.supports_instrumental
+                && args
+                    .get("instrumental")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            duration_seconds: duration_seconds.map(|d| d as f64),
+            video_url: None,
+            // Filled by the submission pipeline after uploading the source
+            // (Swift constructs with sourceURL: nil too).
+            source_url: None,
+            target_language: if caps.target_languages.is_some() {
+                args.get("targetLanguage")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            } else {
+                None
+            },
+        };
+        if let Some(err) = model_catalog::audio_validate_params(model.display_name, caps, &params) {
+            return Err(err);
+        }
+
+        let is_music = caps.category == model_catalog::AudioCategory::Music;
         Err(format!(
             "generate_audio is unavailable: the remote generation backend isn't connected (model: {}, {}{}).",
             model.id,
             if is_music { "music" } else { "speech/audio" },
-            duration
-                .map(|d| format!(", {d:.1}s"))
+            duration_seconds
+                .map(|d| format!(", {:.1}s", d as f64))
                 .unwrap_or_default(),
         ))
     }
@@ -9382,31 +9518,113 @@ mod tests {
         assert!(err.contains("entries"), "got: {err}");
     }
 
+    // ── generate_audio #294 helpers: synthetic source-based models ─────────
+    // (cleanup/dubbing/video-sfx entries live in the server catalog; the
+    // static catalog has none, so tests inject leaked configs via the
+    // executor's test seam.)
+
+    fn leak_model(m: model_catalog::ModelConfig) -> &'static model_catalog::ModelConfig {
+        Box::leak(Box::new(m))
+    }
+
+    fn dubbing_model() -> &'static model_catalog::ModelConfig {
+        use model_catalog::*;
+        leak_model(ModelConfig {
+            id: "elevenlabs-dubbing",
+            display_name: "ElevenLabs Dubbing",
+            paid_only: false,
+            caps: ModelCaps::Audio(AudioCaps {
+                category: AudioCategory::Dubbing,
+                inputs: Some(vec![AudioInput::Audio, AudioInput::Video]),
+                target_languages: Some(vec!["es", "fr", "de", "ja"]),
+                default_target_language: Some("es"),
+                ..Default::default()
+            }),
+        })
+    }
+
+    fn cleanup_model() -> &'static model_catalog::ModelConfig {
+        use model_catalog::*;
+        leak_model(ModelConfig {
+            id: "elevenlabs-voice-isolator",
+            display_name: "Voice Isolator",
+            paid_only: false,
+            caps: ModelCaps::Audio(AudioCaps {
+                category: AudioCategory::Cleanup,
+                inputs: Some(vec![AudioInput::Audio, AudioInput::Video]),
+                ..Default::default()
+            }),
+        })
+    }
+
+    fn video_sfx_model() -> &'static model_catalog::ModelConfig {
+        use model_catalog::*;
+        leak_model(ModelConfig {
+            id: "test-video-sfx",
+            display_name: "Test Video SFX",
+            paid_only: false,
+            caps: ModelCaps::Audio(AudioCaps {
+                category: AudioCategory::Sfx,
+                inputs: Some(vec![AudioInput::Text, AudioInput::Video]),
+                min_seconds: Some(5.0),
+                max_seconds: Some(30.0),
+                min_prompt_length: 0,
+                ..Default::default()
+            }),
+        })
+    }
+
+    fn source_media(id: &str, ty: ClipType, duration: f64, has_audio: Option<bool>) -> core_model::MediaManifestEntry {
+        let mut e = audio_media(id, duration);
+        e.r#type = ty;
+        e.has_audio = has_audio;
+        e
+    }
+
     #[test]
     fn generate_audio_validates_video_span_288() {
         // Upstream #288: span checks fire BEFORE the backend-gap error.
+        // Post-#294 the span check needs a model whose inputs include video
+        // (text-only models now reject a video source outright, below).
         let mut manifest = MediaManifest::default();
-        let mut long = audio_media("vid", 700.0);
-        long.r#type = ClipType::Video;
-        manifest.entries.push(long);
+        manifest
+            .entries
+            .push(source_media("vid", ClipType::Video, 700.0, Some(true)));
         let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.add_test_model(video_sfx_model());
 
-        // mediaRef branch: 700s > minimax-music-v2.6's max span.
+        // mediaRef branch: 700s > the model's 30s max span (Swift wording).
         let err = exec
             .execute(
                 "generate_audio",
-                &json!({"model": "minimax-music-v2.6", "videoSourceMediaRef": "vid"}),
+                &json!({"model": "test-video-sfx", "videoSourceMediaRef": "vid"}),
             )
             .unwrap_err();
-        assert!(err.contains("at most"), "long span rejected: {err}");
+        assert_eq!(
+            err,
+            "Test Video SFX accepts at most 30s of source media (selection is 700s)."
+        );
 
-        // frame-span branch at 30fps: 90 frames = 3s, within caps -> falls
-        // through to the honest backend gap (NOT a span error).
+        // frame-span branch at 30fps: 90 frames = 3s < 5s min.
         let err = exec
             .execute(
                 "generate_audio",
-                &json!({"model": "minimax-music-v2.6",
+                &json!({"model": "test-video-sfx",
                         "videoSourceStartFrame": 0, "videoSourceEndFrame": 90}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "Test Video SFX needs at least 5s of source media (selection is 3s)."
+        );
+
+        // 300 frames = 10s, within caps -> falls through to the honest
+        // backend gap (NOT a span error).
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "test-video-sfx",
+                        "videoSourceStartFrame": 0, "videoSourceEndFrame": 300}),
             )
             .unwrap_err();
         assert!(err.contains("backend"), "valid span reaches the gap: {err}");
@@ -9415,11 +9633,281 @@ mod tests {
         let err = exec
             .execute(
                 "generate_audio",
-                &json!({"model": "minimax-music-v2.6",
+                &json!({"model": "test-video-sfx",
                         "videoSourceStartFrame": 90, "videoSourceEndFrame": 90}),
             )
             .unwrap_err();
         assert!(err.contains("greater than"), "{err}");
+
+        // #294: a text-only model refuses video source media on both keys.
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "minimax-music-v2.6", "videoSourceMediaRef": "vid"}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "Model 'minimax-music-v2.6' does not accept video source media."
+        );
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "minimax-music-v2.6",
+                        "videoSourceStartFrame": 0, "videoSourceEndFrame": 90}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "Model 'minimax-music-v2.6' does not accept a video input (see list_models 'inputs')."
+        );
+    }
+
+    #[test]
+    fn generate_audio_dubbing_requires_source_294() {
+        // Spec scenario: dubbing without sourceMediaRef fails with the
+        // upstream source-required error.
+        let mut exec = make_executor();
+        exec.add_test_model(dubbing_model());
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-dubbing", "targetLanguage": "es"}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "Model 'elevenlabs-dubbing' needs source media. Provide sourceMediaRef."
+        );
+    }
+
+    #[test]
+    fn generate_audio_silent_video_source_rejected_294() {
+        // Spec scenario: a video source with has_audio == false fails with
+        // the upstream no-audio message BEFORE any backend interaction.
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(source_media("vid", ClipType::Video, 10.0, Some(false)));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.add_test_model(dubbing_model());
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-dubbing",
+                        "sourceMediaRef": "vid", "targetLanguage": "es"}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "ElevenLabs Dubbing requires source video with an audio track."
+        );
+        assert!(!err.contains("backend"), "rejected before the backend gap");
+    }
+
+    #[test]
+    fn generate_audio_dubbing_duration_from_source_294() {
+        // usesSourceURL categories always preserve the source length: a
+        // requested duration is ignored, the source duration reaches the
+        // (honest-error) report.
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(source_media("vid", ClipType::Video, 12.3, Some(true)));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.add_test_model(dubbing_model());
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-dubbing", "sourceMediaRef": "vid",
+                        "targetLanguage": "es", "duration": 99}),
+            )
+            .unwrap_err();
+        assert!(err.contains("backend"), "gating passed, honest gap: {err}");
+        assert!(err.contains("12.0s"), "duration = source length: {err}");
+        assert!(!err.contains("99"), "requested duration ignored: {err}");
+    }
+
+    #[test]
+    fn generate_audio_dubbing_target_language_gate_294() {
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(source_media("aud", ClipType::Audio, 8.0, Some(true)));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.add_test_model(dubbing_model());
+        // Missing (Swift executor applies no default; the picker default is UI-side).
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-dubbing", "sourceMediaRef": "aud"}),
+            )
+            .unwrap_err();
+        assert_eq!(err, "Choose a target language.");
+        // Outside the allowed list.
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-dubbing", "sourceMediaRef": "aud",
+                        "targetLanguage": "xx"}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "ElevenLabs Dubbing does not support target language 'xx'. Valid: es, fr, de, ja."
+        );
+    }
+
+    #[test]
+    fn generate_audio_cleanup_paths_294() {
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(source_media("aud", ClipType::Audio, 10.0, Some(true)));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.add_test_model(cleanup_model());
+        // No source → upstream source-required error (cleanup too).
+        let err = exec
+            .execute("generate_audio", &json!({"model": "elevenlabs-voice-isolator"}))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "Model 'elevenlabs-voice-isolator' needs source media. Provide sourceMediaRef."
+        );
+        // Audio source accepted, no prompt needed; duration = source length.
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-voice-isolator", "sourceMediaRef": "aud"}),
+            )
+            .unwrap_err();
+        assert!(err.contains("backend"), "gating passed: {err}");
+        assert!(err.contains("10.0s"), "duration = source length: {err}");
+        // Frame spans are the scoring path, not the transform path.
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-voice-isolator",
+                        "videoSourceStartFrame": 0, "videoSourceEndFrame": 300}),
+            )
+            .unwrap_err();
+        assert_eq!(err, "Use sourceMediaRef for Voice Isolator.");
+    }
+
+    #[test]
+    fn generate_audio_source_type_gates_294() {
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(source_media("aud", ClipType::Audio, 8.0, Some(true)));
+        manifest
+            .entries
+            .push(source_media("img", ClipType::Image, 5.0, None));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.add_test_model(dubbing_model());
+
+        // A text-only model refuses audio source media.
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-tts-v3", "sourceMediaRef": "aud",
+                        "prompt": "hello"}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "Model 'elevenlabs-tts-v3' does not accept audio source media."
+        );
+
+        // The legacy key keeps its video-only contract.
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "minimax-music-v2.6", "videoSourceMediaRef": "img",
+                        "prompt": "score this please"}),
+            )
+            .unwrap_err();
+        assert_eq!(err, "videoSourceMediaRef must be a video asset (got image).");
+
+        // sourceMediaRef on a non-A/V asset → accepts-source refusal.
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-dubbing", "sourceMediaRef": "img",
+                        "targetLanguage": "es"}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "Model 'elevenlabs-dubbing' does not accept image source media."
+        );
+
+        // Unknown ref → Swift asset-lookup wording ("Source media" label).
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-dubbing", "sourceMediaRef": "nope",
+                        "targetLanguage": "es"}),
+            )
+            .unwrap_err();
+        assert_eq!(err, "Source media not found: nope");
+    }
+
+    #[test]
+    fn generate_audio_source_ref_short_id_expansion_294() {
+        // sourceMediaRef is a SCALAR_ID_KEY: a >= 8-char unique prefix
+        // expands before the tool runs (proven by the silent-video error,
+        // which requires resolving the entry).
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(source_media(
+            "dubbing-source-video-0001",
+            ClipType::Video,
+            10.0,
+            Some(false),
+        ));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.add_test_model(dubbing_model());
+        let err = exec
+            .execute(
+                "generate_audio",
+                &json!({"model": "elevenlabs-dubbing",
+                        "sourceMediaRef": "dubbing-", "targetLanguage": "es"}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "ElevenLabs Dubbing requires source video with an audio track."
+        );
+    }
+
+    #[test]
+    fn list_models_audio_entries_carry_source_fields_294() {
+        // Unit-level: a source-based (synthetic) config emits inputs +
+        // minSeconds/maxSeconds + targetLanguages, mirroring Swift's
+        // audioModelInfo emission.
+        let entry = ToolExecutor::model_entry_json(dubbing_model(), true);
+        assert_eq!(entry["category"], "dubbing");
+        assert_eq!(entry["inputs"], json!(["audio", "video"]));
+        assert_eq!(entry["minSeconds"], 1);
+        assert_eq!(entry["maxSeconds"], 600);
+        assert_eq!(entry["targetLanguages"], json!(["es", "fr", "de", "ja"]));
+
+        // e2e: catalog text models emit inputs=["text"] and omit the
+        // source-only keys.
+        let mut exec = make_executor();
+        let res = exec
+            .execute("list_models", &json!({"type": "audio"}))
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        let body: Value = serde_json::from_str(text).unwrap();
+        let models = body["models"].as_array().unwrap();
+        assert!(!models.is_empty());
+        for m in models {
+            assert_eq!(m["inputs"], json!(["text"]), "catalog audio is text-only");
+            assert!(m.get("minSeconds").is_none(), "no source caps on text models");
+            assert!(m.get("maxSeconds").is_none());
+            assert!(m.get("targetLanguages").is_none());
+        }
     }
 
     #[test]
@@ -12527,9 +13015,14 @@ mod tests {
 
     #[test]
     fn exec_052_generate_audio_requires_prompt_without_video_source() {
+        // #294: the prompt gate is Swift's validate(params:) text-input
+        // minimum-length check (default model = ElevenLabs v3 TTS).
         let mut exec = make_executor();
         let err = exec.execute("generate_audio", &json!({})).unwrap_err();
-        assert!(err.contains("prompt"), "got: {err}");
+        assert_eq!(
+            err,
+            "ElevenLabs v3 TTS requires prompt ≥ 1 characters (got 0)."
+        );
     }
 
     #[test]

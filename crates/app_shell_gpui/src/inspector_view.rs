@@ -14,11 +14,17 @@ use crate::ai_edit_tab_view::AiEditTabView;
 use crate::field_components::{
     color_to_hex, ColorField, ColorFieldEvent, FontPickerEvent, FontPickerField,
 };
-use crate::inspector_model::{InspectorState, InspectorTab};
+use crate::inspector_model::InspectorState;
 use crate::keyframes_view::KeyframesView;
+use crate::panel_components::{
+    available_tabs, editor_reset_button, editor_value_field, panel_row, resolve_active_tab,
+    resolve_preferred_tab, title_tab, title_tab_bar, ClipTab, EditorPanelGroup, GroupStates,
+    TabSelection, ADJUST_CHROMA_SUBGROUP, ADJUST_TAB_GROUPS,
+};
 use crate::text_area::{TextArea, TextAreaEvent};
 use crate::theme::{
-    Accent, Background, BorderColors, FontSize, Layout, Opacity, Radius, Spacing, Text,
+    Accent, Background, BorderColors, EditorPanel, FontSize, IconSize, Layout, Opacity, Radius,
+    Spacing, Text, TrackColor,
 };
 use core_model::{Clip, ClipType, MediaManifestEntry, TextAlignment, TextFill, TextStyle};
 use gpui::{
@@ -200,7 +206,10 @@ fn scrub_commit_args(
             }
             Some((
                 "update_text",
-                serde_json::json!({ "clipIds": [clip.id], "fontSize": value.clamp(12.0, 300.0) }),
+                update_text_style_args(
+                    &clip.id,
+                    serde_json::json!({ "fontSize": value.clamp(12.0, 300.0) }),
+                ),
             ))
         }
         "chroma_tolerance" | "chroma_softness" | "chroma_spill" => {
@@ -241,6 +250,13 @@ fn fmt_scrub(field: &'static str, v: f32) -> String {
         "chroma_tolerance" | "chroma_softness" | "chroma_spill" => format!("{:.0}%", v * 100.0),
         _ => format!("{:.0}%", v), // scale, opacity
     }
+}
+
+/// update_text payload with the #330 nested `style` patch — the inspector no
+/// longer sends the deprecated flat `fontName`/`fontSize`/`color`/`alignment`
+/// compat keys.
+fn update_text_style_args(clip_id: &str, style: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "clipIds": [clip_id], "style": style })
 }
 
 /// Crop aspect presets — mirrors Swift `CropAspectLock`.
@@ -337,6 +353,36 @@ struct SelectionSnapshot {
     fps: i64,
     canvas_w: i64,
     canvas_h: i64,
+    /// Group of the first stamped clip in the selection, if it still resolves
+    /// (Swift `selectedMulticamGroupId`).
+    multicam_group: Option<core_model::MulticamSource>,
+}
+
+impl SelectionSnapshot {
+    /// Selection shape for the tab-availability logic (Swift availableTabs).
+    fn tab_selection(&self) -> TabSelection {
+        let text = self
+            .clips
+            .iter()
+            .filter(|c| c.media_type == ClipType::Text)
+            .count();
+        let audio = self
+            .clips
+            .iter()
+            .filter(|c| c.media_type == ClipType::Audio)
+            .count();
+        TabSelection {
+            text_clips: text,
+            non_text_visual_clips: self.clips.len() - text - audio,
+            audio_clips: audio,
+            has_multicam_group: self.multicam_group.is_some(),
+            // Swift gates on a resolvable asset + account state; the Rust AI
+            // Edit tab binds per-selection itself, so any selection is eligible
+            // (preserves the pre-#327 always-visible behavior).
+            ai_eligible: !self.clips.is_empty(),
+        }
+    }
+
 }
 
 fn snapshot_selected_clips(selected_ids: &[String]) -> SelectionSnapshot {
@@ -345,18 +391,24 @@ fn snapshot_selected_clips(selected_ids: &[String]) -> SelectionSnapshot {
     let guard = exec.lock().unwrap();
     let t = guard.timeline();
     // Timeline order (Swift iterates tracks), not click order.
-    let clips = t
+    let clips: Vec<Clip> = t
         .tracks
         .iter()
         .flat_map(|track| track.clips.iter())
         .filter(|c| selected_ids.iter().any(|id| id == &c.id))
         .cloned()
         .collect();
+    let multicam_group = clips
+        .iter()
+        .filter_map(|c| c.multicam_group_id.as_deref())
+        .find_map(|gid| guard.multicam_groups().iter().find(|g| g.id == gid))
+        .cloned();
     SelectionSnapshot {
         clips,
         fps: t.fps,
         canvas_w: t.width,
         canvas_h: t.height,
+        multicam_group,
     }
 }
 
@@ -378,6 +430,13 @@ fn snapshot_selected_asset(asset_id: &str) -> Option<(MediaManifestEntry, Option
 
 pub struct InspectorView {
     pub state: InspectorState,
+    /// Preferred clip tab (Swift `preferredTab`); the rendered tab falls back
+    /// to the first available one.
+    preferred_tab: ClipTab,
+    /// Selection the preferred tab was last resolved for (Swift onChange).
+    tab_resolved_for: Option<Vec<String>>,
+    /// Session-scoped collapse state for panel groups (#327).
+    groups: GroupStates,
     pub has_clip_selected: bool,
     /// True when a media asset in the library panel is selected (Swift: Source mode).
     pub has_media_asset_selected: bool,
@@ -440,7 +499,7 @@ impl InspectorView {
             if let Some(id) = this.text_synced_clip.clone() {
                 Self::run_tool(
                     "update_text",
-                    serde_json::json!({ "clipIds": [id], "fontName": name }),
+                    update_text_style_args(&id, serde_json::json!({ "fontName": name })),
                 );
                 cx.notify();
             }
@@ -453,7 +512,7 @@ impl InspectorView {
             if let Some(id) = this.text_synced_clip.clone() {
                 Self::run_tool(
                     "update_text",
-                    serde_json::json!({ "clipIds": [id], "color": color_to_hex(rgba) }),
+                    update_text_style_args(&id, serde_json::json!({ "color": color_to_hex(rgba) })),
                 );
                 cx.notify();
             }
@@ -480,6 +539,9 @@ impl InspectorView {
 
         Self {
             state: InspectorState::new(),
+            preferred_tab: ClipTab::Video,
+            tab_resolved_for: None,
+            groups: GroupStates::default(),
             has_clip_selected: false,
             has_media_asset_selected: false,
             selected_clip_ids: Vec::new(),
@@ -515,8 +577,13 @@ impl InspectorView {
         }
     }
 
-    pub fn select_tab(&mut self, tab: InspectorTab, cx: &mut Context<Self>) {
-        self.state.select_tab(tab);
+    fn select_clip_tab(&mut self, tab: ClipTab, cx: &mut Context<Self>) {
+        self.preferred_tab = tab;
+        cx.notify();
+    }
+
+    fn toggle_group(&mut self, key: &'static str, default_expanded: bool, cx: &mut Context<Self>) {
+        self.groups.toggle(key, default_expanded);
         cx.notify();
     }
 
@@ -773,21 +840,29 @@ impl InspectorView {
     ) -> impl IntoElement {
         let value = self.scrub_value(field);
         let display = fmt_scrub(field, value);
+        // #327 InspectorRow layout: right-aligned label in the fixed column,
+        // value right-aligned in the trailing area.
         div()
             .id(SharedString::from(format!("scrub-{field}")))
             .flex()
             .flex_row()
             .items_center()
             .w_full()
-            .px(px(Spacing::LG))
-            .h(px(22.0))
+            .gap(px(Spacing::SM))
+            .min_h(px(EditorPanel::ROW_MIN_HEIGHT))
             .child(
                 div()
-                    .flex_1()
-                    .text_color(Text::TERTIARY)
-                    .text_size(px(FontSize::XS))
+                    .w(px(EditorPanel::LABEL_COLUMN_WIDTH))
+                    .flex_none()
+                    .flex()
+                    .justify_end()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_color(Text::SECONDARY)
+                    .text_size(px(FontSize::SM))
                     .child(label.to_string()),
             )
+            .child(div().flex_1())
             .child(
                 div()
                     .text_color(if enabled {
@@ -884,14 +959,14 @@ impl Focusable for InspectorView {
 
 // ── Static row helpers ────────────────────────────────────────────────────────
 
+/// Plain metadata row (Swift plainMetadataRow): label left, value right.
 fn prop_row(label: &str, value: &str) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
         .items_center()
         .w_full()
-        .px(px(Spacing::LG))
-        .h(px(22.0))
+        .h(px(EditorPanel::ROW_MIN_HEIGHT))
         .child(
             div()
                 .flex_1()
@@ -904,119 +979,6 @@ fn prop_row(label: &str, value: &str) -> impl IntoElement {
                 .text_color(Text::SECONDARY)
                 .text_size(px(FontSize::XS))
                 .child(value.to_string()),
-        )
-}
-
-fn section_header(id: &str, label: &str, expanded: bool) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id.to_string())
-        .flex()
-        .flex_row()
-        .items_center()
-        .w_full()
-        .px(px(Spacing::LG))
-        .h(px(28.0))
-        .cursor_pointer()
-        .child(
-            div()
-                .flex_1()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::XXS))
-                .child(label.to_uppercase()),
-        )
-        .child(
-            div()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::XS))
-                .child(if expanded { "v" } else { ">" }),
-        )
-}
-
-/// Section title without toggle behavior (Swift sectionTitleLabel).
-fn section_title(label: &str) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .w_full()
-        .px(px(Spacing::LG))
-        .h(px(28.0))
-        .child(
-            div()
-                .flex_1()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::XXS))
-                .child(label.to_uppercase()),
-        )
-}
-
-/// Reset button (Swift: arrow.counterclockwise resetButton).
-fn reset_button(id: &str) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id.to_string())
-        .w(px(18.0))
-        .h(px(18.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .rounded(px(Radius::XS))
-        .text_color(Text::TERTIARY)
-        .text_size(px(FontSize::XS))
-        .child("↺")
-}
-
-fn project_metadata_content() -> impl IntoElement {
-    use timeline_core::TimelineMathExt;
-
-    let hub = crate::editor_state_hub::EditorStateHub::global();
-    let (width, height, fps, total_frames) = {
-        let exec = hub.executor();
-        let guard = exec.lock().unwrap();
-        let t = guard.timeline();
-        (t.width, t.height, t.fps, t.total_frames())
-    };
-    let (name, path) = match hub.project_root() {
-        Some(p) => (
-            p.file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Untitled".into()),
-            p.display().to_string(),
-        ),
-        None => ("Untitled".into(), "~/Movies/Untitled.palmier".into()),
-    };
-    let resolution = format!("{width} x {height}");
-    let frame_rate = format!("{fps} fps");
-    let aspect = timeline_core::format_aspect_ratio(width, height);
-    let duration = timeline_core::format_duration(total_frames as f64 / fps.max(1) as f64);
-
-    div()
-        .flex()
-        .flex_col()
-        .w_full()
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .w_full()
-                .pt(px(Spacing::MD))
-                .gap(px(Spacing::XXS))
-                .child(section_header("section-project", "Project", true))
-                .child(prop_row("Name", &name))
-                .child(prop_row("Path", &path)),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .w_full()
-                .pt(px(Spacing::SM))
-                .gap(px(Spacing::XXS))
-                .child(section_header("section-format", "Format", true))
-                .child(prop_row("Resolution", &resolution))
-                .child(prop_row("Frame Rate", &frame_rate))
-                .child(prop_row("Aspect Ratio", &aspect))
-                .child(prop_row("Duration", &duration)),
         )
 }
 
@@ -1067,6 +1029,63 @@ fn icon_toggle(id: String, glyph: &'static str, is_on: bool) -> gpui::Stateful<g
 // ── Source mode (media asset metadata) ────────────────────────────────────────
 
 impl InspectorView {
+    /// No-selection mode (Swift projectMetadataContent, #327): Project and
+    /// Settings panel groups. Settings rows stay read-only — the Swift preset
+    /// menus write timeline settings, a binding the Rust inspector doesn't
+    /// have yet.
+    fn project_metadata_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        use timeline_core::TimelineMathExt;
+
+        let hub = crate::editor_state_hub::EditorStateHub::global();
+        let (width, height, fps, total_frames) = {
+            let exec = hub.executor();
+            let guard = exec.lock().unwrap();
+            let t = guard.timeline();
+            (t.width, t.height, t.fps, t.total_frames())
+        };
+        let (name, path) = match hub.project_root() {
+            Some(p) => (
+                p.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Untitled".into()),
+                p.display().to_string(),
+            ),
+            None => ("Untitled".into(), "~/Movies/Untitled.palmier".into()),
+        };
+        let resolution = format!("{width} × {height}");
+        let frame_rate = format!("{fps} fps");
+        let aspect = timeline_core::format_aspect_ratio(width, height);
+        let duration = timeline_core::format_duration(total_frames as f64 / fps.max(1) as f64);
+
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .child(
+                EditorPanelGroup::new("group-meta-project", "Project")
+                    .expanded(self.groups.expanded("meta-project", true))
+                    .content_spacing(Spacing::SM)
+                    .on_toggle(cx.listener(|this, _, _, cx| {
+                        this.toggle_group("meta-project", true, cx)
+                    }))
+                    .child(prop_row("Name", &name))
+                    .child(prop_row("Path", &path))
+                    .child(prop_row("Duration", &duration)),
+            )
+            .child(
+                EditorPanelGroup::new("group-meta-settings", "Settings")
+                    .expanded(self.groups.expanded("meta-settings", true))
+                    .content_spacing(Spacing::SM)
+                    .on_toggle(cx.listener(|this, _, _, cx| {
+                        this.toggle_group("meta-settings", true, cx)
+                    }))
+                    .child(prop_row("Resolution", &resolution))
+                    .child(prop_row("Frame Rate", &frame_rate))
+                    .child(prop_row("Aspect Ratio", &aspect)),
+            )
+            .into_any_element()
+    }
+
     /// Source mode — displayed when a media asset (not a timeline clip) is
     /// selected. Matches Swift InspectorView.assetDetailsContent.
     fn source_asset_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1137,18 +1156,11 @@ impl InspectorView {
             );
         }
 
-        // FILE section
-        let mut file_section = div()
-            .flex()
-            .flex_col()
-            .gap(px(Spacing::XXS))
-            .child(
-                div()
-                    .px(px(Spacing::LG))
-                    .text_color(Text::MUTED)
-                    .text_size(px(FontSize::XXS))
-                    .child("FILE"),
-            )
+        // File group (Swift fileSection → metadataSection "File").
+        let mut file_section = EditorPanelGroup::new("group-asset-file", "File")
+            .expanded(self.groups.expanded("asset-file", true))
+            .content_spacing(Spacing::SM)
+            .on_toggle(cx.listener(|this, _, _, cx| this.toggle_group("asset-file", true, cx)))
             .child(prop_row("Type", clip_type_label(entry.r#type)));
         if entry.r#type != ClipType::Audio {
             if let (Some(w), Some(h)) = (entry.source_width, entry.source_height) {
@@ -1171,23 +1183,18 @@ impl InspectorView {
             .flex_col()
             .w_full()
             .pt(px(Spacing::MD))
-            .gap(px(Spacing::XL))
-            .child(header.px(px(Spacing::LG)))
+            .gap(px(Spacing::SM))
+            .child(header.px(px(Spacing::SM_MD)))
             .child(file_section);
 
-        // GENERATED + PROMPT sections
+        // Generated + prompt sections (Swift metadataSection "Generated").
         if let Some(gen) = &entry.generation_input {
-            let mut gen_section = div()
-                .flex()
-                .flex_col()
-                .gap(px(Spacing::XXS))
-                .child(
-                    div()
-                        .px(px(Spacing::LG))
-                        .text_color(Text::MUTED)
-                        .text_size(px(FontSize::XXS))
-                        .child("GENERATED"),
-                )
+            let mut gen_section = EditorPanelGroup::new("group-asset-generated", "Generated")
+                .expanded(self.groups.expanded("asset-generated", true))
+                .content_spacing(Spacing::SM)
+                .on_toggle(cx.listener(|this, _, _, cx| {
+                    this.toggle_group("asset-generated", true, cx)
+                }))
                 .child(prop_row("Model", &model_display_name(&gen.model)));
             if !gen.aspect_ratio.is_empty() {
                 gen_section = gen_section.child(prop_row("Aspect Ratio", &gen.aspect_ratio));
@@ -1204,12 +1211,13 @@ impl InspectorView {
             if !gen.prompt.is_empty() {
                 let prompt = gen.prompt.clone();
                 let copied = self.prompt_copied;
+                // Swift promptSection: title + copy button, then the text.
                 body = body.child(
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(Spacing::SM_MD))
-                        .px(px(Spacing::LG))
+                        .px(px(Spacing::SM_MD))
                         .child(
                             div()
                                 .flex()
@@ -1218,9 +1226,10 @@ impl InspectorView {
                                 .child(
                                     div()
                                         .flex_1()
-                                        .text_color(Text::MUTED)
-                                        .text_size(px(FontSize::XXS))
-                                        .child("PROMPT"),
+                                        .text_color(Text::PRIMARY)
+                                        .text_size(px(FontSize::SM_MD))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .child("Prompt"),
                                 )
                                 .child(
                                     div()
@@ -1319,8 +1328,8 @@ impl InspectorView {
             .flex_row()
             .items_center()
             .w_full()
-            .px(px(Spacing::LG))
-            .h(px(22.0))
+            .gap(px(Spacing::SM))
+            .min_h(px(EditorPanel::ROW_MIN_HEIGHT))
             .opacity(if enabled {
                 Opacity::OPAQUE
             } else {
@@ -1328,11 +1337,15 @@ impl InspectorView {
             })
             .child(
                 div()
-                    .flex_1()
-                    .text_color(Text::TERTIARY)
-                    .text_size(px(FontSize::XS))
+                    .w(px(EditorPanel::LABEL_COLUMN_WIDTH))
+                    .flex_none()
+                    .flex()
+                    .justify_end()
+                    .text_color(Text::SECONDARY)
+                    .text_size(px(FontSize::SM))
                     .child("Crop"),
             )
+            .child(div().flex_1())
             .child(
                 div()
                     .flex()
@@ -1394,8 +1407,8 @@ impl InspectorView {
             .flex_row()
             .items_center()
             .w_full()
-            .px(px(Spacing::LG))
-            .h(px(22.0))
+            .gap(px(Spacing::SM))
+            .min_h(px(EditorPanel::ROW_MIN_HEIGHT))
             .opacity(if enabled {
                 Opacity::OPAQUE
             } else {
@@ -1403,11 +1416,15 @@ impl InspectorView {
             })
             .child(
                 div()
-                    .flex_1()
-                    .text_color(Text::TERTIARY)
-                    .text_size(px(FontSize::XS))
+                    .w(px(EditorPanel::LABEL_COLUMN_WIDTH))
+                    .flex_none()
+                    .flex()
+                    .justify_end()
+                    .text_color(Text::SECONDARY)
+                    .text_size(px(FontSize::SM))
                     .child("Flip"),
             )
+            .child(div().flex_1())
             .child(
                 div()
                     .flex()
@@ -1474,24 +1491,6 @@ impl InspectorView {
         self.shadow_color_field
             .update(cx, |f, cx| f.set_color(style.shadow.color, cx));
 
-        let label_row = |label: &str, trailing: AnyElement| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .w_full()
-                .px(px(Spacing::LG))
-                .h(px(26.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_color(Text::TERTIARY)
-                        .text_size(px(FontSize::XS))
-                        .child(label.to_string()),
-                )
-                .child(trailing)
-        };
-
         // Alignment segmented control (Swift: 3-way L/C/R picker)
         let alignments = [
             (TextAlignment::Left, "◀▌"),
@@ -1531,7 +1530,7 @@ impl InspectorView {
                     .on_click(cx.listener(move |_, _, _, cx| {
                         Self::run_tool(
                             "update_text",
-                            serde_json::json!({ "clipIds": [clip_id], "alignment": name }),
+                            update_text_style_args(&clip_id, serde_json::json!({ "alignment": name })),
                         );
                         cx.notify();
                     }))
@@ -1539,52 +1538,27 @@ impl InspectorView {
             );
         }
 
-        // Toggle+color rows (Background / Border / Shadow)
-        let fill_row = |label: &'static str,
-                        which: Option<&'static str>,
-                        enabled: bool,
-                        color_field: Entity<ColorField>,
-                        cx: &mut Context<Self>| {
+        // Decoration-group enable toggle (Swift decorationGroup headerAccessory).
+        // `which == None` renders a display-only toggle (no write path yet).
+        let fill_toggle = |label: &'static str,
+                           which: Option<&'static str>,
+                           enabled: bool,
+                           cx: &mut Context<Self>| {
             let toggle = icon_toggle(
                 format!("fill-toggle-{}", label.to_lowercase()),
                 if enabled { "◉" } else { "○" },
                 enabled,
             );
-            let toggle = if let Some(which) = which {
-                toggle.on_click(cx.listener(move |this, _, _, cx| {
-                    this.commit_text_fill(which, None, Some(!enabled), cx);
-                }))
-            } else {
+            if let Some(which) = which {
                 toggle
-            };
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .w_full()
-                .px(px(Spacing::LG))
-                .h(px(26.0))
-                .opacity(if which.is_some() {
-                    Opacity::OPAQUE
-                } else {
-                    Opacity::MEDIUM
-                })
-                .child(
-                    div()
-                        .flex_1()
-                        .text_color(Text::TERTIARY)
-                        .text_size(px(FontSize::XS))
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(Spacing::SM))
-                        .child(color_field)
-                        .child(toggle),
-                )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.commit_text_fill(which, None, Some(!enabled), cx);
+                    }))
+                    .into_any_element()
+            } else {
+                toggle.opacity(Opacity::MEDIUM).into_any_element()
+            }
         };
 
         let size_row = self.scrub_row("text_size", "Size", 12.0, 300.0, 0.5, false, true, cx);
@@ -1610,167 +1584,136 @@ impl InspectorView {
             cx,
         );
 
+        // "Text" group: content editor in value-field chrome.
+        let text_group = EditorPanelGroup::new("group-text-content", "Text")
+            .expanded(self.groups.expanded("text-text", true))
+            .on_toggle(cx.listener(|this, _, _, cx| this.toggle_group("text-text", true, cx)))
+            .child(
+                editor_value_field()
+                    .w_full()
+                    .min_h(px(EditorPanel::TEXT_EDITOR_MIN_HEIGHT))
+                    .p(px(Spacing::SM_MD))
+                    .child(self.content_area.clone()),
+            );
+
+        // "Style" group: Font / Size / Alignment / Position / Color / Opacity.
+        let style_group = EditorPanelGroup::new("group-text-style", "Style")
+            .expanded(self.groups.expanded("text-style", true))
+            .on_toggle(cx.listener(|this, _, _, cx| this.toggle_group("text-style", true, cx)))
+            .child(panel_row("Font", self.font_picker.clone().into_any_element()))
+            .child(size_row)
+            .child(panel_row("Alignment", align_buttons.into_any_element()))
+            .child(pos_x_row)
+            .child(pos_y_row)
+            .child(panel_row(
+                "Color",
+                self.text_color_field.clone().into_any_element(),
+            ))
+            .child(opacity_row);
+
+        // Decoration groups (Swift Outline / Shadow / Background).
+        let outline_group = EditorPanelGroup::new("group-text-outline", "Outline")
+            .expanded(self.groups.expanded("text-outline", true))
+            .on_toggle(cx.listener(|this, _, _, cx| this.toggle_group("text-outline", true, cx)))
+            .header_accessory(fill_toggle("Outline", Some("border"), style.border.enabled, cx))
+            .child(
+                div()
+                    .w_full()
+                    .opacity(if style.border.enabled {
+                        Opacity::OPAQUE
+                    } else {
+                        Opacity::MEDIUM
+                    })
+                    .child(panel_row(
+                        "Color",
+                        self.border_color_field.clone().into_any_element(),
+                    )),
+            );
+        // Shadow: bound display; editing needs a tool-surface extension.
+        let shadow_group = EditorPanelGroup::new("group-text-shadow", "Shadow")
+            .expanded(self.groups.expanded("text-shadow", true))
+            .on_toggle(cx.listener(|this, _, _, cx| this.toggle_group("text-shadow", true, cx)))
+            .header_accessory(fill_toggle("Shadow", None, style.shadow.enabled, cx))
+            .child(div().w_full().opacity(Opacity::MEDIUM).child(panel_row(
+                "Color",
+                self.shadow_color_field.clone().into_any_element(),
+            )));
+        let background_group = EditorPanelGroup::new("group-text-background", "Background")
+            .expanded(self.groups.expanded("text-background", true))
+            .on_toggle(cx.listener(|this, _, _, cx| {
+                this.toggle_group("text-background", true, cx)
+            }))
+            .header_accessory(fill_toggle(
+                "Background",
+                Some("background"),
+                style.background.enabled,
+                cx,
+            ))
+            .child(
+                div()
+                    .w_full()
+                    .opacity(if style.background.enabled {
+                        Opacity::OPAQUE
+                    } else {
+                        Opacity::MEDIUM
+                    })
+                    .child(panel_row(
+                        "Color",
+                        self.bg_color_field.clone().into_any_element(),
+                    )),
+            );
+
         div()
             .flex()
             .flex_col()
             .w_full()
-            .pt(px(Spacing::MD))
-            // Content
-            .child(section_title("Content"))
-            .child(
-                div().w_full().px(px(Spacing::LG)).child(
-                    div()
-                        .w_full()
-                        .p(px(Spacing::XS))
-                        .rounded(px(Radius::SM))
-                        .bg(Hsla {
-                            h: 0.0,
-                            s: 0.0,
-                            l: 1.0,
-                            a: Opacity::HINT,
-                        })
-                        .child(self.content_area.clone()),
-                ),
-            )
-            // Typography
-            .child(section_title("Typography"))
-            .child(label_row(
-                "Font",
-                self.font_picker.clone().into_any_element(),
-            ))
-            .child(size_row)
-            // Appearance
-            .child(section_title("Appearance"))
-            .child(label_row(
-                "Color",
-                self.text_color_field.clone().into_any_element(),
-            ))
-            .child(opacity_row)
-            .child(fill_row(
-                "Background",
-                Some("background"),
-                style.background.enabled,
-                self.bg_color_field.clone(),
-                cx,
-            ))
-            .child(fill_row(
-                "Border",
-                Some("border"),
-                style.border.enabled,
-                self.border_color_field.clone(),
-                cx,
-            ))
-            // Shadow: bound display; editing needs a tool-surface extension.
-            .child(fill_row(
-                "Shadow",
-                None,
-                style.shadow.enabled,
-                self.shadow_color_field.clone(),
-                cx,
-            ))
-            // Layout
-            .child(section_title("Layout"))
-            .child(label_row("Alignment", align_buttons.into_any_element()))
-            .child(pos_x_row)
-            .child(pos_y_row)
+            .child(text_group)
+            .child(style_group)
+            .child(outline_group)
+            .child(shadow_group)
+            .child(background_group)
             .into_any_element()
     }
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
+// ── Clip tab content (#327 panel groups) ─────────────────────────────────────
 
-impl Render for InspectorView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_tab = self.state.active_tab.clone();
+impl InspectorView {
+    /// Keyframes toggle header accessory (Swift keyframesToggleButton).
+    fn keyframes_accessory(&self, id: &str, cx: &mut Context<Self>) -> AnyElement {
+        keyframes_btn(id, self.state.keyframes_visible)
+            .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle_keyframes(cx);
+            }))
+            .into_any_element()
+    }
+
+    /// Keyframe panel strip below the groups (Rust layout; Swift splits the
+    /// group content instead — a follow-up).
+    fn keyframes_strip(&self, kf_entity: &Entity<KeyframesView>) -> Option<AnyElement> {
+        if !self.state.keyframes_visible {
+            return None;
+        }
+        Some(
+            div()
+                .w_full()
+                .border_t_1()
+                .border_color(BorderColors::SUBTLE)
+                .child(kf_entity.clone())
+                .into_any_element(),
+        )
+    }
+
+    /// Video tab (Swift videoTabContent): Transform + Playback groups.
+    fn video_tab(
+        &mut self,
+        snap: &SelectionSnapshot,
+        rows_enabled: bool,
+        kf_entity: &Entity<KeyframesView>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let transform_expanded = self.state.transform_expanded;
-        let volume_expanded = self.state.volume_expanded;
-        let kf_visible = self.state.keyframes_visible;
-        let has_clip = self.has_clip_selected || !self.selected_clip_ids.is_empty();
-        let has_asset =
-            !has_clip && (self.has_media_asset_selected || self.selected_media_asset_id.is_some());
-        let title = if has_asset {
-            "Source"
-        } else if has_clip {
-            "Inspector"
-        } else {
-            "Timeline"
-        };
-        let icon = if has_asset {
-            "◈"
-        } else if has_clip {
-            "⊙"
-        } else {
-            "i"
-        };
-
-        // Selection snapshot: derive row values from the selected clip unless a
-        // scrub drag is live (the drag owns the value until commit).
-        let snap = if has_clip {
-            self.selection()
-        } else {
-            SelectionSnapshot {
-                clips: Vec::new(),
-                fps: 30,
-                canvas_w: 1920,
-                canvas_h: 1080,
-            }
-        };
-        let first_clip = snap.clips.first().cloned();
-        let scrub_live = self
-            .active_scrub
-            .as_ref()
-            .map(|s| s.dragged)
-            .unwrap_or(false);
-        if !scrub_live {
-            self.scrub_values = match &first_clip {
-                Some(clip) => derive_scrub_values(
-                    clip,
-                    self.playhead_frame,
-                    snap.fps,
-                    snap.canvas_w,
-                    snap.canvas_h,
-                ),
-                None => default_scrub_values(),
-            };
-        }
-        if first_clip.is_none() {
-            self.text_synced_clip = None;
-        }
-        let rows_enabled = first_clip.is_some();
-
-        // Forward the media-library selection so AI Edit actions bind to it.
-        // Guarded like the text-tab entity syncs above — notify only on change.
-        let asset_sel = self.selected_media_asset_id.clone();
-        self.ai_edit_view.update(cx, |ai, cx| {
-            if ai.selected_media_asset_id != asset_sel {
-                ai.selected_media_asset_id = asset_sel;
-                ai.state.status = None;
-                ai.state.show_upscale_picker = false;
-                cx.notify();
-            }
-        });
-        let ai_edit_entity = self.ai_edit_view.clone();
-        let kf_entity = self.keyframes_view.clone();
-
-        // WeakEntity captured for on_drag_move (global while a drag is active).
-        let weak_drag = cx.entity().downgrade();
-
-        // Build interactive scrub rows for all numeric fields
-        // Volume: -60 dB (floor) to +15 dB, 0.5 dB/px sensitivity (matches Swift VolumeScale)
-        let vol_row = self.scrub_row(
-            "volume",
-            "Volume",
-            -60.0,
-            15.0,
-            0.5,
-            false,
-            rows_enabled,
-            cx,
-        );
-        // Fade rows are display-bound only: the tool surface has no fade write yet.
-        let fade_in_row = self.scrub_row("fade_in", "Fade In", 0.0, 10.0, 0.05, false, false, cx);
-        let fade_out_row =
-            self.scrub_row("fade_out", "Fade Out", 0.0, 10.0, 0.05, false, false, cx);
         let pos_x_row = self.scrub_row(
             "position_x",
             "Position X",
@@ -1812,263 +1755,542 @@ impl Render for InspectorView {
             rows_enabled,
             cx,
         );
-        // Speed: 0.25× to 4.0×, 0.01/px sensitivity (matches Swift speedRange 0.25...4.0, suffix "x")
-        let speed_row = self.scrub_row("speed", "Speed", 0.25, 4.0, 0.01, false, rows_enabled, cx);
+        let first_clip = snap.clips.first();
+        let crop_row = self.crop_row(first_clip, cx);
+        let flip_row = self.flip_row(first_clip, cx);
 
-        let crop_row = self.crop_row(first_clip.as_ref(), cx);
-        let flip_row = self.flip_row(first_clip.as_ref(), cx);
-
-        // Levels section (clickable header — toggles volume_expanded; ↺ resets)
-        let levels_section = div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .w_full()
-                    .child(
-                        div().flex_1().child(
-                            section_header("section-levels", "Levels", volume_expanded)
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_volume(cx))),
-                        ),
-                    )
-                    .when(volume_expanded && rows_enabled, |el| {
-                        el.child(
-                            div().pr(px(Spacing::LG)).child(
-                                reset_button("reset-levels")
-                                    .on_click(cx.listener(|this, _, _, cx| this.reset_levels(cx))),
-                            ),
-                        )
-                    }),
-            )
-            .when(volume_expanded, |el| {
-                el.child(vol_row).child(fade_in_row).child(fade_out_row)
-            });
-
-        // Transform section (clickable header — toggles transform_expanded; ↺ resets)
-        let transform_section = div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .w_full()
-                    .child(
-                        div().flex_1().child(
-                            section_header("section-transform", "Transform", transform_expanded)
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_transform(cx))),
-                        ),
-                    )
-                    .when(transform_expanded && rows_enabled, |el| {
-                        el.child(
-                            div().pr(px(Spacing::LG)).child(
-                                reset_button("reset-transform").on_click(
-                                    cx.listener(|this, _, _, cx| this.reset_transform(cx)),
-                                ),
-                            ),
-                        )
-                    }),
-            )
-            .when(transform_expanded, |el| {
-                el.child(pos_x_row)
-                    .child(pos_y_row)
-                    .child(scale_row)
-                    .child(rotation_row)
-                    .child(opacity_row)
-                    .child(crop_row)
-                    .child(flip_row)
-            });
-
-        // Speed section (↺ resets)
-        let speed_section =
-            div()
-                .flex()
-                .flex_col()
-                .w_full()
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .w_full()
-                        .child(div().flex_1().child(section_header(
-                            "section-playback",
-                            "Playback",
-                            true,
-                        )))
-                        .when(rows_enabled, |el| {
-                            el.child(div().pr(px(Spacing::LG)).child(
-                                reset_button("reset-playback").on_click(
-                                    cx.listener(|this, _, _, cx| this.reset_playback(cx)),
-                                ),
-                            ))
-                        }),
+        let mut transform_group = EditorPanelGroup::new("group-transform", "Transform")
+            .expanded(transform_expanded)
+            .on_toggle(cx.listener(|this, _, _, cx| this.toggle_transform(cx)));
+        if transform_expanded {
+            transform_group =
+                transform_group.header_accessory(self.keyframes_accessory("kf-toggle-video", cx));
+        }
+        if rows_enabled {
+            transform_group = transform_group.reset(
+                editor_reset_button(
+                    "reset-transform",
+                    cx.listener(|this, _, _, cx| this.reset_transform(cx)),
                 )
-                .child(speed_row);
+                .into_any_element(),
+            );
+        }
+        transform_group = transform_group
+            .child(pos_x_row)
+            .child(pos_y_row)
+            .child(scale_row)
+            .child(rotation_row)
+            .child(opacity_row)
+            .child(crop_row)
+            .child(flip_row);
 
-        // Chroma Key section (visual clips): enable toggle, key-colour swatch +
-        // Green/Blue presets + preview eyedropper, and tolerance/softness/spill
-        // scrub rows. Writes the key.chroma effect the compositor renders soft.
-        let is_visual = first_clip
-            .as_ref()
-            .map(|c| matches!(c.media_type, ClipType::Video | ClipType::Image))
-            .unwrap_or(false);
+        let playback_group = self.playback_group("video-playback", rows_enabled, cx);
+
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .child(transform_group)
+            .child(playback_group);
+        if let Some(strip) = self.keyframes_strip(kf_entity) {
+            body = body.child(strip);
+        }
+        body.into_any_element()
+    }
+
+    /// Playback group (Swift speedSection) shared by Video and Audio tabs.
+    fn playback_group(
+        &mut self,
+        key: &'static str,
+        rows_enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> EditorPanelGroup {
+        let speed_row = self.scrub_row("speed", "Speed", 0.25, 4.0, 0.01, false, rows_enabled, cx);
+        let mut group = EditorPanelGroup::new(format!("group-{key}"), "Playback")
+            .expanded(self.groups.expanded(key, true))
+            .on_toggle(cx.listener(move |this, _, _, cx| this.toggle_group(key, true, cx)));
+        if rows_enabled {
+            group = group.reset(
+                editor_reset_button(
+                    format!("reset-{key}"),
+                    cx.listener(|this, _, _, cx| this.reset_playback(cx)),
+                )
+                .into_any_element(),
+            );
+        }
+        group.child(speed_row)
+    }
+
+    /// Audio tab (Swift audioTabContent): Levels group + Playback when the
+    /// selection has no visual clips. (Swift also has an Enhance/denoise
+    /// group — no Rust denoise UI yet.)
+    fn audio_tab(
+        &mut self,
+        snap: &SelectionSnapshot,
+        rows_enabled: bool,
+        kf_entity: &Entity<KeyframesView>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let levels_expanded = self.state.volume_expanded;
+        let vol_row = self.scrub_row("volume", "Volume", -60.0, 15.0, 0.5, false, rows_enabled, cx);
+        // Fade rows are display-bound only: the tool surface has no fade write yet.
+        let fade_in_row = self.scrub_row("fade_in", "Fade In", 0.0, 10.0, 0.05, false, false, cx);
+        let fade_out_row =
+            self.scrub_row("fade_out", "Fade Out", 0.0, 10.0, 0.05, false, false, cx);
+
+        let mut levels_group = EditorPanelGroup::new("group-levels", "Levels")
+            .expanded(levels_expanded)
+            .on_toggle(cx.listener(|this, _, _, cx| this.toggle_volume(cx)));
+        if levels_expanded {
+            levels_group =
+                levels_group.header_accessory(self.keyframes_accessory("kf-toggle-audio", cx));
+        }
+        if rows_enabled {
+            levels_group = levels_group.reset(
+                editor_reset_button(
+                    "reset-levels",
+                    cx.listener(|this, _, _, cx| this.reset_levels(cx)),
+                )
+                .into_any_element(),
+            );
+        }
+        levels_group = levels_group
+            .child(vol_row)
+            .child(fade_in_row)
+            .child(fade_out_row);
+
+        let mut body = div().flex().flex_col().w_full().child(levels_group);
+        if snap.tab_selection().non_text_visual_clips == 0 {
+            body = body.child(self.playback_group("audio-playback", rows_enabled, cx));
+        }
+        if let Some(strip) = self.keyframes_strip(kf_entity) {
+            body = body.child(strip);
+        }
+        body.into_any_element()
+    }
+
+    /// Adjust tab (Swift effectsTabContent). Only the Effects › Chroma Key
+    /// subgroup has Rust controls; the other Swift sections (Basic Correction,
+    /// Curves, Color Wheels, Hue Curves, LUTs) have no Rust effect UI yet, so
+    /// no empty shells are rendered.
+    fn adjust_tab(&mut self, snap: &SelectionSnapshot, cx: &mut Context<Self>) -> AnyElement {
+        let effects_default = ADJUST_TAB_GROUPS[0].1;
+        let chroma_default = ADJUST_CHROMA_SUBGROUP.1;
+        let effects_expanded = self.groups.expanded("adjust-effects", effects_default);
+        let chroma_expanded = self.groups.expanded("adjust-chroma", chroma_default);
+
+        // Same clip the apply path targets (first_chroma_clip: Video | Image).
+        let chroma_clip = snap
+            .clips
+            .iter()
+            .find(|c| matches!(c.media_type, ClipType::Video | ClipType::Image));
+        let is_visual = chroma_clip.is_some();
         let chroma_ctrls = crate::chroma_controls::ChromaControls::from_chroma_key(
-            first_clip.as_ref().and_then(|c| c.chroma_key.as_ref()),
+            chroma_clip.and_then(|c| c.chroma_key.as_ref()),
         );
         let chroma_enabled = chroma_ctrls.enabled;
         let chroma_hue = chroma_ctrls.key_hue() as f32;
         let sampling_active = crate::chroma_sampling::sampling_clip().is_some();
-        let chroma_rows_on = rows_enabled && chroma_enabled;
-        let tol_row = self.scrub_row(
-            "chroma_tolerance",
-            "Tolerance",
-            0.0,
-            1.0,
-            0.004,
-            false,
-            chroma_rows_on,
-            cx,
-        );
-        let soft_row = self.scrub_row(
-            "chroma_softness",
-            "Softness",
-            0.0,
-            1.0,
-            0.004,
-            false,
-            chroma_rows_on,
-            cx,
-        );
-        let spill_row = self.scrub_row(
-            "chroma_spill",
-            "Spill",
-            0.0,
-            1.0,
-            0.004,
-            false,
-            chroma_rows_on,
-            cx,
-        );
-        let chroma_section = div()
+        let chroma_rows_on = is_visual && chroma_enabled;
+
+        let mut effects_group = EditorPanelGroup::new("group-adjust-effects", "Effects")
+            .expanded(effects_expanded)
+            .content_spacing(Spacing::XS)
+            .on_toggle(cx.listener(move |this, _, _, cx| {
+                this.toggle_group("adjust-effects", effects_default, cx)
+            }));
+
+        // Chroma Key subgroup header (Swift adjustSubgroup): chevron + title,
+        // eyedropper accessory, plus the Rust enable chip.
+        let subgroup_header = div()
+            .id("chroma-subgroup-header")
+            .flex()
+            .flex_row()
+            .items_center()
+            .w_full()
+            .gap(px(Spacing::XS))
+            .cursor_pointer()
+            .child(
+                div()
+                    .w(px(IconSize::XXS))
+                    .flex()
+                    .justify_center()
+                    .text_color(Text::MUTED)
+                    .text_size(px(FontSize::XXS))
+                    .child(if chroma_expanded { "▾" } else { "▸" }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_color(Text::PRIMARY)
+                    .text_size(px(FontSize::SM_MD))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child("Chroma Key"),
+            )
+            .child(
+                div()
+                    .id("chroma-eyedropper")
+                    .px(px(Spacing::SM))
+                    .h(px(IconSize::SM))
+                    .flex()
+                    .items_center()
+                    .rounded(px(Radius::XS))
+                    .cursor_pointer()
+                    .text_size(px(FontSize::XS))
+                    .bg(if sampling_active {
+                        Accent::PRIMARY
+                    } else {
+                        Background::RAISED
+                    })
+                    .text_color(if sampling_active {
+                        Background::BASE
+                    } else {
+                        Text::SECONDARY
+                    })
+                    .child(if sampling_active {
+                        "Click preview…"
+                    } else {
+                        "⦿ Pick"
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.start_chroma_sampling(cx);
+                    })),
+            )
+            .child(
+                div()
+                    .id("chroma-enable")
+                    .cursor_pointer()
+                    .text_size(px(FontSize::XS))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(if chroma_enabled {
+                        Accent::PRIMARY
+                    } else {
+                        Text::MUTED
+                    })
+                    .child(if chroma_enabled { "On" } else { "Off" })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_chroma_enabled(cx);
+                    })),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_group("adjust-chroma", chroma_default, cx)
+            }));
+        effects_group = effects_group.child(subgroup_header);
+
+        if chroma_expanded {
+            let tol_row = self.scrub_row(
+                "chroma_tolerance",
+                "Tolerance",
+                0.0,
+                1.0,
+                0.004,
+                false,
+                chroma_rows_on,
+                cx,
+            );
+            let soft_row = self.scrub_row(
+                "chroma_softness",
+                "Softness",
+                0.0,
+                1.0,
+                0.004,
+                false,
+                chroma_rows_on,
+                cx,
+            );
+            let spill_row = self.scrub_row(
+                "chroma_spill",
+                "Spill",
+                0.0,
+                1.0,
+                0.004,
+                false,
+                chroma_rows_on,
+                cx,
+            );
+            let key_row = div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(Spacing::SM))
+                .w_full()
+                .min_h(px(EditorPanel::ROW_MIN_HEIGHT))
+                .child(
+                    div()
+                        .w(px(16.0))
+                        .h(px(16.0))
+                        .rounded(px(Radius::XS))
+                        .border_1()
+                        .border_color(BorderColors::PRIMARY)
+                        .bg(gpui::hsla(chroma_hue, 0.9, 0.5, 1.0)),
+                )
+                .child(
+                    div()
+                        .id("chroma-green")
+                        .px(px(Spacing::SM))
+                        .h(px(IconSize::SM))
+                        .flex()
+                        .items_center()
+                        .rounded(px(Radius::XS))
+                        .cursor_pointer()
+                        .bg(Background::RAISED)
+                        .text_size(px(FontSize::XS))
+                        .text_color(Text::SECONDARY)
+                        .child("Green")
+                        .on_click(cx.listener(|this, _, _, cx| this.set_chroma_hue(1.0 / 3.0, cx))),
+                )
+                .child(
+                    div()
+                        .id("chroma-blue")
+                        .px(px(Spacing::SM))
+                        .h(px(IconSize::SM))
+                        .flex()
+                        .items_center()
+                        .rounded(px(Radius::XS))
+                        .cursor_pointer()
+                        .bg(Background::RAISED)
+                        .text_size(px(FontSize::XS))
+                        .text_color(Text::SECONDARY)
+                        .child("Blue")
+                        .on_click(cx.listener(|this, _, _, cx| this.set_chroma_hue(2.0 / 3.0, cx))),
+                );
+            effects_group = effects_group
+                .child(key_row)
+                .child(tol_row)
+                .child(soft_row)
+                .child(spill_row);
+        }
+
+        div()
             .flex()
             .flex_col()
             .w_full()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .w_full()
-                    .child(div().flex_1().child(section_title("Chroma Key")))
-                    .child(
-                        div()
-                            .id("chroma-enable")
-                            .pr(px(Spacing::LG))
-                            .cursor_pointer()
-                            .text_size(px(FontSize::XS))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(if chroma_enabled {
-                                Accent::PRIMARY
-                            } else {
-                                Text::MUTED
-                            })
-                            .child(if chroma_enabled { "On" } else { "Off" })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_chroma_enabled(cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(Spacing::SM))
-                    .w_full()
-                    .px(px(Spacing::LG))
-                    .h(px(26.0))
-                    .child(
-                        div()
-                            .w(px(16.0))
-                            .h(px(16.0))
-                            .rounded(px(Radius::XS))
-                            .border_1()
-                            .border_color(BorderColors::PRIMARY)
-                            .bg(gpui::hsla(chroma_hue, 0.9, 0.5, 1.0)),
-                    )
-                    .child(
-                        div()
-                            .id("chroma-green")
-                            .px(px(Spacing::SM))
-                            .h(px(18.0))
-                            .flex()
-                            .items_center()
-                            .rounded(px(Radius::XS))
-                            .cursor_pointer()
-                            .bg(Background::RAISED)
-                            .text_size(px(FontSize::XS))
-                            .text_color(Text::SECONDARY)
-                            .child("Green")
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.set_chroma_hue(1.0 / 3.0, cx)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("chroma-blue")
-                            .px(px(Spacing::SM))
-                            .h(px(18.0))
-                            .flex()
-                            .items_center()
-                            .rounded(px(Radius::XS))
-                            .cursor_pointer()
-                            .bg(Background::RAISED)
-                            .text_size(px(FontSize::XS))
-                            .text_color(Text::SECONDARY)
-                            .child("Blue")
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.set_chroma_hue(2.0 / 3.0, cx)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("chroma-eyedropper")
-                            .px(px(Spacing::SM))
-                            .h(px(18.0))
-                            .flex()
-                            .items_center()
-                            .rounded(px(Radius::XS))
-                            .cursor_pointer()
-                            .text_size(px(FontSize::XS))
-                            .bg(if sampling_active {
-                                Accent::PRIMARY
-                            } else {
-                                Background::RAISED
-                            })
-                            .text_color(if sampling_active {
-                                Background::BASE
-                            } else {
-                                Text::SECONDARY
-                            })
-                            .child(if sampling_active {
-                                "Click preview…"
-                            } else {
-                                "⦿ Pick"
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.start_chroma_sampling(cx))),
-                    ),
-            )
-            .child(tol_row)
-            .child(soft_row)
-            .child(spill_row);
+            .child(effects_group)
+            .into_any_element()
+    }
 
-        let text_tab = if has_clip && active_tab == InspectorTab::Text {
-            Some(self.text_tab_content(first_clip.as_ref(), cx))
+    /// Multicam tab (Swift MulticamTab): read-only member roster for the
+    /// selected clip's group. Functional multicam UI stays deferred.
+    fn multicam_tab(&mut self, snap: &SelectionSnapshot, cx: &mut Context<Self>) -> AnyElement {
+        let Some(group) = snap.multicam_group.clone() else {
+            return div().into_any_element();
+        };
+        let title = if group.name.is_empty() {
+            "Multicam".to_string()
+        } else {
+            group.name.clone()
+        };
+        let mut panel = EditorPanelGroup::new("group-multicam", title)
+            .expanded(self.groups.expanded("multicam", true))
+            .on_toggle(cx.listener(|this, _, _, cx| this.toggle_group("multicam", true, cx)));
+        for member in &group.members {
+            panel = panel.child(multicam_member_row(member, &group));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .child(panel)
+            .into_any_element()
+    }
+}
+
+/// One multicam member row (Swift MulticamTab.memberRow).
+fn multicam_member_row(
+    member: &core_model::MulticamMember,
+    group: &core_model::MulticamSource,
+) -> impl IntoElement {
+    let (kind_label, kind_color) = match member.kind {
+        core_model::MulticamMemberKind::Angle => ("Angle", TrackColor::VIDEO),
+        core_model::MulticamMemberKind::Mic => ("Mic", TrackColor::AUDIO),
+        core_model::MulticamMemberKind::Both => ("Both", TrackColor::MULTICAM),
+    };
+    let is_master = member.id == group.master_member_id;
+    let usable = member.usable();
+    let sync_text = format!(
+        "{:+.2}s · {:.0}%",
+        member.sync.offset_seconds,
+        member.sync.confidence * 100.0
+    );
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .w_full()
+        .gap(px(Spacing::SM))
+        .min_h(px(EditorPanel::ROW_MIN_HEIGHT))
+        .child(
+            div()
+                .px(px(Spacing::XS))
+                .py(px(Spacing::XXS))
+                .rounded(px(Radius::XS))
+                .bg(kind_color)
+                .text_size(px(FontSize::XXS))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(Hsla {
+                    h: 0.0,
+                    s: 0.0,
+                    l: 0.0,
+                    a: Opacity::PROMINENT,
+                })
+                .child(kind_label),
+        )
+        .child(
+            div()
+                .text_size(px(FontSize::SM))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(Text::PRIMARY)
+                .child(member.angle_label.clone()),
+        )
+        .when(is_master, |el| {
+            el.child(
+                div()
+                    .text_size(px(FontSize::XXS))
+                    .text_color(Accent::TIMECODE)
+                    .child("★"),
+            )
+        })
+        .child(div().flex_1())
+        .child(if usable {
+            div()
+                .text_size(px(FontSize::XXS))
+                .text_color(Text::TERTIARY)
+                .child(sync_text)
+                .into_any_element()
+        } else {
+            div()
+                .text_size(px(FontSize::XXS))
+                .text_color(crate::theme::Status::ERROR)
+                .child("⚠ Not synced")
+                .into_any_element()
+        })
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+
+impl Render for InspectorView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_clip = self.has_clip_selected || !self.selected_clip_ids.is_empty();
+        let has_asset =
+            !has_clip && (self.has_media_asset_selected || self.selected_media_asset_id.is_some());
+        let title = if has_asset {
+            "Source"
+        } else if has_clip {
+            "Inspector"
+        } else {
+            "Timeline"
+        };
+        let icon = if has_asset {
+            "◈"
+        } else if has_clip {
+            "⊙"
+        } else {
+            "i"
+        };
+
+        // Selection snapshot: derive row values from the selected clip unless a
+        // scrub drag is live (the drag owns the value until commit).
+        let snap = if has_clip {
+            self.selection()
+        } else {
+            SelectionSnapshot {
+                clips: Vec::new(),
+                fps: 30,
+                canvas_w: 1920,
+                canvas_h: 1080,
+                multicam_group: None,
+            }
+        };
+        let first_clip = snap.clips.first().cloned();
+        let scrub_live = self
+            .active_scrub
+            .as_ref()
+            .map(|s| s.dragged)
+            .unwrap_or(false);
+        if !scrub_live {
+            self.scrub_values = match &first_clip {
+                Some(clip) => derive_scrub_values(
+                    clip,
+                    self.playhead_frame,
+                    snap.fps,
+                    snap.canvas_w,
+                    snap.canvas_h,
+                ),
+                None => default_scrub_values(),
+            };
+        }
+        if first_clip.is_none() {
+            self.text_synced_clip = None;
+        }
+        let rows_enabled = first_clip.is_some();
+
+        // Tab availability + preferred-tab resolution (Swift availableTabs +
+        // resolvePreferredTab, the latter on selection change only).
+        let tab_sel = snap.tab_selection();
+        if self.tab_resolved_for.as_deref() != Some(self.selected_clip_ids.as_slice()) {
+            self.preferred_tab = resolve_preferred_tab(self.preferred_tab, tab_sel);
+            self.tab_resolved_for = Some(self.selected_clip_ids.clone());
+            // Swift drops crop editing when the selection changes.
+            self.crop_editing_active = false;
+        }
+        let tabs = available_tabs(tab_sel);
+        let active_tab = resolve_active_tab(self.preferred_tab, &tabs);
+
+        // Forward the media-library selection so AI Edit actions bind to it.
+        // Guarded like the text-tab entity syncs — notify only on change.
+        let asset_sel = self.selected_media_asset_id.clone();
+        self.ai_edit_view.update(cx, |ai, cx| {
+            if ai.selected_media_asset_id != asset_sel {
+                ai.selected_media_asset_id = asset_sel;
+                ai.state.status = None;
+                ai.state.show_upscale_picker = false;
+                cx.notify();
+            }
+        });
+        let ai_edit_entity = self.ai_edit_view.clone();
+        let kf_entity = self.keyframes_view.clone();
+
+        // WeakEntity captured for on_drag_move (global while a drag is active).
+        let weak_drag = cx.entity().downgrade();
+
+        // Per-tab content (only the active tab is built).
+        let tab_content: Option<AnyElement> = if has_clip {
+            match active_tab {
+                Some(ClipTab::Video) => Some(self.video_tab(&snap, rows_enabled, &kf_entity, cx)),
+                Some(ClipTab::Adjust) => Some(self.adjust_tab(&snap, cx)),
+                Some(ClipTab::Audio) => Some(self.audio_tab(&snap, rows_enabled, &kf_entity, cx)),
+                Some(ClipTab::Text) => Some(self.text_tab_content(first_clip.as_ref(), cx)),
+                Some(ClipTab::Multicam) => Some(self.multicam_tab(&snap, cx)),
+                Some(ClipTab::AiEdit) => Some(ai_edit_entity.clone().into_any_element()),
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        // Tab bar (Swift TitleTabBar; hidden when only one tab is available).
+        let tab_bar: Option<AnyElement> = if has_clip && tabs.len() > 1 {
+            let mut bar = title_tab_bar().id("inspector-tabs");
+            for tab in &tabs {
+                let tab = *tab;
+                bar = bar.child(
+                    title_tab(
+                        SharedString::from(format!("clip-tab-{}", tab.label())),
+                        tab.label(),
+                        Some(tab) == active_tab,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.select_clip_tab(tab, cx))),
+                );
+            }
+            Some(bar.into_any_element())
+        } else {
+            None
+        };
+
+        let metadata = if !has_clip && !has_asset {
+            Some(self.project_metadata_content(cx))
         } else {
             None
         };
@@ -2140,207 +2362,10 @@ impl Render for InspectorView {
                     .flex_1()
                     .w_full()
                     .overflow_y_scroll()
-                    .when(!has_clip && !has_asset, |el| {
-                        el.child(project_metadata_content())
-                    })
+                    .when_some(metadata, |el, content| el.child(content))
                     .when_some(source_content, |el, content| el.child(content))
-                    .when(has_clip, |el| {
-                        el
-                            // Tab bar
-                            .child(
-                                div()
-                                    .id("inspector-tabs")
-                                    .flex()
-                                    .flex_row()
-                                    .items_end()
-                                    .w_full()
-                                    .px(px(Spacing::LG))
-                                    .pt(px(Spacing::XS))
-                                    .gap(px(Spacing::MD_LG))
-                                    .bg(Background::SURFACE)
-                                    .border_b_1()
-                                    .border_color(BorderColors::SUBTLE)
-                                    .children(InspectorTab::all_tabs().iter().map(|tab| {
-                                        let is_active = *tab == active_tab;
-                                        let is_ai = *tab == InspectorTab::AiEdit;
-                                        let tab_clone = tab.clone();
-                                        div()
-                                            .id(tab.label())
-                                            .pb(px(Spacing::XS))
-                                            .cursor_pointer()
-                                            .text_color(if is_ai {
-                                                Accent::PRIMARY
-                                            } else if is_active {
-                                                Text::PRIMARY
-                                            } else {
-                                                Text::TERTIARY
-                                            })
-                                            .text_size(px(FontSize::SM))
-                                            .font_weight(if is_active {
-                                                gpui::FontWeight::MEDIUM
-                                            } else {
-                                                gpui::FontWeight::NORMAL
-                                            })
-                                            .border_b(px(if is_active { 1.5 } else { 0.0 }))
-                                            .border_color(if is_ai {
-                                                Accent::PRIMARY
-                                            } else {
-                                                Text::PRIMARY
-                                            })
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.select_tab(tab_clone.clone(), cx);
-                                            }))
-                                            .child(tab.label())
-                                    })),
-                            )
-                            // Tab content
-                            .child(match active_tab {
-                                InspectorTab::Video => div()
-                                    .flex()
-                                    .flex_col()
-                                    .w_full()
-                                    .child(levels_section)
-                                    .child(transform_section)
-                                    .child(speed_section)
-                                    .when(is_visual, |el| el.child(chroma_section))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .justify_end()
-                                            .w_full()
-                                            .px(px(Spacing::LG))
-                                            .py(px(Spacing::XS))
-                                            .child(
-                                                keyframes_btn("kf-toggle-video", kf_visible)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.toggle_keyframes(cx);
-                                                    })),
-                                            ),
-                                    )
-                                    .when(kf_visible, |el| {
-                                        el.child(
-                                            div()
-                                                .w_full()
-                                                .border_t_1()
-                                                .border_color(BorderColors::SUBTLE)
-                                                .child(kf_entity.clone()),
-                                        )
-                                    })
-                                    .into_any_element(),
-                                InspectorTab::Audio => {
-                                    // Levels + speed for the audio tab; rows read the
-                                    // same derived scrub values.
-                                    let audio_static_row = |id: &str, label: &str, field| {
-                                        div()
-                                            .id(id.to_string())
-                                            .flex()
-                                            .flex_row()
-                                            .items_center()
-                                            .w_full()
-                                            .px(px(Spacing::LG))
-                                            .h(px(22.0))
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .text_color(Text::TERTIARY)
-                                                    .text_size(px(FontSize::XS))
-                                                    .child(label.to_string()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_color(Accent::PRIMARY)
-                                                    .text_size(px(FontSize::XS))
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .child(fmt_scrub(
-                                                        field,
-                                                        self.scrub_value(field),
-                                                    )),
-                                            )
-                                    };
-                                    let vol_row2 =
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .w_full()
-                                            .child(
-                                                section_header(
-                                                    "section-levels-audio",
-                                                    "Levels",
-                                                    volume_expanded,
-                                                )
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.toggle_volume(cx)
-                                                })),
-                                            )
-                                            .when(volume_expanded, |el| {
-                                                el.child(audio_static_row(
-                                                    "scrub-volume-audio",
-                                                    "Volume",
-                                                    "volume",
-                                                ))
-                                                .child(audio_static_row(
-                                                    "scrub-fade_in-audio",
-                                                    "Fade In",
-                                                    "fade_in",
-                                                ))
-                                                .child(audio_static_row(
-                                                    "scrub-fade_out-audio",
-                                                    "Fade Out",
-                                                    "fade_out",
-                                                ))
-                                            });
-                                    let spd_row2 =
-                                        audio_static_row("scrub-speed-audio", "Speed", "speed");
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .w_full()
-                                        .child(vol_row2)
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .w_full()
-                                                .child(section_header(
-                                                    "section-audio-playback",
-                                                    "Playback",
-                                                    true,
-                                                ))
-                                                .child(spd_row2),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_row()
-                                                .justify_end()
-                                                .w_full()
-                                                .px(px(Spacing::LG))
-                                                .py(px(Spacing::XS))
-                                                .child(
-                                                    keyframes_btn("kf-toggle-audio", kf_visible)
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.toggle_keyframes(cx);
-                                                        })),
-                                                ),
-                                        )
-                                        .when(kf_visible, |el| {
-                                            el.child(
-                                                div()
-                                                    .w_full()
-                                                    .border_t_1()
-                                                    .border_color(BorderColors::SUBTLE)
-                                                    .child(kf_entity.clone()),
-                                            )
-                                        })
-                                        .into_any_element()
-                                }
-                                InspectorTab::Text => {
-                                    text_tab.unwrap_or_else(|| div().into_any_element())
-                                }
-                                InspectorTab::AiEdit => ai_edit_entity.clone().into_any_element(),
-                            })
-                    }),
+                    .when_some(tab_bar, |el, bar| el.child(bar))
+                    .when_some(tab_content, |el, content| el.child(content)),
             )
     }
 }
@@ -2506,10 +2531,34 @@ mod tests {
         let text = test_clip(serde_json::json!({"mediaType": "text"}));
         let (tool, args) = scrub_commit_args("text_size", 48.0, &text, 1920, 1080).unwrap();
         assert_eq!(tool, "update_text");
-        assert!((args["fontSize"].as_f64().unwrap() - 48.0).abs() < 1e-9);
+        // #330 nested style patch — never the deprecated flat compat key.
+        assert!((args["style"]["fontSize"].as_f64().unwrap() - 48.0).abs() < 1e-9);
+        assert!(args.get("fontSize").is_none(), "flat fontSize key retired");
         // Clamps to the Swift 12–300 range.
         let (_, args) = scrub_commit_args("text_size", 1.0, &text, 1920, 1080).unwrap();
-        assert!((args["fontSize"].as_f64().unwrap() - 12.0).abs() < 1e-9);
+        assert!((args["style"]["fontSize"].as_f64().unwrap() - 12.0).abs() < 1e-9);
+    }
+
+    /// Every inspector update_text payload sends the nested `style` object and
+    /// none of the deprecated flat keys (fontName/fontSize/color/alignment).
+    #[test]
+    fn update_text_payloads_use_nested_style_without_flat_keys() {
+        for (style, flat_key) in [
+            (serde_json::json!({"fontName": "Anton"}), "fontName"),
+            (serde_json::json!({"fontSize": 42.0}), "fontSize"),
+            (serde_json::json!({"color": "#FF0000"}), "color"),
+            (serde_json::json!({"alignment": "center"}), "alignment"),
+        ] {
+            let args = update_text_style_args("c1", style.clone());
+            assert_eq!(args["clipIds"][0], "c1");
+            assert_eq!(args["style"], style);
+            assert!(
+                args.get(flat_key).is_none(),
+                "flat '{flat_key}' must not appear at the top level"
+            );
+            // Top level carries exactly clipIds + style.
+            assert_eq!(args.as_object().unwrap().len(), 2);
+        }
     }
 
     #[test]

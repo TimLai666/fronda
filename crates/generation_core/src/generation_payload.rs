@@ -200,7 +200,10 @@ impl ImageGenerationPayload {
 // Audio generation
 // ═══════════════════════════════════════════════════════════════════
 
-/// GPAY-011: Audio generation payload.
+/// GPAY-011: Audio generation payload. `source_url`/`target_language` mirror
+/// Swift `AudioGenerationParams` (#294): `source_url` stays None at
+/// construction — the submission pipeline fills it after uploading the
+/// source asset for cleanup/dubbing models.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioGenerationPayload {
     pub prompt: String,
@@ -210,6 +213,46 @@ pub struct AudioGenerationPayload {
     pub instrumental: bool,
     pub duration_seconds: Option<f64>,
     pub video_url: Option<String>,
+    pub source_url: Option<String>,
+    pub target_language: Option<String>,
+}
+
+impl AudioGenerationPayload {
+    /// Wire-encode exactly as Swift `AudioGenerationParams.encode(to:)`:
+    /// constant `kind`, `encodeIfPresent` optionals omitted when None, Swift
+    /// key casing (`styleInstructions`, `durationSeconds`, `videoURL`,
+    /// `sourceURL`, `targetLanguage`).
+    pub fn wire_json(&self) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert("kind".into(), "audio".into());
+        obj.insert("prompt".into(), self.prompt.clone().into());
+        if let Some(v) = &self.voice {
+            obj.insert("voice".into(), v.clone().into());
+        }
+        if let Some(v) = &self.lyrics {
+            obj.insert("lyrics".into(), v.clone().into());
+        }
+        if let Some(v) = &self.style_instructions {
+            obj.insert("styleInstructions".into(), v.clone().into());
+        }
+        obj.insert("instrumental".into(), self.instrumental.into());
+        if let Some(d) = self.duration_seconds {
+            obj.insert(
+                "durationSeconds".into(),
+                serde_json::Value::from(d.round() as i64),
+            );
+        }
+        if let Some(v) = &self.video_url {
+            obj.insert("videoURL".into(), v.clone().into());
+        }
+        if let Some(v) = &self.source_url {
+            obj.insert("sourceURL".into(), v.clone().into());
+        }
+        if let Some(v) = &self.target_language {
+            obj.insert("targetLanguage".into(), v.clone().into());
+        }
+        serde_json::Value::Object(obj)
+    }
 }
 
 /// GPAY-012: Audio category labels.
@@ -598,6 +641,8 @@ mod tests {
             instrumental: false,
             duration_seconds: None,
             video_url: None,
+            source_url: None,
+            target_language: None,
         };
         let result = p.validate(5, &[], &[]);
         assert!(result.is_err());
@@ -615,6 +660,8 @@ mod tests {
             instrumental: false,
             duration_seconds: Some(dur),
             video_url: None,
+            source_url: None,
+            target_language: None,
         };
         assert!(make(45.0).validate(1, &[], &[30.0, 60.0]).is_err());
         assert!(make(60.0).validate(1, &[], &[30.0, 60.0]).is_ok());
@@ -630,12 +677,48 @@ mod tests {
             instrumental: false,
             duration_seconds: None,
             video_url: None,
+            source_url: None,
+            target_language: None,
         };
         // "café" is 4 characters (5 UTF-8 bytes) → too short at min 5 (byte len passed).
         assert!(make("café").validate(5, &[], &[]).is_err());
         // Whitespace is trimmed before counting: "  abcd  " → "abcd" (4) < 5.
         assert!(make("  abcd  ").validate(5, &[], &[]).is_err());
         assert!(make("abcde").validate(5, &[], &[]).is_ok());
+    }
+
+    // #294: wire encoding mirrors Swift AudioGenerationParams.encode.
+    #[test]
+    fn audio_payload_wire_json_matches_swift_keys() {
+        let p = AudioGenerationPayload {
+            prompt: "".into(),
+            voice: None,
+            lyrics: None,
+            style_instructions: None,
+            instrumental: false,
+            duration_seconds: Some(12.0),
+            video_url: None,
+            source_url: Some("https://cdn/source.mp4".into()),
+            target_language: Some("es".into()),
+        };
+        let wire = p.wire_json();
+        let obj = wire.as_object().unwrap();
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        // encodeIfPresent: nil keys are omitted; present keys use Swift casing.
+        assert!(keys.contains(&"kind") && wire["kind"] == "audio");
+        assert!(keys.contains(&"sourceURL") && wire["sourceURL"] == "https://cdn/source.mp4");
+        assert!(keys.contains(&"targetLanguage") && wire["targetLanguage"] == "es");
+        assert_eq!(wire["durationSeconds"], 12, "Swift Int durationSeconds");
+        for absent in ["voice", "lyrics", "styleInstructions", "videoURL"] {
+            assert!(!keys.contains(&absent), "{absent} must be omitted when None");
+        }
+        // videoURL keeps its uppercase-acronym key when present.
+        let mut with_video = p.clone();
+        with_video.video_url = Some("https://cdn/span.mp4".into());
+        with_video.source_url = None;
+        let wire = with_video.wire_json();
+        assert_eq!(wire["videoURL"], "https://cdn/span.mp4");
+        assert!(wire.get("sourceURL").is_none());
     }
 
     // GPAY-015
