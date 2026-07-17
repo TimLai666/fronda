@@ -1,6 +1,8 @@
 //! Pane visibility persistence (EDT-003): media/inspector/agent flags stored
 //! under `paneVisibility` in preferences.json (same file as mcp_service's
 //! keys). Timeline/preview are session-only. Pure std + serde_json — no gpui.
+//! Also home of the shared `whisperModelPath` read/write (settings UI writes
+//! it in every build; the `transcribe-local` feature reads it).
 
 use std::path::{Path, PathBuf};
 
@@ -141,6 +143,33 @@ fn write_prefs_root(path: &Path, root: &serde_json::Value) {
     if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, path).is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
+}
+
+pub const WHISPER_MODEL_PATH_KEY: &str = "whisperModelPath";
+
+/// `whisperModelPath` from preferences.json. Missing file, unreadable JSON,
+/// missing key, or a non-string/empty value → `None`.
+pub fn load_whisper_model_path(path: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let raw = value.get(WHISPER_MODEL_PATH_KEY)?.as_str()?.trim();
+    (!raw.is_empty()).then(|| PathBuf::from(raw))
+}
+
+/// Read-modify-write like [`save_pane_visibility`]: blank input removes the
+/// key, anything else stores the trimmed path. Other keys survive; the write
+/// is atomic.
+pub fn save_whisper_model_path(path: &Path, raw: &str) {
+    let mut root = read_prefs_root(path);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        if let Some(obj) = root.as_object_mut() {
+            obj.remove(WHISPER_MODEL_PATH_KEY);
+        }
+    } else {
+        root[WHISPER_MODEL_PATH_KEY] = serde_json::Value::String(trimmed.to_string());
+    }
+    write_prefs_root(path, &root);
 }
 
 /// Missing file, unreadable JSON, or a missing/malformed `paneVisibility`
@@ -446,6 +475,77 @@ mod tests {
         assert_eq!(upper.media, Some(2000.0));
         assert_eq!(upper.inspector, None);
         assert_eq!(upper.timeline_height, Some(pr::TIMELINE_MIN));
+    }
+
+    #[test]
+    fn whisper_model_path_round_trips_and_trims() {
+        let path = temp_prefs("whisper-roundtrip.json");
+        save_whisper_model_path(&path, "  /models/ggml-base.bin  ");
+        assert_eq!(
+            load_whisper_model_path(&path),
+            Some(PathBuf::from("/models/ggml-base.bin"))
+        );
+    }
+
+    #[test]
+    fn whisper_model_blank_save_removes_the_key() {
+        let path = temp_prefs("whisper-clear.json");
+        save_whisper_model_path(&path, "/models/a.bin");
+        save_whisper_model_path(&path, "   ");
+        assert_eq!(load_whisper_model_path(&path), None);
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            value.get(WHISPER_MODEL_PATH_KEY).is_none(),
+            "blank save must remove the key, not store an empty string"
+        );
+    }
+
+    #[test]
+    fn whisper_model_save_preserves_other_keys() {
+        let path = temp_prefs("whisper-preserve.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServerEnabled": true, "paneVisibility": {"media": true, "inspector": true, "agent": false}}"#,
+        )
+        .unwrap();
+        save_whisper_model_path(&path, "/models/base.gguf");
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            value.get("mcpServerEnabled"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert!(value.get(PANE_VISIBILITY_KEY).is_some());
+        assert_eq!(
+            load_whisper_model_path(&path),
+            Some(PathBuf::from("/models/base.gguf"))
+        );
+    }
+
+    #[test]
+    fn whisper_model_load_missing_malformed_or_empty_returns_none() {
+        assert_eq!(load_whisper_model_path(&temp_prefs("whisper-missing.json")), None);
+        let corrupt = temp_prefs("whisper-corrupt.json");
+        std::fs::write(&corrupt, "{not json").unwrap();
+        assert_eq!(load_whisper_model_path(&corrupt), None);
+        let non_string = temp_prefs("whisper-non-string.json");
+        std::fs::write(&non_string, r#"{"whisperModelPath": 7}"#).unwrap();
+        assert_eq!(load_whisper_model_path(&non_string), None);
+        let empty = temp_prefs("whisper-empty.json");
+        std::fs::write(&empty, r#"{"whisperModelPath": "  "}"#).unwrap();
+        assert_eq!(load_whisper_model_path(&empty), None);
+    }
+
+    #[test]
+    fn whisper_model_save_over_corrupt_file_rebuilds() {
+        let path = temp_prefs("whisper-rebuild.json");
+        std::fs::write(&path, "{broken").unwrap();
+        save_whisper_model_path(&path, "/models/base.bin");
+        assert_eq!(
+            load_whisper_model_path(&path),
+            Some(PathBuf::from("/models/base.bin"))
+        );
     }
 
     #[test]

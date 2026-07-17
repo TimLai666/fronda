@@ -200,15 +200,15 @@ fn entry_passes(entry: &MediaManifestEntry, state: &LibraryState) -> bool {
     type_ok && ai_ok && name_ok
 }
 
-fn sort_entries<'a>(
-    mut entries: Vec<&'a MediaManifestEntry>,
+fn sort_entries(
+    mut entries: Vec<&MediaManifestEntry>,
     key: LibrarySortKey,
-) -> Vec<&'a MediaManifestEntry> {
+) -> Vec<&MediaManifestEntry> {
     match key {
         // Manifest order is insertion order (Swift .dateAdded keeps it).
         LibrarySortKey::DateAdded => {}
         LibrarySortKey::Name => {
-            entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            entries.sort_by_key(|a| a.name.to_lowercase());
         }
         LibrarySortKey::Duration => {
             entries.sort_by(|a, b| b.duration.total_cmp(&a.duration));
@@ -331,7 +331,7 @@ pub fn grouped_sections<'a>(
             (f, title)
         })
         .collect();
-    folders.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    folders.sort_by_key(|a| a.1.to_lowercase());
     for (f, title) in folders {
         sections.push((
             Some(f.id.as_str()),
@@ -492,7 +492,7 @@ pub fn captionable_clip_ids(timeline: &Timeline, track_id: Option<&str>) -> Vec<
     timeline
         .tracks
         .iter()
-        .filter(|t| track_id.map_or(true, |id| t.id == id))
+        .filter(|t| track_id.is_none_or(|id| t.id == id))
         .flat_map(|t| t.clips.iter())
         .filter(|c| clip_is_captionable(c))
         .map(|c| c.id.clone())
@@ -1007,7 +1007,7 @@ pub struct MediaPanelView {
 
 impl MediaPanelView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let gen = cx.new(|cx| GenerationView::new(cx));
+        let gen = cx.new(GenerationView::new);
         let search_field = cx.new(|cx| crate::text_field::TextField::new(cx, "Search"));
         cx.subscribe(&search_field, |this, field, event, cx| {
             if matches!(event, crate::text_field::TextFieldEvent::Edited) {

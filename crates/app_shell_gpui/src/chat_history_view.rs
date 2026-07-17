@@ -132,7 +132,7 @@ impl Render for ChatHistoryView {
                     .flex_col()
                     .max_h(px(360.0))
                     .overflow_y_scroll()
-                    .children(sessions.iter().map(|s| session_row(s)))
+                    .children(sessions.iter().map(session_row))
                     .into_any_element()
             })
     }

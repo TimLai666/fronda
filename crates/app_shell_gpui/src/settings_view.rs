@@ -15,7 +15,8 @@ use crate::theme::{
 use app_contract::agent_panel_model::McpServerStatus;
 use gpui::{
     div, prelude::*, px, svg, AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable,
-    Hsla, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    Hsla, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Window,
 };
 
 /// Swift `AppTheme.Settings` metrics (#319). Local until the shared theme
@@ -152,6 +153,12 @@ pub struct SettingsView {
     mcp_enabled: bool,
     /// True when the user has stored an Anthropic API key (AgentPane SecureField state).
     pub has_stored_api_key: bool,
+    /// Whisper model path entry — commits `whisperModelPath` on Enter/blur.
+    whisper_model_field: Entity<TextField>,
+    /// Last committed value ("" = key removed); commit skips no-op writes.
+    whisper_model_saved: String,
+    /// Focus-out commit hook, registered on first render (`new` has no Window).
+    whisper_blur_sub: Option<Subscription>,
     // Skills
     skill_store: SkillStore,
     skills_search: Entity<TextField>,
@@ -176,6 +183,18 @@ impl SettingsView {
             }
         })
         .detach();
+        let whisper_model_saved =
+            crate::pane_prefs::load_whisper_model_path(&crate::pane_prefs::default_prefs_path())
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+        let whisper_model_field = cx.new(|cx| TextField::new(cx, "/path/to/ggml-model.bin"));
+        whisper_model_field.update(cx, |f, cx| f.set_text(whisper_model_saved.clone(), cx));
+        cx.subscribe(&whisper_model_field, |this: &mut Self, _, event, cx| {
+            if matches!(event, TextFieldEvent::Submitted) {
+                this.commit_whisper_model_path(cx);
+            }
+        })
+        .detach();
         Self {
             focus_handle: cx.focus_handle(),
             active_tab: initial_tab,
@@ -196,12 +215,31 @@ impl SettingsView {
             mcp_running: true,
             mcp_enabled: true,
             has_stored_api_key: false,
+            whisper_model_field,
+            whisper_model_saved,
+            whisper_blur_sub: None,
             skill_store: SkillStore::default_location(),
             skills_search,
             skill_sheet: None,
             search_enabled: true,
             model_bytes: None,
         }
+    }
+
+    /// Persist the whisper model path (Enter or focus loss). Blank removes
+    /// the key; an unchanged value skips the write.
+    fn commit_whisper_model_path(&mut self, cx: &mut Context<Self>) {
+        let trimmed = self.whisper_model_field.read(cx).text().trim().to_string();
+        if trimmed == self.whisper_model_saved {
+            return;
+        }
+        crate::pane_prefs::save_whisper_model_path(
+            &crate::pane_prefs::default_prefs_path(),
+            &trimmed,
+        );
+        self.whisper_model_saved = trimmed.clone();
+        self.whisper_model_field.update(cx, |f, cx| f.set_text(trimmed, cx));
+        cx.notify();
     }
 
     // ── Skills sheet lifecycle ────────────────────────────────────────────────
@@ -960,6 +998,30 @@ impl SettingsView {
                             ),
                         )
                     })
+                    .into_any_element(),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(Spacing::XS))
+                    .pt(px(Spacing::SM))
+                    .child(
+                        div()
+                            .text_color(Text::PRIMARY)
+                            .text_size(px(FontSize::MD))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child("Whisper model"),
+                    )
+                    .child(body_text(
+                        "Path to a whisper GGML or GGUF model file for local transcription. Leave empty to unset.",
+                    ))
+                    .into_any_element(),
+                themed_surface(Background::RAISED, Radius::SM)
+                    .w_full()
+                    .px(px(Spacing::MD))
+                    .py(px(Spacing::SM_MD))
+                    .text_size(px(FontSize::SM))
+                    .text_color(Text::PRIMARY)
+                    .child(self.whisper_model_field.clone())
                     .into_any_element(),
             ],
         );
@@ -1727,7 +1789,16 @@ impl SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.whisper_blur_sub.is_none() {
+            let field_focus = self.whisper_model_field.read(cx).focus_handle(cx);
+            let weak = cx.entity().downgrade();
+            self.whisper_blur_sub = Some(window.on_focus_out(&field_focus, cx, move |_, _, cx| {
+                if let Some(view) = weak.upgrade() {
+                    view.update(cx, |this, cx| this.commit_whisper_model_path(cx));
+                }
+            }));
+        }
         let mut mcp_status_label = String::from("Stopped");
         if let Ok(svc) = crate::mcp_service::McpService::global().lock() {
             self.mcp_enabled = svc.is_enabled_preference();

@@ -381,6 +381,151 @@ fn partial_ripple_across_group_refused_via_tool() {
     assert!(ok.is_ok(), "{ok:?}");
 }
 
+// ── Manual segment switch (untooled executor operation) ──────────────────
+
+/// Two-mic harness mirroring the engine spec's
+/// `switch_mic_rewrites_audio_clip_in_place`: camA angle, lapel (master,
+/// +2s) and room (0s) mics, lapel lane split so [600, 1200) is the target.
+fn segment_switch_harness() -> (ToolExecutor, String, String) {
+    let mut manifest = MediaManifest::default();
+    manifest
+        .entries
+        .push(media_entry("camA", ClipType::Video, 120.0, true));
+    manifest
+        .entries
+        .push(media_entry("lapel", ClipType::Audio, 130.0, false));
+    manifest
+        .entries
+        .push(media_entry("room", ClipType::Audio, 125.0, false));
+    let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+    exec.execute(
+        "manage_multicam",
+        &json!({"create": {
+            "name": "MC",
+            "members": [
+                {"mediaRef": "camA", "kind": "angle", "angleLabel": "cam-a", "offsetSeconds": 0},
+                {"mediaRef": "lapel", "kind": "mic", "angleLabel": "lapel", "offsetSeconds": 2},
+                {"mediaRef": "room", "kind": "mic", "angleLabel": "room", "offsetSeconds": 0},
+            ],
+            "master": "lapel",
+            "startFrame": 0,
+        }}),
+    )
+    .unwrap();
+    let group_id = exec.multicam_groups()[0].id.clone();
+    let lapel = exec
+        .timeline()
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .find(|c| c.media_ref == "lapel")
+        .expect("lapel mic clip")
+        .id
+        .clone();
+    exec.execute(
+        "split_clips",
+        &json!({"splits": [{"clipId": lapel, "atFrame": 600}]}),
+    )
+    .unwrap();
+    let mid = exec
+        .timeline()
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .find(|c| c.media_ref == "lapel" && c.start_frame == 600)
+        .expect("middle lapel piece")
+        .id
+        .clone();
+    exec.execute(
+        "split_clips",
+        &json!({"splits": [{"clipId": mid, "atFrame": 1200}]}),
+    )
+    .unwrap();
+    let target = exec
+        .timeline()
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .find(|c| c.media_ref == "lapel" && c.start_frame == 600)
+        .expect("target piece")
+        .id
+        .clone();
+    (exec, group_id, target)
+}
+
+#[test]
+fn switch_segment_rewrites_mic_in_place_with_undo() {
+    let (mut exec, group_id, target) = segment_switch_harness();
+    // The mic roster the tab offers (Swift multicamAudioBearers).
+    assert_eq!(
+        exec.multicam_audio_bearer_labels(&group_id),
+        ["cam-a", "lapel", "room"]
+    );
+
+    let rev = exec.revision();
+    let undo_len = exec.undo_stack().len();
+    exec.switch_multicam_segment(&target, "room").unwrap();
+
+    // Engine-spec expectations (`switch_mic_rewrites_audio_clip_in_place`).
+    let swapped = exec
+        .timeline()
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .find(|c| c.id == target)
+        .expect("target survives in place")
+        .clone();
+    assert_eq!(swapped.media_ref, "room");
+    // Same real moment on the room mic's clock: lapel trim 540 + 2s·30.
+    assert_eq!(swapped.trim_start_frame, 600);
+    assert_eq!(swapped.start_frame, 600);
+    assert_eq!(swapped.start_frame + swapped.duration_frames, 1200);
+    let lapel_count = exec
+        .timeline()
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .filter(|c| c.media_ref == "lapel")
+        .count();
+    assert_eq!(lapel_count, 2, "neighbors untouched");
+
+    // Undo-tracked + revision-bumped like a tool mutation.
+    assert_eq!(exec.undo_stack().len(), undo_len + 1);
+    assert!(exec.revision() > rev);
+    exec.execute("undo", &json!({})).unwrap();
+    let reverted = exec
+        .timeline()
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .find(|c| c.id == target)
+        .unwrap()
+        .clone();
+    assert_eq!(reverted.media_ref, "lapel");
+    assert_eq!(reverted.trim_start_frame, 540);
+}
+
+#[test]
+fn switch_segment_errors_leave_state_untouched() {
+    let (mut exec, _group_id, target) = segment_switch_harness();
+    let before = exec.timeline().clone();
+    let rev = exec.revision();
+    let undo_len = exec.undo_stack().len();
+
+    let err = exec
+        .switch_multicam_segment(&target, "nope")
+        .unwrap_err();
+    assert!(err.contains("Unknown mic"), "{err}");
+    assert!(err.contains("room"), "lists valid mics: {err}");
+
+    let stray = exec.switch_multicam_segment("not-a-clip", "room").unwrap_err();
+    assert!(stray.contains("not part of a multicam group"), "{stray}");
+
+    assert_eq!(exec.timeline(), &before);
+    assert_eq!(exec.revision(), rev);
+    assert_eq!(exec.undo_stack().len(), undo_len);
+}
+
 #[test]
 fn create_timecode_sync_uses_seam_exact_ntsc_seconds() {
     // D1: NDF NTSC members sync by shared timecode; the ClipAudioSource seam

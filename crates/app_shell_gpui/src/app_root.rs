@@ -697,6 +697,43 @@ impl AppRoot {
         }));
     }
 
+    /// Swift `handlePanelClick`, line by line: every left mouse-down on a pane
+    /// card focuses that pane; a media click clears the timeline clip
+    /// selection; a timeline click clears the media selection. (Swift also
+    /// clears timeline-tile and folder selections there — the Rust media panel
+    /// has no such selection sets, so assets are the whole port.)
+    fn handle_panel_click(&mut self, pane: PaneId, cx: &mut Context<Self>) {
+        if self.focused_pane != Some(pane) {
+            self.focused_pane = Some(pane);
+            cx.notify();
+        }
+        match pane {
+            PaneId::Media => {
+                if let Some(timeline) = self.timeline_view.clone() {
+                    timeline.update(cx, |tl, cx| {
+                        if !tl.state.selected_clip_ids.is_empty() {
+                            tl.state.clear_selection();
+                            cx.notify();
+                        }
+                    });
+                }
+            }
+            PaneId::Timeline => {
+                if let Some(media) = self.media_panel_view.clone() {
+                    media.update(cx, |media, cx| {
+                        if !media.library.selection.is_empty()
+                            || media.library.selection_anchor.is_some()
+                        {
+                            media.library.clear_selection();
+                            cx.notify();
+                        }
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Start the ~30 Hz audio-transport sync loop when a transport action may
     /// need it. One step runs synchronously so play/pause/audio-start take
     /// effect without a tick of latency; the loop then keeps the playback
@@ -1107,9 +1144,10 @@ impl AppRoot {
                     tv.update(cx, |view, cx| view.ripple_delete_selected(cx));
                 }
             }
-            menu::MenuAction::About
-            | menu::MenuAction::CheckForUpdates
-            | menu::MenuAction::Settings => {}
+            menu::MenuAction::Settings => {
+                open_settings_window(cx);
+            }
+            menu::MenuAction::About | menu::MenuAction::CheckForUpdates => {}
             menu::MenuAction::Tutorial
             | menu::MenuAction::KeyboardShortcuts
             | menu::MenuAction::McpInstructions => {}
@@ -2038,17 +2076,15 @@ impl Render for AppRoot {
                 .map(|t| (t, self.build_divider(t, cx)))
                 .collect();
 
-                // Panel focus wiring (EDT-007): card clicks move the ring.
+                // Panel focus wiring (EDT-007): card clicks move the ring and
+                // clear cross-panel selections (Swift handlePanelClick).
                 let focus = editor_view::PaneFocus {
                     focused: self.focused_pane,
                     on_mouse_down: {
                         let weak = cx.entity().downgrade();
                         std::rc::Rc::new(move |pane, _window, cx| {
                             let _ = weak.update(cx, |this: &mut AppRoot, cx| {
-                                if this.focused_pane != Some(pane) {
-                                    this.focused_pane = Some(pane);
-                                    cx.notify();
-                                }
+                                this.handle_panel_click(pane, cx);
                             });
                         })
                     },
@@ -2256,6 +2292,24 @@ impl Render for AppRoot {
 }
 
 /// Create and open the initial window.
+/// Open the Settings window (MenuAction::Settings). Sized per WIN-004;
+/// backend_configured mirrors the chat panel's ANTHROPIC_API_KEY gate.
+fn open_settings_window(cx: &mut gpui::App) {
+    let cfg = crate::window::WindowConfig::for_settings();
+    let size = size(px(cfg.default_width as f32), px(cfg.default_height as f32));
+    let bounds = Bounds::centered(None, size, cx);
+    let backend_configured = !std::env::var("ANTHROPIC_API_KEY")
+        .unwrap_or_default()
+        .is_empty();
+    let _ = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        |_, cx| cx.new(|cx| crate::settings_view::SettingsView::new(backend_configured, cx)),
+    );
+}
+
 pub fn open_main_window(cx: &mut App) {
     // BOOT: start the MCP server when the preference allows (Swift: startMCPService).
     if let Ok(mut svc) = crate::mcp_service::McpService::global().lock() {

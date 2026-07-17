@@ -442,14 +442,14 @@ mod tests {
     #[test]
     fn border_colors_alpha_order() {
         // PRIMARY (0.16) > SUBTLE (0.12)
-        assert!(BorderColors::PRIMARY.a > BorderColors::SUBTLE.a);
+        const { assert!(BorderColors::PRIMARY.a > BorderColors::SUBTLE.a) };
     }
 
     #[test]
     fn text_colors_decrease_alpha() {
-        assert!(Text::PRIMARY.a > Text::SECONDARY.a);
-        assert!(Text::SECONDARY.a > Text::TERTIARY.a);
-        assert!(Text::TERTIARY.a > Text::MUTED.a);
+        const { assert!(Text::PRIMARY.a > Text::SECONDARY.a) };
+        const { assert!(Text::SECONDARY.a > Text::TERTIARY.a) };
+        const { assert!(Text::TERTIARY.a > Text::MUTED.a) };
     }
 
     #[test]
@@ -547,17 +547,17 @@ mod tests {
     #[test]
     fn track_colors_match_281_hex_palette() {
         // #1D5878
-        assert_hsla(TrackColor::VIDEO, 0.558608059, 0.610738255, 0.292156863);
+        assert_hsla(TrackColor::VIDEO, 0.55860806, 0.6107383, 0.29215688);
         // #2E7765
-        assert_hsla(TrackColor::AUDIO, 0.458904110, 0.442424242, 0.323529412);
+        assert_hsla(TrackColor::AUDIO, 0.45890412, 0.44242424, 0.32352942);
         // #715486
-        assert_hsla(TrackColor::IMAGE, 0.763333333, 0.229357798, 0.427450980);
+        assert_hsla(TrackColor::IMAGE, 0.7633333, 0.2293578, 0.42745098);
         // #715486 (text aliases image)
-        assert_hsla(TrackColor::TEXT, 0.763333333, 0.229357798, 0.427450980);
+        assert_hsla(TrackColor::TEXT, 0.7633333, 0.2293578, 0.42745098);
         // #A07822
-        assert_hsla(TrackColor::LOTTIE, 0.113756614, 0.649484536, 0.380392157);
+        assert_hsla(TrackColor::LOTTIE, 0.11375661, 0.6494845, 0.38039216);
         // #B9B29A
-        assert_hsla(TrackColor::SEQUENCE, 0.129032258, 0.181286550, 0.664705882);
+        assert_hsla(TrackColor::SEQUENCE, 0.12903225, 0.18128654, 0.6647059);
     }
 
     // #281 tokens: Border.timelineClip (black), Opacity.high, min border width.
@@ -565,7 +565,7 @@ mod tests {
     fn timeline_clip_tokens_281() {
         assert_hsla(BorderColors::TIMELINE_CLIP, 0.0, 0.0, 0.0);
         assert!((Opacity::HIGH - 0.70).abs() < 1e-6);
-        assert!(Opacity::STRONG < Opacity::HIGH && Opacity::HIGH < Opacity::PROMINENT);
+        const { assert!(Opacity::STRONG < Opacity::HIGH && Opacity::HIGH < Opacity::PROMINENT) };
         assert_eq!(ComponentSize::TIMELINE_CLIP_BORDER_MIN_WIDTH, 8.0);
     }
 
@@ -591,7 +591,7 @@ mod tests {
     fn multicam_track_color_is_system_red() {
         // NSColor.systemRed ≈ #FF3B30, opaque.
         assert!((TrackColor::MULTICAM.a - 1.0).abs() < 1e-6);
-        assert!(TrackColor::MULTICAM.l > 0.0 && TrackColor::MULTICAM.s > 0.9);
+        const { assert!(TrackColor::MULTICAM.l > 0.0 && TrackColor::MULTICAM.s > 0.9) };
     }
 
     #[test]
@@ -602,9 +602,9 @@ mod tests {
 
     #[test]
     fn layout_constants_positive() {
-        assert!(Layout::MEDIA_PANEL_DEFAULT > 0.0);
-        assert!(Layout::INSPECTOR_DEFAULT > 0.0);
-        assert!(Layout::TOOLBAR_HEIGHT > 0.0);
-        assert!(Layout::PANEL_GAP > 0.0);
+        const { assert!(Layout::MEDIA_PANEL_DEFAULT > 0.0) };
+        const { assert!(Layout::INSPECTOR_DEFAULT > 0.0) };
+        const { assert!(Layout::TOOLBAR_HEIGHT > 0.0) };
+        const { assert!(Layout::PANEL_GAP > 0.0) };
     }
 }

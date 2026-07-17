@@ -145,7 +145,7 @@ impl Render for ProjectActivityView {
                     .gap(px(Spacing::XXS))
                     .max_h(px(420.0))
                     .overflow_y_scroll()
-                    .children(entries.iter().map(|e| entry_row(e)))
+                    .children(entries.iter().map(entry_row))
                     .into_any_element()
             })
     }

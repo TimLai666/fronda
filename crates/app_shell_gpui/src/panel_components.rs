@@ -629,8 +629,8 @@ mod tests {
         assert!(VIDEO_TAB_GROUPS.iter().all(|(_, e)| *e));
         assert!(AUDIO_TAB_GROUPS.iter().all(|(_, e)| *e));
         assert!(TEXT_TAB_GROUPS.iter().all(|(_, e)| *e));
-        assert_eq!(ADJUST_TAB_GROUPS[0].1, false);
-        assert_eq!(ADJUST_CHROMA_SUBGROUP.1, false);
+        assert!(!ADJUST_TAB_GROUPS[0].1);
+        assert!(!ADJUST_CHROMA_SUBGROUP.1);
         let caption_defaults: Vec<bool> = CAPTIONS_TAB_GROUPS.iter().map(|(_, e)| *e).collect();
         assert_eq!(caption_defaults, [true, true, false, true]);
     }

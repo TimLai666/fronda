@@ -2923,6 +2923,57 @@ impl ToolExecutor {
         self.multicam_groups.iter().find(|g| g.id == id)
     }
 
+    /// The group's audio-bearing members' angle labels (Swift
+    /// `multicamAudioBearers`): usable mics plus cameras whose file carries
+    /// audio — the roster a mic fragment can switch to. For the host UI's
+    /// Multicam tab; empty when the group id doesn't resolve.
+    pub fn multicam_audio_bearer_labels(&self, group_id: &str) -> Vec<String> {
+        let Some(group) = self.multicam_group(group_id) else {
+            return Vec::new();
+        };
+        let assets = self.multicam_assets();
+        timeline_core::multicam_audio_bearers(group, &assets)
+            .into_iter()
+            .map(|m| m.angle_label.clone())
+            .collect()
+    }
+
+    /// Manual per-clip angle/mic switch (Swift `switchMulticamSegment`), for
+    /// the host UI's Multicam tab. Deliberately NOT on the tool surface — the
+    /// Swift tool surface has no such tool either (mirror policy). Mics and
+    /// overlay fragments rewrite in place; a program fragment routes through
+    /// the full switch engine. Undo-tracked like a tool mutation; the
+    /// revision bumps only when the timeline actually changed. Errors leave
+    /// the timeline untouched.
+    pub fn switch_multicam_segment(&mut self, clip_id: &str, angle: &str) -> Result<(), String> {
+        let group = timeline_core::find_clip(&self.timeline, clip_id)
+            .and_then(|loc| {
+                self.timeline.tracks[loc.track_index].clips[loc.clip_index]
+                    .multicam_group_id
+                    .clone()
+            })
+            .and_then(|gid| self.multicam_group(&gid).cloned())
+            .ok_or_else(|| format!("Clip '{clip_id}' is not part of a multicam group."))?;
+        let assets = self.multicam_assets();
+        let before = self.timeline.clone();
+        if let Err(e) =
+            timeline_core::switch_segment(&mut self.timeline, &group, clip_id, angle, &assets)
+        {
+            self.timeline = before;
+            return Err(e);
+        }
+        if self.timeline != before {
+            self.undo_stack.push_command(UndoCommand::new(
+                Uuid::new_v4().to_string(),
+                "switch_multicam_segment".to_string(),
+                before,
+                self.timeline.clone(),
+            ));
+            self.revision += 1;
+        }
+        Ok(())
+    }
+
     fn require_multicam_group(&self, group_id: &str) -> Result<String, String> {
         if self.multicam_group(group_id).is_none() {
             return Err(format!(

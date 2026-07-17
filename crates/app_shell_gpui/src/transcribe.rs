@@ -7,21 +7,14 @@
 
 use agent_contract::tool_exec::{TranscriptionProvider, WordStamp};
 use core_model::MediaSource;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-pub const WHISPER_MODEL_PATH_KEY: &str = "whisperModelPath";
-pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
+// Shared with the settings UI (which must write the key in non-gated builds).
+pub use crate::pane_prefs::{load_whisper_model_path, WHISPER_MODEL_PATH_KEY};
 
-/// `whisperModelPath` from preferences.json. Missing file, unreadable JSON,
-/// missing key, or a non-string/empty value → `None` (pane_prefs convention).
-pub fn load_whisper_model_path(prefs_path: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(prefs_path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let raw = value.get(WHISPER_MODEL_PATH_KEY)?.as_str()?.trim();
-    (!raw.is_empty()).then(|| PathBuf::from(raw))
-}
+pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
 /// Timeline language → whisper language id: the primary BCP-47 subtag,
 /// lowercased. `None`, empty, or "auto" → `None` (whisper auto-detect).
@@ -303,5 +296,61 @@ mod tests {
             assert!(!s.word.trim().is_empty(), "{s:?}");
         }
         let _ = std::fs::remove_file(&wav);
+    }
+
+    /// Positive-signal inference test: synthesizes real speech via macOS
+    /// `say`, transcribes it, and asserts a recognizable word came back —
+    /// proving the model actually ran (the silence test skips-or-passes).
+    /// Gated on FRONDA_WHISPER_MODEL and macOS.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn local_whisper_recognizes_generated_speech() {
+        let Some(model) = std::env::var_os("FRONDA_WHISPER_MODEL") else {
+            eprintln!("skipping: FRONDA_WHISPER_MODEL not set");
+            return;
+        };
+        let model = PathBuf::from(model);
+        if !model.exists() {
+            eprintln!("skipping: FRONDA_WHISPER_MODEL points at a missing file");
+            return;
+        }
+        let dir = std::env::temp_dir().join("fronda-transcribe-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let aiff = dir.join("speech.aiff");
+        let ok = std::process::Command::new("say")
+            .args(["-o"])
+            .arg(&aiff)
+            .arg("hello world this is a test")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("skipping: `say` synthesis unavailable");
+            return;
+        }
+        let prefs = temp_prefs(
+            "real-model-speech.json",
+            Some(&format!(
+                r#"{{"whisperModelPath": {}}}"#,
+                serde_json::json!(model.to_string_lossy())
+            )),
+        );
+        let t = WhisperTranscriber::new(dir.clone(), prefs);
+        let source = MediaSource::External {
+            absolute_path: aiff.to_string_lossy().to_string(),
+        };
+        let stamps = t
+            .transcribe(&source, Some("en"))
+            .expect("speech transcribes without error");
+        let joined = stamps
+            .iter()
+            .map(|s| s.word.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            joined.contains("hello") || joined.contains("world") || joined.contains("test"),
+            "expected recognizable words, got: {joined:?}"
+        );
+        let _ = std::fs::remove_file(&aiff);
     }
 }

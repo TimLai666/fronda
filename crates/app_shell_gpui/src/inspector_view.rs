@@ -468,6 +468,17 @@ fn multicam_ungroup_args(group_id: &str) -> serde_json::Value {
     serde_json::json!({ "ungroup": { "groupId": group_id } })
 }
 
+/// Rewrite-path chip roster (Swift `switchMemberItem` gate): the labels a
+/// mic/overlay fragment can switch between, or None when no member other
+/// than the fragment's own exists.
+fn segment_switch_roster(labels: Vec<String>, current: Option<&str>) -> Option<Vec<String>> {
+    if labels.iter().any(|l| Some(l.as_str()) != current) {
+        Some(labels)
+    } else {
+        None
+    }
+}
+
 /// Swift `VideoLayout.displayName`.
 fn layout_display_name(layout: VideoLayout) -> &'static str {
     match layout {
@@ -497,6 +508,9 @@ struct SelectionSnapshot {
     multicam_group: Option<core_model::MulticamSource>,
     /// That same clip, classified for the Multicam tab's operations.
     multicam_target: Option<MulticamTarget>,
+    /// Mic-target roster (Swift `multicamAudioBearers` labels), computed with
+    /// the executor's asset facts while the snapshot holds the lock.
+    multicam_mic_labels: Vec<String>,
 }
 
 impl SelectionSnapshot {
@@ -548,6 +562,12 @@ fn snapshot_selected_clips(selected_ids: &[String]) -> SelectionSnapshot {
         })
         .map(|(g, target)| (Some(g), target))
         .unwrap_or((None, None));
+    let multicam_mic_labels = match (&multicam_group, &multicam_target) {
+        (Some(g), Some(t)) if t.kind == MulticamTargetKind::Audio => {
+            guard.multicam_audio_bearer_labels(&g.id)
+        }
+        _ => Vec::new(),
+    };
     SelectionSnapshot {
         clips,
         fps: t.fps,
@@ -555,6 +575,7 @@ fn snapshot_selected_clips(selected_ids: &[String]) -> SelectionSnapshot {
         canvas_h: t.height,
         multicam_group,
         multicam_target,
+        multicam_mic_labels,
     }
 }
 
@@ -719,6 +740,18 @@ impl InspectorView {
         if let Ok(mut exec) = guard {
             if let Err(reason) = exec.execute(tool, &args) {
                 eprintln!("{tool} failed: {reason}");
+            }
+        }
+    }
+
+    /// Mic/overlay manual switch through the executor's untooled
+    /// `switch_multicam_segment` (not on the agent tool surface).
+    fn run_switch_segment(clip_id: &str, angle: &str) {
+        let executor = crate::editor_state_hub::EditorStateHub::global().executor();
+        let guard = executor.lock();
+        if let Ok(mut exec) = guard {
+            if let Err(reason) = exec.switch_multicam_segment(clip_id, angle) {
+                eprintln!("switch_multicam_segment failed: {reason}");
             }
         }
     }
@@ -2225,8 +2258,8 @@ impl InspectorView {
     /// Swift keeps in the timeline context menu (D7 moves them here — the
     /// Rust timeline has no context menu): Switch Angle and Layout on the
     /// selected program fragment via change_cam, Ungroup via manage_multicam.
-    /// Mic/overlay switching needs the untooled `switch_segment` rewrite path
-    /// and stays read-only.
+    /// Mic/overlay fragments get Switch Mic / Switch Angle chips through the
+    /// executor's untooled `switch_multicam_segment` rewrite path.
     fn multicam_tab(&mut self, snap: &SelectionSnapshot, cx: &mut Context<Self>) -> AnyElement {
         let Some(group) = snap.multicam_group.clone() else {
             return div().into_any_element();
@@ -2254,10 +2287,8 @@ impl InspectorView {
                 .iter()
                 .map(|m| m.angle_label.clone())
                 .collect();
-            let has_other = angles
-                .iter()
-                .any(|l| Some(l.as_str()) != target.current_angle.as_deref());
-            if !angles.is_empty() && has_other {
+            let angle_count = angles.len();
+            if let Some(roster) = segment_switch_roster(angles, target.current_angle.as_deref()) {
                 let mut row = div()
                     .flex()
                     .flex_row()
@@ -2265,7 +2296,7 @@ impl InspectorView {
                     .items_center()
                     .w_full()
                     .gap(px(Spacing::XXS));
-                for label in &angles {
+                for label in &roster {
                     let active = Some(label.as_str()) == target.current_angle.as_deref();
                     let args = change_cam_switch_args(&target.clip_id, target.range, label);
                     row = row.child(
@@ -2286,7 +2317,7 @@ impl InspectorView {
             }
 
             // Layout (Swift layoutItem gate: video fragment + ≥2 angles).
-            if angles.len() >= 2 {
+            if angle_count >= 2 {
                 let mut row = div()
                     .flex()
                     .flex_row()
@@ -2311,6 +2342,58 @@ impl InspectorView {
                     );
                 }
                 panel = panel.child(multicam_section_label("Layout")).child(row);
+            }
+        }
+
+        // Mic/overlay fragments: Switch Mic / Switch Angle via the executor's
+        // switch_multicam_segment rewrite (Swift switchMemberItem's non-program
+        // branch of switchMulticamSegment).
+        let rewrite_target = snap
+            .multicam_target
+            .clone()
+            .filter(|t| t.kind != MulticamTargetKind::Program);
+        if let Some(target) = rewrite_target {
+            let audio = target.kind == MulticamTargetKind::Audio;
+            let labels: Vec<String> = if audio {
+                snap.multicam_mic_labels.clone()
+            } else {
+                group
+                    .angles()
+                    .iter()
+                    .map(|m| m.angle_label.clone())
+                    .collect()
+            };
+            if let Some(roster) = segment_switch_roster(labels, target.current_angle.as_deref()) {
+                let mut row = div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .w_full()
+                    .gap(px(Spacing::XXS));
+                for label in &roster {
+                    let active = Some(label.as_str()) == target.current_angle.as_deref();
+                    let clip_id = target.clip_id.clone();
+                    let angle = label.clone();
+                    row = row.child(
+                        multicam_action_button(
+                            SharedString::from(format!("mc-seg-{label}")),
+                            SharedString::from(label.clone()),
+                            active,
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            Self::run_switch_segment(&clip_id, &angle);
+                            cx.notify();
+                        })),
+                    );
+                }
+                panel = panel
+                    .child(multicam_section_label(if audio {
+                        "Switch Mic"
+                    } else {
+                        "Switch Angle"
+                    }))
+                    .child(row);
             }
         }
 
@@ -2480,6 +2563,7 @@ impl Render for InspectorView {
                 canvas_h: 1080,
                 multicam_group: None,
                 multicam_target: None,
+                multicam_mic_labels: Vec::new(),
             }
         };
         let first_clip = snap.clips.first().cloned();
@@ -3008,6 +3092,25 @@ mod tests {
             ..target
         };
         assert!(change_cam_layout_args(&g, &anon, VideoLayout::Full).is_none());
+    }
+
+    // Swift switchMemberItem gate: chips only when a member other than the
+    // fragment's own exists; the roster keeps every label (current included,
+    // shown active) in member order.
+    #[test]
+    fn segment_switch_roster_gates_on_another_member() {
+        let labels = vec!["lapel".to_string(), "room".to_string()];
+        assert_eq!(
+            segment_switch_roster(labels.clone(), Some("lapel")),
+            Some(labels.clone())
+        );
+        assert_eq!(segment_switch_roster(labels.clone(), None), Some(labels));
+        assert_eq!(
+            segment_switch_roster(vec!["lapel".to_string()], Some("lapel")),
+            None
+        );
+        assert_eq!(segment_switch_roster(Vec::new(), Some("lapel")), None);
+        assert_eq!(segment_switch_roster(Vec::new(), None), None);
     }
 
     #[test]

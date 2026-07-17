@@ -4,12 +4,14 @@ use crate::media_panel_view::MediaPanelView;
 use crate::pane::{PaneId, PaneLayout};
 use crate::pane_tree::{PaneNode, PaneNodeKind, PaneSize};
 use crate::preview_view::PreviewView;
-use crate::theme::{Accent, Background, BorderWidth, Layout, Radius, Text};
+use crate::theme::{Accent, Anim, Background, BorderWidth, Layout, Radius, Text};
 use crate::timeline_view::TimelineView;
 use crate::toolbar_view::ToolbarView;
 use gpui::{
-    div, prelude::*, px, AnyElement, Entity, IntoElement, MouseButton, ParentElement, Styled,
+    div, prelude::*, px, Animation, AnimationExt as _, AnyElement, Entity, IntoElement,
+    MouseButton, ParentElement, SharedString, Styled,
 };
+use std::time::Duration;
 
 /// Human-readable label for each pane.
 fn pane_label(id: PaneId) -> &'static str {
@@ -159,8 +161,13 @@ pub(crate) fn focus_ring_color() -> gpui::Hsla {
     }
 }
 
+/// Quadratic ease-out (SwiftUI `.easeOut` shape): fast start, decelerating.
+fn ease_out_quad(delta: f32) -> f32 {
+    1.0 - (1.0 - delta) * (1.0 - delta)
+}
+
 /// Non-interactive accent ring overlaying a focused card (Swift
-/// PanelFocusRing; the easeOut fade is a known gpui gap).
+/// PanelFocusRing).
 fn focus_ring() -> gpui::Div {
     div()
         .absolute()
@@ -170,6 +177,20 @@ fn focus_ring() -> gpui::Div {
         .rounded(px(FOCUS_RING_RADIUS))
         .border(px(FOCUS_RING_WIDTH))
         .border_color(focus_ring_color())
+}
+
+/// The ring with Swift PanelFocusRing's appearance animation: 0.2s easeOut
+/// opacity fade-in. The element only exists while its pane is focused, so
+/// gpui's per-element animation state restarts on every focus move — the
+/// fade-out half of the Swift animation has no element to run on and is
+/// instant (recorded deviation).
+fn focus_ring_fading_in(pane: PaneId) -> impl IntoElement {
+    focus_ring().with_animation(
+        SharedString::from(format!("focus-ring-{}", pane_label(pane))),
+        Animation::new(Duration::from_millis((Anim::TRANSITION * 1000.0) as u64))
+            .with_easing(ease_out_quad),
+        |ring, delta| ring.opacity(delta),
+    )
 }
 
 /// Swift makeHosting panel shell: surface rounded card inset by half the
@@ -192,7 +213,7 @@ fn pane_card(id: PaneId, focus: &PaneFocus, inner: AnyElement) -> gpui::Div {
                 }
             })
             .child(inner)
-            .when(focused, |el| el.child(focus_ring())),
+            .when(focused, |el| el.child(focus_ring_fading_in(id))),
     )
 }
 
@@ -329,6 +350,20 @@ mod tests {
         assert!((color.a - 0.6).abs() < 1e-6);
         assert_eq!(FOCUS_RING_WIDTH, BorderWidth::MEDIUM);
         assert_eq!(FOCUS_RING_RADIUS, Radius::SM);
+    }
+
+    #[test]
+    fn ring_fade_matches_swift_ease_out_transition() {
+        // Swift: .easeOut(duration: Anim.transition) — 0.2s, decelerating,
+        // 0 → full opacity endpoints.
+        assert!((Anim::TRANSITION - 0.2).abs() < 1e-6);
+        assert_eq!(ease_out_quad(0.0), 0.0);
+        assert_eq!(ease_out_quad(1.0), 1.0);
+        // Ease-OUT: the first half covers more than half the distance.
+        assert!(ease_out_quad(0.5) > 0.5);
+        // Monotonic on [0, 1].
+        assert!(ease_out_quad(0.25) < ease_out_quad(0.5));
+        assert!(ease_out_quad(0.5) < ease_out_quad(0.75));
     }
 
     #[test]

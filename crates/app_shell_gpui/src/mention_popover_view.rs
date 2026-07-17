@@ -257,7 +257,7 @@ impl Render for MentionPopoverView {
                     .flex_col()
                     .max_h(px(280.0))
                     .overflow_y_scroll()
-                    .children(candidates.iter().map(|c| candidate_row(c)))
+                    .children(candidates.iter().map(candidate_row))
                     .into_any_element()
             })
     }
