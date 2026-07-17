@@ -113,7 +113,35 @@ impl EditorStateHub {
         // A just-loaded project is already on disk — don't autosave until the
         // next edit (#211 coalescing baseline).
         self.mark_saved_revision();
+        self.recover_generations();
         Ok(())
+    }
+
+    /// Resume in-flight generation jobs found in the just-loaded manifest
+    /// (#216). Runs after the saved-revision baseline so applied outcomes read
+    /// as unsaved edits and the next autosave persists them. Without a host
+    /// backend the plan is only logged — recovery never fails or blocks an open.
+    fn recover_generations(&self) {
+        let Ok(mut exec) = self.executor.lock() else {
+            return;
+        };
+        for record in exec.recover_generations() {
+            let job = &record.job;
+            match &record.outcome {
+                None => eprintln!(
+                    "Generation recovery: no backend; job {} (asset {}) left pending",
+                    job.backend_job_id, job.asset_id
+                ),
+                Some(Ok(())) => eprintln!(
+                    "Generation recovery: job {} (asset {}) outcome applied",
+                    job.backend_job_id, job.asset_id
+                ),
+                Some(Err(reason)) => eprintln!(
+                    "Generation recovery: job {} (asset {}) resume failed: {reason}",
+                    job.backend_job_id, job.asset_id
+                ),
+            }
+        }
     }
 
     /// Point the project-scoped host seams at the given project package:
@@ -632,5 +660,116 @@ mod tests {
         assert!(err.contains("project.json"), "err={err}");
         assert_eq!(hub.revision(), before);
         assert!(hub.project_root().is_none());
+    }
+
+    // ── #216 generation recovery on project load ─────────────────────────
+
+    fn in_flight_manifest(job_id: &str) -> MediaManifest {
+        MediaManifest {
+            entries: vec![core_model::MediaManifestEntry {
+                id: "gen-asset".into(),
+                name: "gen-asset".into(),
+                r#type: core_model::ClipType::Video,
+                source: core_model::MediaSource::External {
+                    absolute_path: "/tmp/gen-asset.mp4".into(),
+                },
+                duration: 5.0,
+                generation_input: Some(core_model::GenerationInput {
+                    backend_job_id: Some(job_id.to_string()),
+                    ..Default::default()
+                }),
+                source_width: None,
+                source_height: None,
+                source_fps: None,
+                has_audio: None,
+                folder_id: None,
+                cached_remote_url: None,
+                cached_remote_url_expires_at: None,
+                source_timecode_frame: None,
+                source_timecode_quanta: None,
+                source_timecode_drop_frame: None,
+                ai_tags: None,
+                ai_description: None,
+                ai_label_status: None,
+                generation_status: Some("generating".into()),
+            }],
+            ..Default::default()
+        }
+    }
+
+    struct SucceedingBackend;
+    impl agent_contract::GenerationBackend for SucceedingBackend {
+        fn resume_job(
+            &self,
+            _job_id: &str,
+        ) -> Result<generation_core::GenerationOutcome, String> {
+            Ok(generation_core::GenerationOutcome::Success {
+                result_urls: vec!["https://cdn/out.mp4".into()],
+            })
+        }
+    }
+
+    #[test]
+    fn load_bundle_resumes_in_flight_generations_via_backend() {
+        let dir = temp_bundle_dir("recovery.palmier");
+        project_io::save_project_state(
+            &dir,
+            &Timeline {
+                fps: 30,
+                ..Default::default()
+            },
+            &in_flight_manifest("job-ok"),
+        )
+        .unwrap();
+
+        let hub = hub_with_temp_registry("recovery.json");
+        hub.executor()
+            .lock()
+            .unwrap()
+            .set_generation_backend(Arc::new(SucceedingBackend));
+        hub.load_bundle(&dir).unwrap();
+
+        {
+            let exec = hub.executor();
+            let exec = exec.lock().unwrap();
+            let entry = &exec.media_manifest().entries[0];
+            assert_eq!(entry.generation_status.as_deref(), Some("none"));
+            assert_eq!(
+                entry.generation_input.as_ref().unwrap().result_urls,
+                Some(vec!["https://cdn/out.mp4".to_string()])
+            );
+        }
+        // Applied outcomes are dirty relative to the load baseline, so the
+        // next autosave tick persists them.
+        assert_eq!(hub.autosave_if_dirty(), Ok(true));
+        let reloaded = project_io::ProjectBundle::open(&dir).unwrap();
+        let manifest = reloaded.manifest.unwrap();
+        assert_eq!(manifest.entries[0].generation_status.as_deref(), Some("none"));
+        assert!(generation_core::plan_generation_recovery(&manifest).is_empty());
+    }
+
+    #[test]
+    fn load_bundle_without_backend_skips_recovery_quietly() {
+        let dir = temp_bundle_dir("recovery-nobackend.palmier");
+        project_io::save_project_state(
+            &dir,
+            &Timeline {
+                fps: 30,
+                ..Default::default()
+            },
+            &in_flight_manifest("job-pending"),
+        )
+        .unwrap();
+
+        let hub = hub_with_temp_registry("recovery-nobackend.json");
+        hub.load_bundle(&dir).unwrap();
+
+        let exec = hub.executor();
+        let entry_status = exec.lock().unwrap().media_manifest().entries[0]
+            .generation_status
+            .clone();
+        assert_eq!(entry_status.as_deref(), Some("generating"));
+        // Nothing applied → the load stays clean; a later pass can retry.
+        assert_eq!(hub.autosave_if_dirty(), Ok(false));
     }
 }
