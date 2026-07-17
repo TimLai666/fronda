@@ -1,7 +1,7 @@
 # Upstream PR Audit — Rust Rewrite Applicability
 
 Latest re-audit: 2026-07-17
-Upstream HEAD: `60d2f525` (palmier-io/palmier-pro main, v0.6.10 + #343)
+Upstream HEAD: `d5eb62bd` (palmier-io/palmier-pro main, v0.6.10 + #343/#344)
 Previous audits: 2026-07-05 at `771b63e` (v0.6.1), 2026-07-03 at `9a3ae50`,
 2026-06-25 at `b9b4ad9`
 
@@ -90,7 +90,7 @@ backend), #272 (CoreVideo color-tag passthrough), #266 (Swift file split).
 
 #290/#297/#317 (PostHog analytics + tool-call tracking + MCP session
 counts), #277 (Sentry log-level downgrade), #332 (feedback lastError
-enrichment — no feedback backend), infra-batch: #316 (SPM traits/CI), #314
+enrichment — no feedback backend), #344 (export failure_reason PostHog enrichment + NSError-domain classification — audited 2026-07-18, same class as #332; the Rust export queue already surfaces failure strings in-UI), infra-batch: #316 (SPM traits/CI), #314
 (MLX drain), #313 (logging overhead), #308 (star-history token), #323/#325
 (README badges), version bumps/appcast/changelogs.
 
