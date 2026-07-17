@@ -1978,8 +1978,8 @@ pub fn open_main_window(cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()
         },
-        |_, cx| {
-            cx.new(|cx| {
+        |window, cx| {
+            let root = cx.new(|cx| {
                 let mut root = AppRoot::new(cx);
                 // Dev/verification seam: boot straight into an empty editor
                 // (same path as Home's New Project button).
@@ -1992,7 +1992,14 @@ pub fn open_main_window(cx: &mut App) {
                     root.open_editor(cx);
                 }
                 root
-            })
+            });
+            // Focus the root at boot: gpui dispatches keystrokes and
+            // resolves menu-action availability along the focus path, so
+            // without this, shortcuts and app-menu items are dead (macOS
+            // shows them disabled) until something else takes focus.
+            let handle = root.read(cx).focus_handle.clone();
+            window.focus(&handle, cx);
+            root
         },
     )
     .unwrap();

@@ -16,6 +16,11 @@ fn main() {
             app_shell_gpui::text_area::bind_text_area_keys(cx);
             app_shell_gpui::global_shortcuts::bind_global_shortcut_keys(cx);
             app_shell_gpui::global_shortcuts::bind_menu_shortcut_keys(cx);
+            // After the bindings (the keymap feeds the menu key
+            // equivalents), before the window opens.
+            if cfg!(target_os = "macos") {
+                cx.set_menus(app_shell_gpui::native_menu::native_menus());
+            }
             open_main_window(cx);
         });
 }

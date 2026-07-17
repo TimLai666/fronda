@@ -8,29 +8,47 @@
 use gpui::{actions, App, KeyBinding};
 
 /// Menu-shortcut dispatch: one action carrying the target MenuAction, bound
-/// per shortcut on non-macOS (macOS routes through the system menu).
+/// per shortcut on every platform and dispatched by the native macOS menu.
 #[derive(Clone, PartialEq, gpui::Action)]
 #[action(namespace = fronda_menu, no_json)]
 pub struct RunMenuAction {
     pub action: crate::menu::MenuAction,
 }
 
-/// Register menu-shortcut keybindings (Ctrl-modifier chords). No-op on
-/// macOS. Call once at boot, before the window opens.
+/// Register menu-shortcut keybindings: Ctrl-modifier chords on non-macOS,
+/// Cmd-modifier chords on macOS (where the keymap entries also feed the
+/// native menu's key equivalents). Call once at boot, before the window
+/// opens.
 pub fn bind_menu_shortcut_keys(cx: &mut App) {
-    if cfg!(target_os = "macos") {
-        return;
-    }
-    let bindings: Vec<KeyBinding> = crate::menu::menu_keybinding_shortcuts()
+    let macos = cfg!(target_os = "macos");
+    let mut bindings: Vec<KeyBinding> = crate::menu::menu_keybinding_shortcuts()
         .into_iter()
         .map(|s| {
-            KeyBinding::new(
-                &s.keystroke(),
-                RunMenuAction { action: s.action },
-                None,
-            )
+            let keystroke = if macos {
+                s.keystroke_macos()
+            } else {
+                s.keystroke()
+            };
+            KeyBinding::new(&keystroke, RunMenuAction { action: s.action }, None)
         })
         .collect();
+    if macos {
+        // Display-parity bindings for the text-input-owned combos: the
+        // keymap entry gives the Edit menu its standard ⌘ key equivalents;
+        // `!input` keeps text fields' own `input`-context bindings winning
+        // inside inputs.
+        bindings.extend(
+            crate::menu::text_input_owned_menu_shortcuts()
+                .into_iter()
+                .map(|s| {
+                    KeyBinding::new(
+                        &s.keystroke_macos(),
+                        RunMenuAction { action: s.action },
+                        Some("!input"),
+                    )
+                }),
+        );
+    }
     cx.bind_keys(bindings);
 }
 

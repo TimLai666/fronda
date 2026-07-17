@@ -102,7 +102,7 @@ On non-macOS platforms, menu actions with declared shortcuts SHALL be triggerabl
 
 ### Requirement: Title bar menu bar on non-macOS
 
-On non-macOS platforms, the title bar SHALL show File, Edit, View, Window, and Help menus whose items mirror the application menu definition, execute their menu actions when clicked, and display the items' shortcut hints. The menu definition SHALL have a single source shared with the shortcut bindings.
+On non-macOS platforms, the title bar SHALL show the application menu (Fronda), File, Edit, View, and Help menus whose items mirror the application menu definition, execute their menu actions when clicked, and display the items' shortcut hints. The menu definition SHALL have a single source shared with the shortcut bindings. (The Swift baseline `MainMenu.swift` defines exactly these five groups; there is no Window menu.)
 
 #### Scenario: File menu opens and executes
 
@@ -117,3 +117,41 @@ The media panel tab rail SHALL render each tab (media, captions, music) with an 
 
 - **WHEN** the media panel renders its tab rail
 - **THEN** each of the three tabs shows its SVG icon and no placeholder letters are visible
+
+### Requirement: Desktop feature enables the platform font backend
+
+The `desktop-app` cargo feature of `fronda-app-shell-gpui` SHALL enable `gpui_platform/font-kit` so the desktop binary can rasterize text glyphs on macOS. A regression test SHALL assert that the feature declaration continues to include `gpui_platform/font-kit`.
+
+#### Scenario: macOS build renders text
+
+- **WHEN** the desktop binary built with the `desktop-app` feature runs on macOS
+- **THEN** all UI text labels render alongside the vector shapes, panel backgrounds, borders, and icons
+
+#### Scenario: Regression test pins the feature declaration
+
+- **WHEN** the `desktop-app` feature declaration stops including `gpui_platform/font-kit`
+- **THEN** the test `desktop_app_enables_macos_font_backend` fails
+
+### Requirement: Native macOS application menu
+
+On macOS, the app SHALL register a native application menu at startup, translated from the same single-source menu definition used by the non-macOS title bar menu (application menu, File, Edit, View, and Help groups with the Swift baseline's separator grouping, and Layout as a View submenu). Selecting a menu item SHALL dispatch the same action through the same code path as the non-macOS title bar menu. Menu actions with declared Command shortcuts SHALL be triggerable via those shortcuts, dispatching the same actions, with the shortcuts shown as the menu items' key equivalents. Editing shortcuts owned by text inputs (Cmd+A, Cmd+C, Cmd+V, Cmd+X, Cmd+Z) SHALL keep priority inside focused text inputs.
+
+#### Scenario: Menu bar appears with the shared groups
+
+- **WHEN** the app launches on macOS
+- **THEN** the native menu bar shows the application menu, File, Edit, View, and Help, whose items mirror the shared menu definition
+
+#### Scenario: Layout switches through the View menu
+
+- **WHEN** the user selects Default, Media, or Vertical from the View menu's Layout submenu on macOS
+- **THEN** the editor switches to that layout preset, identically to the non-macOS title bar menu's layout items
+
+#### Scenario: Command shortcut dispatches the same action
+
+- **WHEN** the user presses Cmd+N on macOS with no blocking dialog open
+- **THEN** the NewProject menu action runs, matching the File menu item and the Home screen's New Project button behavior
+
+#### Scenario: Text inputs keep editing shortcuts
+
+- **WHEN** focus is inside a text input on macOS and the user presses Cmd+C
+- **THEN** the text input's copy handling runs instead of the menu action

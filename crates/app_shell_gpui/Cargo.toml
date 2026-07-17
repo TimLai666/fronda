@@ -15,7 +15,7 @@ required-features = ["desktop-app"]
 
 [features]
 default = []
-desktop-app = ["dep:gpui", "dep:gpui_platform"]
+desktop-app = ["dep:gpui", "dep:gpui_platform", "gpui_platform/font-kit"]
 
 [dependencies]
 agent_contract = { package = "fronda-agent-contract", path = "../agent_contract" }

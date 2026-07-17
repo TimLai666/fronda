@@ -15,6 +15,11 @@
 7. **Windows 沒有選單入口**：`menu.rs` 已有完整 MenuAction 與快捷鍵表（例如 cmd+N），但 Windows 上既無選單列、快捷鍵也未綁定，File/Edit/View 整面功能（含 Import Timeline、佈局切換、面板開關）無入口。
 8. **Media rail 圖示是字母替身**：rail 的 M / C 為文字字母，Swift 用 SF Symbols 圖示。
 
+2026-07-17 macOS 實測（首次在 Mac 上實跑 Rust editor）再確認兩項結構性落差：
+
+9. **macOS 文字完全不渲染**：editor 的向量圖形、面板底色、邊框、圖示都正常，但所有文字缺失。以 gpui-ce 官方 text example（同一 checkout，文字正常）排除截圖路徑後，以最小 render probe 定位根因：`desktop-app` feature 只啟用 `dep:gpui` 與 `dep:gpui_platform`，未啟用 `gpui_platform/font-kit` 平台字型後端，App 能畫幾何但無法 rasterize 字形。
+10. **macOS 沒有任何選單**：原第 7 點假設「macOS 上維持系統選單（gpui_platform 既有路徑）」，實測不成立 — System Events 查無 Fronda 的 menu bar。原始碼佐證：`global_shortcuts::bind_menu_shortcut_keys` 在 macOS 直接 return、`titlebar_view.rs` 在 macOS 刻意隱藏視窗內選單列、`main.rs` 啟動從未呼叫 GPUI 的 `App::set_menus`。macOS 既沒有非 macOS 的 title bar 選單、也沒有原生替代，View 選單與佈局切換在 macOS 無選單入口。
+
 ## Proposed Solution
 
 1. **骨架重寫**（`editor_view.rs`）：照 Swift `EditorView.swift` 的 split 巢狀重建三個 preset。
@@ -29,6 +34,8 @@
 6. **Windows 選單快捷鍵**（`menu.rs` + `global_shortcuts.rs` + `app_root.rs`）：為 MenuAction 快捷鍵表產生 gpui actions 與 keybindings（cmd 映射為 Windows 的 ctrl），`app_root` 以 on_action 轉發到既有 `perform_menu_action`。輸入欄位聚焦時的行為沿用既有 `input` context 規則（帶修飾鍵的選單快捷鍵不受 `!input` 限制，Ctrl+C/V/X/A/Z 等由 text field 自行處理者除外，遇衝突以 text field 優先）。
 7. **Title bar 選單列基礎版**（`titlebar_view.rs`）：title bar 左側加 File / Edit / View / Window / Help 下拉，項目直接取 `menu.rs` 既有選單結構，點擊執行對應 MenuAction，樣式沿用 `context_menu.rs` 的深色選單。macOS 上維持系統選單（gpui_platform 既有路徑），選單列僅在非 macOS 顯示。
 8. **Media rail 圖示**（`media_panel_view.rs` + `assets`）：M / C / 音符字母替換為 SVG 圖示（對照 Swift SF Symbols：photo 系 / captions 系 / music note 系），沿用專案既有 icons 資產風格。
+9. **macOS 字型後端**（`crates/app_shell_gpui/Cargo.toml` + `lib.rs`）：`desktop-app` feature 補上 `gpui_platform/font-kit`（`desktop-app = ["dep:gpui", "dep:gpui_platform", "gpui_platform/font-kit"]`），並加回歸測試 `desktop_app_enables_macos_font_backend` 斷言 feature 宣告持續包含該後端，防止之後改依賴時無聲退回「無文字」狀態。
+10. **macOS 原生選單**（`menu.rs` + `global_shortcuts.rs` + `main.rs` 或同 crate 新模組）：從 `menu.rs` 既有單一來源選單模型翻譯出 GPUI 原生 `Menu` / `MenuItem`，boot 時在 macOS 呼叫 `App::set_menus` 註冊；選單項一律 dispatch 既有共享的 `RunMenuAction`，與非 macOS title bar 選單走同一 `perform_menu_action` 路徑。Command 快捷鍵在 macOS 綁 `cmd-` keybinding（keymap 同時是原生選單 key equivalent 顯示的資料來源）。不新增第二份獨立選單模型、不直接呼叫 AppKit。修正第 7 點「macOS 上維持系統選單」的錯誤假設。
 
 ## Non-Goals
 
@@ -36,7 +43,8 @@
 - **PanelFocusRing 焦點光環**：依賴 pane focus 追蹤系統（Swift `editor.focusedPanel`），Rust 尚無對應狀態，本次不引入。
 - **面板 visibility 跨啟動持久化（EDT-003）**：現況未實作，不在本次補。
 - **Preview 畫布的即時合成內容**：僅修空狀態的底色與畫布邊界，合成 PNG 管線不動。
-- **macOS / Linux 的選單行為**：僅針對 Windows 補入口，macOS 系統選單路徑不動。
+- **Linux 的選單行為**：Linux 走非 macOS 的 title bar 選單列路徑，已由第 6、7 點涵蓋，不另做原生選單。（macOS 選單原列於此處，2026-07-17 實測確認 macOS 根本沒有系統選單被註冊，已改列入範圍，見 Proposed Solution 第 10 點。）
+- **macOS 選單的動態狀態**：選單項的 checked 狀態（例如目前佈局打勾）與依情境 disable 不在本次範圍，與非 macOS title bar 選單現況一致。
 
 ## Alternatives Considered
 
@@ -46,8 +54,11 @@
 
 ## Impact
 
-- Affected specs: 新 capability `editor-shell-layout`；同步在 specs/rust-rewrite/03-timeline-editor-and-preview.md 的 J 節補 EDT-006（骨架結構）、EDT-007（卡片外殼）、EDT-008（divider 調整）、EDT-009（Windows 選單入口）並修正 EDT-002 的 preset/visibility 描述。
+- Affected specs: 新 capability `editor-shell-layout`；同步在 specs/rust-rewrite/03-timeline-editor-and-preview.md 的 J 節補 EDT-006（骨架結構）、EDT-007（卡片外殼）、EDT-008（divider 調整）、EDT-009（非 macOS 選單快捷鍵與 title bar 選單列）、EDT-010（desktop 字型後端）、EDT-011（macOS 原生選單）並修正 EDT-002 的 preset/visibility 描述。
 - Affected code:
+  - Modified: crates/app_shell_gpui/Cargo.toml（desktop-app feature 補 gpui_platform/font-kit；Cargo.lock 隨之更新）
+  - Modified: crates/app_shell_gpui/src/lib.rs（字型後端回歸測試）
+  - Modified: crates/app_shell_gpui/src/main.rs（macOS boot 註冊原生選單）
   - Modified: crates/app_shell_gpui/src/editor_view.rs
   - Modified: crates/app_shell_gpui/src/pane.rs
   - Modified: crates/app_shell_gpui/src/app_root.rs
@@ -59,3 +70,4 @@
   - Modified: crates/app_shell_gpui/src/global_shortcuts.rs
   - Modified: specs/rust-rewrite/03-timeline-editor-and-preview.md
   - New: crates/app_shell_gpui/assets/icons（media rail 三顆 SVG 圖示，實際檔名以現有 icons 目錄慣例為準）
+  - New: crates/app_shell_gpui/src/native_menu.rs（macOS 原生選單翻譯層，`#[cfg(feature = "desktop-app")]`）

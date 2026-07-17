@@ -57,6 +57,8 @@ pub mod media_panel_view;
 pub mod mention_popover_view;
 pub mod menu;
 pub mod multi_session;
+#[cfg(feature = "desktop-app")]
+pub mod native_menu;
 pub mod pane;
 pub mod pane_resize;
 pub mod pane_tree;
@@ -135,5 +137,18 @@ mod tests {
     fn shell_headline_is_not_future_tense_scaffolding_copy() {
         assert!(!SHELL_HEADLINE.contains("rewrite"));
         assert!(!SHELL_HEADLINE.contains("scaffold"));
+    }
+
+    #[test]
+    fn desktop_app_enables_macos_font_backend() {
+        let manifest = include_str!("../Cargo.toml");
+        let desktop_app = manifest
+            .lines()
+            .find(|line| line.starts_with("desktop-app ="))
+            .expect("desktop-app feature must exist");
+        assert!(
+            desktop_app.contains("gpui_platform/font-kit"),
+            "desktop-app must enable gpui_platform/font-kit so macOS can rasterize text"
+        );
     }
 }

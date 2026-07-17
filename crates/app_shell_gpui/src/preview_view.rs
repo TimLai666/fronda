@@ -1135,9 +1135,51 @@ impl Render for PreviewView {
                             this.try_sample_chroma(e.position, cx);
                         }),
                     )
-                    // Composited frame (or empty-state canvas rect) — hidden when
-                    // an overlay is shown. The zoom wrapper scales the fitted
-                    // frame by canvas_zoom (Swift: fitSize * editor.canvasZoom,
+                    // Timeline-aspect canvas bounds (BASE + SUBTLE border),
+                    // always painted under the frame: an empty or fully
+                    // transparent composite must still show the canvas
+                    // (spec "Preview empty-state canvas" — an empty
+                    // timeline composites to a transparent PNG, so keying
+                    // this off frame_png presence hides the canvas).
+                    .when(canvas_overlay == CanvasOverlay::None, |el| {
+                        let aspect = tl_width as f64 / tl_height.max(1) as f64;
+                        let zoom = canvas_zoom as f32;
+                        el.child(
+                            canvas(
+                                |_, _, _| {},
+                                move |bounds, _, window, _| {
+                                    let avail = (
+                                        bounds.size.width.as_f32(),
+                                        bounds.size.height.as_f32(),
+                                    );
+                                    if let Some((_, _, w, h)) = aspect_fit_rect(avail, aspect)
+                                    {
+                                        // Center-scale by zoom to track the
+                                        // frame's zoom wrapper.
+                                        let (w, h) = (w * zoom, h * zoom);
+                                        let rect = gpui::Bounds {
+                                            origin: bounds.origin
+                                                + gpui::point(
+                                                    px((avail.0 - w) / 2.0),
+                                                    px((avail.1 - h) / 2.0),
+                                                ),
+                                            size: gpui::size(px(w), px(h)),
+                                        };
+                                        window.paint_quad(
+                                            gpui::fill(rect, Background::BASE)
+                                                .border_widths(px(BorderWidth::THIN))
+                                                .border_color(BorderColors::SUBTLE),
+                                        );
+                                    }
+                                },
+                            )
+                            .absolute()
+                            .size_full(),
+                        )
+                    })
+                    // Composited frame — hidden when an overlay is shown.
+                    // The zoom wrapper scales the fitted frame by
+                    // canvas_zoom (Swift: fitSize * editor.canvasZoom,
                     // clipped).
                     .when(
                         canvas_overlay == CanvasOverlay::None,
@@ -1157,38 +1199,7 @@ impl Render for PreviewView {
                                             .object_fit(gpui::ObjectFit::Contain),
                                     ),
                             ),
-                            // No composited frame: draw the timeline-aspect canvas
-                            // bounds so an empty project still shows the canvas.
-                            None => {
-                                let aspect = tl_width as f64 / tl_height.max(1) as f64;
-                                el.child(
-                                    canvas(
-                                        |_, _, _| {},
-                                        move |bounds, _, window, _| {
-                                            let avail = (
-                                                bounds.size.width.as_f32(),
-                                                bounds.size.height.as_f32(),
-                                            );
-                                            if let Some((x, y, w, h)) =
-                                                aspect_fit_rect(avail, aspect)
-                                            {
-                                                let rect = gpui::Bounds {
-                                                    origin: bounds.origin
-                                                        + gpui::point(px(x), px(y)),
-                                                    size: gpui::size(px(w), px(h)),
-                                                };
-                                                window.paint_quad(
-                                                    gpui::fill(rect, Background::BASE)
-                                                        .border_widths(px(BorderWidth::THIN))
-                                                        .border_color(BorderColors::SUBTLE),
-                                                );
-                                            }
-                                        },
-                                    )
-                                    .absolute()
-                                    .size_full(),
-                                )
-                            }
+                            None => el,
                         },
                     )
                     // Offline overlay (Swift: "Media Offline" message)

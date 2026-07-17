@@ -168,6 +168,27 @@ impl Shortcut {
         s
     }
 
+    /// gpui keystroke string for macOS keybindings; the cmd modifier stays
+    /// the platform (⌘) modifier. The keymap entry doubles as the native
+    /// menu's key-equivalent source.
+    pub fn keystroke_macos(&self) -> String {
+        let mut s = String::new();
+        if self.modifiers.command {
+            s.push_str("cmd-");
+        }
+        if self.modifiers.control {
+            s.push_str("ctrl-");
+        }
+        if self.modifiers.option {
+            s.push_str("alt-");
+        }
+        if self.modifiers.shift {
+            s.push_str("shift-");
+        }
+        s.push_str(&self.key);
+        s
+    }
+
     /// Human-readable hint for menu items ("Ctrl+Shift+S").
     pub fn display_hint(&self) -> String {
         let mut parts: Vec<&str> = Vec::new();
@@ -196,18 +217,32 @@ impl Shortcut {
     }
 }
 
-/// Menu shortcuts to bind as global keybindings on non-macOS builds: the
-/// command-modifier entries, minus the plain-Ctrl combos text inputs own
-/// (Ctrl+A/C/V/X/Z/Y — spec "Windows menu shortcuts" exclusion clause).
+const TEXT_INPUT_OWNED: [&str; 6] = ["a", "c", "v", "x", "z", "y"];
+
+/// True for plain primary-modifier combos text inputs own
+/// (Cmd/Ctrl+A/C/V/X/Z/Y — spec "Windows menu shortcuts" exclusion clause).
+fn is_text_input_owned(s: &Shortcut) -> bool {
+    let plain_primary = !s.modifiers.shift && !s.modifiers.option && !s.modifiers.control;
+    plain_primary && TEXT_INPUT_OWNED.contains(&s.key.as_str())
+}
+
+/// Menu shortcuts to bind as global keybindings: the command-modifier
+/// entries, minus the combos text inputs own.
 pub fn menu_keybinding_shortcuts() -> Vec<Shortcut> {
-    const TEXT_INPUT_OWNED: [&str; 6] = ["a", "c", "v", "x", "z", "y"];
     all_shortcuts()
         .into_iter()
-        .filter(|s| s.modifiers.command)
-        .filter(|s| {
-            let plain_ctrl = !s.modifiers.shift && !s.modifiers.option && !s.modifiers.control;
-            !(plain_ctrl && TEXT_INPUT_OWNED.contains(&s.key.as_str()))
-        })
+        .filter(|s| s.modifiers.command && !is_text_input_owned(s))
+        .collect()
+}
+
+/// The command shortcuts text inputs own (Cmd+A/C/V/X/Z in `all_shortcuts`).
+/// Excluded from the plain menu bindings; macOS binds them separately with
+/// an `!input` predicate so the Edit menu shows standard ⌘ key equivalents
+/// while text fields keep priority.
+pub fn text_input_owned_menu_shortcuts() -> Vec<Shortcut> {
+    all_shortcuts()
+        .into_iter()
+        .filter(|s| s.modifiers.command && is_text_input_owned(s))
         .collect()
 }
 
@@ -288,70 +323,85 @@ impl MenuAction {
             MenuAction::TimelineFitToWindow => "Fit Timeline to Window",
         }
     }
+
+    /// Short label for submenu contexts (Swift Layout submenu shows
+    /// "Default" / "Media" / "Vertical", not the flattened title-bar form).
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            MenuAction::LayoutDefault => "Default",
+            MenuAction::LayoutMedia => "Media",
+            MenuAction::LayoutVertical => "Vertical",
+            other => other.label(),
+        }
+    }
 }
 
-/// Returns all menu items organized by group matching MENU-001 to MENU-007.
-pub fn all_menus() -> Vec<(MenuGroup, Vec<MenuAction>)> {
-    vec![
-        (
-            MenuGroup::App,
+/// Menu items for one group, split into sections at Swift `MainMenu.swift`'s
+/// separator positions. This is the primary menu definition; `all_menus`
+/// flattens it so the two can never diverge.
+pub fn menu_sections(group: MenuGroup) -> Vec<Vec<MenuAction>> {
+    match group {
+        MenuGroup::App => vec![
+            vec![MenuAction::About],
+            vec![MenuAction::CheckForUpdates],
+            vec![MenuAction::Settings],
+            vec![MenuAction::Quit],
+        ],
+        MenuGroup::File => vec![
+            vec![MenuAction::NewProject, MenuAction::OpenProject],
+            vec![MenuAction::SaveProject, MenuAction::SaveProjectAs],
+            vec![MenuAction::ImportMedia, MenuAction::ImportTimeline],
+            vec![MenuAction::Export],
+        ],
+        MenuGroup::Edit => vec![
+            vec![MenuAction::Undo, MenuAction::Redo],
             vec![
-                MenuAction::About,
-                MenuAction::CheckForUpdates,
-                MenuAction::Settings,
-                MenuAction::Quit,
-            ],
-        ),
-        (
-            MenuGroup::File,
-            vec![
-                MenuAction::NewProject,
-                MenuAction::OpenProject,
-                MenuAction::SaveProject,
-                MenuAction::SaveProjectAs,
-                MenuAction::ImportMedia,
-                MenuAction::ImportTimeline,
-                MenuAction::Export,
-            ],
-        ),
-        (
-            MenuGroup::Edit,
-            vec![
-                MenuAction::Undo,
-                MenuAction::Redo,
                 MenuAction::Cut,
                 MenuAction::Copy,
                 MenuAction::Paste,
                 MenuAction::SelectAll,
+            ],
+            vec![
                 MenuAction::SplitAtPlayhead,
                 MenuAction::TrimStartToPlayhead,
                 MenuAction::TrimEndToPlayhead,
-                MenuAction::Delete,
             ],
-        ),
-        (
-            MenuGroup::View,
+            vec![MenuAction::Delete],
+        ],
+        MenuGroup::View => vec![
             vec![
                 MenuAction::ToggleMediaPanel,
                 MenuAction::ToggleInspector,
                 MenuAction::ToggleAgentPanel,
-                MenuAction::MaximizeFocusedPane,
-                MenuAction::EnterFullScreen,
+            ],
+            vec![MenuAction::MaximizeFocusedPane],
+            vec![
                 MenuAction::LayoutDefault,
                 MenuAction::LayoutMedia,
                 MenuAction::LayoutVertical,
             ],
-        ),
-        (
-            MenuGroup::Help,
-            vec![
-                MenuAction::Tutorial,
-                MenuAction::KeyboardShortcuts,
-                MenuAction::McpInstructions,
-                MenuAction::SendFeedback,
-            ],
-        ),
+            vec![MenuAction::EnterFullScreen],
+        ],
+        MenuGroup::Help => vec![
+            vec![MenuAction::Tutorial],
+            vec![MenuAction::KeyboardShortcuts, MenuAction::McpInstructions],
+            vec![MenuAction::SendFeedback],
+        ],
+    }
+}
+
+/// Returns all menu items organized by group matching MENU-001 to MENU-007.
+pub fn all_menus() -> Vec<(MenuGroup, Vec<MenuAction>)> {
+    [
+        MenuGroup::App,
+        MenuGroup::File,
+        MenuGroup::Edit,
+        MenuGroup::View,
+        MenuGroup::Help,
     ]
+    .into_iter()
+    .map(|group| (group, menu_sections(group).into_iter().flatten().collect()))
+    .collect()
 }
 
 /// Returns all keyboard shortcuts matching MENU-002 to MENU-007 key bindings.
@@ -519,6 +569,136 @@ mod tests {
             .any(|s| s.action == MenuAction::Redo && s.keystroke() == "ctrl-shift-z"));
         // Modifier-free shortcuts are global_shortcuts' job, not menu bindings.
         assert!(bindings.iter().all(|s| s.modifiers.command));
+    }
+
+    #[test]
+    fn text_input_owned_shortcuts_are_exactly_the_excluded_five() {
+        let owned = text_input_owned_menu_shortcuts();
+        let mut pairs: Vec<(String, MenuAction)> =
+            owned.into_iter().map(|s| (s.key, s.action)).collect();
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            pairs,
+            vec![
+                ("a".to_string(), MenuAction::SelectAll),
+                ("c".to_string(), MenuAction::Copy),
+                ("v".to_string(), MenuAction::Paste),
+                ("x".to_string(), MenuAction::Cut),
+                ("z".to_string(), MenuAction::Undo),
+            ]
+        );
+    }
+
+    #[test]
+    fn menu_sections_flatten_to_all_menus() {
+        for (group, actions) in all_menus() {
+            let flattened: Vec<MenuAction> =
+                menu_sections(group).into_iter().flatten().collect();
+            assert_eq!(flattened, actions, "sections diverge for {group:?}");
+        }
+    }
+
+    #[test]
+    fn menu_sections_match_swift_separator_grouping() {
+        // Swift MainMenu.swift separator placement, group by group.
+        let app = menu_sections(MenuGroup::App);
+        assert_eq!(
+            app,
+            vec![
+                vec![MenuAction::About],
+                vec![MenuAction::CheckForUpdates],
+                vec![MenuAction::Settings],
+                vec![MenuAction::Quit],
+            ]
+        );
+        let file = menu_sections(MenuGroup::File);
+        assert_eq!(
+            file,
+            vec![
+                vec![MenuAction::NewProject, MenuAction::OpenProject],
+                vec![MenuAction::SaveProject, MenuAction::SaveProjectAs],
+                vec![MenuAction::ImportMedia, MenuAction::ImportTimeline],
+                vec![MenuAction::Export],
+            ]
+        );
+        let edit = menu_sections(MenuGroup::Edit);
+        assert_eq!(
+            edit,
+            vec![
+                vec![MenuAction::Undo, MenuAction::Redo],
+                vec![
+                    MenuAction::Cut,
+                    MenuAction::Copy,
+                    MenuAction::Paste,
+                    MenuAction::SelectAll,
+                ],
+                vec![
+                    MenuAction::SplitAtPlayhead,
+                    MenuAction::TrimStartToPlayhead,
+                    MenuAction::TrimEndToPlayhead,
+                ],
+                vec![MenuAction::Delete],
+            ]
+        );
+        let view = menu_sections(MenuGroup::View);
+        assert_eq!(
+            view,
+            vec![
+                vec![
+                    MenuAction::ToggleMediaPanel,
+                    MenuAction::ToggleInspector,
+                    MenuAction::ToggleAgentPanel,
+                ],
+                vec![MenuAction::MaximizeFocusedPane],
+                vec![
+                    MenuAction::LayoutDefault,
+                    MenuAction::LayoutMedia,
+                    MenuAction::LayoutVertical,
+                ],
+                vec![MenuAction::EnterFullScreen],
+            ]
+        );
+        let help = menu_sections(MenuGroup::Help);
+        assert_eq!(
+            help,
+            vec![
+                vec![MenuAction::Tutorial],
+                vec![
+                    MenuAction::KeyboardShortcuts,
+                    MenuAction::McpInstructions,
+                ],
+                vec![MenuAction::SendFeedback],
+            ]
+        );
+    }
+
+    #[test]
+    fn layout_actions_have_short_labels() {
+        // Swift Layout submenu item titles (LayoutPreset labels).
+        assert_eq!(MenuAction::LayoutDefault.short_label(), "Default");
+        assert_eq!(MenuAction::LayoutMedia.short_label(), "Media");
+        assert_eq!(MenuAction::LayoutVertical.short_label(), "Vertical");
+        // Everything else falls back to the full label.
+        assert_eq!(
+            MenuAction::NewProject.short_label(),
+            MenuAction::NewProject.label()
+        );
+    }
+
+    #[test]
+    fn keystroke_macos_maps_cmd_to_cmd() {
+        assert_eq!(
+            Shortcut::cmd("n", MenuAction::NewProject).keystroke_macos(),
+            "cmd-n"
+        );
+        assert_eq!(
+            Shortcut::cmd_shift("s", MenuAction::SaveProjectAs).keystroke_macos(),
+            "cmd-shift-s"
+        );
+        assert_eq!(
+            Shortcut::cmd_option("0", MenuAction::ToggleInspector).keystroke_macos(),
+            "cmd-alt-0"
+        );
     }
 
     #[test]

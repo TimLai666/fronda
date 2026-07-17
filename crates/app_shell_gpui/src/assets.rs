@@ -76,11 +76,45 @@ impl AssetSource for FrondaAssets {
             "icons/waveform.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/waveform.svg"
             )))),
+            "icons/captions.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/captions.svg"
+            )))),
+            "icons/music_note.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/music_note.svg"
+            )))),
+            "icons/eye_slash.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/eye_slash.svg"
+            )))),
+            "icons/speaker_slash.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/speaker_slash.svg"
+            )))),
             _ => Err(anyhow!("unknown asset: {path}")),
         }
     }
 
     fn list(&self, _path: &str) -> anyhow::Result<Vec<SharedString>> {
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_icon_on_disk_is_embedded() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons");
+        for entry in std::fs::read_dir(dir).expect("assets/icons must exist") {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            if !name.ends_with(".svg") {
+                continue;
+            }
+            let path = format!("icons/{name}");
+            assert!(
+                FrondaAssets.load(&path).is_ok_and(|a| a.is_some()),
+                "{path} exists on disk but is not embedded in FrondaAssets — \
+                 svg().path(\"{path}\") would silently render nothing"
+            );
+        }
     }
 }
