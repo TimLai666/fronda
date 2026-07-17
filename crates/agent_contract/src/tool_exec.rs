@@ -2095,14 +2095,6 @@ impl ToolExecutor {
             volume,
             opacity,
             transform: transform.as_ref(),
-            content: None,
-            font_name: None,
-            font_size: None,
-            font_weight: None,
-            color: None,
-            alignment: None,
-            background: None,
-            border: None,
         };
 
         // v2: blendMode (absorbs set_blend_mode). 'normal' clears; rejected on
@@ -2184,14 +2176,6 @@ impl ToolExecutor {
                     trim_end_frame: if is_text { None } else { trim_end },
                     speed: if is_text { None } else { speed },
                     transform: None,
-                    content: None,
-                    font_name: None,
-                    font_size: None,
-                    font_weight: None,
-                    color: None,
-                    alignment: None,
-                    background: None,
-                    border: None,
                     volume: None,
                     opacity: None,
                 };

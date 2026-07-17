@@ -55,7 +55,6 @@ fn is_layout_action(action: &MenuAction) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::Action;
 
     fn assert_dispatches(item: &MenuItem, expected: MenuAction, expected_name: &str) {
         match item {

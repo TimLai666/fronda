@@ -98,6 +98,8 @@ pub mod titlebar_view;
 pub mod toolbar_model;
 #[cfg(feature = "desktop-app")]
 pub mod toolbar_view;
+#[cfg(feature = "transcribe-local")]
+pub mod transcribe;
 #[cfg(feature = "desktop-app")]
 pub mod tour_overlay_view;
 #[cfg(feature = "desktop-app")]

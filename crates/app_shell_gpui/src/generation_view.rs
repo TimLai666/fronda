@@ -874,7 +874,8 @@ pub fn settings_summary(state: &GenerationState) -> String {
                 parts.push(p.quality.clone());
             }
             if !p.aspect_ratio.is_empty() && !c.aspect_ratios.is_empty() {
-                parts.push(p.aspect_ratio.clone());
+                // #284: image aspect enum ids display humanized ("Landscape 16:9").
+                parts.push(model_catalog::aspect_ratio_display_label(&p.aspect_ratio));
             }
             if c.max_images > 1 && p.num_images > 1 {
                 parts.push(format!("×{}", p.num_images));
@@ -2356,12 +2357,18 @@ impl GenerationView {
         st: &GenerationState,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        // #284: image models get a wider popover for humanized aspect labels.
+        let popover_width = if matches!(st.selected_type, GenerationType::Image) {
+            270.0
+        } else {
+            220.0
+        };
         let mut popover = div()
             .id("gen-settings-popover")
             .absolute()
             .bottom(px(34.0))
             .left(px(Spacing::SM_MD))
-            .w(px(220.0))
+            .w(px(popover_width))
             .rounded(px(Radius::MD))
             .bg(Background::RAISED)
             .border_1()
@@ -2858,6 +2865,10 @@ mod tests {
 
         let ist = image_state("gpt-image-2");
         assert_eq!(settings_summary(&ist), "Landscape · high");
+
+        // #284: image aspect enum ids are humanized in the summary.
+        let rst = image_state("recraft-v4");
+        assert_eq!(settings_summary(&rst), "Square HD");
 
         let mut ast = audio_state("elevenlabs-music");
         assert_eq!(settings_summary(&ast), "30s");

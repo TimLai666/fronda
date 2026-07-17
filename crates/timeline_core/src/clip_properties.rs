@@ -1,4 +1,4 @@
-use core_model::{Clip, Interpolation, KeyframeTrack, TextStyle, Transform};
+use core_model::{Clip, Interpolation, KeyframeTrack, Transform};
 
 // ---------------------------------------------------------------------------
 // Upstream #114: Partial transform must carry forward missing fields.
@@ -59,10 +59,10 @@ pub struct PropertyChanges {
 ///   - `speed` recomputes duration unless `duration_frames` is also set
 ///   - `volume` / `opacity` set the scalar and clear the keyframe track
 ///   - `transform` uses `PartialTransform::merge_into` (#114 fix)
-///   - `content` / `font_name` etc. update text style fields
 /// The set of clip properties an update may change. Every field is optional;
 /// `None` leaves the property untouched. Replaces the old 12-positional-argument
-/// signature of [`set_clip_properties`].
+/// signature of [`set_clip_properties`]. Text edits go through `update_text`,
+/// not here (tool-surface v2).
 #[derive(Default)]
 pub struct ClipPropertyUpdate<'a> {
     pub duration_frames: Option<i64>,
@@ -72,15 +72,6 @@ pub struct ClipPropertyUpdate<'a> {
     pub volume: Option<f64>,
     pub opacity: Option<f64>,
     pub transform: Option<&'a PartialTransform>,
-    // Text-clip style fields.
-    pub content: Option<&'a str>,
-    pub font_name: Option<&'a str>,
-    pub font_size: Option<f64>,
-    pub font_weight: Option<f64>,
-    pub color: Option<core_model::TextRgba>,
-    pub alignment: Option<core_model::TextAlignment>,
-    pub background: Option<core_model::TextFill>,
-    pub border: Option<core_model::TextFill>,
 }
 
 pub fn set_clip_properties(clip: &mut Clip, u: &ClipPropertyUpdate) -> PropertyChanges {
@@ -140,69 +131,7 @@ pub fn set_clip_properties(clip: &mut Clip, u: &ClipPropertyUpdate) -> PropertyC
         }
     }
 
-    // Text fields
-    if let Some(c) = u.content {
-        clip.text_content = Some(c.to_string());
-        changed.push("content".into());
-    }
-    if let Some(n) = u.font_name {
-        ensure_text_style(clip);
-        if let Some(ref mut ts) = clip.text_style {
-            ts.font_name = n.to_string();
-            changed.push("fontName".into());
-        }
-    }
-    if let Some(s) = u.font_size {
-        ensure_text_style(clip);
-        if let Some(ref mut ts) = clip.text_style {
-            ts.font_size = s;
-            changed.push("fontSize".into());
-        }
-    }
-    if let Some(w) = u.font_weight {
-        ensure_text_style(clip);
-        if let Some(ref mut ts) = clip.text_style {
-            ts.font_weight = w;
-            changed.push("fontWeight".into());
-        }
-    }
-    if let Some(c) = u.color {
-        ensure_text_style(clip);
-        if let Some(ref mut ts) = clip.text_style {
-            ts.color = c;
-            changed.push("color".into());
-        }
-    }
-    if let Some(a) = u.alignment {
-        ensure_text_style(clip);
-        if let Some(ref mut ts) = clip.text_style {
-            ts.alignment = a;
-            changed.push("alignment".into());
-        }
-    }
-    if let Some(bg) = &u.background {
-        ensure_text_style(clip);
-        if let Some(ref mut ts) = clip.text_style {
-            ts.background = bg.clone();
-            changed.push("background".into());
-        }
-    }
-    if let Some(bd) = &u.border {
-        ensure_text_style(clip);
-        if let Some(ref mut ts) = clip.text_style {
-            ts.border = bd.clone();
-            changed.push("border".into());
-        }
-    }
-
     PropertyChanges { changed }
-}
-
-/// Ensure a clip has a non-None text_style, filling defaults if needed.
-fn ensure_text_style(clip: &mut Clip) {
-    if clip.text_style.is_none() {
-        clip.text_style = Some(TextStyle::default());
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,29 +428,6 @@ mod tests {
         assert_eq!(clip.transform.rotation, 45.0);
         assert!(clip.transform.flip_horizontal);
         assert!(result.changed.contains(&"transform".to_string()));
-    }
-
-    #[test]
-    fn set_clip_properties_text_fields() {
-        let mut clip = make_clip();
-        clip.media_type = ClipType::Text;
-        clip.source_clip_type = ClipType::Text;
-        let result = set_clip_properties(
-            &mut clip,
-            &ClipPropertyUpdate {
-                content: Some("Hello"),
-                font_name: Some("Helvetica"),
-                font_size: Some(48.0),
-                ..Default::default()
-            },
-        );
-        assert_eq!(clip.text_content.as_deref(), Some("Hello"));
-        assert_eq!(
-            clip.text_style.as_ref().map(|s| &*s.font_name),
-            Some("Helvetica")
-        );
-        assert_eq!(clip.text_style.as_ref().map(|s| s.font_size), Some(48.0));
-        assert!(result.changed.contains(&"content".to_string()));
     }
 
     // --- writePosition (#115) ---

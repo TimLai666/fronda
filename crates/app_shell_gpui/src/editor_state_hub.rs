@@ -160,6 +160,13 @@ impl EditorStateHub {
             exec.set_speech_analyzer(std::sync::Arc::new(crate::vad::VadSpeechAnalyzer::new(
                 root.clone(),
             )));
+            #[cfg(feature = "transcribe-local")]
+            exec.set_transcription_provider(std::sync::Arc::new(
+                crate::transcribe::WhisperTranscriber::new(
+                    root.clone(),
+                    crate::pane_prefs::default_prefs_path(),
+                ),
+            ));
             exec.set_export_host(std::sync::Arc::new(
                 crate::export_host::AgentExportHost::new(root.clone()),
             ));

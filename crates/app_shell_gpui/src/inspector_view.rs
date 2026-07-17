@@ -1344,7 +1344,10 @@ impl InspectorView {
                 }))
                 .child(prop_row("Model", &model_display_name(&gen.model)));
             if !gen.aspect_ratio.is_empty() {
-                gen_section = gen_section.child(prop_row("Aspect Ratio", &gen.aspect_ratio));
+                gen_section = gen_section.child(prop_row(
+                    "Aspect Ratio",
+                    &generation_core::model_catalog::aspect_ratio_display_label(&gen.aspect_ratio),
+                ));
             }
             if let Some(res) = &gen.resolution {
                 gen_section = gen_section.child(prop_row("Resolution", res));
