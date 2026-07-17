@@ -74,14 +74,18 @@ extension ToolExecutor {
             guard let source = editor.timeline(for: fromRef) else {
                 throw ToolError("No timeline with id '\(fromRef)'. get_media lists the project's timelines.")
             }
-            guard let newId = editor.duplicateTimeline(fromRef) else {
-                throw ToolError("Couldn't duplicate \"\(source.name)\".")
+            id = try editor.undo.perform("Duplicate Timeline (Agent)") {
+                guard let newId = editor.duplicateTimeline(fromRef) else {
+                    throw ToolError("Couldn't duplicate \"\(source.name)\".")
+                }
+                if let name = args.string("name") { editor.renameTimeline(newId, to: name) }
+                return newId
             }
-            id = newId
-            if let name = args.string("name") { editor.renameTimeline(id, to: name) }
             note = "Duplicated \"\(source.name)\" and switched to the copy. Its clip and track ids are new — re-read get_timeline before editing."
         } else {
-            id = editor.createTimeline(name: args.string("name"))
+            id = editor.undo.perform("Create Timeline (Agent)") {
+                editor.createTimeline(name: args.string("name"))
+            }
             note = "Empty and now active; all edit tools target it."
         }
         let payload: [String: Any] = [
@@ -151,7 +155,7 @@ extension ToolExecutor {
             // Report the displayed label (mirrored video numbering), not the stored seed.
             track["label"] = editor.timelineTrackDisplayLabel(at: i)
             track["index"] = i
-            track.removeValue(forKey: "id")
+            track["trackId"] = track.removeValue(forKey: "id")
             track.removeValue(forKey: "displayHeight")
             if let count = fold.foldedCountByTrack[i] { track["linkedClips"] = count }
             let gaps = trackGaps(editor.timeline.tracks[i])

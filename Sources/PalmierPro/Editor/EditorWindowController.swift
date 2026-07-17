@@ -2,8 +2,9 @@ import AppKit
 
 /// Window controller that handles keyboard shortcuts via the responder chain.
 /// Forwards actions to the EditorViewModel owned by VideoProject.
-final class EditorWindowController: NSWindowController {
+final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let editorViewModel: EditorViewModel
+    var onBecameKey: (() -> Void)?
     private nonisolated(unsafe) var keyMonitor: Any?
     private nonisolated(unsafe) var mouseMonitor: Any?
     private nonisolated(unsafe) var endEditingObserver: Any?
@@ -15,6 +16,10 @@ final class EditorWindowController: NSWindowController {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        onBecameKey?()
+    }
 
     deinit {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
@@ -43,7 +48,7 @@ final class EditorWindowController: NSWindowController {
             MainActor.assumeIsolated {
                 guard let self, let editor = object as? NSTextView,
                       editor.window === self.window, let storage = editor.textStorage else { return }
-                self.editorViewModel.undoManager?.removeAllActions(withTarget: storage)
+                self.editorViewModel.undo.removeAllActions(withTarget: storage)
             }
         }
     }
@@ -253,12 +258,6 @@ extension EditorWindowController: EditorActions {
             editorViewModel.rippleDeleteSelectedClips()
         }
     }
-    @objc func playPause(_ sender: Any?) { editorViewModel.togglePlayback() }
-    @objc func stepFrameForward(_ sender: Any?) { editorViewModel.stepForward() }
-    @objc func stepFrameBackward(_ sender: Any?) { editorViewModel.stepBackward() }
-    @objc func skipFramesForward(_ sender: Any?) { editorViewModel.skipForward() }
-    @objc func skipFramesBackward(_ sender: Any?) { editorViewModel.skipBackward() }
-
     @objc func importMedia(_ sender: Any?) {
         // Handled by MediaTab directly
     }

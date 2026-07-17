@@ -2,6 +2,8 @@ import AppKit
 import ClerkKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var isTerminating = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Activate the app (required when launched from CLI, not a .app bundle)
         NSApp.setActivationPolicy(.regular)
@@ -34,6 +36,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AppState.shared.showHome()
         }
         return true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if isTerminating { return .terminateLater }
+        isTerminating = true
+        let projects = AppState.shared.openProjects
+
+        Task { @MainActor in
+            do {
+                for project in projects {
+                    try await project.saveBeforeClosing()
+                }
+                if !MLXRuntime.beginTermination() {
+                    await MLXRuntime.waitUntilIdle()
+                }
+                sender.reply(toApplicationShouldTerminate: true)
+            } catch {
+                projects.forEach { $0.editorViewModel.projectPackageCoordinator.cancelClosing() }
+                isTerminating = false
+                sender.presentError(error)
+                sender.reply(toApplicationShouldTerminate: false)
+            }
+        }
+        return .terminateLater
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

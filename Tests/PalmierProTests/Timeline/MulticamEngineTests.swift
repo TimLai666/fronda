@@ -151,11 +151,8 @@ struct MulticamTests {
     @Test func createUndoDropsClipsAndMetadata() throws {
         let h = harness()
         let undoManager = UndoManager()
-        undoManager.groupsByEvent = false
-        h.editor.undoManager = undoManager
-        undoManager.beginUndoGrouping()
+        h.editor.undo.attach(undoManager)
         let (groupId, _) = try createGroup(h)
-        undoManager.endUndoGrouping()
         undoManager.undo()
         #expect(h.editor.multicamClips(of: groupId).isEmpty)
         #expect(h.editor.multicamGroup(id: groupId) == nil)
@@ -333,8 +330,6 @@ struct MulticamTests {
         // Metadata stays in memory for undo, but is filtered from saves.
         #expect(h.editor.multicamGroup(id: groupId) != nil)
         #expect(h.editor.savedMulticamGroups() == nil)
-        h.editor.pruneMulticamGroups()
-        #expect(h.editor.multicamGroup(id: groupId) == nil)
     }
 
     // MARK: - Guardrails

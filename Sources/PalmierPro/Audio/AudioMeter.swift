@@ -1,7 +1,6 @@
 import Accelerate
 import AVFoundation
 import Foundation
-import Observation
 
 struct AudioMeterAnalysis: Sendable, Equatable {
     let leftPeak, rightPeak: Float
@@ -62,7 +61,6 @@ struct AudioMeterChannelState: Sendable {
     }
 }
 
-@Observable
 @MainActor
 final class AudioMeterHub {
     private var left = AudioMeterChannelState()
@@ -95,6 +93,27 @@ enum AudioLevelAnalyzer {
             leftPeak: left.withUnsafeBufferPointer { peak($0.baseAddress! + lower, count: count) },
             rightPeak: right.withUnsafeBufferPointer { peak($0.baseAddress! + lower, count: count) }
         )
+    }
+
+    nonisolated static func analyzeInt16(left: [Int16], right: [Int16], range: Range<Int>) -> AudioMeterAnalysis {
+        let upper = min(range.upperBound, min(left.count, right.count))
+        let lower = max(0, min(range.lowerBound, upper))
+        guard lower < upper else { return .silence }
+        let count = upper - lower
+        return AudioMeterAnalysis(
+            leftPeak: peakInt16(left, lower: lower, count: count),
+            rightPeak: peakInt16(right, lower: lower, count: count)
+        )
+    }
+
+    nonisolated private static func peakInt16(_ samples: [Int16], lower: Int, count: Int) -> Float {
+        var floats = [Float](repeating: 0, count: count)
+        samples.withUnsafeBufferPointer { buffer in
+            vDSP_vflt16(buffer.baseAddress! + lower, 1, &floats, 1, vDSP_Length(count))
+        }
+        var peak: Float = 0
+        vDSP_maxmgv(floats, 1, &peak, vDSP_Length(count))
+        return peak / 32767.0  // matches ScrubAudioEngine quantize scale so full-scale reads as 1.0
     }
 
     nonisolated static func analyze(_ buffer: AVAudioPCMBuffer) -> AudioMeterAnalysis {

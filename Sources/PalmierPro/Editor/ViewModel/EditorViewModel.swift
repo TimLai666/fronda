@@ -170,6 +170,10 @@ final class EditorViewModel {
         }
     }
     private(set) var projectId: String?
+    private let editorSessionID = UUID().uuidString
+    var exportQueueProjectID: String {
+        projectId ?? projectURL?.standardizedFileURL.path ?? editorSessionID
+    }
     // Placeholder replaced in init() — @Observable doesn't support lazy var
     private(set) var mediaResolver: MediaResolver = MediaResolver(
         manifest: { MediaManifest() }, projectURL: { nil }
@@ -240,8 +244,10 @@ final class EditorViewModel {
     var mediaPanelPasteRequestTick: Int = 0
     var mediaPanelShowMediaTabTick: Int = 0
     var mediaPanelToast: MediaPanelToast?
-    @ObservationIgnored var mediaImportTail: Task<MediaImportSummary, Never>?
+    @ObservationIgnored var mediaImportTail: Task<MediaImportSummary, Error>?
     @ObservationIgnored var mediaImportSequence: Int = 0
+    @ObservationIgnored var pendingManifestMetadataUpdates: [String: MediaAsset] = [:]
+    @ObservationIgnored var pendingManifestMetadataFlushTask: Task<Void, Never>?
 
     func showMediaPanelMediaTab() {
         mediaPanelShowMediaTabTick += 1
@@ -285,7 +291,8 @@ final class EditorViewModel {
 
     // MARK: - Document bridge
 
-    weak var undoManager: UndoManager?
+    @ObservationIgnored let undo = EditorUndo()
+    @ObservationIgnored let projectPackageCoordinator = ProjectPackageCoordinator()
     @ObservationIgnored var onProjectCheckpointRequired: (() -> Void)?
     var isDocumentEdited: Bool = false
 
@@ -419,7 +426,7 @@ final class EditorViewModel {
     var pendingRebuildTask: Task<Void, Never>?
 
     func notifyTimelineChanged(refreshVisuals: Bool = true) {
-        guard undoManager?.isUndoRegistrationEnabled ?? true else { return }
+        guard undo.isRegistrationEnabled else { return }
         enhancePendingDenoises()
         pendingRebuildTask?.cancel()
         pendingRebuildTask = nil
@@ -458,6 +465,7 @@ final class EditorViewModel {
         trimEndFrame: Int? = nil
     ) -> [String] {
         guard timeline.tracks.indices.contains(trackIndex) else { return [] }
+        prepareMediaVisuals(for: asset)
         let targetIsVideo = timeline.tracks[trackIndex].type == .video
         let shouldLink = addLinkedAudio && targetIsVideo && asset.hasAudio
             && (asset.type == .video || asset.type == .sequence)

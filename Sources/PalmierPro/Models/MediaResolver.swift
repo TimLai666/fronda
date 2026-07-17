@@ -24,10 +24,20 @@ final class MediaResolver: @unchecked Sendable {
         Self.expectedURLMap(entries: manifest().entries, projectURL: projectURL())
     }
 
+    func snapshot() -> MediaResolver {
+        let manifest = manifest()
+        let projectURL = projectURL()
+        return MediaResolver(manifest: { manifest }, projectURL: { projectURL })
+    }
+
     static func expectedURLMap(entries: [MediaManifestEntry], projectURL: URL?) -> [String: URL] {
-        Dictionary(uniqueKeysWithValues: entries.compactMap { entry in
-            expectedURL(for: entry, projectURL: projectURL).map { (entry.id, $0) }
-        })
+        var seenIds: Set<String> = []
+        var urls: [String: URL] = [:]
+        urls.reserveCapacity(entries.count)
+        for entry in entries where seenIds.insert(entry.id).inserted {
+            urls[entry.id] = expectedURL(for: entry, projectURL: projectURL)
+        }
+        return urls
     }
 
     private static func expectedURL(for entry: MediaManifestEntry, projectURL: URL?) -> URL? {
