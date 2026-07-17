@@ -51,7 +51,7 @@ audit (#293 audio meter, #291 chroma eyedropper, #283 multicam v2, #138 HDR,
 
 | PR | Blocker |
 |----|---------|
-| #269 (engine half) | sync_clips correlator hardening: min-overlap floor (Rust currently accepts 1-frame overlaps — worse than pre-fix Swift for thin-edge false matches), centerLag/capture-date seeding, NTSC-exact frameDuration. Contract half is DONE (tool-surface v2). **Highest-priority follow-up: the min-overlap floor is a real quality bug.** |
+| #269 (engine half) | **min-overlap floor DONE 2026-07-17** (change `sync-min-overlap-floor`: find_sync_offset excludes lags with overlap < max(16 hops, 3 s) — the thin-edge false-match bug). Remaining deferred: centerLag/capture-date seeding, NTSC-exact frameDuration. Contract half was already DONE (tool-surface v2). |
 | #296 | 65-point .cube LUT cap: no Rust .cube parser exists at all — `color.lut` is stored but never parsed/applied. Blocked on a LUT engine (compositor follow-up); carry the 128 cap when it lands. |
 | #285 (behavior half) | canUseCloudTranscription(cost vs credits): transcription + account/credit state are host-deferred. Description text half already DONE (tool-surface v2). |
 | #276 | models:list resubscribe backoff: no Convex client in Rust; static catalog. Carry when a live catalog subscription exists. |

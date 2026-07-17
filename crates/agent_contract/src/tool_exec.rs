@@ -13977,7 +13977,7 @@ mod tests {
             sample_rate: u32,
             _channels: usize,
         ) -> Option<Vec<f32>> {
-            let n = sample_rate as usize; // 1s
+            let n = sample_rate as usize * 8; // 8s: the correlator's #269 floor needs 3s+ of overlap
             let base = sync_noise(n);
             let path = match source {
                 core_model::MediaSource::External { absolute_path } => absolute_path.clone(),
@@ -14118,6 +14118,9 @@ mod tests {
             serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(v["synced"].as_array().unwrap().len(), 0);
         assert_eq!(v["skipped"].as_array().unwrap().len(), 1);
+        // Pin the reason: a correlation DID happen (not filtered out by the
+        // min-overlap floor) and lost on confidence alone.
+        assert_eq!(v["skipped"][0]["reason"], "low confidence", "{v}");
         assert_eq!(
             before,
             start_of(&exec, &tgt_id),

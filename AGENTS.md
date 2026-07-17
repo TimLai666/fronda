@@ -161,9 +161,9 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
   auto-track bug, #307 manage_tracks trackId, #274-followups detect_beats
   contract, #333 import text, #338 CAF, #294/#336/#330 on-disk serde slices);
   7 verified DONE (#288, #57, #268, #261, #329, #331, #334); 8 DEFERRED with
-  named blockers (#269 engine half — **its correlator lacks Swift's
-  min-overlap floor, a real false-sync bug, highest-priority follow-up** —
-  plus #296, #285 behavior half, #276, #273, #339, #280, #292); feature tier
+  named blockers (#269 engine half — its min-overlap-floor bug was fixed same day via change
+  `sync-min-overlap-floor`; seeding/NTSC remain deferred — plus #296, #285
+  behavior half, #276, #273, #339, #280, #292); feature tier
   awaiting a go decision (#299 manage_project consolidation, #298 export
   queue, #294/#330/#336 remainders, UI: #281 clip colors, #327 panel
   redesign, #319 settings/help, #284-leftover). NOTE: the in-tree Swift

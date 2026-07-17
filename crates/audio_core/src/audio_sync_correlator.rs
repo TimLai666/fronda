@@ -20,6 +20,9 @@ pub struct SyncOffset {
     pub peak_lag_frames: i64,
 }
 
+/// Absolute floor on scored overlap, in RMS hops; #269 raises the effective floor to 3 seconds.
+const MIN_OVERLAP_HOPS: usize = 16;
+
 /// Audio sync correlator using RMS-envelope cross-correlation.
 pub struct AudioSyncCorrelator;
 
@@ -174,6 +177,11 @@ impl AudioSyncCorrelator {
             let max_lag = (max_secs / seconds_per_rms_frame).ceil() as i64;
             correlation.retain(|(lag, _)| lag.abs() <= max_lag);
         }
+        // Thin-edge overlaps score spurious perfect correlations that can beat the true alignment (#269).
+        let min_overlap_hops =
+            MIN_OVERLAP_HOPS.max((3.0 * sample_rate / frame_size as f64).round() as usize) as i64;
+        let (m, n) = (ref_rms.len() as i64, tgt_rms.len() as i64);
+        correlation.retain(|(lag, _)| (m - 0.max(-*lag)).min(n - 0.max(*lag)) >= min_overlap_hops);
 
         // 3. Find peak
         let (peak_lag, _, confidence) = Self::find_peak(&correlation)?;
@@ -374,7 +382,9 @@ mod tests {
 
     #[test]
     fn find_sync_offset_identical_signals() {
-        let samples = make_sine_wave(48000, 440.0, SAMPLE_RATE);
+        // Noise, not a sine: a 440 Hz sine's RMS envelope repeats exactly every
+        // 75 hops, so long signals tie at 1.0 on aliased lags.
+        let samples = make_noise(8 * SAMPLE_RATE as usize);
         let result = AudioSyncCorrelator::find_sync_offset(
             &samples,
             &samples,
@@ -399,7 +409,7 @@ mod tests {
 
     #[test]
     fn find_sync_offset_shifted_signals() {
-        let samples = make_noise(96000);
+        let samples = make_noise(8 * SAMPLE_RATE as usize);
         let shift_samples = 5 * FRAME_SIZE; // 5120 samples = 5 RMS frames
         let shifted: Vec<f64> = std::iter::repeat_n(0.0, shift_samples)
             .chain(samples.iter().copied())
@@ -422,6 +432,62 @@ mod tests {
     }
 
     #[test]
+    fn find_sync_offset_rejects_sub_three_second_overlap() {
+        // Two 2-second signals: no lag can reach the 3-second overlap floor.
+        let samples = make_noise(2 * SAMPLE_RATE as usize);
+        let result = AudioSyncCorrelator::find_sync_offset(
+            &samples,
+            &samples,
+            SAMPLE_RATE,
+            FRAME_SIZE,
+            30.0,
+        );
+        assert!(
+            result.is_none(),
+            "signals too short for the min-overlap floor must return None, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn find_sync_offset_thin_edge_lag_cannot_win() {
+        // Piecewise-constant per-RMS-frame amplitudes: envelope == amplitude
+        // exactly. Two unrelated envelopes are rigged so a 2-hop edge overlap
+        // (ref tail rising, tgt head rising) correlates at a perfect +1.0 —
+        // the exact spurious match #269 guards against.
+        let hops = 375usize; // 8 s at 48000/1024
+        let env = |seed: f64, k: usize| 0.3 + 0.25 * ((k as f64 * seed).sin().abs());
+        let mut ref_env: Vec<f64> = (0..hops).map(|k| env(0.731, k)).collect();
+        let mut tgt_env: Vec<f64> = (0..hops).map(|k| env(1.917, k)).collect();
+        ref_env[hops - 2] = 0.2;
+        ref_env[hops - 1] = 0.9;
+        tgt_env[0] = 0.3;
+        tgt_env[1] = 0.95;
+        let expand = |e: &[f64]| -> Vec<f64> {
+            e.iter()
+                .flat_map(|&a| std::iter::repeat_n(a, FRAME_SIZE))
+                .collect()
+        };
+
+        let result = AudioSyncCorrelator::find_sync_offset(
+            &expand(&ref_env),
+            &expand(&tgt_env),
+            SAMPLE_RATE,
+            FRAME_SIZE,
+            30.0,
+        )
+        .expect("long signals still produce a result");
+
+        let min_overlap_hops =
+            MIN_OVERLAP_HOPS.max((3.0 * SAMPLE_RATE / FRAME_SIZE as f64).round() as usize);
+        let bound = (hops - min_overlap_hops) as i64;
+        assert!(
+            result.peak_lag_frames.abs() <= bound,
+            "thin-edge lag won: |{}| > {bound}",
+            result.peak_lag_frames
+        );
+    }
+
+    #[test]
     fn find_sync_offset_too_short() {
         let short = vec![0.5; 512];
         let result =
@@ -431,7 +497,7 @@ mod tests {
 
     #[test]
     fn find_sync_offset_project_fps_conversion() {
-        let samples = make_noise(96000);
+        let samples = make_noise(8 * SAMPLE_RATE as usize);
         let shift_samples = 5 * FRAME_SIZE; // 5120 samples = 5 RMS frames
         let shifted: Vec<f64> = std::iter::repeat_n(0.0, shift_samples)
             .chain(samples.iter().copied())
