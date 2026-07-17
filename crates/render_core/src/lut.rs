@@ -10,7 +10,6 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::SystemTime;
 
 /// A parsed 3D LUT: `dimension`³ RGB nodes, red fastest, values normalized 0..=1.
 #[derive(Debug, Clone, PartialEq)]
@@ -130,25 +129,25 @@ impl CubeLut {
     }
 }
 
-type LutCache = HashMap<String, (Option<SystemTime>, Arc<CubeLut>)>;
+type LutCache = HashMap<String, Arc<CubeLut>>;
 static CACHE: OnceLock<Mutex<LutCache>> = OnceLock::new();
 
-/// Read + parse a `.cube` file, cached by path + mtime (Swift `LUTLoader.load`).
+/// Read + parse a `.cube` file, memory-cached by path (upstream #343:
+/// no per-load stat — an edited LUT refreshes on restart, first cached
+/// value wins over concurrent re-reads).
 pub fn load_cached(path: &str) -> Result<Arc<CubeLut>, String> {
-    let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some((cached_mtime, lut)) = cache.lock().unwrap().get(path) {
-        if *cached_mtime == mtime {
-            return Ok(Arc::clone(lut));
-        }
+    if let Some(lut) = cache.lock().unwrap().get(path) {
+        return Ok(Arc::clone(lut));
     }
     let text =
         std::fs::read_to_string(path).map_err(|e| format!("cannot read LUT {path}: {e}"))?;
     let lut = Arc::new(CubeLut::parse(&text).map_err(|e| format!("invalid LUT {path}: {e}"))?);
-    cache
-        .lock()
-        .unwrap()
-        .insert(path.to_string(), (mtime, Arc::clone(&lut)));
+    let mut guard = cache.lock().unwrap();
+    if let Some(existing) = guard.get(path) {
+        return Ok(Arc::clone(existing));
+    }
+    guard.insert(path.to_string(), Arc::clone(&lut));
     Ok(lut)
 }
 
@@ -357,7 +356,11 @@ mod tests {
         let b = load_cached(&p).expect("cached load");
         assert!(Arc::ptr_eq(&a, &b), "second load hits the cache");
         assert_eq!(a.dimension, 2);
-        let _ = std::fs::remove_file(&path);
+        // Upstream #343 loadUsesMemoryCacheAfterFirstRead: the memory cache
+        // serves even after the file is gone (path-only key, no stat).
+        std::fs::remove_file(&path).unwrap();
+        let c = load_cached(&p).expect("cache survives file removal");
+        assert!(Arc::ptr_eq(&a, &c));
     }
 
     #[test]

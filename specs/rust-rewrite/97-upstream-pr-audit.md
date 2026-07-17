@@ -1,7 +1,7 @@
 # Upstream PR Audit — Rust Rewrite Applicability
 
 Latest re-audit: 2026-07-17
-Upstream HEAD: `cfa9e05e` (palmier-io/palmier-pro main, v0.6.10)
+Upstream HEAD: `60d2f525` (palmier-io/palmier-pro main, v0.6.10 + #343)
 Previous audits: 2026-07-05 at `771b63e` (v0.6.1), 2026-07-03 at `9a3ae50`,
 2026-06-25 at `b9b4ad9`
 
@@ -53,7 +53,7 @@ The Swift baseline itself was merged to v0.6.10 in-tree on 2026-07-17.
 | PR | Blocker |
 |----|---------|
 | #269 (engine half) | **min-overlap floor + seeding + DF-NTSC DONE 2026-07-17** (changes `sync-min-overlap-floor`, `sync-engine-and-flat-key-cleanup`): seeded center-lag window (capture-date deltas via the new ClipAudioSource::capture_date_seconds host seam, 3 s window, raw-Pearson gate ≥0.5, global fallback pinned identical to unseeded) and drop-frame sources now recover the exact 1001/1000 seconds (manifest_tc_seconds, both sync paths). CORRECTION of this audit's earlier claim: Rust's frame/quanta was Swift's FALLBACK form, not "more precise" — Swift #269 reads frameDuration from the tmcd track. Remaining: NDF-NTSC needs a manifest frameDuration field (data-model decision) or a host tmcd seam; ProjectAudioSource does not yet implement capture_date_seconds (app runs unseeded until the ffmpeg metadata read lands); Swift group-shift/chained-anchor retry unported. Contract half was already DONE (tool-surface v2). |
-| #296 | **DONE 2026-07-17** (change `lut-engine`, decision D5): pure-Rust CubeLut parser (Swift LUTLoader parity incl. the 128 cap and 1D rejection, #296 test vectors transplanted) + trilinear sampling applied at EffectRegistry canonicalOrder's color.lut slot (after color adjustments, before clarity/chroma/blur); reads both strength and Swift's intensity keys. Known divergence: trilinear vs Swift's tetrahedral interpolation (lattice-linear LUTs bit-identical; interior differs at second order — one pinned test to swap if tetra parity is wanted). |
+| #296 | **DONE 2026-07-17** (change `lut-engine`, decision D5): pure-Rust CubeLut parser (Swift LUTLoader parity incl. the 128 cap and 1D rejection, #296 test vectors transplanted) + trilinear sampling applied at EffectRegistry canonicalOrder's color.lut slot (after color adjustments, before clarity/chroma/blur); reads both strength and Swift's intensity keys. #343 (path-only in-memory LUT cache, no per-load stat — first cached value wins; edited LUTs refresh on restart) ported same-day 2026-07-18, change `lut-cache-343`, upstream test transplanted. Known divergence: trilinear vs Swift's tetrahedral interpolation (lattice-linear LUTs bit-identical; interior differs at second order — one pinned test to swap if tetra parity is wanted). |
 | #285 (behavior half) | canUseCloudTranscription(cost vs credits): transcription + account/credit state are host-deferred. Description text half already DONE (tool-surface v2). |
 | #276 | models:list resubscribe backoff: no Convex client in Rust; static catalog. Carry when a live catalog subscription exists. |
 | #273 | Unreadable-media readiness classification (unprocessable vs missing + failed status): needs the media-probe host seam; Rust honest-degradation via missing_entry_ids covers part today. |
