@@ -1,7 +1,7 @@
 # Upstream PR Audit — Rust Rewrite Applicability
 
 Latest re-audit: 2026-07-17
-Upstream HEAD: `d5eb62bd` (palmier-io/palmier-pro main, v0.6.10 + #343/#344)
+Upstream HEAD: `689c52af` (palmier-io/palmier-pro main, v0.6.11)
 Previous audits: 2026-07-05 at `771b63e` (v0.6.1), 2026-07-03 at `9a3ae50`,
 2026-06-25 at `b9b4ad9`
 
@@ -84,7 +84,7 @@ trap + MainActor restore batching), #335 (SwiftUI invalidation isolation),
 (@Observable meter redundancy), #305 (AVAudioEngine threading), #275
 (main-thread stalls; Rust equivalents structurally absent), #278 (NSDocument
 mod-date), #279 (feedback English clause — Fronda has no auto-send feedback
-backend), #272 (CoreVideo color-tag passthrough), #266 (Swift file split).
+backend), #272 (CoreVideo color-tag passthrough), #266 (Swift file split), #345 (export summary Task.detached off @MainActor — same class as #311; audited 2026-07-18), #346 (MLX process-wide inference gate — Apple-only runtime, same class as #314; Rust VAD already serializes behind a Mutex; audited 2026-07-18).
 
 ## SKIP — infra/telemetry — no Rust work
 
