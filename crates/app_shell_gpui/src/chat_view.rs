@@ -1393,10 +1393,10 @@ fn render_md_text(text: &str, base_size: f32) -> impl IntoElement {
         }
 
         // Heading
-        let (line_text, is_h1, is_h2) = if raw_line.starts_with("# ") {
-            (&raw_line[2..], true, false)
-        } else if raw_line.starts_with("## ") {
-            (&raw_line[3..], false, true)
+        let (line_text, is_h1, is_h2) = if let Some(rest) = raw_line.strip_prefix("# ") {
+            (rest, true, false)
+        } else if let Some(rest) = raw_line.strip_prefix("## ") {
+            (rest, false, true)
         } else {
             (raw_line, false, false)
         };

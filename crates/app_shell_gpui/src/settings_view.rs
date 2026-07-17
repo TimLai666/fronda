@@ -1248,7 +1248,7 @@ impl SettingsView {
             .filter(|s| skill_matches(&query, &s.name, &s.description))
             .map(|s| (s.id.clone(), s.name.clone(), s.description.clone()))
             .collect();
-        visible.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        visible.sort_by_key(|a| a.1.to_lowercase());
         let installed_count = self.skill_store.skills().len();
 
         // ── Introduction ──

@@ -717,8 +717,8 @@ impl InspectorView {
             crop_editing_active: false,
             crop_aspect: CropAspect::Free,
             crop_menu_open: false,
-            ai_edit_view: cx.new(|cx| AiEditTabView::new(cx)),
-            keyframes_view: cx.new(|cx| KeyframesView::new(cx)),
+            ai_edit_view: cx.new(AiEditTabView::new),
+            keyframes_view: cx.new(KeyframesView::new),
             focus_handle: cx.focus_handle(),
             scrub_values: default_scrub_values(),
             active_scrub: None,
@@ -2256,10 +2256,11 @@ impl InspectorView {
 
     /// Multicam tab: the Swift MulticamTab member roster, plus the operations
     /// Swift keeps in the timeline context menu (D7 moves them here — the
-    /// Rust timeline has no context menu): Switch Angle and Layout on the
-    /// selected program fragment via change_cam, Ungroup via manage_multicam.
-    /// Mic/overlay fragments get Switch Mic / Switch Angle chips through the
-    /// executor's untooled `switch_multicam_segment` rewrite path.
+    /// Rust timeline has no context menu): Switch Angle on the selected
+    /// program fragment and Layout on any video fragment (program or overlay)
+    /// via change_cam, Ungroup via manage_multicam. Mic/overlay fragments get
+    /// Switch Mic / Switch Angle chips through the executor's untooled
+    /// `switch_multicam_segment` rewrite path.
     fn multicam_tab(&mut self, snap: &SelectionSnapshot, cx: &mut Context<Self>) -> AnyElement {
         let Some(group) = snap.multicam_group.clone() else {
             return div().into_any_element();
@@ -2287,7 +2288,6 @@ impl InspectorView {
                 .iter()
                 .map(|m| m.angle_label.clone())
                 .collect();
-            let angle_count = angles.len();
             if let Some(roster) = segment_switch_roster(angles, target.current_angle.as_deref()) {
                 let mut row = div()
                     .flex()
@@ -2314,34 +2314,6 @@ impl InspectorView {
                 panel = panel
                     .child(multicam_section_label("Switch Angle"))
                     .child(row);
-            }
-
-            // Layout (Swift layoutItem gate: video fragment + ≥2 angles).
-            if angle_count >= 2 {
-                let mut row = div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_center()
-                    .w_full()
-                    .gap(px(Spacing::XXS));
-                for layout in VideoLayout::ALL {
-                    let Some(args) = change_cam_layout_args(&group, &target, layout) else {
-                        continue;
-                    };
-                    row = row.child(
-                        multicam_action_button(
-                            SharedString::from(format!("mc-layout-{}", layout.as_str())),
-                            SharedString::from(layout_display_name(layout)),
-                            false,
-                        )
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            Self::run_tool("change_cam", args.clone());
-                            cx.notify();
-                        })),
-                    );
-                }
-                panel = panel.child(multicam_section_label("Layout")).child(row);
             }
         }
 
@@ -2394,6 +2366,41 @@ impl InspectorView {
                         "Switch Angle"
                     }))
                     .child(row);
+            }
+        }
+
+        // Layout (Swift layoutItem gate: any non-audio fragment + ≥2 angles —
+        // program AND overlay, TimelineView.swift `clip.mediaType != .audio`).
+        let layout_target = snap
+            .multicam_target
+            .clone()
+            .filter(|t| t.kind != MulticamTargetKind::Audio);
+        if let Some(target) = layout_target {
+            if group.angles().len() >= 2 {
+                let mut row = div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .w_full()
+                    .gap(px(Spacing::XXS));
+                for layout in VideoLayout::ALL {
+                    let Some(args) = change_cam_layout_args(&group, &target, layout) else {
+                        continue;
+                    };
+                    row = row.child(
+                        multicam_action_button(
+                            SharedString::from(format!("mc-layout-{}", layout.as_str())),
+                            SharedString::from(layout_display_name(layout)),
+                            false,
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            Self::run_tool("change_cam", args.clone());
+                            cx.notify();
+                        })),
+                    );
+                }
+                panel = panel.child(multicam_section_label("Layout")).child(row);
             }
         }
 
@@ -3240,6 +3247,48 @@ mod tests {
         assert!(
             !payload["overlayClipIds"].as_array().unwrap().is_empty(),
             "side-by-side lands the second angle as an overlay clip"
+        );
+    }
+
+    // Overlay fragments get Layout chips too (Swift layoutItem gates on any
+    // non-audio fragment, not just the program): a first layout switch lands
+    // the overlay, then chip args built from the OVERLAY target apply a new
+    // layout through the executor with the overlay's own angle in slot 1.
+    #[test]
+    fn overlay_layout_chip_args_relayout_through_executor() {
+        let (mut exec, _gid) = mc_executor();
+        let group = exec.multicam_groups()[0].clone();
+        let clip_id = program_clip_id(&exec, &group);
+        let mut target = classify_multicam_clip(exec.timeline(), &group, &clip_id).unwrap();
+        target.range = (600, 1200);
+        let args = change_cam_layout_args(&group, &target, VideoLayout::SideBySide).unwrap();
+        exec.execute("change_cam", &args).expect("layout succeeds");
+
+        let overlay_target = {
+            let t = exec.timeline();
+            t.tracks
+                .iter()
+                .flat_map(|track| track.clips.iter())
+                .find_map(|c| {
+                    classify_multicam_clip(t, &group, &c.id)
+                        .filter(|tgt| tgt.kind == MulticamTargetKind::Overlay)
+                })
+                .expect("layout switch landed an overlay fragment")
+        };
+        assert!(group.angles().len() >= 2, "chip gate holds for the fixture");
+        let args =
+            change_cam_layout_args(&group, &overlay_target, VideoLayout::PipBottomRight).unwrap();
+        // Swift applyMulticamLayout: the clicked fragment's angle takes slot 1
+        // — for the overlay that's its own (cam-b), not the program's.
+        assert_eq!(args["entries"][0]["angles"][0], "cam-b");
+        let res = exec
+            .execute("change_cam", &args)
+            .expect("overlay-built layout args succeed");
+        let payload: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(
+            !payload["overlayClipIds"].as_array().unwrap().is_empty(),
+            "PiP relayout lands overlay clips again"
         );
     }
 

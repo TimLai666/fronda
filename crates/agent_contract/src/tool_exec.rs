@@ -197,6 +197,10 @@ pub struct ProjectSeams {
     pub audio_source: Arc<dyn ClipAudioSource>,
     pub export_host: Arc<dyn ExportHost>,
     pub project_lister: Arc<dyn ProjectLister>,
+    /// None when the host has no transcription backend (feature off / MCP).
+    pub transcription_provider: Option<Arc<dyn TranscriptionProvider>>,
+    /// None when the host has no VAD backend (feature off / MCP).
+    pub speech_analyzer: Option<Arc<dyn SpeechAnalyzer>>,
 }
 
 /// Host seam for manage_project open/create/close: resolves/loads (or
@@ -7377,6 +7381,8 @@ impl ToolExecutor {
         self.audio_source = Some(seams.audio_source);
         self.export_host = Some(seams.export_host);
         self.project_lister = Some(seams.project_lister);
+        self.transcription_provider = seams.transcription_provider;
+        self.speech_analyzer = seams.speech_analyzer;
         (name, root)
     }
 
@@ -7509,6 +7515,8 @@ impl ToolExecutor {
         self.matte_writer = None;
         self.audio_source = None;
         self.export_host = None;
+        self.transcription_provider = None;
+        self.speech_analyzer = None;
         if let Some(l) = lister {
             self.project_lister = Some(l);
         }
@@ -14094,6 +14102,7 @@ mod tests {
         let mut exec = make_executor_with_media();
         exec.timeline_mut().fps = 48;
         exec.set_matte_writer(std::sync::Arc::new(MockMatte::default()));
+        exec.set_transcription_provider(MockTranscriber::new(Vec::new()));
         let nav = std::sync::Arc::new(MockCloseNav {
             outcome: std::sync::Mutex::new(Some(Ok(ClosedProject {
                 name: "Demo".into(),
@@ -14129,6 +14138,10 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("unavailable"), "{err}");
+        assert!(
+            !exec.is_transcription_available(),
+            "project-rooted transcription provider cleared with the other seams"
+        );
         assert!(exec
             .execute("manage_project", &json!({"action": "list"}))
             .is_ok());
@@ -14171,6 +14184,8 @@ mod tests {
                 audio_source: std::sync::Arc::new(MockAudio),
                 export_host: std::sync::Arc::new(MockExportHost),
                 project_lister: std::sync::Arc::new(MockCloseLister),
+                transcription_provider: None,
+                speech_analyzer: None,
             },
         };
         let nav = std::sync::Arc::new(MockCloseNav {
@@ -14223,6 +14238,8 @@ mod tests {
                     audio_source: std::sync::Arc::new(MockAudio),
                     export_host: std::sync::Arc::new(MockExportHost),
                     project_lister: std::sync::Arc::new(MockCloseLister),
+                    transcription_provider: None,
+                    speech_analyzer: None,
                 },
             }
         }
@@ -14273,6 +14290,58 @@ mod tests {
             "name selector reaches the navigator"
         );
         assert_eq!(exec.timeline().fps, 25, "adopted the opened project");
+    }
+
+    // The seams' transcription provider survives the project swap (root
+    // consistency) and a provider-less swap clears the stale one.
+    #[test]
+    fn manage_project_open_installs_the_seams_transcription_provider() {
+        struct ProviderNav(std::sync::Arc<MockTranscriber>);
+        impl ProjectNavigator for ProviderNav {
+            fn open(
+                &self,
+                name: Option<&str>,
+                _id: Option<&str>,
+                _path: Option<&str>,
+            ) -> Result<OpenedProject, String> {
+                let mut opened = MockOpenNav::opened_project(name.unwrap_or("Demo"));
+                opened.seams.transcription_provider = Some(self.0.clone());
+                Ok(opened)
+            }
+            fn create(&self, _name: Option<&str>) -> Result<OpenedProject, String> {
+                Err("not scripted".into())
+            }
+            fn close(
+                &self,
+                _name: Option<&str>,
+                _id: Option<&str>,
+                _path: Option<&str>,
+                _active: ActiveProjectState,
+            ) -> Result<ClosedProject, String> {
+                Err("not scripted".into())
+            }
+        }
+
+        let mut exec = make_executor();
+        assert!(!exec.is_transcription_available());
+        let provider = MockTranscriber::new(Vec::new());
+        exec.set_project_navigator(std::sync::Arc::new(ProviderNav(provider)));
+        exec.execute("manage_project", &json!({"action": "open", "name": "Demo"}))
+            .unwrap();
+        assert!(
+            exec.is_transcription_available(),
+            "seams provider still attached after the root swap"
+        );
+
+        // A host without a transcription backend hands back None — the old
+        // root's provider must not survive into the new project.
+        exec.set_project_navigator(std::sync::Arc::new(MockOpenNav::new()));
+        exec.execute("manage_project", &json!({"action": "open", "name": "Other"}))
+            .unwrap();
+        assert!(
+            !exec.is_transcription_available(),
+            "stale provider cleared when the new seams carry none"
+        );
     }
 
     #[test]

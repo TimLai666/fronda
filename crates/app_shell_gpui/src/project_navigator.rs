@@ -38,6 +38,22 @@ impl AppProjectNavigator {
                 self.registry_path.clone(),
                 Some(root.to_path_buf()),
             )),
+            // Same construction as the hub's install point — the provider must
+            // resolve project-relative media against the NEW root.
+            #[cfg(feature = "transcribe-local")]
+            transcription_provider: Some(Arc::new(crate::transcribe::WhisperTranscriber::new(
+                root.to_path_buf(),
+                crate::pane_prefs::default_prefs_path(),
+            ))),
+            #[cfg(not(feature = "transcribe-local"))]
+            transcription_provider: None,
+            // Same root-consistency requirement as the transcription provider.
+            #[cfg(feature = "vad")]
+            speech_analyzer: Some(Arc::new(crate::vad::VadSpeechAnalyzer::new(
+                root.to_path_buf(),
+            ))),
+            #[cfg(not(feature = "vad"))]
+            speech_analyzer: None,
         }
     }
 

@@ -277,8 +277,8 @@ impl AppRoot {
             preview_view: None,
             timeline_view: None,
             inspector_view: None,
-            tour_overlay: cx.new(|cx| TourOverlayView::new(cx)),
-            update_overlay: cx.new(|cx| UpdateOverlayView::new(cx)),
+            tour_overlay: cx.new(TourOverlayView::new),
+            update_overlay: cx.new(UpdateOverlayView::new),
             timeline_height,
             agent_width,
             media_width,
@@ -595,7 +595,7 @@ impl AppRoot {
         self.project_menu.close();
         self.active_screen = ActiveScreen::Editor;
         if self.chat_view.is_none() {
-            let titlebar = cx.new(|cx| TitleBarView::new(cx));
+            let titlebar = cx.new(TitleBarView::new);
             cx.subscribe(&titlebar, |this, _, event, cx| match event {
                 crate::titlebar_view::TitleBarEvent::RunMenu(action) => {
                     this.dispatch_menu_action(action.clone(), cx);
@@ -603,17 +603,17 @@ impl AppRoot {
             })
             .detach();
             self.titlebar_view = Some(titlebar);
-            self.chat_view = Some(cx.new(|cx| ChatView::new(cx)));
-            let toolbar = cx.new(|cx| ToolbarView::new(cx));
+            self.chat_view = Some(cx.new(ChatView::new));
+            let toolbar = cx.new(ToolbarView::new);
             cx.subscribe(&toolbar, |this, _, event, cx| match event {
                 crate::toolbar_view::ToolbarEvent::AddText => this.add_text_at_playhead(cx),
             })
             .detach();
             self.toolbar_view = Some(toolbar);
-            self.media_panel_view = Some(cx.new(|cx| MediaPanelView::new(cx)));
-            self.preview_view = Some(cx.new(|cx| PreviewView::new(cx)));
-            self.timeline_view = Some(cx.new(|cx| TimelineView::new(cx)));
-            self.inspector_view = Some(cx.new(|cx| InspectorView::new(cx)));
+            self.media_panel_view = Some(cx.new(MediaPanelView::new));
+            self.preview_view = Some(cx.new(PreviewView::new));
+            self.timeline_view = Some(cx.new(TimelineView::new));
+            self.inspector_view = Some(cx.new(InspectorView::new));
             self.wire_cross_view_state(cx);
             // Periodic autosave (#211): a coalesced checkpoint every 20s that
             // no-ops unless a project is open and edited since the last save.
@@ -1263,7 +1263,7 @@ impl AppRoot {
     fn activate_project_menu_item(&mut self, index: usize, cx: &mut Context<Self>) {
         let target = self.project_menu.target().cloned();
         let entries =
-            Self::project_card_menu_entries(target.as_ref().map_or(true, |t| t.accessible));
+            Self::project_card_menu_entries(target.as_ref().is_none_or(|t| t.accessible));
         if let crate::context_menu::Activation::Perform(id) =
             self.project_menu.activate(index, &entries)
         {
@@ -2344,7 +2344,7 @@ pub fn open_main_window(cx: &mut App) {
         .unwrap_or((cfg.default_width as f32, cfg.default_height as f32));
     let size = size(px(dw), px(dh));
     let mut bounds = Bounds::centered(None, size, cx);
-    bounds.origin.y = bounds.origin.y + px(220.0);
+    bounds.origin.y += px(220.0);
     // The +220 nudge (Swift Home placement) must not push the window off
     // small displays — keep it fully on screen.
     if let Some(display) = cx.primary_display() {
