@@ -517,6 +517,57 @@ pub fn apply_color_adjustments(img: &mut RgbaImage, effects: &[crate::effects::E
     }
 }
 
+/// Apply a parsed `.cube` LUT: `out = in + (lut(in) − in) × strength` per pixel
+/// (the Metal `LUTTetra` kernel's final mix); alpha is untouched. Decision D5.
+#[allow(clippy::manual_clamp)] // NaN strength degrades to 0 (skip), never poisons pixels
+pub fn apply_lut(img: &mut RgbaImage, lut: &crate::lut::CubeLut, strength: f64) {
+    let s = strength.max(0.0).min(1.0);
+    if s <= 0.0 {
+        return;
+    }
+    for px in img.pixels.chunks_exact_mut(4) {
+        let rgb = [
+            px[0] as f64 / 255.0,
+            px[1] as f64 / 255.0,
+            px[2] as f64 / 255.0,
+        ];
+        let mapped = lut.sample(rgb);
+        for c in 0..3 {
+            let v = rgb[c] + (mapped[c] - rgb[c]) * s;
+            px[c] = (v * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+}
+
+/// `color.lut` effect pass at its Swift canonical-order slot
+/// (`EffectRegistry.canonicalOrder`: after the colour adjustments, before
+/// detail/blur/stylize). An unreadable or invalid LUT file skips the effect,
+/// matching Swift's `LUTLoader.load` nil → image-unchanged path.
+fn apply_lut_effects(img: &mut RgbaImage, clip: &Clip, rel: i64) {
+    let Some(effects) = clip.effects.as_ref() else {
+        return;
+    };
+    for e in effects {
+        if !e.enabled || e.r#type != "color.lut" {
+            continue;
+        }
+        let Some(path) = e.params.get("path").and_then(|p| p.string.as_deref()) else {
+            continue;
+        };
+        // Rust `apply_color` writes `strength`; Swift's EffectRegistry writes
+        // `intensity`. Read both so either app's project renders the same.
+        let strength = e
+            .params
+            .get("strength")
+            .or_else(|| e.params.get("intensity"))
+            .map(|p| p.resolved_at(rel, 1.0))
+            .unwrap_or(1.0);
+        if let Ok(lut) = crate::lut::load_cached(path) {
+            apply_lut(img, &lut, strength);
+        }
+    }
+}
+
 /// Make pixels within `tolerance` of the key colour transparent (green-screen
 /// keying), then suppress key-colour spill on the pixels that survive. Distances
 /// are Euclidean in normalized RGB; `tolerance` and `spill_suppression` are
@@ -931,6 +982,7 @@ fn compose_frame_inner(
             if fx.has_color_adjustments {
                 apply_color_adjustments(&mut src, &fx.effects);
             }
+            apply_lut_effects(&mut src, clip, rel);
             if fx.has_blur_or_vignette {
                 for e in &fx.effects {
                     if !e.enabled {
@@ -2133,5 +2185,154 @@ mod tests {
             |_, _| count += 1,
         );
         assert_eq!(count, 0);
+    }
+
+    // === color.lut effect (decision D5 / upstream #296) ===
+
+    fn identity_cube_text() -> String {
+        let mut lines = vec!["LUT_3D_SIZE 2".to_string()];
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    lines.push(format!("{r} {g} {b}"));
+                }
+            }
+        }
+        lines.join("\n")
+    }
+
+    fn inverting_cube_text() -> String {
+        let mut lines = vec!["LUT_3D_SIZE 2".to_string()];
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    lines.push(format!("{} {} {}", 1 - r, 1 - g, 1 - b));
+                }
+            }
+        }
+        lines.join("\n")
+    }
+
+    fn write_temp_cube(name: &str, text: &str) -> String {
+        let path = std::env::temp_dir().join(format!(
+            "fronda-lut-compositor-{}-{name}.cube",
+            std::process::id()
+        ));
+        std::fs::write(&path, text).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    fn lut_effect(path: &str, params: &[(&str, f64)]) -> core_model::Effect {
+        let mut p = std::collections::HashMap::new();
+        p.insert("path".to_string(), core_model::EffectParam::string(path));
+        for (k, v) in params {
+            p.insert(k.to_string(), core_model::EffectParam::value(*v));
+        }
+        core_model::Effect {
+            id: "fx-lut".into(),
+            r#type: "color.lut".into(),
+            enabled: true,
+            params: p,
+        }
+    }
+
+    fn compose_solid_with_effects(
+        rgba: [u8; 4],
+        effects: Option<Vec<core_model::Effect>>,
+    ) -> RgbaImage {
+        let mut c = clip("c1", "m1", 0, 30);
+        c.transform = Transform::from_top_left(0.0, 0.0, 1.0, 1.0);
+        c.effects = effects;
+        let timeline = tl(vec![c]);
+        compose_frame(&timeline, &MediaManifest::default(), 0, 4, 4, |_| {
+            Some(RgbaImage::solid(4, 4, rgba))
+        })
+    }
+
+    #[test]
+    fn apply_lut_strength_endpoints_and_alpha() {
+        let lut = crate::lut::CubeLut::parse(&inverting_cube_text()).unwrap();
+        // strength 0 → bit-identical.
+        let mut img = RgbaImage::solid(2, 2, [10, 200, 60, 77]);
+        let before = img.clone();
+        apply_lut(&mut img, &lut, 0.0);
+        assert_eq!(img, before, "strength 0 is a no-op");
+        // strength 1 → full inversion, alpha preserved.
+        apply_lut(&mut img, &lut, 1.0);
+        assert_eq!(px(&img, 0, 0), [245, 55, 195, 77]);
+        // strength 0.5 on black → exactly half-way to white (127.5 → 128).
+        let mut black = RgbaImage::solid(1, 1, [0, 0, 0, 255]);
+        apply_lut(&mut black, &lut, 0.5);
+        assert_eq!(px(&black, 0, 0), [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn e2e_identity_lut_is_bit_identical() {
+        let path = write_temp_cube("identity", &identity_cube_text());
+        let plain = compose_solid_with_effects([10, 200, 60, 255], None);
+        let with_lut = compose_solid_with_effects(
+            [10, 200, 60, 255],
+            Some(vec![lut_effect(&path, &[("strength", 1.0)])]),
+        );
+        assert_eq!(with_lut, plain, "identity LUT leaves every pixel unchanged");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn e2e_inverting_lut_applies() {
+        let path = write_temp_cube("invert", &inverting_cube_text());
+        let out = compose_solid_with_effects(
+            [10, 200, 60, 255],
+            Some(vec![lut_effect(&path, &[("strength", 1.0)])]),
+        );
+        assert_eq!(px(&out, 2, 2), [245, 55, 195, 255], "inverted through the LUT");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn e2e_lut_strength_zero_leaves_frame_unchanged() {
+        let path = write_temp_cube("invert-s0", &inverting_cube_text());
+        let plain = compose_solid_with_effects([10, 200, 60, 255], None);
+        let out = compose_solid_with_effects(
+            [10, 200, 60, 255],
+            Some(vec![lut_effect(&path, &[("strength", 0.0)])]),
+        );
+        assert_eq!(out, plain);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn e2e_missing_lut_file_skips_effect() {
+        let plain = compose_solid_with_effects([10, 200, 60, 255], None);
+        let out = compose_solid_with_effects(
+            [10, 200, 60, 255],
+            Some(vec![lut_effect("/nonexistent/fronda-missing.cube", &[])]),
+        );
+        assert_eq!(out, plain, "unreadable LUT skips, never panics");
+    }
+
+    #[test]
+    fn e2e_disabled_lut_effect_skipped() {
+        let path = write_temp_cube("invert-disabled", &inverting_cube_text());
+        let plain = compose_solid_with_effects([10, 200, 60, 255], None);
+        let mut fx = lut_effect(&path, &[("strength", 1.0)]);
+        fx.enabled = false;
+        let out = compose_solid_with_effects([10, 200, 60, 255], Some(vec![fx]));
+        assert_eq!(out, plain);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn e2e_swift_intensity_key_honoured() {
+        // A Swift-written project stores the mix as `intensity`; absent both keys
+        // the default is 1.0, so intensity=0 proves the fallback is read.
+        let path = write_temp_cube("invert-intensity", &inverting_cube_text());
+        let plain = compose_solid_with_effects([10, 200, 60, 255], None);
+        let out = compose_solid_with_effects(
+            [10, 200, 60, 255],
+            Some(vec![lut_effect(&path, &[("intensity", 0.0)])]),
+        );
+        assert_eq!(out, plain, "Swift `intensity` param is honoured");
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -62,6 +62,15 @@ pub trait ClipAudioSource: Send + Sync {
     fn capture_date_seconds(&self, _source: &MediaSource) -> Option<f64> {
         None
     }
+
+    /// Exact duration of one timecode frame as a `(num, den)` rational —
+    /// NTSC 29.97 reads (1001, 30000). Swift reads it live from the tmcd
+    /// format description (#269 `SourceTimingReader`); the app shell derives
+    /// it from the tmcd stream via ffmpeg. `None` (the default and the
+    /// MCP/headless value) falls back to the manifest-derived duration.
+    fn timecode_frame_duration(&self, _source: &MediaSource) -> Option<(i64, i64)> {
+        None
+    }
 }
 
 /// A detected speech span in source seconds.
@@ -3056,9 +3065,12 @@ impl ToolExecutor {
         // Sync maps (Swift `syncMulticamMembers`' no-audio path): pinned →
         // locked; master → 0; else shared embedded timecode; else unresolved.
         let tc_seconds = |media_ref: &str| -> Option<f64> {
-            self.media_manifest
-                .entry_for(media_ref)
-                .and_then(Self::manifest_tc_seconds)
+            let entry = self.media_manifest.entry_for(media_ref)?;
+            let precise = self
+                .audio_source
+                .as_ref()
+                .and_then(|a| a.timecode_frame_duration(&entry.source));
+            Self::manifest_tc_seconds(entry, precise)
         };
         let mut maps: std::collections::HashMap<String, MulticamSyncMap> =
             std::collections::HashMap::new();
@@ -6285,17 +6297,24 @@ impl ToolExecutor {
 
     /// Embedded source timecode in seconds. The manifest carries the tmcd
     /// frame/quanta pair (#136) but not the exact per-frame duration Swift
-    /// #269 reads from the format description; a drop-frame flag implies the
-    /// NTSC 1001/1000 family, so the exact duration is recoverable as
-    /// 1001/(1000·quanta). Non-drop-frame NTSC still falls back to 1/quanta —
-    /// the manifest can't distinguish it from integer rates.
-    fn manifest_tc_seconds(entry: &MediaManifestEntry) -> Option<f64> {
-        let frame = entry.source_timecode_frame? as f64;
-        let quanta = entry.source_timecode_quanta.filter(|q| *q > 0)? as f64;
-        Some(if entry.source_timecode_drop_frame == Some(true) {
-            frame * 1001.0 / (1000.0 * quanta)
-        } else {
-            frame / quanta
+    /// #269 reads from the format description. Precision order (D1): the
+    /// host seam's `(num, den)` when provided (frame × num/den, integer
+    /// multiply before the divide); else a drop-frame flag implies the NTSC
+    /// 1001/1000 family (1001/(1000·quanta)); else 1/quanta. The manifest
+    /// pair still gates presence — a seam value never invents a timecode
+    /// the manifest doesn't carry.
+    fn manifest_tc_seconds(
+        entry: &MediaManifestEntry,
+        frame_duration: Option<(i64, i64)>,
+    ) -> Option<f64> {
+        let frame = entry.source_timecode_frame?;
+        let quanta = entry.source_timecode_quanta.filter(|q| *q > 0)?;
+        Some(match frame_duration {
+            Some((num, den)) if num > 0 && den > 0 => (frame * num) as f64 / den as f64,
+            _ if entry.source_timecode_drop_frame == Some(true) => {
+                (frame * 1001) as f64 / (1000 * quanta) as f64
+            }
+            _ => frame as f64 / quanta as f64,
         })
     }
 
@@ -6384,8 +6403,14 @@ impl ToolExecutor {
         // never touch the decoder.
         let mut ref_f64: Option<Vec<f64>> = None;
         let ref_anchor = ref_clip.start_frame - ref_clip.trim_start_frame;
+        // The seam is read off `audio_seam`, not `audio` — timecode mode
+        // nulls the decoder but still wants the exact frame duration.
         let tc_seconds = |media_ref: &str, manifest: &MediaManifest| -> Option<f64> {
-            manifest.entry_for(media_ref).and_then(Self::manifest_tc_seconds)
+            let entry = manifest.entry_for(media_ref)?;
+            let precise = audio_seam
+                .as_ref()
+                .and_then(|a| a.timecode_frame_duration(&entry.source));
+            Self::manifest_tc_seconds(entry, precise)
         };
         let ref_tc = tc_seconds(&ref_clip.media_ref, &self.media_manifest);
         // Capture-date seed (#269): dates come from the host seam (both
@@ -14911,23 +14936,29 @@ mod tests {
         // per-TC-frame duration is 1001/(1000*quanta) — quanta-only seconds
         // mis-scale the offset by 1/1001.
         assert_eq!(
-            ToolExecutor::manifest_tc_seconds(&{
-                let mut e = audio_media("x", 1.0);
-                e.source_timecode_frame = Some(30_000);
-                e.source_timecode_quanta = Some(30);
-                e.source_timecode_drop_frame = Some(true);
-                e
-            }),
+            ToolExecutor::manifest_tc_seconds(
+                &{
+                    let mut e = audio_media("x", 1.0);
+                    e.source_timecode_frame = Some(30_000);
+                    e.source_timecode_quanta = Some(30);
+                    e.source_timecode_drop_frame = Some(true);
+                    e
+                },
+                None
+            ),
             Some(1001.0),
             "30000 DF frames at 30 quanta = 1001s exactly"
         );
         assert_eq!(
-            ToolExecutor::manifest_tc_seconds(&{
-                let mut e = audio_media("x", 1.0);
-                e.source_timecode_frame = Some(30_000);
-                e.source_timecode_quanta = Some(30);
-                e
-            }),
+            ToolExecutor::manifest_tc_seconds(
+                &{
+                    let mut e = audio_media("x", 1.0);
+                    e.source_timecode_frame = Some(30_000);
+                    e.source_timecode_quanta = Some(30);
+                    e
+                },
+                None
+            ),
             Some(1000.0),
             "non-drop-frame keeps the 1/quanta fallback"
         );
@@ -14961,6 +14992,107 @@ mod tests {
         let synced = &v["synced"][0];
         // Naive frame/quanta would give -3003 / 3103.
         assert_eq!(synced["offsetFrames"], json!(-3006), "DF-exact NTSC offset");
+        assert_eq!(synced["movedToFrame"], json!(3106));
+    }
+
+    /// D1 seam: supplies only the exact per-TC-frame duration, no audio.
+    struct MockTimecodeSeam;
+    impl ClipAudioSource for MockTimecodeSeam {
+        fn decode_source_pcm(
+            &self,
+            _source: &core_model::MediaSource,
+            _sample_rate: u32,
+            _channels: usize,
+        ) -> Option<Vec<f32>> {
+            None
+        }
+        fn timecode_frame_duration(
+            &self,
+            _source: &core_model::MediaSource,
+        ) -> Option<(i64, i64)> {
+            Some((1001, 30_000))
+        }
+    }
+
+    #[test]
+    fn manifest_tc_seconds_seam_priority() {
+        // D1 precision order: seam (num, den) > drop-frame 1001/1000 > 1/quanta.
+        let ndf = |frame: i64| {
+            let mut e = audio_media("x", 1.0);
+            e.source_timecode_frame = Some(frame);
+            e.source_timecode_quanta = Some(30);
+            e
+        };
+        // NDF NTSC: quanta alone can't tell 29.97 from 30 — the seam can.
+        assert_eq!(
+            ToolExecutor::manifest_tc_seconds(&ndf(30_000), Some((1001, 30_000))),
+            Some(1001.0),
+            "seam-exact NDF NTSC: 30000 × 1001/30000"
+        );
+        // The seam outranks the DF derivation (same family, source-exact).
+        let mut df = ndf(30_000);
+        df.source_timecode_drop_frame = Some(true);
+        assert_eq!(
+            ToolExecutor::manifest_tc_seconds(&df, Some((1001, 30_000))),
+            Some(1001.0)
+        );
+        // Degenerate seam rationals fall through instead of poisoning the math.
+        assert_eq!(
+            ToolExecutor::manifest_tc_seconds(&ndf(30_000), Some((0, 30_000))),
+            Some(1000.0)
+        );
+        assert_eq!(
+            ToolExecutor::manifest_tc_seconds(&ndf(30_000), Some((1001, 0))),
+            Some(1000.0)
+        );
+        // The manifest still gates presence: a seam value never invents a
+        // timecode the manifest doesn't carry.
+        let mut frame_only = audio_media("x", 1.0);
+        frame_only.source_timecode_frame = Some(30_000);
+        assert_eq!(
+            ToolExecutor::manifest_tc_seconds(&frame_only, Some((1001, 30_000))),
+            None
+        );
+    }
+
+    #[test]
+    fn sync_clips_timecode_seam_uses_exact_ndf_ntsc_seconds() {
+        // D1: NDF NTSC carries no drop-frame flag, so the manifest alone
+        // falls back to 1/quanta; the host seam supplies the exact
+        // 1001/30000 per-TC-frame duration. Same figures as the DF test —
+        // the offset must land on -3006, not the naive -3003.
+        let mut manifest = MediaManifest::default();
+        let mut r = audio_media("ref", 10.0);
+        r.source_timecode_frame = Some(90_000);
+        r.source_timecode_quanta = Some(30);
+        let mut t = audio_media("tgt", 10.0);
+        t.source_timecode_frame = Some(93_003);
+        t.source_timecode_quanta = Some(30);
+        manifest.entries.push(r);
+        manifest.entries.push(t);
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(std::sync::Arc::new(MockTimecodeSeam));
+        exec.execute(
+            "add_clips",
+            &json!({"entries": [{"mediaRef": "ref", "startFrame": 100}, {"mediaRef": "tgt", "startFrame": 400}]}),
+        )
+        .unwrap();
+        let ref_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let tgt_id = exec.timeline().tracks[0].clips[1].id.clone();
+        let res = exec
+            .execute(
+                "sync_clips",
+                &json!({"referenceClipId": ref_id, "targetClipId": tgt_id, "mode": "timecode"}),
+            )
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        let synced = &v["synced"][0];
+        assert_eq!(synced["method"], json!("timecode"));
+        assert_eq!(
+            synced["offsetFrames"],
+            json!(-3006),
+            "seam-exact NTSC offset: {v}"
+        );
         assert_eq!(synced["movedToFrame"], json!(3106));
     }
 

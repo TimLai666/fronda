@@ -380,3 +380,64 @@ fn partial_ripple_across_group_refused_via_tool() {
     );
     assert!(ok.is_ok(), "{ok:?}");
 }
+
+#[test]
+fn create_timecode_sync_uses_seam_exact_ntsc_seconds() {
+    // D1: NDF NTSC members sync by shared timecode; the ClipAudioSource seam
+    // supplies the exact 1001/30000 per-TC-frame duration, so the member's
+    // offset is 3003 × 1001/30000 s — not the naive 3003/30 — matching the
+    // sync_clips path exactly.
+    struct TcSeam;
+    impl agent_contract::ClipAudioSource for TcSeam {
+        fn decode_source_pcm(
+            &self,
+            _source: &MediaSource,
+            _sample_rate: u32,
+            _channels: usize,
+        ) -> Option<Vec<f32>> {
+            None
+        }
+        fn timecode_frame_duration(&self, _source: &MediaSource) -> Option<(i64, i64)> {
+            Some((1001, 30_000))
+        }
+    }
+    let mut manifest = MediaManifest::default();
+    let mut mic = media_entry("mic1", ClipType::Audio, 130.0, true);
+    mic.source_timecode_frame = Some(90_000);
+    mic.source_timecode_quanta = Some(30);
+    let mut cam = media_entry("camA", ClipType::Video, 120.0, true);
+    cam.source_timecode_frame = Some(93_003);
+    cam.source_timecode_quanta = Some(30);
+    manifest.entries.push(mic);
+    manifest.entries.push(cam);
+    let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+    exec.set_audio_source(std::sync::Arc::new(TcSeam));
+    exec.execute(
+        "manage_multicam",
+        &json!({"create": {
+            "members": [
+                {"mediaRef": "mic1", "kind": "mic", "angleLabel": "mic-1"},
+                {"mediaRef": "camA", "kind": "angle", "angleLabel": "cam-a"},
+            ],
+            "master": "mic-1",
+            "startFrame": 0,
+        }}),
+    )
+    .unwrap();
+    let group = &exec.multicam_groups()[0];
+    let cam_member = group
+        .members
+        .iter()
+        .find(|m| m.media_ref == "camA")
+        .expect("camA member stored");
+    let exact = (93_003i64 * 1001) as f64 / 30_000.0 - (90_000i64 * 1001) as f64 / 30_000.0;
+    assert_eq!(
+        cam_member.sync.offset_seconds, exact,
+        "seam-exact NTSC offset"
+    );
+    assert!(
+        (cam_member.sync.offset_seconds - 3003.0 / 30.0).abs() > 1e-4,
+        "must not be the naive 1/quanta offset: {}",
+        cam_member.sync.offset_seconds
+    );
+}

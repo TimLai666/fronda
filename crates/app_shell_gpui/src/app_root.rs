@@ -73,6 +73,62 @@ fn default_text_duration_frames(fps: i64) -> i64 {
 /// prompt here and the caller's notify triggers the redraw that delivers it.
 static PENDING_AGENT_PROMPT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+/// Device-rate premix of the whole timeline keyed by (revision, rate,
+/// channels) — the playback feeder's data source, so replaying an unedited
+/// project skips the decode+mix.
+type PremixCacheEntry = (u64, u32, u16, std::sync::Arc<Vec<f32>>);
+static PREMIX_CACHE: std::sync::Mutex<Option<PremixCacheEntry>> = std::sync::Mutex::new(None);
+
+/// Snapshot the shared editor state into a [`crate::audio_playback::PremixFn`]
+/// that mixes the timeline at the device rate on the feeder thread (same mix
+/// path as export: nests flattened, decode via ffmpeg).
+fn playback_premix_fn() -> crate::audio_playback::PremixFn {
+    let hub = crate::editor_state_hub::EditorStateHub::global();
+    let revision = hub.revision();
+    let snapshot = hub.executor().lock().ok().map(|guard| {
+        (
+            guard.timeline().clone(),
+            guard.media_manifest().clone(),
+            guard.sibling_timeline_map(),
+        )
+    });
+    let root = hub
+        .project_root()
+        .unwrap_or_else(|| std::env::temp_dir().join("fronda-preview"));
+    Box::new(move |rate: u32, channels: u16| {
+        if let Ok(cache) = PREMIX_CACHE.lock() {
+            if let Some((rev, r, c, data)) = cache.as_ref() {
+                if *rev == revision && *r == rate && *c == channels {
+                    return data.clone();
+                }
+            }
+        }
+        let Some((timeline, manifest, timelines)) = snapshot else {
+            return std::sync::Arc::new(Vec::new());
+        };
+        let paths: std::collections::HashMap<String, std::path::PathBuf> = manifest
+            .entries
+            .iter()
+            .filter_map(|e| crate::video_export::source_path(e, &root).map(|p| (e.id.clone(), p)))
+            .collect();
+        let mixed = render_core::audio_plan::mix_timeline_audio_with_timelines(
+            &timeline,
+            &timelines,
+            rate,
+            channels as usize,
+            |clip: &core_model::Clip| {
+                let path = paths.get(clip.media_ref.as_str())?;
+                crate::audio_export::decode_audio_pcm(path, rate, channels)
+            },
+        );
+        let data = std::sync::Arc::new(mixed);
+        if let Ok(mut cache) = PREMIX_CACHE.lock() {
+            *cache = Some((revision, rate, channels, data.clone()));
+        }
+        data
+    })
+}
+
 /// Root view that switches between Home and Editor.
 #[derive(Debug, Clone)]
 pub struct AppRoot {
@@ -119,6 +175,11 @@ pub struct AppRoot {
     /// a short TTL so external changes still surface.
     home_cards: Vec<HomeCard>,
     home_cards_loaded_at: Option<std::time::Instant>,
+    /// The ~30 Hz audio-transport sync loop is running.
+    audio_tick_running: bool,
+    /// Project revision the playback engine's premix was armed with; a
+    /// mismatch mid-play re-arms the feeder on the edited timeline.
+    audio_premix_revision: Option<u64>,
 }
 
 type HomeCard = (
@@ -169,6 +230,8 @@ impl AppRoot {
             armed_delete: None,
             home_cards: Vec::new(),
             home_cards_loaded_at: None,
+            audio_tick_running: false,
+            audio_premix_revision: None,
         }
     }
 
@@ -559,6 +622,127 @@ impl AppRoot {
         }));
     }
 
+    /// Start the ~30 Hz audio-transport sync loop when a transport action may
+    /// need it. One step runs synchronously so play/pause/audio-start take
+    /// effect without a tick of latency; the loop then keeps the playback
+    /// engine and the timeline transport in lockstep until both are idle.
+    fn ensure_audio_sync_tick(&mut self, cx: &mut Context<Self>) {
+        if self.audio_tick_running {
+            return;
+        }
+        if !self.audio_sync_step(cx) {
+            return;
+        }
+        self.audio_tick_running = true;
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(33))
+                .await;
+            let alive = this.update(cx, |app, cx| {
+                let keep = app.audio_sync_step(cx);
+                if !keep {
+                    app.audio_tick_running = false;
+                }
+                keep
+            });
+            if !alive.unwrap_or(false) {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    /// One audio-transport sync step: start/stop/seek the playback engine from
+    /// the timeline transport, and while audio is live drive the playhead from
+    /// the audio clock (consumed samples), overriding the visual ticker's
+    /// dead reckoning. Degraded (no output device) keeps the pre-existing
+    /// silent dead-reckoned playback. Returns false when there is nothing left
+    /// to sync.
+    fn audio_sync_step(&mut self, cx: &mut Context<Self>) -> bool {
+        use crate::audio_playback::PlayState;
+        let Some(tv) = self.timeline_view.clone() else {
+            if let Ok(mut engine) = crate::audio_playback::engine().lock() {
+                engine.stop();
+            }
+            return false;
+        };
+        let (rate, playhead, fps, total_frames) = {
+            let state = &tv.read(cx).state;
+            (
+                state.transport.rate,
+                state.playhead_frame,
+                state.fps.max(1),
+                state.total_frames,
+            )
+        };
+        let revision = crate::editor_state_hub::EditorStateHub::global().revision();
+        // Phase-1 non-goal: JKL shuttle rates and reverse stay silent — only
+        // 1x forward produces audio.
+        let want_audio = rate == 1.0;
+        let Ok(mut engine) = crate::audio_playback::engine().lock() else {
+            return false;
+        };
+        let mut clock_playhead: Option<i64> = None;
+        match (want_audio, engine.state()) {
+            (true, PlayState::Idle) | (true, PlayState::Paused) => {
+                let start = playhead.max(0) as f64 / fps as f64;
+                let resumed = engine.state() == PlayState::Paused
+                    && self.audio_premix_revision == Some(revision)
+                    && engine.resume_at(start);
+                if !resumed {
+                    engine.play(start, playback_premix_fn());
+                    self.audio_premix_revision = Some(revision);
+                }
+            }
+            (true, PlayState::Playing) => {
+                if self.audio_premix_revision != Some(revision) {
+                    // Edited mid-play: re-arm the feeder on the new timeline.
+                    let position = engine.position_seconds();
+                    engine.play(position, playback_premix_fn());
+                    self.audio_premix_revision = Some(revision);
+                } else if engine.is_live_playing() && !engine.ended() {
+                    let clock_frame = engine.position_frame(fps);
+                    let slop = (fps / 10).max(3);
+                    if (playhead - clock_frame).abs() > slop {
+                        // External jump (ruler click): refeed from there.
+                        engine.seek(playhead.max(0) as f64 / fps as f64);
+                    } else {
+                        clock_playhead = Some(clock_frame);
+                    }
+                }
+                // `ended`: stop driving so the visual ticker reaches the end
+                // and auto-pauses; the next step then pauses the engine.
+            }
+            (false, PlayState::Playing) => engine.pause(),
+            (false, _) => {}
+        }
+        let engine_playing = engine.state() == PlayState::Playing;
+        drop(engine);
+
+        if let Some(frame) = clock_playhead {
+            if frame != playhead {
+                tv.update(cx, |view, cx| {
+                    view.state.playhead_frame = frame;
+                    cx.notify();
+                });
+            }
+        }
+        // Preview follows the transport (frame for the canvas, playing flag
+        // for the button); the per-tick notify also repaints the live meter.
+        let transport_playing = rate != 0.0;
+        if let Some(preview) = self.preview_view.clone() {
+            let shown_frame = clock_playhead.unwrap_or(playhead).max(0);
+            preview.update(cx, |preview, cx| {
+                preview.state.total_frames = total_frames;
+                preview.state.fps = fps;
+                preview.state.active_frame = shown_frame;
+                preview.state.is_playing = transport_playing;
+                cx.notify();
+            });
+        }
+        transport_playing || engine_playing
+    }
+
     /// Toolbar "T": insert a default text clip at the timeline playhead via
     /// the shared add_texts tool (undoable; every view syncs on the revision).
     fn add_text_at_playhead(&mut self, cx: &mut Context<Self>) {
@@ -615,6 +799,13 @@ impl AppRoot {
 
     /// Navigate back to Home (e.g., close project).
     pub fn show_home(&mut self, cx: &mut Context<Self>) {
+        // Stop audio + transport so Home is silent and re-entry starts paused.
+        if let Ok(mut engine) = crate::audio_playback::engine().lock() {
+            engine.stop();
+        }
+        if let Some(tv) = self.timeline_view.clone() {
+            tv.update(cx, |view, cx| view.transport_jkl(0, cx));
+        }
         // Autosave before leaving the editor (#211, Swift saves on close);
         // best-effort — a rootless (unsaved) project returns Err and is skipped.
         let _ = crate::editor_state_hub::EditorStateHub::global().save_now();
@@ -846,41 +1037,49 @@ impl AppRoot {
             menu::MenuAction::PlayPause => {
                 if let Some(tv) = self.timeline_view.clone() {
                     tv.update(cx, |view, cx| view.transport_toggle_play(cx));
+                    self.ensure_audio_sync_tick(cx);
                 }
             }
             menu::MenuAction::PlayBackward => {
                 if let Some(tv) = self.timeline_view.clone() {
                     tv.update(cx, |view, cx| view.transport_jkl(-1, cx));
+                    self.ensure_audio_sync_tick(cx);
                 }
             }
             menu::MenuAction::PauseJkl => {
                 if let Some(tv) = self.timeline_view.clone() {
                     tv.update(cx, |view, cx| view.transport_jkl(0, cx));
+                    self.ensure_audio_sync_tick(cx);
                 }
             }
             menu::MenuAction::PlayForward => {
                 if let Some(tv) = self.timeline_view.clone() {
                     tv.update(cx, |view, cx| view.transport_jkl(1, cx));
+                    self.ensure_audio_sync_tick(cx);
                 }
             }
             menu::MenuAction::StepFrameBackward => {
                 if let Some(tv) = self.timeline_view.clone() {
                     tv.update(cx, |view, cx| view.transport_step(-1, cx));
+                    self.ensure_audio_sync_tick(cx);
                 }
             }
             menu::MenuAction::StepFrameForward => {
                 if let Some(tv) = self.timeline_view.clone() {
                     tv.update(cx, |view, cx| view.transport_step(1, cx));
+                    self.ensure_audio_sync_tick(cx);
                 }
             }
             menu::MenuAction::SkipFramesBackward => {
                 if let Some(tv) = self.timeline_view.clone() {
                     tv.update(cx, |view, cx| view.transport_step(-5, cx));
+                    self.ensure_audio_sync_tick(cx);
                 }
             }
             menu::MenuAction::SkipFramesForward => {
                 if let Some(tv) = self.timeline_view.clone() {
                     tv.update(cx, |view, cx| view.transport_step(5, cx));
+                    self.ensure_audio_sync_tick(cx);
                 }
             }
             menu::MenuAction::MarkIn

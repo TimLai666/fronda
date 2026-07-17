@@ -10,6 +10,7 @@ pub mod compositor;
 pub mod effects;
 pub mod export_stall_watchdog;
 pub mod fcpxml_export;
+pub mod lut;
 pub mod text;
 pub mod xml_export;
 pub mod xml_import;

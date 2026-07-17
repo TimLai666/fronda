@@ -50,6 +50,10 @@ impl ClipAudioSource for ProjectAudioSource {
     fn capture_date_seconds(&self, source: &MediaSource) -> Option<f64> {
         read_capture_date(&self.resolve_path(source))
     }
+
+    fn timecode_frame_duration(&self, source: &MediaSource) -> Option<(i64, i64)> {
+        read_timecode_frame_duration(&self.resolve_path(source))
+    }
 }
 
 /// Format-level capture date: QuickTime `com.apple.quicktime.creationdate`,
@@ -61,6 +65,31 @@ fn read_capture_date(path: &Path) -> Option<f64> {
     meta.get("com.apple.quicktime.creationdate")
         .or_else(|| meta.get("creation_time"))
         .and_then(parse_capture_date)
+}
+
+/// Per-TC-frame duration from the container's timecode stream — NTSC 29.97
+/// reads (1001, 30000). MOV/MP4 tmcd tracks demux as data streams tagged
+/// 'tmcd' with no codec id, so the fourcc is the discriminator. The duration
+/// is the inverted `avg_frame_rate` (the demuxer derives it from the tmcd
+/// sample description); the stream time_base is only 1/timescale and would
+/// mis-read NTSC as 1/30000. `None` when the file can't be opened, carries
+/// no tmcd stream, or the rate is unset.
+fn read_timecode_frame_duration(path: &Path) -> Option<(i64, i64)> {
+    init_ffmpeg();
+    const TMCD: u32 = u32::from_le_bytes(*b"tmcd");
+    let ictx = ffmpeg::format::input(path).ok()?;
+    for stream in ictx.streams() {
+        let tag = unsafe { (*stream.parameters().as_ptr()).codec_tag };
+        if tag != TMCD {
+            continue;
+        }
+        // Reduce: mov timescales are muxer-chosen (25fps can demux 12800/512).
+        let rate = stream.avg_frame_rate().reduce();
+        if rate.numerator() > 0 && rate.denominator() > 0 {
+            return Some((rate.denominator() as i64, rate.numerator() as i64));
+        }
+    }
+    None
 }
 
 /// ISO8601 → epoch seconds. Accepts RFC3339 (`Z` / `+08:00`, fractional
@@ -220,6 +249,29 @@ mod tests {
             absolute_path: dir.join("missing.mov").to_string_lossy().to_string(),
         };
         assert_eq!(src.capture_date_seconds(&missing), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn timecode_frame_duration_none_without_tmcd() {
+        // No tmcd fixture can live in-repo (design D1) — this pins the
+        // None path: a plain stream never reads as a timecode stream, and
+        // an unopenable file degrades to None instead of erroring.
+        let dir = std::env::temp_dir().join("fronda-audio-source-tmcd");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("plain.wav");
+        let samples: Vec<f32> = std::iter::repeat_n(0.1f32, 480).collect();
+        write_wav(&path, &samples, 48_000, 1).unwrap();
+
+        let src = ProjectAudioSource::new(dir.clone());
+        let plain = MediaSource::External {
+            absolute_path: path.to_string_lossy().to_string(),
+        };
+        assert_eq!(src.timecode_frame_duration(&plain), None);
+        let missing = MediaSource::External {
+            absolute_path: dir.join("missing.mov").to_string_lossy().to_string(),
+        };
+        assert_eq!(src.timecode_frame_duration(&missing), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

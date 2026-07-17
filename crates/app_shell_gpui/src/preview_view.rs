@@ -376,18 +376,24 @@ impl PreviewView {
         .detach();
     }
 
-    /// Sample the audio level at the playhead and update the meter. Returns the
-    /// current stereo display for rendering.
+    /// Update the meter and return the stereo display for rendering. During
+    /// live playback it ingests the peaks of the audio the output device
+    /// actually played; paused (or degraded/no-device playback) it keeps the
+    /// playhead-envelope mode.
     fn update_meter(&mut self) -> audio_core::audio_meter::StereoMeterDisplay {
-        let frame = self.state.active_frame.max(0) as usize;
-        let level = self
-            .envelope
-            .lock()
-            .ok()
-            .and_then(|e| e.as_ref().and_then(|(_, env)| env.get(frame).copied()))
-            .unwrap_or(0.0);
         let time = self.meter_start.elapsed().as_secs_f64();
-        self.meter.ingest(level, level, time);
+        if let Some((left, right)) = crate::audio_playback::live_output_levels() {
+            self.meter.ingest(left, right, time);
+        } else {
+            let frame = self.state.active_frame.max(0) as usize;
+            let level = self
+                .envelope
+                .lock()
+                .ok()
+                .and_then(|e| e.as_ref().and_then(|(_, env)| env.get(frame).copied()))
+                .unwrap_or(0.0);
+            self.meter.ingest(level, level, time);
+        }
         self.meter.display(time)
     }
 
@@ -1401,8 +1407,13 @@ impl Render for PreviewView {
                             )
                             .child(
                                 transport_btn_svg("btn-step-back", "icons/step_back.svg", false)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.step_backward(cx);
+                                    .on_click(cx.listener(|_, _, window, cx| {
+                                        // Drive the shared timeline transport,
+                                        // not the preview-local state.
+                                        window.dispatch_action(
+                                            Box::new(crate::global_shortcuts::StepFrameBackward),
+                                            cx,
+                                        );
                                     })),
                             )
                             .child(
@@ -1416,15 +1427,21 @@ impl Render for PreviewView {
                                     true,
                                 )
                                 .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.toggle_play(cx);
+                                    |_, _, window, cx| {
+                                        window.dispatch_action(
+                                            Box::new(crate::global_shortcuts::PlayPause),
+                                            cx,
+                                        );
                                     },
                                 )),
                             )
                             .child(
                                 transport_btn_svg("btn-step-fwd", "icons/step_forward.svg", false)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.step_forward(cx);
+                                    .on_click(cx.listener(|_, _, window, cx| {
+                                        window.dispatch_action(
+                                            Box::new(crate::global_shortcuts::StepFrameForward),
+                                            cx,
+                                        );
                                     })),
                             )
                             .child(
