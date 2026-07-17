@@ -1,12 +1,13 @@
-//! Local SKILL.md skill store (Swift: SkillStore). Upstream palmier-pro #199.
+//! Local SKILL.md skill store (Swift: SkillStore). Upstream palmier-pro #199 + #319.
 //!
 //! Scans `~/.palmier/skills/<id>/SKILL.md`, parses each skill's YAML-ish
 //! frontmatter (name/description), and builds a sorted skill list plus the
-//! prompt index injected into the in-app agent. Pure std — no gpui.
+//! prompt index injected into the in-app agent. [`SkillStore`] adds the #319
+//! editing surface: validated atomic `save`, `delete`, and `new_skill`, all
+//! path-confined to the skills directory. Pure std — no gpui.
 //!
-//! This is the local-store half of #199. Still to port: the GitHub `SkillCatalog`
-//! (install/refresh), the `read_skill` agent tool + prompt injection wiring, and
-//! the Settings > Skills pane UI.
+//! Still to port from #199/#319: the GitHub `SkillCatalog` (community
+//! install/refresh) and the external-agent copy menu (platform adapter).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -180,6 +181,169 @@ call read_skill(id) to load its full procedure, then follow it.\n{lines}"
     )
 }
 
+// ── SkillStore (#319 editing surface) ────────────────────────────────────────
+
+/// Save-validation failure message — mirrors the Swift #319 alert copy.
+pub const SAVE_VALIDATION_ERROR: &str =
+    "Add nonempty name and description fields to the skill frontmatter.";
+
+/// New-skill SKILL.md template — mirrors Swift `SkillStore.newSkill`.
+pub const SKILL_TEMPLATE: &str = "---\n\
+name: New skill\n\
+description: Describe in one line when the assistant should use this skill.\n\
+---\n\
+\n\
+## Workflow\n\
+1. First step.\n\
+2. Second step.";
+
+/// Mirrors Swift `SkillStore.isValidSkillId`: a single safe path component.
+pub fn is_valid_skill_id(id: &str) -> bool {
+    !id.is_empty() && id != "." && id != ".." && !id.contains('/') && !id.contains('\\')
+}
+
+/// Rebuild a SKILL.md from edited name/description/body, preserving any other
+/// frontmatter fields (and their order) from `original`. Without an original
+/// frontmatter block a fresh one is created.
+pub fn update_skill_md(original: &str, name: &str, description: &str, body: &str) -> String {
+    let mut front: Vec<String> = Vec::new();
+    let mut saw_name = false;
+    let mut saw_description = false;
+    let lines: Vec<&str> = original.split('\n').collect();
+    if lines.first().map(|l| l.trim()) == Some("---") {
+        let mut i = 1;
+        while i < lines.len() && lines[i].trim() != "---" {
+            let line = lines[i];
+            let key = line.split(':').next().map(str::trim).unwrap_or_default();
+            match key {
+                "name" if !saw_name => {
+                    front.push(format!("name: {name}"));
+                    saw_name = true;
+                }
+                "description" if !saw_description => {
+                    front.push(format!("description: {description}"));
+                    saw_description = true;
+                }
+                _ => front.push(line.to_string()),
+            }
+            i += 1;
+        }
+    }
+    if !saw_description {
+        front.insert(0, format!("description: {description}"));
+    }
+    if !saw_name {
+        front.insert(0, format!("name: {name}"));
+    }
+    format!("---\n{}\n---\n\n{}", front.join("\n"), body.trim_end())
+}
+
+/// Mutable skill store rooted at one skills directory (Swift `SkillStore`).
+///
+/// Every write path re-validates the id (single path component, resolved
+/// location stays inside the root) and `save` refuses content whose
+/// frontmatter fails [`required_fields`] before touching disk.
+#[derive(Debug)]
+pub struct SkillStore {
+    dir: PathBuf,
+    skills: Vec<Skill>,
+}
+
+impl SkillStore {
+    pub fn new(dir: PathBuf) -> Self {
+        let mut store = Self {
+            dir,
+            skills: Vec::new(),
+        };
+        store.reload();
+        store
+    }
+
+    /// Store over the default `~/.palmier/skills` directory.
+    pub fn default_location() -> Self {
+        Self::new(default_skills_dir())
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    pub fn skills(&self) -> &[Skill] {
+        &self.skills
+    }
+
+    pub fn skill(&self, id: &str) -> Option<&Skill> {
+        self.skills.iter().find(|s| s.id == id)
+    }
+
+    pub fn reload(&mut self) {
+        self.skills = load_skills(&self.dir);
+    }
+
+    /// Resolve `<root>/<id>` only when `id` is a safe single component and the
+    /// joined path stays directly under the root (Swift `skillDirectory(for:)`).
+    fn skill_dir(&self, id: &str) -> Result<PathBuf, String> {
+        if !is_valid_skill_id(id) {
+            return Err(format!("Invalid skill id \u{201C}{id}\u{201D}."));
+        }
+        let dir = self.dir.join(id);
+        if dir.parent() != Some(self.dir.as_path()) {
+            return Err(format!("Invalid skill id \u{201C}{id}\u{201D}."));
+        }
+        Ok(dir)
+    }
+
+    /// Raw SKILL.md contents for the editor (path-confined read).
+    pub fn raw(&self, id: &str) -> Option<String> {
+        let dir = self.skill_dir(id).ok()?;
+        std::fs::read_to_string(dir.join("SKILL.md")).ok()
+    }
+
+    /// Validate then atomically write a skill's SKILL.md (temp + rename).
+    /// Nothing is written when validation fails.
+    pub fn save(&mut self, id: &str, content: &str) -> Result<(), String> {
+        let dir = self.skill_dir(id)?;
+        if required_fields(content).is_none() {
+            return Err(SAVE_VALIDATION_ERROR.to_string());
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Unable to save skill: {e}"))?;
+        let target = dir.join("SKILL.md");
+        let temp = dir.join(".SKILL.md.tmp");
+        std::fs::write(&temp, content).map_err(|e| format!("Unable to save skill: {e}"))?;
+        if let Err(e) = std::fs::rename(&temp, &target) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(format!("Unable to save skill: {e}"));
+        }
+        self.reload();
+        Ok(())
+    }
+
+    /// Delete a skill's folder (Swift `SkillStore.delete`).
+    pub fn delete(&mut self, id: &str) -> Result<(), String> {
+        let dir = self.skill_dir(id)?;
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("Unable to delete skill: {e}"))?;
+        self.reload();
+        Ok(())
+    }
+
+    /// Create a fresh skill folder from the template, returning its id
+    /// ("new-skill", then "new-skill-2", … — Swift `SkillStore.newSkill`).
+    pub fn new_skill(&mut self) -> Result<String, String> {
+        let mut id = String::from("new-skill");
+        let mut n = 2;
+        while self.dir.join(&id).exists() {
+            id = format!("new-skill-{n}");
+            n += 1;
+        }
+        let dir = self.dir.join(&id);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Unable to create skill: {e}"))?;
+        std::fs::write(dir.join("SKILL.md"), SKILL_TEMPLATE)
+            .map_err(|e| format!("Unable to create skill: {e}"))?;
+        self.reload();
+        Ok(id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +463,116 @@ mod tests {
     fn load_skills_missing_dir_is_empty() {
         let missing = std::env::temp_dir().join("fronda-skill-store-tests/does-not-exist-xyz");
         assert!(load_skills(&missing).is_empty());
+    }
+
+    // ── SkillStore (#319) ────────────────────────────────────────────────────
+
+    const VALID_MD: &str = "---\nname: Editing\ndescription: Edit clips.\n---\n\nSteps here.";
+
+    #[test]
+    fn store_save_round_trip_updates_skill_and_raw() {
+        let root = temp_dir("store-roundtrip");
+        write_skill(&root, "editing", VALID_MD);
+        let mut store = SkillStore::new(root);
+        assert_eq!(store.skills().len(), 1);
+
+        let updated = "---\nname: Editing v2\ndescription: Edit clips faster.\n---\n\nNew steps.";
+        store.save("editing", updated).expect("save must succeed");
+
+        let skill = store.skill("editing").expect("skill still present");
+        assert_eq!(skill.name, "Editing v2");
+        assert_eq!(skill.description, "Edit clips faster.");
+        assert_eq!(store.raw("editing").as_deref(), Some(updated));
+    }
+
+    #[test]
+    fn store_save_validation_failure_writes_nothing() {
+        let root = temp_dir("store-invalid");
+        write_skill(&root, "editing", VALID_MD);
+        let mut store = SkillStore::new(root.clone());
+
+        let blank_name = "---\nname:   \ndescription: Edit clips.\n---\n\nBody";
+        let err = store.save("editing", blank_name).unwrap_err();
+        assert_eq!(err, SAVE_VALIDATION_ERROR);
+        // On-disk content untouched.
+        assert_eq!(store.raw("editing").as_deref(), Some(VALID_MD));
+        // A validation failure must not create folders for unknown ids either.
+        assert!(store.save("brand-new", blank_name).is_err());
+        assert!(!root.join("brand-new").exists());
+    }
+
+    #[test]
+    fn store_save_rejects_path_escape_ids() {
+        let root = temp_dir("store-escape");
+        let mut store = SkillStore::new(root.clone());
+        for bad in ["../evil", "a/b", "a\\b", "..", ".", ""] {
+            let err = store
+                .save(bad, VALID_MD)
+                .expect_err("path-escaping id must be refused");
+            assert!(err.contains("Invalid skill id"), "unexpected error: {err}");
+        }
+        // Nothing escaped the root: parent of the root gained no "evil" entry.
+        assert!(!root.parent().unwrap().join("evil").exists());
+        assert!(store.raw("../evil").is_none());
+        assert!(store.delete("../evil").is_err());
+    }
+
+    #[test]
+    fn store_save_is_atomic_no_temp_left_behind() {
+        let root = temp_dir("store-atomic");
+        write_skill(&root, "editing", VALID_MD);
+        let mut store = SkillStore::new(root.clone());
+        store.save("editing", VALID_MD).unwrap();
+        let names: Vec<String> = std::fs::read_dir(root.join("editing"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names, vec!["SKILL.md"], "temp file must not survive a save");
+    }
+
+    #[test]
+    fn store_new_skill_uses_template_and_unique_ids() {
+        let root = temp_dir("store-new");
+        let mut store = SkillStore::new(root);
+        let first = store.new_skill().unwrap();
+        let second = store.new_skill().unwrap();
+        assert_eq!(first, "new-skill");
+        assert_eq!(second, "new-skill-2");
+        assert!(required_fields(SKILL_TEMPLATE).is_some(), "template must validate");
+        assert_eq!(store.skill(&first).unwrap().name, "New skill");
+        assert_eq!(store.raw(&second).as_deref(), Some(SKILL_TEMPLATE));
+    }
+
+    #[test]
+    fn store_delete_removes_folder() {
+        let root = temp_dir("store-delete");
+        write_skill(&root, "editing", VALID_MD);
+        let mut store = SkillStore::new(root.clone());
+        store.delete("editing").unwrap();
+        assert!(store.skills().is_empty());
+        assert!(!root.join("editing").exists());
+        assert!(store.delete("editing").is_err(), "double delete reports an error");
+    }
+
+    #[test]
+    fn update_skill_md_preserves_extra_frontmatter_fields() {
+        let original = "---\nlicense: MIT\nname: Old\ndescription: Old desc\n---\n\nOld body";
+        let updated = update_skill_md(original, "New", "New desc", "New body");
+        assert_eq!(
+            updated,
+            "---\nlicense: MIT\nname: New\ndescription: New desc\n---\n\nNew body"
+        );
+        let (fields, body) = parse_frontmatter(&updated);
+        assert_eq!(fields.get("license").map(String::as_str), Some("MIT"));
+        assert_eq!(fields.get("name").map(String::as_str), Some("New"));
+        assert_eq!(body, "New body");
+    }
+
+    #[test]
+    fn update_skill_md_without_frontmatter_creates_block() {
+        let updated = update_skill_md("just a body", "Name", "Desc", "Body text");
+        assert_eq!(updated, "---\nname: Name\ndescription: Desc\n---\n\nBody text");
+        assert!(required_fields(&updated).is_some());
     }
 
     #[test]

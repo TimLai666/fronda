@@ -23,6 +23,24 @@ pub struct SyncOffset {
 /// Absolute floor on scored overlap, in RMS hops; #269 raises the effective floor to 3 seconds.
 const MIN_OVERLAP_HOPS: usize = 16;
 
+/// ± seconds around a capture-date seed; covers typical device clock skew
+/// (Swift `SyncDefaults.dateSeedWindowSeconds`, upstream #269).
+pub const DATE_SEED_WINDOW_SECONDS: f64 = 3.0;
+
+/// A capture-date-implied search seed (upstream #269): the lags within
+/// `center_seconds ± window_seconds` are searched first; the full window is
+/// the fallback when the seeded peak's confidence is insufficient.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SyncSeed {
+    /// Expected lag in seconds, in this correlator's sign convention
+    /// (positive = the shared content sits later in the TARGET's file =
+    /// the target started recording earlier).
+    pub center_seconds: f64,
+    /// ± seconds searched around the center. Capped at the global search
+    /// window's width (Swift caps `seedWindow` at `maxLag`).
+    pub window_seconds: f64,
+}
+
 /// Audio sync correlator using RMS-envelope cross-correlation.
 pub struct AudioSyncCorrelator;
 
@@ -158,6 +176,40 @@ impl AudioSyncCorrelator {
         project_fps: f64,
         max_offset_seconds: Option<f64>,
     ) -> Option<SyncOffset> {
+        Self::find_sync_offset_seeded(
+            reference_samples,
+            target_samples,
+            sample_rate,
+            frame_size,
+            project_fps,
+            max_offset_seconds,
+            None,
+            0.0,
+        )
+    }
+
+    /// [`AudioSyncCorrelator::find_sync_offset_windowed`] with an optional
+    /// capture-date seed (upstream #269): the lags within `seed.center ±
+    /// seed.window` are searched first, and that peak is returned when its
+    /// confidence clears `min_confidence`; otherwise the full window is
+    /// searched exactly as an unseeded run would.
+    ///
+    /// The seeded pass's gate and reported confidence use Swift's metric —
+    /// the raw Pearson score at the winning lag, clamped to 0..1 — because a
+    /// window that misses the true alignment can still contain a locally
+    /// prominent (but weak) peak. The global pass keeps this correlator's
+    /// existing peak-prominence confidence.
+    #[allow(clippy::too_many_arguments)]
+    pub fn find_sync_offset_seeded(
+        reference_samples: &[f64],
+        target_samples: &[f64],
+        sample_rate: f64,
+        frame_size: usize,
+        project_fps: f64,
+        max_offset_seconds: Option<f64>,
+        seed: Option<SyncSeed>,
+        min_confidence: f64,
+    ) -> Option<SyncOffset> {
         if reference_samples.len() < frame_size || target_samples.len() < frame_size {
             return None;
         }
@@ -170,37 +222,63 @@ impl AudioSyncCorrelator {
             return None;
         }
 
-        // 2. Cross-correlate, keeping only lags inside the search window
+        let seconds_per_rms_frame = frame_size as f64 / sample_rate;
         let mut correlation = Self::cross_correlate(&ref_rms, &tgt_rms);
-        if let Some(max_secs) = max_offset_seconds {
-            let seconds_per_rms_frame = frame_size as f64 / sample_rate;
-            let max_lag = (max_secs / seconds_per_rms_frame).ceil() as i64;
-            correlation.retain(|(lag, _)| lag.abs() <= max_lag);
-        }
         // Thin-edge overlaps score spurious perfect correlations that can beat the true alignment (#269).
         let min_overlap_hops =
             MIN_OVERLAP_HOPS.max((3.0 * sample_rate / frame_size as f64).round() as usize) as i64;
         let (m, n) = (ref_rms.len() as i64, tgt_rms.len() as i64);
         correlation.retain(|(lag, _)| (m - 0.max(-*lag)).min(n - 0.max(*lag)) >= min_overlap_hops);
+        let max_lag = max_offset_seconds.map(|s| (s / seconds_per_rms_frame).ceil() as i64);
 
-        // 3. Find peak
+        // 2. Seeded pass: only the ±window around the date-implied lag. Note
+        // the seed's CENTER is not clamped to the global window — only the
+        // window's width is capped (Swift `min(maxLag, seedWindow)`).
+        if let Some(seed) = seed {
+            let center = (seed.center_seconds / seconds_per_rms_frame).round() as i64;
+            let mut width = ((seed.window_seconds / seconds_per_rms_frame).round() as i64).max(1);
+            if let Some(cap) = max_lag {
+                width = width.min(cap.max(1));
+            }
+            let windowed: Vec<(i64, f64)> = correlation
+                .iter()
+                .copied()
+                .filter(|(lag, _)| (lag - center).abs() <= width)
+                .collect();
+            if let Some((lag, peak_val, _)) = Self::find_peak(&windowed) {
+                let confidence = peak_val.clamp(0.0, 1.0);
+                if confidence >= min_confidence {
+                    return Some(Self::offset_at(lag, confidence, seconds_per_rms_frame, project_fps));
+                }
+            }
+        }
+
+        // 3. Global window + peak — identical to an unseeded run.
+        if let Some(cap) = max_lag {
+            correlation.retain(|(lag, _)| lag.abs() <= cap);
+        }
         let (peak_lag, _, confidence) = Self::find_peak(&correlation)?;
+        Some(Self::offset_at(
+            peak_lag,
+            confidence,
+            seconds_per_rms_frame,
+            project_fps,
+        ))
+    }
 
-        // 4. Convert lag (in RMS frames) to project frames
-        // Each RMS frame spans `frame_size` audio samples.
-        // At sample_rate Hz, that's frame_size/sample_rate seconds per RMS frame.
-        // At project_fps fps, each project frame is 1/project_fps seconds.
-        // offset in project frames = (lag * frame_size / sample_rate) * project_fps
-        let seconds_per_rms_frame = frame_size as f64 / sample_rate;
-        let seconds_per_project_frame = 1.0 / project_fps;
-        let offset_frames =
-            ((peak_lag as f64 * seconds_per_rms_frame) / seconds_per_project_frame).round() as i64;
-
-        Some(SyncOffset {
-            offset_frames,
+    /// Convert a peak lag (in RMS hops) to a project-frame offset.
+    /// offset in project frames = (lag * frame_size / sample_rate) * project_fps
+    fn offset_at(
+        peak_lag: i64,
+        confidence: f64,
+        seconds_per_rms_frame: f64,
+        project_fps: f64,
+    ) -> SyncOffset {
+        SyncOffset {
+            offset_frames: (peak_lag as f64 * seconds_per_rms_frame * project_fps).round() as i64,
             confidence,
             peak_lag_frames: peak_lag,
-        })
+        }
     }
 
     /// Find the peak in a correlation array.
@@ -485,6 +563,152 @@ mod tests {
             "thin-edge lag won: |{}| > {bound}",
             result.peak_lag_frames
         );
+    }
+
+    // ── Capture-date seeded search (upstream #269) ──
+
+    /// Per-hop white-ish envelope via an LCG: aperiodic, so wrong-lag
+    /// correlations stay near zero (unlike sine-mix noise).
+    fn lcg_env(seed: u64, hops: usize) -> Vec<f64> {
+        let mut x = seed;
+        (0..hops)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                0.2 + 0.6 * ((x >> 33) as f64 / (1u64 << 31) as f64)
+            })
+            .collect()
+    }
+
+    fn expand_env(env: &[f64]) -> Vec<f64> {
+        env.iter()
+            .flat_map(|&a| std::iter::repeat_n(a, FRAME_SIZE))
+            .collect()
+    }
+
+    #[test]
+    fn good_seed_selects_the_seeded_alignment_over_a_stronger_global_peak() {
+        // The reference holds the target's content twice: an exact copy at its
+        // head (global winner, Pearson 1.0) and a degraded copy 8s in. A seed
+        // pointing at the second copy must pick it — proving the seeded pass
+        // searches ONLY the ±3s window around the seed.
+        let hops = 375; // 8 s at 48000/1024
+        let burst = lcg_env(7, hops);
+        let other = lcg_env(99, hops);
+        let degraded: Vec<f64> = burst
+            .iter()
+            .zip(other.iter())
+            .map(|(&b, &o)| 0.8 * b + 0.2 * o)
+            .collect();
+        let mut ref_env = burst.clone();
+        ref_env.extend_from_slice(&degraded);
+        let reference = expand_env(&ref_env);
+        let target = expand_env(&burst);
+
+        let unseeded = AudioSyncCorrelator::find_sync_offset_windowed(
+            &reference,
+            &target,
+            SAMPLE_RATE,
+            FRAME_SIZE,
+            30.0,
+            Some(30.0),
+        )
+        .expect("global result");
+        assert_eq!(unseeded.offset_frames, 0, "global search picks the exact head copy");
+
+        // Rust sign convention: negative = content later in the REFERENCE.
+        let seeded = AudioSyncCorrelator::find_sync_offset_seeded(
+            &reference,
+            &target,
+            SAMPLE_RATE,
+            FRAME_SIZE,
+            30.0,
+            Some(30.0),
+            Some(SyncSeed {
+                center_seconds: -8.0,
+                window_seconds: DATE_SEED_WINDOW_SECONDS,
+            }),
+            0.5,
+        )
+        .expect("seeded result");
+        // -375 hops * (1024/48000)s * 30fps = -240 frames exactly.
+        assert_eq!(seeded.peak_lag_frames, -(hops as i64));
+        assert_eq!(seeded.offset_frames, -240);
+        assert!(
+            seeded.confidence >= 0.5,
+            "degraded copy still clears the gate: {}",
+            seeded.confidence
+        );
+    }
+
+    #[test]
+    fn bad_seed_falls_back_to_global_and_matches_unseeded() {
+        // Spec scenario: the capture-date seed points far from the true
+        // alignment — the global fallback must return the SAME offset as an
+        // unseeded run.
+        let hops = 750; // 16 s
+        let env = lcg_env(3, hops);
+        let mut tgt_env = vec![0.0; 5];
+        tgt_env.extend_from_slice(&env[..hops - 5]);
+        let reference = expand_env(&env);
+        let target = expand_env(&tgt_env);
+
+        let unseeded = AudioSyncCorrelator::find_sync_offset_windowed(
+            &reference,
+            &target,
+            SAMPLE_RATE,
+            FRAME_SIZE,
+            30.0,
+            Some(30.0),
+        )
+        .expect("global result");
+        assert_eq!(unseeded.offset_frames, 3, "5 hops * 0.02133s * 30fps rounds to 3");
+
+        let seeded = AudioSyncCorrelator::find_sync_offset_seeded(
+            &reference,
+            &target,
+            SAMPLE_RATE,
+            FRAME_SIZE,
+            30.0,
+            Some(30.0),
+            Some(SyncSeed {
+                center_seconds: -10.0,
+                window_seconds: DATE_SEED_WINDOW_SECONDS,
+            }),
+            0.5,
+        )
+        .expect("fallback result");
+        assert_eq!(seeded, unseeded, "weak seeded window falls back to the unseeded result");
+    }
+
+    #[test]
+    fn good_seed_agrees_with_global_on_a_plain_shift() {
+        let hops = 750;
+        let env = lcg_env(11, hops);
+        let mut tgt_env = vec![0.0; 5];
+        tgt_env.extend_from_slice(&env[..hops - 5]);
+        let reference = expand_env(&env);
+        let target = expand_env(&tgt_env);
+
+        let seeded = AudioSyncCorrelator::find_sync_offset_seeded(
+            &reference,
+            &target,
+            SAMPLE_RATE,
+            FRAME_SIZE,
+            30.0,
+            Some(30.0),
+            Some(SyncSeed {
+                // 5 hops = 0.1067s; a nearby (imprecise) seed still hits.
+                center_seconds: 0.1,
+                window_seconds: DATE_SEED_WINDOW_SECONDS,
+            }),
+            0.5,
+        )
+        .expect("seeded result");
+        assert_eq!(seeded.peak_lag_frames, 5);
+        assert_eq!(seeded.offset_frames, 3);
+        assert!(seeded.confidence >= 0.5);
     }
 
     #[test]

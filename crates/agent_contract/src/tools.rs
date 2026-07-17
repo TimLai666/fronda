@@ -1860,7 +1860,7 @@ fn remove_silence() -> ToolDefinition {
 fn sync_clips() -> ToolDefinition {
     ToolDefinition {
         name: "sync_clips",
-        description: "Align one or more clips to a reference clip by shifting targets on the timeline — use for dual-system sound (camera + external audio) or multicam. Default mode 'auto' aligns by embedded source timecode when both files carry one (exact, confidence 1.0), falling back to audio cross-correlation otherwise; force a method with mode. referenceClipId stays put. Returns offsetFrames, confidence (0–1), and method (timecode|audio) per target; refuses weak audio matches. Refused on multicam clips — a group's members are already aligned by its sync maps (manage_multicam).",
+        description: "Align one or more clips to a reference clip by shifting targets on the timeline — use for dual-system sound (camera + external audio) or multicam. Default mode 'auto' aligns by embedded source timecode when both files carry one (exact, confidence 1.0), falling back to audio cross-correlation otherwise (seeded by capture dates when present); force a method with mode. referenceClipId stays put. Returns offsetFrames, confidence (0–1), and method (timecode|audio) per target; refuses weak audio matches. Refused on multicam clips — a group's members are already aligned by its sync maps (manage_multicam).",
         input_schema: object(&[
             ("referenceClipId", string("Clip the others align to. Stays put.")),
             ("targetClipId", string("Single clip to align. Use targetClipIds for several.")),

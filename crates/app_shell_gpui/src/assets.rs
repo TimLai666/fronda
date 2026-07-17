@@ -88,6 +88,21 @@ impl AssetSource for FrondaAssets {
             "icons/speaker_slash.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/speaker_slash.svg"
             )))),
+            "icons/person_circle.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/person_circle.svg"
+            )))),
+            "icons/squares_stack.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/squares_stack.svg"
+            )))),
+            "icons/paperplane.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/paperplane.svg"
+            )))),
+            "icons/book_closed.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/book_closed.svg"
+            )))),
+            "icons/internal_drive.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/internal_drive.svg"
+            )))),
             _ => Err(anyhow!("unknown asset: {path}")),
         }
     }

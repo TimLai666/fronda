@@ -563,3 +563,39 @@ code:
   - specs/rust-rewrite/03-timeline-editor-and-preview.md
   - crates/agent_contract/src/tools.rs
 -->
+
+---
+### Requirement: Audio sync uses seeded search with global fallback
+
+find_sync_offset SHALL support a seeded center-lag window (from capture-date deltas when available) searched before the global range, falling back to the full search when the seeded window's confidence is insufficient, matching upstream #269 seeding semantics; update_text SHALL reject the former flat style keys now that the inspector sends nested style patches.
+
+#### Scenario: Bad seed still finds the true offset
+
+- **WHEN** the capture-date seed points far from the true alignment
+- **THEN** the global fallback search returns the same offset as an unseeded run
+
+#### Scenario: Flat style keys rejected
+
+- **WHEN** update_text is called with a top-level fontSize
+- **THEN** validation fails directing the caller to the nested style object
+
+<!-- @trace
+source: sync-engine-and-flat-key-cleanup
+updated: 2026-07-17
+code:
+  - crates/agent_contract/src/tools.rs
+  - crates/app_shell_gpui/src/skill_store.rs
+  - crates/app_shell_gpui/assets/icons/squares_stack.svg
+  - crates/app_shell_gpui/src/settings_view.rs
+  - crates/app_shell_gpui/src/help_view.rs
+  - crates/app_shell_gpui/assets/icons/person_circle.svg
+  - specs/rust-rewrite/97-upstream-pr-audit.md
+  - crates/agent_contract/src/tool_exec.rs
+  - crates/app_shell_gpui/assets/icons/paperplane.svg
+  - crates/app_shell_gpui/assets/icons/book_closed.svg
+  - AGENTS.md
+  - crates/app_shell_gpui/src/assets.rs
+  - crates/app_shell_gpui/src/home_view.rs
+  - crates/app_shell_gpui/assets/icons/internal_drive.svg
+  - crates/audio_core/src/audio_sync_correlator.rs
+-->

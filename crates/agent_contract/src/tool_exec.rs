@@ -53,6 +53,15 @@ pub trait ClipAudioSource: Send + Sync {
         sample_rate: u32,
         channels: usize,
     ) -> Option<Vec<f32>>;
+
+    /// Recording-start capture date of a media source, in seconds on any
+    /// common clock — only differences between sources matter. Swift reads
+    /// QuickTime's `com.apple.quicktime.creationdate` live (#269
+    /// `SourceTimingReader`); a host that can't, or a source without one,
+    /// returns `None`, which skips capture-date seeding in `sync_clips`.
+    fn capture_date_seconds(&self, _source: &MediaSource) -> Option<f64> {
+        None
+    }
 }
 
 /// A detected speech span in source seconds.
@@ -3094,10 +3103,9 @@ impl ToolExecutor {
         // Sync maps (Swift `syncMulticamMembers`' no-audio path): pinned →
         // locked; master → 0; else shared embedded timecode; else unresolved.
         let tc_seconds = |media_ref: &str| -> Option<f64> {
-            let e = self.media_manifest.entry_for(media_ref)?;
-            let frame = e.source_timecode_frame? as f64;
-            let quanta = e.source_timecode_quanta.filter(|q| *q > 0)? as f64;
-            Some(frame / quanta)
+            self.media_manifest
+                .entry_for(media_ref)
+                .and_then(Self::manifest_tc_seconds)
         };
         let mut maps: std::collections::HashMap<String, MulticamSyncMap> =
             std::collections::HashMap::new();
@@ -6322,8 +6330,26 @@ impl ToolExecutor {
         Ok(ranges)
     }
 
+    /// Embedded source timecode in seconds. The manifest carries the tmcd
+    /// frame/quanta pair (#136) but not the exact per-frame duration Swift
+    /// #269 reads from the format description; a drop-frame flag implies the
+    /// NTSC 1001/1000 family, so the exact duration is recoverable as
+    /// 1001/(1000·quanta). Non-drop-frame NTSC still falls back to 1/quanta —
+    /// the manifest can't distinguish it from integer rates.
+    fn manifest_tc_seconds(entry: &MediaManifestEntry) -> Option<f64> {
+        let frame = entry.source_timecode_frame? as f64;
+        let quanta = entry.source_timecode_quanta.filter(|q| *q > 0)? as f64;
+        Some(if entry.source_timecode_drop_frame == Some(true) {
+            frame * 1001.0 / (1000.0 * quanta)
+        } else {
+            frame / quanta
+        })
+    }
+
     fn cmd_sync_clips(&mut self, args: &Value) -> Result<Value, String> {
-        use audio_core::audio_sync_correlator::AudioSyncCorrelator;
+        use audio_core::audio_sync_correlator::{
+            AudioSyncCorrelator, SyncSeed, DATE_SEED_WINDOW_SECONDS,
+        };
 
         let ref_id = args
             .get("referenceClipId")
@@ -6405,14 +6431,16 @@ impl ToolExecutor {
         // never touch the decoder.
         let mut ref_f64: Option<Vec<f64>> = None;
         let ref_anchor = ref_clip.start_frame - ref_clip.trim_start_frame;
-        // Embedded source timecode in seconds (frame / quanta), when present.
         let tc_seconds = |media_ref: &str, manifest: &MediaManifest| -> Option<f64> {
-            let e = manifest.entry_for(media_ref)?;
-            let frame = e.source_timecode_frame? as f64;
-            let quanta = e.source_timecode_quanta.filter(|q| *q > 0)? as f64;
-            Some(frame / quanta)
+            manifest.entry_for(media_ref).and_then(Self::manifest_tc_seconds)
         };
         let ref_tc = tc_seconds(&ref_clip.media_ref, &self.media_manifest);
+        // Capture-date seed (#269): dates come from the host seam (both
+        // sources decode through it anyway); the sign matches the correlator
+        // (positive = the target started recording earlier).
+        let ref_capture = audio
+            .as_ref()
+            .and_then(|a| a.capture_date_seconds(&ref_source));
 
         let fps = self.timeline.fps as f64;
         let mut synced: Vec<Value> = Vec::new();
@@ -6475,13 +6503,24 @@ impl ToolExecutor {
                     continue;
                 };
                 let tf64: Vec<f64> = tpcm.iter().map(|&s| s as f64).collect();
-                match AudioSyncCorrelator::find_sync_offset_windowed(
+                // A ±3s window around the capture-date-implied lag is
+                // searched first; a weak seeded match falls back to the full
+                // window (#269 seeding semantics).
+                let seed = ref_capture
+                    .zip(audio.capture_date_seconds(&tsource))
+                    .map(|(r, t)| SyncSeed {
+                        center_seconds: r - t,
+                        window_seconds: DATE_SEED_WINDOW_SECONDS,
+                    });
+                match AudioSyncCorrelator::find_sync_offset_seeded(
                     ref_f64.as_ref().expect("decoded above"),
                     &tf64,
                     sample_rate as f64,
                     frame_size,
                     fps,
                     Some(search_window_seconds),
+                    seed,
+                    min_confidence,
                 ) {
                     Some(off) if off.confidence >= min_confidence => {
                         (off.offset_frames, off.confidence, "audio")
@@ -6962,20 +7001,14 @@ impl ToolExecutor {
 
     /// UPDATE_TEXT (upstream): merge content/typography/transform/animation
     /// changes into existing text clips, addressed by clipIds or captionGroupId.
-    /// Top-level update_text keys: the #330 nested-style shape, plus the flat
-    /// `fontName`/`fontSize`/`color`/`alignment` aliases the in-repo inspector
-    /// (app_shell_gpui inspector_view.rs) still sends — kept as a deprecated
-    /// compat path until the inspector migrates to `style`; the nested patch
-    /// wins when both are present.
+    /// Strict #330 top-level shape — typography goes through the nested
+    /// `style` patch only (the flat fontName/fontSize/color/alignment
+    /// inspector aliases were retired once the inspector switched to `style`).
     const UPDATE_TEXT_KEYS: &'static [&'static str] = &[
-        "alignment",
         "animation",
         "captionGroupId",
         "clipIds",
-        "color",
         "content",
-        "fontName",
-        "fontSize",
         "highlightColor",
         "style",
         "transform",
@@ -7030,35 +7063,9 @@ impl ToolExecutor {
 
         // Parse shared updates once (invalid values reject before any mutation).
         let content = args.get("content").and_then(|v| v.as_str());
-        // #330 nested partial style patch. The deprecated flat inspector
-        // aliases fold into the same patch; nested keys win.
-        let mut style_patch = crate::mutation::parse_text_style_patch(args, "update_text")?
+        // #330 nested partial style patch.
+        let style_patch = crate::mutation::parse_text_style_patch(args, "update_text")?
             .unwrap_or_default();
-        if style_patch.font_name.is_none() {
-            style_patch.font_name = args
-                .get("fontName")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-        }
-        if style_patch.font_size.is_none() {
-            style_patch.font_size = args.get("fontSize").and_then(|v| v.as_f64());
-        }
-        if style_patch.color.is_none() {
-            style_patch.color = match args.get("color").and_then(|v| v.as_str()) {
-                Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
-                    format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
-                })?),
-                None => None,
-            };
-        }
-        if style_patch.alignment.is_none() {
-            style_patch.alignment = match args.get("alignment").and_then(|v| v.as_str()) {
-                Some(a) => Some(core_model::TextAlignment::from_name(a).ok_or_else(|| {
-                    format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
-                })?),
-                None => None,
-            };
-        }
         let animation_raw = args.get("animation").and_then(|v| v.as_str());
         let clear_animation = animation_raw == Some("off");
         let animation = if clear_animation {
@@ -14980,6 +14987,293 @@ mod tests {
         assert_eq!(synced["movedToFrame"], json!(160));
     }
 
+    #[test]
+    fn sync_clips_timecode_drop_frame_uses_exact_ntsc_seconds() {
+        // #269: drop-frame implies the NTSC 1001/1000 family, so the exact
+        // per-TC-frame duration is 1001/(1000*quanta) — quanta-only seconds
+        // mis-scale the offset by 1/1001.
+        assert_eq!(
+            ToolExecutor::manifest_tc_seconds(&{
+                let mut e = audio_media("x", 1.0);
+                e.source_timecode_frame = Some(30_000);
+                e.source_timecode_quanta = Some(30);
+                e.source_timecode_drop_frame = Some(true);
+                e
+            }),
+            Some(1001.0),
+            "30000 DF frames at 30 quanta = 1001s exactly"
+        );
+        assert_eq!(
+            ToolExecutor::manifest_tc_seconds(&{
+                let mut e = audio_media("x", 1.0);
+                e.source_timecode_frame = Some(30_000);
+                e.source_timecode_quanta = Some(30);
+                e
+            }),
+            Some(1000.0),
+            "non-drop-frame keeps the 1/quanta fallback"
+        );
+
+        let mut manifest = MediaManifest::default();
+        let mut r = audio_media("ref", 10.0);
+        r.source_timecode_frame = Some(90_000);
+        r.source_timecode_quanta = Some(30);
+        r.source_timecode_drop_frame = Some(true);
+        let mut t = audio_media("tgt", 10.0);
+        t.source_timecode_frame = Some(93_003); // +3003 TC frames = 100.2001s DF-exact
+        t.source_timecode_quanta = Some(30);
+        t.source_timecode_drop_frame = Some(true);
+        manifest.entries.push(r);
+        manifest.entries.push(t);
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.execute(
+            "add_clips",
+            &json!({"entries": [{"mediaRef": "ref", "startFrame": 100}, {"mediaRef": "tgt", "startFrame": 400}]}),
+        )
+        .unwrap();
+        let ref_id = exec.timeline().tracks[0].clips[0].id.clone();
+        let tgt_id = exec.timeline().tracks[0].clips[1].id.clone();
+        let res = exec
+            .execute(
+                "sync_clips",
+                &json!({"referenceClipId": ref_id, "targetClipId": tgt_id, "mode": "timecode"}),
+            )
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        let synced = &v["synced"][0];
+        // Naive frame/quanta would give -3003 / 3103.
+        assert_eq!(synced["offsetFrames"], json!(-3006), "DF-exact NTSC offset");
+        assert_eq!(synced["movedToFrame"], json!(3106));
+    }
+
+    /// Per-hop white-ish envelope via an LCG, expanded to 1024-sample RMS
+    /// hops: aperiodic, so wrong-lag correlations stay near zero.
+    fn lcg_hop_signal(seed: u64, hops: usize) -> Vec<f32> {
+        let mut x = seed;
+        (0..hops)
+            .flat_map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let v = 0.2 + 0.6 * ((x >> 33) as f64 / (1u64 << 31) as f64);
+                std::iter::repeat_n(v as f32, 1024)
+            })
+            .collect()
+    }
+
+    /// The reference holds the target's content twice: an exact copy at its
+    /// head (the global winner) and a degraded copy `SEED_HOPS` in. Only a
+    /// capture-date seed pointing at the second copy picks it.
+    struct MockSeededSyncAudio {
+        with_dates: bool,
+    }
+    const SEED_HOPS: usize = 345; // ~8.01s at 44100/1024
+
+    impl MockSeededSyncAudio {
+        fn seed_seconds() -> f64 {
+            SEED_HOPS as f64 * 1024.0 / 44100.0
+        }
+    }
+    impl ClipAudioSource for MockSeededSyncAudio {
+        fn decode_source_pcm(
+            &self,
+            source: &core_model::MediaSource,
+            _sample_rate: u32,
+            _channels: usize,
+        ) -> Option<Vec<f32>> {
+            let burst = lcg_hop_signal(7, SEED_HOPS);
+            let path = match source {
+                core_model::MediaSource::External { absolute_path } => absolute_path.clone(),
+                core_model::MediaSource::Project { relative_path } => relative_path.clone(),
+            };
+            if path.contains("tgt") {
+                Some(burst)
+            } else {
+                let other = lcg_hop_signal(99, SEED_HOPS);
+                let degraded: Vec<f32> = burst
+                    .iter()
+                    .zip(other.iter())
+                    .map(|(&b, &o)| 0.8 * b + 0.2 * o)
+                    .collect();
+                let mut v = burst;
+                v.extend_from_slice(&degraded);
+                Some(v)
+            }
+        }
+        fn capture_date_seconds(&self, source: &core_model::MediaSource) -> Option<f64> {
+            if !self.with_dates {
+                return None;
+            }
+            let path = match source {
+                core_model::MediaSource::External { absolute_path } => absolute_path.clone(),
+                core_model::MediaSource::Project { relative_path } => relative_path.clone(),
+            };
+            // ref - tgt = -seed_seconds: the content sits later in the
+            // reference (its second copy).
+            Some(if path.contains("tgt") {
+                Self::seed_seconds()
+            } else {
+                0.0
+            })
+        }
+    }
+
+    /// Dual-track layout so a moved target can never overlap (and clear) the
+    /// reference on its own track.
+    fn dual_track_sync_exec(
+        audio: std::sync::Arc<dyn ClipAudioSource>,
+        ref_start: i64,
+        tgt_start: i64,
+    ) -> (ToolExecutor, String, String) {
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("ref", 1.0));
+        manifest.entries.push(audio_media("tgt", 1.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        exec.set_audio_source(audio);
+        exec.execute(
+            "add_clips",
+            &json!({"entries": [
+                {"mediaRef": "ref", "startFrame": ref_start},
+                {"mediaRef": "tgt", "startFrame": tgt_start}
+            ]}),
+        )
+        .unwrap();
+        {
+            let tl = exec.timeline_mut();
+            let mut tgt_clip = None;
+            for t in tl.tracks.iter_mut() {
+                if let Some(pos) = t.clips.iter().position(|c| c.media_ref == "tgt") {
+                    tgt_clip = Some(t.clips.remove(pos));
+                }
+            }
+            tl.tracks.push(core_model::Track {
+                id: "sync-tgt-track".into(),
+                r#type: ClipType::Audio,
+                muted: false,
+                hidden: false,
+                sync_locked: true,
+                display_height: 50.0,
+                clips: vec![tgt_clip.expect("tgt placed by add_clips")],
+            });
+        }
+        let find = |exec: &ToolExecutor, r: &str| {
+            exec.timeline()
+                .tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .find(|c| c.media_ref == r)
+                .unwrap()
+                .id
+                .clone()
+        };
+        let ref_id = find(&exec, "ref");
+        let tgt_id = find(&exec, "tgt");
+        (exec, ref_id, tgt_id)
+    }
+
+    fn run_sync(exec: &mut ToolExecutor, ref_id: &str, tgt_id: &str) -> Value {
+        let res = exec
+            .execute(
+                "sync_clips",
+                &json!({"referenceClipId": ref_id, "targetClipIds": [tgt_id]}),
+            )
+            .unwrap();
+        serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn sync_clips_capture_date_seed_prefers_seeded_alignment() {
+        // With capture dates, the ±3s seeded window lands on the reference's
+        // second (degraded) copy; without them the global search picks the
+        // exact head copy. Distinct landing spots prove the seed is wired.
+        let (mut exec, ref_id, tgt_id) = dual_track_sync_exec(
+            std::sync::Arc::new(MockSeededSyncAudio { with_dates: true }),
+            100,
+            400,
+        );
+        let v = run_sync(&mut exec, &ref_id, &tgt_id);
+        let synced = &v["synced"][0];
+        // -345 hops * (1024/44100)s * 30fps rounds to -240.
+        assert_eq!(synced["offsetFrames"], json!(-240), "{v}");
+        assert_eq!(synced["movedToFrame"], json!(340), "100 + 240");
+
+        let (mut exec, ref_id, tgt_id) = dual_track_sync_exec(
+            std::sync::Arc::new(MockSeededSyncAudio { with_dates: false }),
+            100,
+            400,
+        );
+        let v = run_sync(&mut exec, &ref_id, &tgt_id);
+        let synced = &v["synced"][0];
+        assert_eq!(synced["offsetFrames"], json!(0), "{v}");
+        assert_eq!(synced["movedToFrame"], json!(100), "unseeded: head copy");
+    }
+
+    /// Shifted-noise pair whose capture dates are wildly wrong (clock never
+    /// set): the seeded window misses, the global fallback still syncs.
+    struct MockBadDateSyncAudio {
+        with_dates: bool,
+    }
+    impl ClipAudioSource for MockBadDateSyncAudio {
+        fn decode_source_pcm(
+            &self,
+            source: &core_model::MediaSource,
+            _sample_rate: u32,
+            _channels: usize,
+        ) -> Option<Vec<f32>> {
+            let env = lcg_hop_signal(3, 750);
+            let path = match source {
+                core_model::MediaSource::External { absolute_path } => absolute_path.clone(),
+                core_model::MediaSource::Project { relative_path } => relative_path.clone(),
+            };
+            if path.contains("tgt") {
+                let pad = 5 * 1024;
+                let mut v = vec![0.0f32; pad];
+                v.extend_from_slice(&env[..env.len() - pad]);
+                Some(v)
+            } else {
+                Some(env)
+            }
+        }
+        fn capture_date_seconds(&self, source: &core_model::MediaSource) -> Option<f64> {
+            if !self.with_dates {
+                return None;
+            }
+            let path = match source {
+                core_model::MediaSource::External { absolute_path } => absolute_path.clone(),
+                core_model::MediaSource::Project { relative_path } => relative_path.clone(),
+            };
+            Some(if path.contains("tgt") { 20.0 } else { 0.0 })
+        }
+    }
+
+    #[test]
+    fn sync_clips_bad_capture_date_seed_still_syncs() {
+        // Spec scenario: a bad seed must fall back to the global search and
+        // land exactly where a date-less run does.
+        let (mut exec, ref_id, tgt_id) = dual_track_sync_exec(
+            std::sync::Arc::new(MockBadDateSyncAudio { with_dates: true }),
+            100,
+            400,
+        );
+        let seeded = run_sync(&mut exec, &ref_id, &tgt_id);
+        let (mut exec, ref_id, tgt_id) = dual_track_sync_exec(
+            std::sync::Arc::new(MockBadDateSyncAudio { with_dates: false }),
+            100,
+            400,
+        );
+        let unseeded = run_sync(&mut exec, &ref_id, &tgt_id);
+        assert_eq!(
+            seeded["synced"][0]["offsetFrames"], unseeded["synced"][0]["offsetFrames"],
+            "seeded: {seeded} unseeded: {unseeded}"
+        );
+        assert_eq!(
+            seeded["synced"][0]["movedToFrame"],
+            unseeded["synced"][0]["movedToFrame"]
+        );
+        // And the true 5-hop shift was found: round(5 * 1024/44100 * 30) = 3.
+        assert_eq!(unseeded["synced"][0]["offsetFrames"], json!(3), "{unseeded}");
+    }
+
     fn denoise_exec() -> (ToolExecutor, String) {
         let mut manifest = MediaManifest::default();
         manifest.entries.push(audio_media("a1", 4.0));
@@ -15729,23 +16023,37 @@ mod tests {
     }
 
     #[test]
-    fn update_text_flat_inspector_aliases_still_apply() {
-        // Deprecated compat path: the in-repo inspector still sends flat
-        // fontSize/fontName/color/alignment; the nested patch wins over them.
+    fn update_text_rejects_flat_style_keys() {
+        // The 4 flat inspector aliases are gone (back to the strict #330
+        // contract, now that the inspector sends nested style patches): each
+        // rejects like any other unknown key, with `style` in the allowed
+        // list directing the caller to the nested patch.
         let (mut exec, id) = executor_with_text_clip();
-        exec.execute("update_text", &json!({"clipIds": [id], "fontSize": 40.0}))
-            .unwrap();
-        assert_eq!(
-            exec.timeline().tracks[0].clips[0]
-                .text_style
-                .clone()
-                .unwrap()
-                .font_size,
-            40.0
-        );
+        for (key, value) in [
+            ("fontName", json!("Anton")),
+            ("fontSize", json!(40.0)),
+            ("color", json!("#00FF00")),
+            ("alignment", json!("left")),
+        ] {
+            let mut args = serde_json::Map::new();
+            args.insert("clipIds".into(), json!([id]));
+            args.insert(key.into(), value);
+            let err = exec
+                .execute("update_text", &Value::Object(args))
+                .unwrap_err();
+            assert!(
+                err.contains("unknown field") && err.contains(key),
+                "flat {key} must reject: {err}"
+            );
+            assert!(
+                err.contains("style"),
+                "message lists the nested style patch: {err}"
+            );
+        }
+        // The nested patch still applies.
         exec.execute(
             "update_text",
-            &json!({"clipIds": [id], "fontSize": 60.0, "style": {"fontSize": 90.0}}),
+            &json!({"clipIds": [id], "style": {"fontSize": 40.0}}),
         )
         .unwrap();
         assert_eq!(
@@ -15754,8 +16062,7 @@ mod tests {
                 .clone()
                 .unwrap()
                 .font_size,
-            90.0,
-            "nested style wins over the flat alias"
+            40.0
         );
     }
 
