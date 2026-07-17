@@ -698,19 +698,20 @@ impl InspectorView {
         } else {
             &style.background
         };
-        let mut fill = serde_json::json!({
+        // #330 nested style: "border" maps to style.outline; the partial
+        // patch leaves every untouched field (padding, radius, …) as-is.
+        let key = if which == "border" {
+            "outline"
+        } else {
+            "background"
+        };
+        let fill = serde_json::json!({
             "enabled": new_enabled.unwrap_or(current.enabled),
             "color": color_to_hex(&new_color.unwrap_or(current.color)),
         });
-        if let Some(p) = current.padding {
-            fill["padding"] = serde_json::json!(p);
-        }
-        if let Some(r) = current.corner_radius {
-            fill["cornerRadius"] = serde_json::json!(r);
-        }
         Self::run_tool(
-            "set_clip_properties",
-            serde_json::json!({ "clipIds": [id], "properties": { which: fill } }),
+            "update_text",
+            serde_json::json!({ "clipIds": [id], "style": { key: fill } }),
         );
         cx.notify();
     }

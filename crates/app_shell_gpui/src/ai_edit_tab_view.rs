@@ -1,9 +1,9 @@
 //! AI Edit tab content — matches Swift AIEditTab.
 //!
-//! Layout (top to bottom):
-//!   • Scope section (toggles: Replace clip source / Use trimmed portion)
-//!   • AI Enhance section (collapsible): Upscale / Edit / Rerun / Create Video (image assets)
-//!   • AI Audio section (collapsible, video assets only): Music / SFX
+//! Layout (top to bottom), as `EditorPanelGroup` groups (#327):
+//!   • Scope (toggles: Replace clip source / Use trimmed portion)
+//!   • AI Enhance: Upscale / Edit / Rerun / Create Video (image assets)
+//!   • AI Audio (video assets only): Music / SFX
 //!
 //! Actions dispatch through the shared executor (upscale_media /
 //! generate_audio (music + TTS, tool-surface-v2); Rerun replays the stored
@@ -11,6 +11,7 @@
 //! backend-gated actions report that state honestly, no fake progress.
 
 use crate::generation_view::{interpret_submission, SubmitOutcome};
+use crate::panel_components::EditorPanelGroup;
 use crate::theme::{Accent, Background, BorderColors, FontSize, Spacing, Text};
 use core_model::{ClipType, GenerationInput};
 use generation_core::model_catalog::{self, ModelCaps};
@@ -19,8 +20,15 @@ use gpui::{
     ParentElement, Render, Styled, Window,
 };
 
+/// `(title, default_expanded)` — mirrors Swift AIEditTab's EditorPanelGroup
+/// set (Scope has local state defaulting expanded; the other two `@State`s
+/// default true).
+pub const AI_EDIT_TAB_GROUPS: &[(&str, bool)] =
+    &[("Scope", true), ("AI Enhance", true), ("AI Audio", true)];
+
 #[derive(Debug, Clone)]
 pub struct AiEditTabState {
+    pub scope_expanded: bool,
     pub enhance_expanded: bool,
     pub audio_expanded: bool,
     pub replace_clip_source: bool,
@@ -38,6 +46,7 @@ pub struct AiEditTabState {
 impl Default for AiEditTabState {
     fn default() -> Self {
         Self {
+            scope_expanded: true,
             enhance_expanded: true,
             audio_expanded: true,
             replace_clip_source: false,
@@ -307,35 +316,6 @@ impl Focusable for AiEditTabView {
     }
 }
 
-fn section_header_static(label: &str) -> impl IntoElement {
-    div()
-        .text_color(Text::MUTED)
-        .text_size(px(FontSize::XXS))
-        .w_full()
-        .child(label.to_uppercase())
-}
-
-fn section_header_collapsible(label: &str, expanded: bool) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(Spacing::XS))
-        .w_full()
-        .child(
-            div()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::XXS))
-                .child(if expanded { "▾" } else { "▸" }),
-        )
-        .child(
-            div()
-                .text_color(Text::MUTED)
-                .text_size(px(FontSize::XXS))
-                .child(label.to_uppercase()),
-        )
-}
-
 fn toggle_row(icon: &str, label: &str, is_on: bool) -> impl IntoElement {
     let pill_bg = if is_on { Accent::PRIMARY } else { Text::MUTED };
     div()
@@ -460,6 +440,7 @@ impl Render for AiEditTabView {
         if let Some(a) = &asset {
             self.state.is_video = a.clip_type == ClipType::Video;
         }
+        let scope_exp = self.state.scope_expanded;
         let enhance_exp = self.state.enhance_expanded;
         let audio_exp = self.state.audio_expanded;
         let replace = self.state.replace_clip_source;
@@ -494,6 +475,178 @@ impl Render for AiEditTabView {
             self.state.status.clone()
         };
 
+        // Upscale row — trigger button opens model picker dropdown (Swift: Menu)
+        let mut upscale_trigger = div()
+            .id("upscale-trigger")
+            .px(px(Spacing::SM))
+            .py(px(Spacing::XXS))
+            .rounded_full()
+            .border_1()
+            .border_color(if upscale_enabled {
+                BorderColors::PRIMARY
+            } else {
+                BorderColors::SUBTLE
+            })
+            .text_color(if upscale_enabled {
+                Text::SECONDARY
+            } else {
+                Text::MUTED
+            })
+            .text_size(px(FontSize::XS))
+            .child("Upscale ⌄");
+        if upscale_enabled {
+            upscale_trigger =
+                upscale_trigger
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.state.show_upscale_picker = !this.state.show_upscale_picker;
+                        cx.notify();
+                    }));
+        }
+        let upscale_row = div()
+            .flex()
+            .flex_col()
+            .gap(px(0.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .gap(px(Spacing::SM))
+                    .w_full()
+                    .child(
+                        div()
+                            .w(px(20.0))
+                            .pt(px(2.0))
+                            .text_color(if upscale_enabled {
+                                Text::SECONDARY
+                            } else {
+                                Text::MUTED
+                            })
+                            .text_size(px(FontSize::MD))
+                            .child("✦"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .gap(px(Spacing::XXS))
+                            .child(
+                                div()
+                                    .text_color(if upscale_enabled {
+                                        Text::PRIMARY
+                                    } else {
+                                        Text::MUTED
+                                    })
+                                    .text_size(px(FontSize::SM))
+                                    .child("Upscale"),
+                            )
+                            .child(
+                                div()
+                                    .text_color(Text::TERTIARY)
+                                    .text_size(px(FontSize::XS))
+                                    .child("Enhance resolution with AI"),
+                            ),
+                    )
+                    .child(upscale_trigger),
+            )
+            .when(show_upscale_picker, |el| {
+                let mut dropdown = div()
+                    .ml(px(28.0))
+                    .mt(px(Spacing::XXS))
+                    .rounded(px(crate::theme::Radius::SM))
+                    .border_1()
+                    .border_color(BorderColors::SUBTLE)
+                    .bg(crate::theme::Background::RAISED)
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col();
+                for (idx, model) in upscale_models.iter().enumerate() {
+                    let picked = self.state.selected_upscale_model.as_deref() == Some(model.id);
+                    // Swift menu label: displayName · speed · cost.
+                    let cost = model_catalog::upscale_cost(model, duration_seconds.round() as i64);
+                    let detail = format!("{} · {}", model.speed, model_catalog::format_usd(cost));
+                    let model_id = model.id.to_string();
+                    dropdown = dropdown.child(
+                        div()
+                            .id(("upscale-model", idx))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Spacing::SM))
+                            .px(px(Spacing::SM_MD))
+                            .py(px(Spacing::XS))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.run_upscale(model_id.clone(), cx);
+                            }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_color(if picked {
+                                        Accent::PRIMARY
+                                    } else {
+                                        Text::PRIMARY
+                                    })
+                                    .text_size(px(FontSize::SM))
+                                    .child(model.display_name.to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(Text::MUTED)
+                                    .text_size(px(FontSize::XXS))
+                                    .child(detail),
+                            ),
+                    );
+                }
+                el.child(dropdown)
+            });
+
+        let mut enhance_group = EditorPanelGroup::new("ai-enhance", "AI Enhance")
+            .expanded(enhance_exp)
+            .on_toggle(cx.listener(|this, _, _, cx| {
+                this.state.enhance_expanded = !this.state.enhance_expanded;
+                cx.notify();
+            }))
+            .child(upscale_row)
+            .child(action_row(
+                "btn-edit",
+                "★",
+                "Edit",
+                "Transform with a prompt or motion reference",
+                "Edit",
+                enabled,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.set_backend_required("Edit", cx);
+                }),
+            ))
+            .child(action_row(
+                "btn-rerun",
+                "↺",
+                "Rerun",
+                "Regenerate with the same parameters",
+                "Rerun",
+                can_rerun,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.run_rerun(cx);
+                }),
+            ));
+        if is_image {
+            // Swift: Create Video is offered for image assets.
+            enhance_group = enhance_group.child(action_row(
+                "btn-create-video",
+                "▷",
+                "Create Video",
+                "Use as first frame or reference",
+                "Create",
+                enabled,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.set_backend_required("Create Video", cx);
+                }),
+            ));
+        }
+
         div()
             .track_focus(&self.focus_handle.clone())
             .id("ai-edit-scroll")
@@ -501,265 +654,60 @@ impl Render for AiEditTabView {
             .flex_col()
             .w_full()
             .overflow_y_scroll()
-            .px(px(Spacing::LG))
-            .py(px(Spacing::MD))
-            .gap(px(Spacing::XL))
-            // Scope section
+            // Scope group — Swift passes no binding; local state, default expanded.
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(Spacing::SM_MD))
-                    .child(section_header_static("Scope"))
+                EditorPanelGroup::new("ai-scope", "Scope")
+                    .expanded(scope_exp)
+                    .on_toggle(cx.listener(|this, _, _, cx| {
+                        this.state.scope_expanded = !this.state.scope_expanded;
+                        cx.notify();
+                    }))
                     .child(toggle_row("↩", "Replace clip source", replace))
                     .child(toggle_row("✂", "Use trimmed portion only", trimmed)),
             )
-            // AI Enhance section (collapsible)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(Spacing::SM_MD))
-                    .child(
-                        div()
-                            .id("btn-enhance-toggle")
-                            .w_full()
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _: &ClickEvent, _: &mut Window, cx| {
-                                this.state.enhance_expanded = !this.state.enhance_expanded;
-                                cx.notify();
-                            }))
-                            .child(section_header_collapsible("AI Enhance", enhance_exp)),
-                    )
-                    .when(enhance_exp, |el| {
-                        // Upscale row — trigger button opens model picker dropdown (Swift: Menu)
-                        let mut upscale_trigger = div()
-                            .id("upscale-trigger")
-                            .px(px(Spacing::SM))
-                            .py(px(Spacing::XXS))
-                            .rounded_full()
-                            .border_1()
-                            .border_color(if upscale_enabled {
-                                BorderColors::PRIMARY
-                            } else {
-                                BorderColors::SUBTLE
-                            })
-                            .text_color(if upscale_enabled {
-                                Text::SECONDARY
-                            } else {
-                                Text::MUTED
-                            })
-                            .text_size(px(FontSize::XS))
-                            .child("Upscale ⌄");
-                        if upscale_enabled {
-                            upscale_trigger = upscale_trigger.cursor_pointer().on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.state.show_upscale_picker =
-                                        !this.state.show_upscale_picker;
-                                    cx.notify();
-                                }),
-                            );
-                        }
-                        let upscale_row = div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(0.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_start()
-                                    .gap(px(Spacing::SM))
-                                    .w_full()
-                                    .child(
-                                        div()
-                                            .w(px(20.0))
-                                            .pt(px(2.0))
-                                            .text_color(if upscale_enabled {
-                                                Text::SECONDARY
-                                            } else {
-                                                Text::MUTED
-                                            })
-                                            .text_size(px(FontSize::MD))
-                                            .child("✦"),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .flex_1()
-                                            .gap(px(Spacing::XXS))
-                                            .child(
-                                                div()
-                                                    .text_color(if upscale_enabled {
-                                                        Text::PRIMARY
-                                                    } else {
-                                                        Text::MUTED
-                                                    })
-                                                    .text_size(px(FontSize::SM))
-                                                    .child("Upscale"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_color(Text::TERTIARY)
-                                                    .text_size(px(FontSize::XS))
-                                                    .child("Enhance resolution with AI"),
-                                            ),
-                                    )
-                                    .child(upscale_trigger),
-                            )
-                            .when(show_upscale_picker, |el| {
-                                let mut dropdown = div()
-                                    .ml(px(28.0))
-                                    .mt(px(Spacing::XXS))
-                                    .rounded(px(crate::theme::Radius::SM))
-                                    .border_1()
-                                    .border_color(BorderColors::SUBTLE)
-                                    .bg(crate::theme::Background::RAISED)
-                                    .overflow_hidden()
-                                    .flex()
-                                    .flex_col();
-                                for (idx, model) in upscale_models.iter().enumerate() {
-                                    let picked = self.state.selected_upscale_model.as_deref()
-                                        == Some(model.id);
-                                    // Swift menu label: displayName · speed · cost.
-                                    let cost = model_catalog::upscale_cost(
-                                        model,
-                                        duration_seconds.round() as i64,
-                                    );
-                                    let detail = format!(
-                                        "{} · {}",
-                                        model.speed,
-                                        model_catalog::format_usd(cost)
-                                    );
-                                    let model_id = model.id.to_string();
-                                    dropdown = dropdown.child(
-                                        div()
-                                            .id(("upscale-model", idx))
-                                            .flex()
-                                            .flex_row()
-                                            .items_center()
-                                            .gap(px(Spacing::SM))
-                                            .px(px(Spacing::SM_MD))
-                                            .py(px(Spacing::XS))
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(
-                                                move |this, _: &ClickEvent, _, cx| {
-                                                    this.run_upscale(model_id.clone(), cx);
-                                                },
-                                            ))
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .text_color(if picked {
-                                                        Accent::PRIMARY
-                                                    } else {
-                                                        Text::PRIMARY
-                                                    })
-                                                    .text_size(px(FontSize::SM))
-                                                    .child(model.display_name.to_string()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_color(Text::MUTED)
-                                                    .text_size(px(FontSize::XXS))
-                                                    .child(detail),
-                                            ),
-                                    );
-                                }
-                                el.child(dropdown)
-                            });
-                        el.child(upscale_row)
-                            .child(action_row(
-                                "btn-edit",
-                                "★",
-                                "Edit",
-                                "Transform with a prompt or motion reference",
-                                "Edit",
-                                enabled,
-                                cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.set_backend_required("Edit", cx);
-                                }),
-                            ))
-                            .child(action_row(
-                                "btn-rerun",
-                                "↺",
-                                "Rerun",
-                                "Regenerate with the same parameters",
-                                "Rerun",
-                                can_rerun,
-                                cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.run_rerun(cx);
-                                }),
-                            ))
-                            .when(is_image, |el2| {
-                                // Swift: Create Video is offered for image assets.
-                                el2.child(action_row(
-                                    "btn-create-video",
-                                    "▷",
-                                    "Create Video",
-                                    "Use as first frame or reference",
-                                    "Create",
-                                    enabled,
-                                    cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.set_backend_required("Create Video", cx);
-                                    }),
-                                ))
-                            })
-                    }),
-            )
-            // AI Audio section (video only, collapsible)
+            .child(enhance_group)
+            // AI Audio group (video only)
             .when(is_video, |el| {
                 el.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(Spacing::SM_MD))
-                        .child(
-                            div()
-                                .id("btn-audio-toggle")
-                                .w_full()
-                                .cursor_pointer()
-                                .on_click(cx.listener(
-                                    |this, _: &ClickEvent, _: &mut Window, cx| {
-                                        this.state.audio_expanded = !this.state.audio_expanded;
-                                        cx.notify();
-                                    },
-                                ))
-                                .child(section_header_collapsible("AI Audio", audio_exp)),
-                        )
-                        .when(audio_exp, |el| {
-                            el.child(toggle_row("↗", "Place on timeline", place_audio))
-                                .child(action_row(
-                                    "btn-music",
-                                    "♪",
-                                    "Music",
-                                    "Generate background music from video",
-                                    "Generate",
-                                    enabled,
-                                    cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.run_music(cx);
-                                    }),
-                                ))
-                                .child(action_row(
-                                    "btn-sfx",
-                                    "~",
-                                    "Sound Effects",
-                                    "Generate sound effects from video",
-                                    "Generate",
-                                    enabled,
-                                    cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.run_sfx(cx);
-                                    }),
-                                ))
-                        }),
+                    EditorPanelGroup::new("ai-audio", "AI Audio")
+                        .expanded(audio_exp)
+                        .on_toggle(cx.listener(|this, _, _, cx| {
+                            this.state.audio_expanded = !this.state.audio_expanded;
+                            cx.notify();
+                        }))
+                        .child(toggle_row("↗", "Place on timeline", place_audio))
+                        .child(action_row(
+                            "btn-music",
+                            "♪",
+                            "Music",
+                            "Generate background music from video",
+                            "Generate",
+                            enabled,
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.run_music(cx);
+                            }),
+                        ))
+                        .child(action_row(
+                            "btn-sfx",
+                            "~",
+                            "Sound Effects",
+                            "Generate sound effects from video",
+                            "Generate",
+                            enabled,
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.run_sfx(cx);
+                            }),
+                        )),
                 )
             })
-            // Status line — action results, errors, and backend gating.
+            // Status line — action results, errors, and backend gating (Rust-native;
+            // groups no longer pad it, so it pads itself).
             .when_some(status, |el, text| {
                 el.child(
                     div()
                         .w_full()
+                        .px(px(Spacing::SM_MD))
+                        .py(px(Spacing::SM_MD))
                         .text_color(Text::SECONDARY)
                         .text_size(px(FontSize::XS))
                         .child(text),
@@ -957,5 +905,15 @@ mod tests {
             backend_required_status("Edit"),
             "Edit requires a generation backend."
         );
+    }
+
+    // Group titles/order/defaults mirror the Swift AIEditTab EditorPanelGroups.
+    #[test]
+    fn group_structure_mirrors_swift_ai_edit_tab() {
+        let titles: Vec<&str> = AI_EDIT_TAB_GROUPS.iter().map(|(t, _)| *t).collect();
+        assert_eq!(titles, ["Scope", "AI Enhance", "AI Audio"]);
+        assert!(AI_EDIT_TAB_GROUPS.iter().all(|(_, e)| *e));
+        let s = AiEditTabState::default();
+        assert!(s.scope_expanded && s.enhance_expanded && s.audio_expanded);
     }
 }

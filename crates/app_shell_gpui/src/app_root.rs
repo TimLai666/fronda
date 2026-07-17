@@ -21,9 +21,9 @@ use crate::update_overlay_view::UpdateOverlayView;
 use crate::window::WindowConfig;
 use app_contract::focus_router::{route_paste, FocusTarget};
 use gpui::{
-    div, prelude::*, px, size, svg, App, Bounds, Context, DragMoveEvent, Entity, FocusHandle,
-    Focusable, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions,
-    Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, size, App, Bounds, Context, DragMoveEvent, Entity, FocusHandle, Focusable,
+    InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions, Window,
+    WindowBounds, WindowOptions,
 };
 
 /// Drag token for pane divider resize.
@@ -918,45 +918,6 @@ impl AppRoot {
             .child(label.to_string())
     }
 
-    /// A sidebar navigation button row.
-    fn sidebar_row_svg(
-        id: &str,
-        icon_path: &'static str,
-        label: &str,
-    ) -> gpui::Stateful<gpui::Div> {
-        div()
-            .id(id.to_string())
-            .flex()
-            .flex_row()
-            .items_center()
-            .w_full()
-            .h(px(32.0))
-            .px(px(Spacing::SM_MD))
-            .gap(px(Spacing::SM_MD))
-            .rounded(px(Radius::SM))
-            .cursor_pointer()
-            .child(
-                div()
-                    .w(px(16.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        svg()
-                            .path(icon_path)
-                            .w(px(14.0))
-                            .h(px(14.0))
-                            .text_color(Text::TERTIARY),
-                    ),
-            )
-            .child(
-                div()
-                    .text_color(Text::SECONDARY)
-                    .text_size(px(FontSize::SM))
-                    .child(label.to_string()),
-            )
-    }
-
     /// Project-card context menu entries (order defines activation indices).
     /// Open/Reveal are omitted for a missing package (Swift: entry.isAccessible).
     fn project_card_menu_entries(accessible: bool) -> Vec<crate::context_menu::MenuEntry> {
@@ -1171,20 +1132,22 @@ impl AppRoot {
                             ),
                     )
                     .child(
-                        Self::sidebar_row_svg(
+                        crate::home_view::sidebar_row_button(
                             "sidebar-new-project",
                             "icons/plus.svg",
                             "New Project",
+                            false,
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.open_editor(cx);
                         })),
                     )
                     .child(
-                        Self::sidebar_row_svg(
+                        crate::home_view::sidebar_row_button(
                             "sidebar-open-project",
                             "icons/folder.svg",
                             "Open Project",
+                            false,
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.perform_menu_action(menu::MenuAction::OpenProject, window, cx);
@@ -1220,10 +1183,11 @@ impl AppRoot {
                                 ),
                         )
                     })
-                    .child(Self::sidebar_row_svg(
+                    .child(crate::home_view::sidebar_row_button(
                         "sidebar-settings",
                         "icons/gear.svg",
                         "Settings",
+                        false,
                     )),
             )
             // ── Content area ──
@@ -1733,11 +1697,12 @@ impl Render for AppRoot {
                 let vw = viewport.width.as_f32();
                 let vh = viewport.height.as_f32() - crate::theme::Layout::TOOLBAR_HEIGHT;
                 self.last_viewport = (vw, vh);
-                let preset_w = (vw - if layout.is_visible(PaneId::Agent) {
-                    self.agent_width
-                } else {
-                    0.0
-                })
+                let preset_w = (vw
+                    - if layout.is_visible(PaneId::Agent) {
+                        self.agent_width
+                    } else {
+                        0.0
+                    })
                 .max(0.0);
                 // Resolve sentinel sizes to the preset's initial proportions
                 // (Swift applyAfterLayout setPosition calls).
@@ -1802,7 +1767,9 @@ impl Render for AppRoot {
                                                 event.event.position.y.as_f32()
                                             };
                                             let delta = (pos - session.start_pos)
-                                                * crate::pane_resize::drag_direction(session.target);
+                                                * crate::pane_resize::drag_direction(
+                                                    session.target,
+                                                );
                                             let bounds = this.resize_bounds(session.target);
                                             let new_size = crate::pane_resize::clamp_resize(
                                                 session.target,
@@ -1816,10 +1783,7 @@ impl Render for AppRoot {
                                 },
                             )
                             .child(editor_view::render_pane_layout(
-                                &layout,
-                                &contents,
-                                &sizes,
-                                dividers,
+                                &layout, &contents, &sizes, dividers,
                             )),
                     )
                     .into_any_element()
@@ -1925,11 +1889,11 @@ impl Render for AppRoot {
             ))
             // Ctrl-modifier menu shortcuts (Windows/Linux; macOS uses the
             // system menu path).
-            .on_action(cx.listener(
-                |this, a: &crate::global_shortcuts::RunMenuAction, w, cx| {
+            .on_action(
+                cx.listener(|this, a: &crate::global_shortcuts::RunMenuAction, w, cx| {
                     this.perform_menu_action(a.action.clone(), w, cx)
-                },
-            ))
+                }),
+            )
             .flex()
             .flex_col()
             .size_full()

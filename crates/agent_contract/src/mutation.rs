@@ -85,26 +85,60 @@ pub fn validate_split_clip(input: &Value) -> ValidationResult<SplitClipInput> {
 pub struct SetClipPropertiesInput {
     pub clip_ids: Vec<String>,
     pub properties: Value,
-    /// Text-only fields detected in properties (MUT-010).
-    pub text_only_fields: Vec<String>,
     /// Whether setting scalar volume/opacity clears existing keyframes (MUT-011).
     pub clears_keyframes: bool,
     /// Timing-related properties detected (speed, durationFrames, trimStart, trimEnd) (MUT-012).
     pub timing_properties: Vec<String>,
 }
 
+/// The v2 property key set — Swift `SetClipPropertiesInput.allowedKeys` minus
+/// `clipIds`. Legacy text keys (content/fontName/fontSize/fontWeight/color/
+/// alignment/background/border) are retired: text edits go through update_text.
+const SET_CLIP_PROPERTY_KEYS: [&str; 8] = [
+    "durationFrames",
+    "trimStartFrame",
+    "trimEndFrame",
+    "speed",
+    "volume",
+    "opacity",
+    "transform",
+    "blendMode",
+];
+
 /// MUT-009: `set_clip_properties` applies the same property set to every clip.
-/// MUT-010: text-only fields rejected when any target is non-text.
 /// MUT-011: Setting scalar volume/opacity clears existing keyframes.
 /// MUT-012: timing changes propagate to linked partners.
 ///
-/// The `clip_types` parameter provides the type of each target clip
-/// (e.g. "video", "text", "audio"). When unavailable (None), text-only
-/// field validation (MUT-010) is skipped.
-pub fn validate_set_clip_properties(
-    input: &Value,
-    clip_types: Option<Vec<String>>,
-) -> ValidationResult<SetClipPropertiesInput> {
+/// Unknown keys are rejected up front (Swift decodeToolArgs parity), which is
+/// what retires the legacy text keys. MUT-010 (text-only field gating) is gone
+/// with them.
+pub fn validate_set_clip_properties(input: &Value) -> ValidationResult<SetClipPropertiesInput> {
+    if let Some(obj) = input.as_object() {
+        let check = match obj.get("properties") {
+            // Legacy nested form (Rust inspector compat; Swift is flat-only).
+            Some(v) if v.is_object() => {
+                validate_unknown_keys(obj, &["clipIds", "properties"], "set_clip_properties")
+                    .and_then(|()| {
+                        validate_unknown_keys(
+                            v.as_object().unwrap(),
+                            &SET_CLIP_PROPERTY_KEYS,
+                            "set_clip_properties.properties",
+                        )
+                    })
+            }
+            Some(_) => Err("set_clip_properties: 'properties' must be a JSON object".into()),
+            // v2 flat form — same allowed set and message as Swift.
+            None => {
+                let mut allowed = vec!["clipIds"];
+                allowed.extend(SET_CLIP_PROPERTY_KEYS);
+                validate_unknown_keys(obj, &allowed, "set_clip_properties")
+            }
+        };
+        if let Err(e) = check {
+            return ValidationResult::Error(e);
+        }
+    }
+
     let clip_ids = match input.get("clipIds").and_then(|v| v.as_array()) {
         Some(arr) if !arr.is_empty() => {
             let ids: Vec<String> = arr
@@ -128,70 +162,14 @@ pub fn validate_set_clip_properties(
     // v2: property fields are flat at the top level; the legacy nested
     // 'properties' object still validates for older callers.
     let properties = match input.get("properties") {
-        Some(v) if v.is_object() => v.clone(),
-        Some(_) => {
-            return ValidationResult::Error(
-                "set_clip_properties: 'properties' must be a JSON object".into(),
-            )
-        }
+        Some(v) => v.clone(),
         None => input.clone(),
     };
 
-    let mut text_only_fields: Vec<String> = Vec::new();
     let mut clears_keyframes = false;
     let mut timing_properties: Vec<String> = Vec::new();
 
     if let Some(obj) = properties.as_object() {
-        // MUT-010: detect text-only fields and reject if any non-text clip targeted.
-        // Names match the executor + Swift (content/color/alignment/background/border,
-        // plus fontWeight for PR #65 and background/border for Issue #18).
-        let text_fields = [
-            "content",
-            "fontSize",
-            "fontName",
-            "fontWeight",
-            "alignment",
-            "color",
-            "background",
-            "border",
-        ];
-        for field in &text_fields {
-            if obj.contains_key(*field) {
-                text_only_fields.push(field.to_string());
-            }
-        }
-        if let Some(ref types) = clip_types {
-            let has_non_text = types.iter().any(|t| t != "text");
-            if has_non_text && !text_only_fields.is_empty() {
-                return ValidationResult::Error(format!(
-                    "set_clip_properties: text-only fields {:?} rejected for non-text clips",
-                    text_only_fields
-                ));
-            }
-        }
-
-        // Issue #18: validate background / border color sub-fields.
-        for fill_key in &["background", "border"] {
-            if let Some(fill) = obj.get(*fill_key).and_then(|v| v.as_object()) {
-                if let Some(color_val) = fill.get("color").and_then(|v| v.as_str()) {
-                    if let Err(e) = crate::hex_color_parser::parse_hex_color(color_val) {
-                        return ValidationResult::Error(format!(
-                            "set_clip_properties: '{}.color' is not a valid hex color: {e}",
-                            fill_key
-                        ));
-                    }
-                }
-            } else if obj.contains_key(*fill_key) {
-                let val = obj.get(*fill_key).unwrap();
-                if !val.is_object() {
-                    return ValidationResult::Error(format!(
-                        "set_clip_properties: '{}' must be an object with 'enabled' and 'color' fields",
-                        fill_key
-                    ));
-                }
-            }
-        }
-
         // MUT-011: scalar volume/opacity (number, not object) clears keyframes
         clears_keyframes = obj.get("volume").and_then(|v| v.as_f64()).is_some()
             || obj.get("opacity").and_then(|v| v.as_f64()).is_some();
@@ -258,7 +236,6 @@ pub fn validate_set_clip_properties(
     ValidationResult::Ok(SetClipPropertiesInput {
         clip_ids,
         properties,
-        text_only_fields,
         clears_keyframes,
         timing_properties,
     })
@@ -2642,7 +2619,7 @@ mod tests {
     fn frame_bound_set_clip_properties_rejects_i64_max_timing() {
         for key in ["durationFrames", "trimStartFrame", "trimEndFrame"] {
             let input = json!({"clipIds": ["c1"], "properties": {key: i64::MAX}});
-            let err = validate_set_clip_properties(&input, None)
+            let err = validate_set_clip_properties(&input)
                 .into_error()
                 .unwrap_or_else(|| panic!("{key} should be rejected"));
             assert!(
@@ -2656,15 +2633,11 @@ mod tests {
 
     #[test]
     fn speed_below_quarter_accepted_zero_rejected() {
-        let ok = validate_set_clip_properties(
-            &json!({"clipIds": ["c1"], "properties": {"speed": 0.1}}),
-            None,
-        );
+        let ok =
+            validate_set_clip_properties(&json!({"clipIds": ["c1"], "properties": {"speed": 0.1}}));
         assert!(ok.into_ok().is_some(), "0.1x speed is valid");
-        let err = validate_set_clip_properties(
-            &json!({"clipIds": ["c1"], "properties": {"speed": 0.0}}),
-            None,
-        );
+        let err =
+            validate_set_clip_properties(&json!({"clipIds": ["c1"], "properties": {"speed": 0.0}}));
         assert!(err.into_error().is_some(), "0 speed rejected");
     }
 
@@ -2676,10 +2649,9 @@ mod tests {
             "clipIds": ["c1", "c2"],
             "properties": {"speed": 2.0}
         });
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         let parsed = result.into_ok().expect("MUT-009: valid");
         assert_eq!(parsed.clip_ids.len(), 2);
-        assert!(parsed.text_only_fields.is_empty());
         assert!(!parsed.clears_keyframes);
         // "speed" is a timing property (MUT-012)
         assert_eq!(parsed.timing_properties, vec!["speed"]);
@@ -2691,7 +2663,7 @@ mod tests {
             "clipIds": [],
             "properties": {}
         });
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         assert!(result.into_error().is_some(), "MUT-009: empty ids rejected");
     }
 
@@ -2699,7 +2671,7 @@ mod tests {
     fn mut_009_set_clip_properties_flat_v2_shape_accepted() {
         // v2: fields sit at the top level; no 'properties' object required.
         let input = json!({"clipIds": ["c1"], "opacity": 0.5});
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         assert!(result.into_ok().is_some());
     }
 
@@ -3092,32 +3064,38 @@ mod tests {
         assert!(result.into_error().is_some());
     }
 
-    // ---- MUT-010: text-only field validation ----------------------------
+    // ---- Legacy text keys retired (v2: text goes through update_text) ----
 
     #[test]
-    fn mut_010_non_text_clip_rejects_text_fields() {
+    fn text_keys_rejected_as_unknown_fields_nested() {
+        // Pre-v2 these were text-only fields (MUT-010); the v2 contract has no
+        // text keys on set_clip_properties at all — even for text clips.
         let input = json!({
             "clipIds": ["c1"],
             "properties": {"content": "hello", "fontSize": 24, "opacity": 0.5}
         });
-        let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result
+        let err = validate_set_clip_properties(&input)
             .into_error()
-            .expect("MUT-010: non-text clip rejects text fields");
-        assert!(err.contains("content"));
+            .expect("legacy text keys rejected");
+        assert!(
+            err.contains("unknown field(s) 'content', 'fontSize'"),
+            "err={err}"
+        );
+        assert!(err.contains("Allowed:"), "err={err}");
     }
 
     #[test]
-    fn mut_010_text_only_clip_allows_text_fields() {
-        let input = json!({
-            "clipIds": ["c1"],
-            "properties": {"content": "hello", "fontSize": 24}
-        });
-        let result = validate_set_clip_properties(&input, Some(vec!["text".to_string()]));
-        let parsed = result
-            .into_ok()
-            .expect("MUT-010: text clip allows text fields");
-        assert_eq!(parsed.text_only_fields.len(), 2);
+    fn text_keys_rejected_as_unknown_fields_flat() {
+        // Swift SetClipPropertiesInput.allowedKeys parity, message included.
+        let input = json!({"clipIds": ["c1"], "fontSize": 24});
+        let err = validate_set_clip_properties(&input)
+            .into_error()
+            .expect("flat fontSize rejected");
+        assert_eq!(
+            err,
+            "set_clip_properties: unknown field(s) 'fontSize'. Allowed: blendMode, clipIds, \
+             durationFrames, opacity, speed, transform, trimEndFrame, trimStartFrame, volume."
+        );
     }
 
     // ---- MUT-011: scalar volume/opacity clears keyframes -----------------
@@ -3128,7 +3106,7 @@ mod tests {
             "clipIds": ["c1"],
             "properties": {"volume": 0.8}
         });
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         let parsed = result.into_ok().expect("MUT-011: scalar volume");
         assert!(parsed.clears_keyframes);
     }
@@ -3139,7 +3117,7 @@ mod tests {
             "clipIds": ["c1"],
             "properties": {"opacity": 0.5}
         });
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         let parsed = result.into_ok().expect("MUT-011: scalar opacity");
         assert!(parsed.clears_keyframes);
     }
@@ -3150,7 +3128,7 @@ mod tests {
             "clipIds": ["c1"],
             "properties": {"volume": {"keyframes": [{"frame": 0, "value": 1.0}]}}
         });
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         let parsed = result.into_ok().expect("MUT-011: keyframed volume");
         assert!(
             !parsed.clears_keyframes,
@@ -3164,7 +3142,7 @@ mod tests {
             "clipIds": ["c1"],
             "properties": {"speed": 2.0}
         });
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         let parsed = result.into_ok().expect("MUT-011: unrelated property");
         assert!(!parsed.clears_keyframes);
     }
@@ -3177,7 +3155,7 @@ mod tests {
             "clipIds": ["c1"],
             "properties": {"speed": 2.0, "trimStartFrame": 10}
         });
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         let parsed = result.into_ok().expect("MUT-012: timing props");
         assert!(parsed.timing_properties.contains(&"speed".to_string()));
         assert!(parsed
@@ -3197,7 +3175,7 @@ mod tests {
                 "trimEndFrame": 100
             }
         });
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         let parsed = result.into_ok().expect("MUT-012: all timing");
         assert_eq!(parsed.timing_properties.len(), 4);
     }
@@ -3208,110 +3186,60 @@ mod tests {
             "clipIds": ["c1"],
             "properties": {"opacity": 0.5, "volume": 1.0}
         });
-        let result = validate_set_clip_properties(&input, None);
+        let result = validate_set_clip_properties(&input);
         let parsed = result.into_ok().expect("MUT-012: no timing");
         assert!(parsed.timing_properties.is_empty());
     }
 
-    // ---- Issue #18: background / border validation ------------------
+    // ---- Legacy text keys: every retired key rejects, allowed keys pass ----
 
     #[test]
-    fn issue_018_text_background_recognized_as_text_field() {
-        let input = json!({
-            "clipIds": ["clip-1"],
-            "properties": {"background": {"enabled": true, "color": "#FF0000"}}
-        });
-        let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result
-            .into_error()
-            .expect("background must be rejected for non-text clips");
-        assert!(err.contains("background"), "err={err}");
-    }
-
-    #[test]
-    fn issue_018_text_background_allowed_for_text_clips() {
-        let input = json!({
-            "clipIds": ["clip-1"],
-            "properties": {"background": {"enabled": true, "color": "#FF0000"}}
-        });
-        let result = validate_set_clip_properties(&input, Some(vec!["text".to_string()]));
-        result
-            .into_ok()
-            .expect("background must be accepted for text clips");
-    }
-
-    #[test]
-    fn issue_018_text_border_recognized_as_text_field() {
-        let input = json!({
-            "clipIds": ["clip-1"],
-            "properties": {"border": {"enabled": false, "color": "#000000"}}
-        });
-        let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result.into_error().expect("border rejected for non-text");
-        assert!(err.contains("border"), "err={err}");
-    }
-
-    #[test]
-    fn issue_018_text_background_invalid_hex_rejected() {
-        let input = json!({
-            "clipIds": ["clip-1"],
-            "properties": {"background": {"enabled": true, "color": "not-a-color"}}
-        });
-        let result = validate_set_clip_properties(&input, None);
-        let err = result.into_error().expect("invalid hex must be rejected");
-        assert!(err.contains("background.color"), "err={err}");
-    }
-
-    #[test]
-    fn issue_018_text_border_invalid_hex_rejected() {
-        let input = json!({
-            "clipIds": ["clip-1"],
-            "properties": {"border": {"enabled": true, "color": "#ZZZ"}}
-        });
-        let result = validate_set_clip_properties(&input, None);
-        let err = result.into_error().expect("invalid hex must be rejected");
-        assert!(err.contains("border.color"), "err={err}");
-    }
-
-    #[test]
-    fn issue_018_text_background_non_object_rejected() {
-        let input = json!({
-            "clipIds": ["clip-1"],
-            "properties": {"background": "red"}
-        });
-        let result = validate_set_clip_properties(&input, None);
-        let err = result
-            .into_error()
-            .expect("non-object background must be rejected");
-        assert!(err.contains("background"), "err={err}");
-    }
-
-    #[test]
-    fn issue_018_font_weight_recognized_as_text_field() {
-        let input = json!({
-            "clipIds": ["clip-1"],
-            "properties": {"fontWeight": 700}
-        });
-        let result = validate_set_clip_properties(&input, Some(vec!["video".to_string()]));
-        let err = result
-            .into_error()
-            .expect("fontWeight rejected for non-text");
-        assert!(err.contains("fontWeight"), "err={err}");
-    }
-
-    #[test]
-    fn issue_018_text_background_color_valid_hex_accepted() {
-        // Multiple hex formats should all be accepted
-        for color in &["#FFF", "#FFFFFF", "#FFFFFF80"] {
-            let input = json!({
-                "clipIds": ["clip-1"],
-                "properties": {"background": {"enabled": true, "color": color}}
-            });
-            let result = validate_set_clip_properties(&input, None);
-            result
-                .into_ok()
-                .unwrap_or_else(|| panic!("color {} must be accepted", color));
+    fn every_retired_text_key_rejects() {
+        // Issue #18 / PR #65 text styling moved to update_text; these keys are
+        // now unknown on both the nested and flat shapes.
+        for (key, value) in [
+            ("content", json!("hello")),
+            ("fontName", json!("Poppins")),
+            ("fontSize", json!(24)),
+            ("fontWeight", json!(700)),
+            ("color", json!("#FF0000")),
+            ("alignment", json!("center")),
+            ("background", json!({"enabled": true, "color": "#FF0000"})),
+            ("border", json!({"enabled": false, "color": "#000000"})),
+        ] {
+            let nested = json!({"clipIds": ["c1"], "properties": {key: value.clone()}});
+            let err = validate_set_clip_properties(&nested)
+                .into_error()
+                .unwrap_or_else(|| panic!("nested {key} must be rejected"));
+            assert!(err.contains(&format!("'{key}'")), "{key}: err={err}");
+            let flat = json!({"clipIds": ["c1"], key: value});
+            let err = validate_set_clip_properties(&flat)
+                .into_error()
+                .unwrap_or_else(|| panic!("flat {key} must be rejected"));
+            assert!(err.contains(&format!("'{key}'")), "{key}: err={err}");
         }
+    }
+
+    #[test]
+    fn stray_top_level_key_next_to_nested_properties_rejects() {
+        // Nested form allows exactly clipIds + properties at the top level.
+        let input = json!({"clipIds": ["c1"], "properties": {"speed": 2.0}, "volume": 0.5});
+        let err = validate_set_clip_properties(&input)
+            .into_error()
+            .expect("stray top-level key rejected");
+        assert!(err.contains("unknown field(s) 'volume'"), "err={err}");
+    }
+
+    #[test]
+    fn non_object_properties_still_rejected() {
+        let input = json!({"clipIds": ["c1"], "properties": "red"});
+        let err = validate_set_clip_properties(&input)
+            .into_error()
+            .expect("non-object properties rejected");
+        assert!(
+            err.contains("'properties' must be a JSON object"),
+            "err={err}"
+        );
     }
 
     // ---- MUT-017/018: ripple_delete_ranges ------------------------------

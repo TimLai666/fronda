@@ -155,7 +155,7 @@ Since change `wire-mutation-validators`, the validators run on the live path: `T
 - [x] `MUT-007`: `validate_move_clips()` requires at least one of `toTrack`/`toFrame`. Tests: `mut_007_move_clips_valid_with_to_track`, `mut_007_move_clips_valid_with_to_frame`, `mut_007_move_clips_valid_with_both`, `mut_007_move_clips_requires_at_least_one`, `mut_007_move_clips_requires_clip_ids`.
 - [x] `MUT-008`: `validate_move_clips_linked()` handles linked partner frame deltas. Tests: `mut_008_move_clips_linked_valid`, `mut_008_move_clips_linked_empty_rejected`.
 - [x] `MUT-009`: `validate_set_clip_properties()` applies same properties to all clip_ids. Test: `mut_009_set_clip_properties_valid`, `mut_009_set_clip_properties_empty_ids`, `mut_009_set_clip_properties_missing_properties`.
-- [x] `MUT-010`: Text-only field rejection when target is non-text. Tests: `mut_010_non_text_clip_rejects_text_fields`, `mut_010_text_only_clip_allows_text_fields`.
+- [x] `MUT-010`: set_clip_properties rejects text-styling keys via the v2 unknown-key whitelist (Swift allowedKeys parity — text goes through update_text; the earlier text-only-detection tests were superseded 2026-07-17, change `v0610-followups`).
 - [x] `MUT-011`: Scalar volume/opacity clears keyframes detection. Tests: `mut_011_scalar_volume_clears_keyframes`, `mut_011_scalar_opacity_clears_keyframes`, `mut_011_keyframed_volume_no_clear`, `mut_011_no_scalar_no_clear`.
 - [x] `MUT-012`: Timing properties detection (speed, durationFrames, trimStart, trimEnd). Tests: `mut_012_detects_timing_properties`, `mut_012_detects_all_timing_fields`, `mut_012_no_timing_properties`.
 - [x] `MUT-013`: `validate_set_keyframes()` replaces full keyframe track for one (clipId, property) pair. Test: `mut_013_set_keyframes_valid`.

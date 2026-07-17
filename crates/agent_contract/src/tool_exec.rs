@@ -581,27 +581,6 @@ pub(crate) fn parse_keyframe_rows(
     Ok(deduped)
 }
 
-/// Parse a caption background/border fill object `{enabled?, color?, padding?,
-/// cornerRadius?}` into a [`core_model::TextFill`] (Issue #18). Missing fields
-/// keep the default; an invalid colour is an error. Full replacement, not a merge.
-fn parse_text_fill(v: &Value, what: &str) -> Result<core_model::TextFill, String> {
-    let mut fill = core_model::TextFill::default();
-    if let Some(en) = v.get("enabled").and_then(|x| x.as_bool()) {
-        fill.enabled = en;
-    }
-    if let Some(hex) = v.get("color").and_then(|x| x.as_str()) {
-        fill.color = core_model::TextRgba::from_hex(hex)
-            .ok_or_else(|| format!("invalid {what} color '{hex}'"))?;
-    }
-    if let Some(p) = v.get("padding").and_then(|x| x.as_f64()) {
-        fill.padding = Some(p);
-    }
-    if let Some(r) = v.get("cornerRadius").and_then(|x| x.as_f64()) {
-        fill.corner_radius = Some(r);
-    }
-    Ok(fill)
-}
-
 fn resolve_layout_anchor(entry: &Value) -> Result<(f64, f64), String> {
     const ANCHORS: &[(&str, (f64, f64))] = &[
         ("center", (0.5, 0.5)),
@@ -1242,10 +1221,7 @@ impl ToolExecutor {
             }
         }
         match tool_name {
-            // MUT-010 (text-only field rejection) needs clip types; it stays
-            // validator-only (None) pending a Swift-parity decision — the Rust
-            // executor deliberately styles non-text clips today.
-            "set_clip_properties" => gate(m::validate_set_clip_properties(args, None)),
+            "set_clip_properties" => gate(m::validate_set_clip_properties(args)),
             "remove_clips" => gate(m::validate_remove_clips(args)),
             "move_clips" | "move_clips_linked" => gate(m::validate_move_clips(args)),
             "duplicate_clips" => gate(m::validate_duplicate_clips(args)),
@@ -2088,30 +2064,6 @@ impl ToolExecutor {
         }
         let volume = properties.get("volume").and_then(|v| v.as_f64());
         let opacity = properties.get("opacity").and_then(|v| v.as_f64());
-        let content = properties.get("content").and_then(|v| v.as_str());
-        let font_name = properties.get("fontName").and_then(|v| v.as_str());
-        let font_size = properties.get("fontSize").and_then(|v| v.as_f64());
-        let font_weight = properties.get("fontWeight").and_then(|v| v.as_f64());
-        let color = match properties.get("color").and_then(|v| v.as_str()) {
-            Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
-                format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
-            })?),
-            None => None,
-        };
-        let alignment = match properties.get("alignment").and_then(|v| v.as_str()) {
-            Some(a) => Some(core_model::TextAlignment::from_name(a).ok_or_else(|| {
-                format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
-            })?),
-            None => None,
-        };
-        let background = match properties.get("background") {
-            Some(v) => Some(parse_text_fill(v, "background")?),
-            None => None,
-        };
-        let border = match properties.get("border") {
-            Some(v) => Some(parse_text_fill(v, "border")?),
-            None => None,
-        };
 
         let transform = properties
             .get("transform")
@@ -2125,6 +2077,7 @@ impl ToolExecutor {
                 flip_vertical: t.get("flipVertical").and_then(|v| v.as_bool()),
             });
 
+        // v2: no text fields here — text edits go through update_text.
         let update = timeline_core::ClipPropertyUpdate {
             duration_frames: duration,
             trim_start_frame: trim_start,
@@ -2133,14 +2086,14 @@ impl ToolExecutor {
             volume,
             opacity,
             transform: transform.as_ref(),
-            content,
-            font_name,
-            font_size,
-            font_weight,
-            color,
-            alignment,
-            background,
-            border,
+            content: None,
+            font_name: None,
+            font_size: None,
+            font_weight: None,
+            color: None,
+            alignment: None,
+            background: None,
+            border: None,
         };
 
         // v2: blendMode (absorbs set_blend_mode). 'normal' clears; rejected on
@@ -13234,84 +13187,49 @@ mod tests {
     }
 
     #[test]
-    fn set_clip_properties_sets_text_color_and_alignment() {
+    fn set_clip_properties_rejects_legacy_text_keys_flat() {
+        // v0610-followups: the v2 contract has no text keys here (upstream
+        // SetClipPropertiesInput.allowedKeys) — text edits go through
+        // update_text. Rejection happens on the unknown-key path.
         let mut exec = executor_with_clip();
-        exec.execute(
-            "set_clip_properties",
-            &json!({"clipIds": ["c"], "properties": {"color": "#FF0000", "alignment": "center"}}),
-        )
-        .unwrap();
-        let ts = only_clip(&exec)
-            .text_style
-            .as_ref()
-            .expect("text style created");
-        assert_eq!((ts.color.r, ts.color.g, ts.color.b), (1.0, 0.0, 0.0));
-        assert_eq!(ts.alignment, core_model::TextAlignment::Center);
-    }
-
-    #[test]
-    fn set_clip_properties_rejects_bad_color() {
-        let mut exec = executor_with_clip();
+        let before = exec.revision();
         let err = exec
             .execute(
                 "set_clip_properties",
-                &json!({"clipIds": ["c"], "properties": {"color": "not-a-color"}}),
+                &json!({"clipIds": ["c"], "fontSize": 24}),
             )
             .unwrap_err();
-        assert!(err.contains("invalid color"), "got: {err}");
-    }
-
-    #[test]
-    fn set_clip_properties_rejects_bad_alignment() {
-        let mut exec = executor_with_clip();
-        let err = exec
-            .execute(
-                "set_clip_properties",
-                &json!({"clipIds": ["c"], "properties": {"alignment": "middle"}}),
-            )
-            .unwrap_err();
-        assert!(err.contains("invalid alignment"), "got: {err}");
-    }
-
-    #[test]
-    fn set_clip_properties_sets_font_weight_background_border() {
-        let mut exec = executor_with_clip();
-        exec.execute(
-            "set_clip_properties",
-            &json!({"clipIds": ["c"], "properties": {
-                "fontWeight": 700.0,
-                "background": {"enabled": true, "color": "#000000", "padding": 8.0, "cornerRadius": 4.0},
-                "border": {"enabled": true, "color": "#FFFFFF"}
-            }}),
-        )
-        .unwrap();
-        let ts = only_clip(&exec).text_style.as_ref().unwrap();
-        assert_eq!(ts.font_weight, 700.0);
-        assert!(ts.background.enabled);
-        assert_eq!(ts.background.padding, Some(8.0));
-        assert_eq!(ts.background.corner_radius, Some(4.0));
-        assert_eq!((ts.background.color.r, ts.background.color.g), (0.0, 0.0));
-        assert!(ts.border.enabled);
+        assert!(err.contains("unknown field(s) 'fontSize'"), "got: {err}");
+        assert!(err.contains("Allowed:"), "got: {err}");
         assert_eq!(
-            (ts.border.color.r, ts.border.color.g, ts.border.color.b),
-            (1.0, 1.0, 1.0)
+            exec.revision(),
+            before,
+            "rejection leaves the clip untouched"
         );
     }
 
     #[test]
-    fn set_clip_properties_rejects_bad_background_color() {
+    fn set_clip_properties_rejects_legacy_text_keys_nested() {
         let mut exec = executor_with_clip();
-        let err = exec
-            .execute(
-                "set_clip_properties",
-                &json!({"clipIds": ["c"], "properties": {"background": {"color": "zzz"}}}),
-            )
-            .unwrap_err();
-        // wire-mutation-validators: the validator's hex check fires before the
-        // inline parse_text_fill; its message pinpoints the exact field.
+        for props in [
+            json!({"color": "#FF0000", "alignment": "center"}),
+            json!({"fontWeight": 700.0}),
+            json!({"background": {"enabled": true, "color": "#000000"}}),
+            json!({"border": {"enabled": true, "color": "#FFFFFF"}}),
+            json!({"content": "hello"}),
+            json!({"fontName": "Poppins"}),
+        ] {
+            let err = exec
+                .execute(
+                    "set_clip_properties",
+                    &json!({"clipIds": ["c"], "properties": props}),
+                )
+                .unwrap_err();
+            assert!(err.contains("unknown field(s)"), "got: {err}");
+        }
         assert!(
-            err.contains("'background.color' is not a valid hex color"),
-            "got: {err}"
+            only_clip(&exec).text_style.is_none(),
+            "no text style is ever created via set_clip_properties"
         );
     }
 
