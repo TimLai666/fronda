@@ -111,3 +111,23 @@ Cosmetic deviations noted (not structural):
 Artifacts from this session: `~/Movies/Untitled.palmier` (Fronda dev-seam
 project) and `~/Documents/Palmier Pro/Untitled Project.palmier` (Swift
 baseline project) were created during verification and can be deleted.
+
+## D9 addendum — evening interactive pass (same day)
+
+After the decision-execution waves (D1–D5, D7, D8, D11, #294–#342 ports),
+a second interactive pass on macOS verified the day's UI landings live:
+
+- Native menu bar regression: `Apple, fronda, File, Edit, View, Help` intact.
+- #327 panel groups: inspector renders Project/Settings as collapsible
+  EditorPanelGroups (88pt label column); clicking the Settings header
+  collapses it (chevron + content) while Project stays open.
+- D8 focus ring: clicking inside a pane moves the accent ring to that
+  pane's card (observed on the inspector after an in-pane click).
+- Media rail three icons, centered preview empty-state canvas, timeline
+  tab bar + toolbar all render correctly.
+- Text rendering (font-kit) regression: clean.
+
+Not covered tonight (needs human/hardware): physical audio-out for the
+new cpal playback engine (seek pops, meter timing), whisper real-model
+inference (no model file on this machine), multicam chip operations and
+export-queue interactions beyond compile/model tests.
