@@ -153,19 +153,24 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 
 ## Upstream PR management
 
-- **Merged upstream/main v0.6.1 → v0.6.5 on 2026-07-12** (upstream HEAD
-  `f0f5b473`, merge commit brings the Swift baseline current; the Rust
-  `crates/` workspace was untouched by the merge). A **Rust-porting re-audit
-  is PENDING** for the commits `771b63e..f0f5b473`. New PRs to triage (not yet
-  in the porting table below): **#294** elevenlabs voice isolator + dubbing
-  (generation — likely Rust port), **#296** allow 65-point `.cube` LUTs
-  (Rust-relevant if LUT support exists), **#288** validate video-to-audio span
-  in the agent path (bug fix — check `agent_contract`), **#297** track tools
-  called / **#290** analytics / **#292** hosted Sonnet 5 (telemetry/config —
-  mostly skip or already covered by #243). Already ported before this merge:
-  #293 audio meter, #291 chroma eyedropper, #283 multicam v2, #138 HDR export,
-  #176 duplicate_clips, #284 aspect labels, #263 tool-surface v2, #274 beat
-  detection. Full new-commit list: `git --no-pager log 771b63e..f0f5b473 --oneline`.
+- **Re-audited `771b63e..cfa9e05e` (v0.6.1 → v0.6.10) on 2026-07-17**: 47 PR
+  units audited by parallel agents, every PORT/DONE verdict adversarially
+  re-verified. Full tier tables + decision list in
+  `specs/rust-rewrite/97-upstream-pr-audit.md` (2026-07-17 section). Results:
+  8 items ported via change `upstream-v0610-compat-ports` (#342 add_clips
+  auto-track bug, #307 manage_tracks trackId, #274-followups detect_beats
+  contract, #333 import text, #338 CAF, #294/#336/#330 on-disk serde slices);
+  7 verified DONE (#288, #57, #268, #261, #329, #331, #334); 8 DEFERRED with
+  named blockers (#269 engine half — **its correlator lacks Swift's
+  min-overlap floor, a real false-sync bug, highest-priority follow-up** —
+  plus #296, #285 behavior half, #276, #273, #339, #280, #292); feature tier
+  awaiting a go decision (#299 manage_project consolidation, #298 export
+  queue, #294/#330/#336 remainders, UI: #281 clip colors, #327 panel
+  redesign, #319 settings/help, #284-leftover). NOTE: the in-tree Swift
+  baseline is still the v0.6.5 merge (`f0f5b473`); v0.6.6–v0.6.10 were
+  audited from the upstream remote but are not merged locally. The 2026-07-17
+  audit also found the porting table's old "#284 picker wiring follow-up"
+  note was stale — the wiring already landed (generation_view.rs).
 - Upstream PRs were re-audited on 2026-07-05 (upstream HEAD `771b63e`, v0.6.1),
   covering the 6 new commits `9a3ae50..771b63e`: **#251 Audio Enhancer/Denoise**
   (ported — `denoise_audio` tool; no model change, denoise is an `audio.denoise`
@@ -227,4 +232,4 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
 | #211 | Project checkpoint autosave             | PORTED (change `upstream-m-batch`) | `app_shell_gpui::editor_state_hub`: pure `autosave_should_fire(has_root, cur_rev, last_rev)` decision (injected-counter testable) + `autosave_if_dirty()` (coalesced tick: saves only with a root AND revision advance; rapid edits collapse to one save) + `save_now()` (named wrapper for the Home-transition/timer) + `mark_saved_revision()` (baseline set on save/save_as/load_bundle). Mirrors Swift `VideoProject.scheduleProjectCheckpointAutosave` (no interval; coalesce to next tick). close_project's existing save is untouched. Follow-up (1 line, another slice's `app_root.rs`): call `hub.autosave_if_dirty()` on the revision-poll tick / `hub.save_now()` on show-Home. 6 tests. |
 | #138 | 10-bit HDR video export (HEVC Main10)   | PORTED (change `upstream-m-batch`) | `app_shell_gpui::video_export`: `VideoCodec::H265Hdr` (HEVC, `YUV420P10LE`, `set_colorspace(BT2020NCL)` + direct-write `color_primaries=BT2020` / `color_trc=ARIB_STD_B67` HLG). HDR resolves to libx265 ONLY — a missing 10-bit HEVC encoder is an explicit error, NEVER a silent SDR/8-bit fallback. Threads end-to-end via the existing `VideoCodec` param through `audio_export::export_project_with_audio` (untouched). `export_model`: `hdr` field + `set_hdr` + `effective_video_codec` (H.265+hdr→H265Hdr); `export_view`: HDR toggle (H.265 only) drives codec selection. Structural test `hdr_export_is_10bit_bt2020_hlg_or_errors` asserts 10-bit + BT.2020 + HLG survive re-decode when libx265 is present, else the explicit-error path + no leftover file. NOTE: this dev/CI ffmpeg has no libx265, so the color-tag re-decode assertions are logic/compile-verified but not runtime-exercised here; the no-silent-fallback error path IS runtime-verified. 3 tests. |
 | #176 | duplicate_clips agent tool              | PORTED (change `upstream-m-batch`) | Upstream PR #176 contract (description verbatim). `agent_contract::tool_exec::cmd_duplicate_clips` (single-line dispatch arm → `exec_enveloped` C-4 envelope): full-fidelity clone (fresh ids; keyframes/effects/fades/speed/opacity/volume/transform/crop preserved), linked partners auto-duplicated (`partner_moves_for_move_of` relative offset), the duplicated set re-links via a fresh link group (≥2 members share / lone member unlinks), destination overwrite via `clear_region`, multicam stamp dropped. `mutation::validate_duplicate_clips` wired into `validate_args` (non-empty entries, toFrame≥0 + frame ceiling, toTrack≥0). Short-id: `clipId` already a SCALAR_ID_KEY and `expand_input_ids` recurses into `entries`, so nested prefix-expansion + output shortening already cover it (test-confirmed; no id_short change). Tool count 56→57 across all 4 assertion files + host split (shared 52 / MCP 56 / in-app 53). 4 Swift tests transplanted + short-id + validator = 11 tests. |
-| #284 | Aspect-ratio display labels             | PORTED (change `upstream-m-batch`) | `generation_core::model_catalog::aspect_ratio_display_label` (+ `aspect_ratio_display_token`) verbatim from Swift `ImageModelConfig.aspectRatioDisplayLabel`: colon-form ids pass through, underscore enum ids tokenize ("landscape_16_9"→"Landscape 16:9", "square_hd"→"Square HD"). Golden vectors transplanted from upstream PR #284's deleted `ImageModelConfigTests`. `tool_exec::cmd_list_models` emits `aspectRatioLabels` parallel to `aspectRatios` on Video/Image entries (additive, compatible). Generation panel picker wiring is a trivial follow-up (`generation_view.rs`, another slice). 3 tests. |
+| #284 | Aspect-ratio display labels             | PORTED (change `upstream-m-batch`) | `generation_core::model_catalog::aspect_ratio_display_label` (+ `aspect_ratio_display_token`) verbatim from Swift `ImageModelConfig.aspectRatioDisplayLabel`: colon-form ids pass through, underscore enum ids tokenize ("landscape_16_9"→"Landscape 16:9", "square_hd"→"Square HD"). Golden vectors transplanted from upstream PR #284's deleted `ImageModelConfigTests`. `tool_exec::cmd_list_models` emits `aspectRatioLabels` parallel to `aspectRatios` on Video/Image entries (additive, compatible). Generation panel picker wiring landed (`generation_view.rs:768-777`; the earlier "follow-up" note was stale — verified by the 2026-07-17 audit). 3 tests. |

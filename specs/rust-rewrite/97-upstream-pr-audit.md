@@ -1,15 +1,97 @@
 # Upstream PR Audit — Rust Rewrite Applicability
 
-Latest re-audit: 2026-07-03
-Upstream HEAD: `9a3ae50` (palmier-io/palmier-pro main, v0.5.2)
-Previous audit: 2026-06-25 at `b9b4ad9`
+Latest re-audit: 2026-07-17
+Upstream HEAD: `cfa9e05e` (palmier-io/palmier-pro main, v0.6.10)
+Previous audits: 2026-07-05 at `771b63e` (v0.6.1), 2026-07-03 at `9a3ae50`,
+2026-06-25 at `b9b4ad9`
 
 This file catalogs every upstream PR (from the Swift `palmier-pro` repo), its
 current porting status in Fronda, and any action items.
 
-The **2026-07-03 Re-audit** section below covers the 86 new commits in
-`b9b4ad9..9a3ae50` (PRs roughly #148–#254). The historical tables further down
-remain valid for pre-`b9b4ad9` PRs.
+The **2026-07-17 Re-audit** section below covers `771b63e..cfa9e05e`
+(v0.6.1 → v0.6.10). Earlier sections remain valid for older PRs.
+
+# 2026-07-17 Re-audit (771b63e → cfa9e05e, v0.6.1 → v0.6.10)
+
+Method: 47 PR units audited by parallel agents (each read the real diffs with
+`git show` and cross-checked current Rust source with file:line evidence);
+every PORT/DONE verdict then re-checked by an independent adversarial
+verifier (22 checks, 1 verdict corrected). Full evidence trail in the
+workflow journal (session 2026-07-17). Items already ported before this
+audit (#293 audio meter, #291 chroma eyedropper, #283 multicam v2, #138 HDR,
+#176 duplicate_clips, #284 aspect labels core, #263 tool-surface v2,
+#274 beat detection baseline, #211 autosave, #65 wght) were not re-opened.
+
+## Ported by change `upstream-v0610-compat-ports` (2026-07-17)
+
+| PR | Item | Scope ported |
+|----|------|--------------|
+| #342 | add_clips auto-track semantics | all-omitted branch always creates fresh shared tracks (was reusing first existing track — data-destructive overwrite of linked dialogue via place_clips overwrite semantics); description text |
+| #307 | manage_tracks addressing | stable trackId selector (XOR index), out-of-zone reorder → hard error, reordered/removedTracks receipts, get_timeline trackId, id_universe + SCALAR_ID_KEYS; Swift accepts integral floats for index, Rust keeps strict as_i64 (documented) |
+| #274-followups | detect_beats contract fixes | has_audio up-front rejection; windowed bpm recomputed (audio_core estimate_bpm = 60/median IBI); empty-analysis/empty-window notes; bpm/downbeats omission; beat_cache (size,mtime) invalidation tag |
+| #333 | import_media contract text | description/path text synced to in-place registration + synchronous ready (executor behavior was already post-#333; the text actively misled agents into polling) |
+| #338 | CAF audio support | ClipType::from_extension + content_type_for_extension (audio/x-caf) + media_library AUDIO extensions + import_media format list + mime rejection message |
+| #294 (slice) | GenerationInput.targetLanguage | media.json additive serde field (Swift-written value survived Fronda round-trip; skip_serializing_if) — rest of #294 in the decision list |
+| #336 (slice) | TextStyle underline/strikethrough/overline | on-disk serde fields through TextStyleWire (data-loss class of #65); renderer/inspector deferred |
+| #330 (slice) | TextStyle rich styling fields | tracking/lineSpacing/fontCase/border.width + 9-field Background on-disk round-trip; nested style agent args + render semantics deferred |
+
+## DONE — verified already satisfied in Rust (no action)
+
+| PR | Evidence |
+|----|----------|
+| #288 | Video-to-audio span validation mirrored at tool_exec.rs generate_audio (both branches, 1..600s defaults) with tests; scoring-render shrink is Swift-render-only. |
+| #57 | search_core strip_unicode_extensions covers `-u-*` (TRN-014) plus `@rg=` ICU form; transcription itself remains host-deferred. |
+| #268 | prompt_caching model_request_extras merges `{"output_config":{"effort":"low"}}` for sonnet-5 in both request-build paths (PORTED 2026-07-10). |
+| #261 | Speech suite: speakers registry round-trips opaquely; remove_silence matches shipped contract incl. in-PR review fixes; VAD host adapter is the archived `speech-analysis-seam` boundary. |
+| #329 | Undo-boundary bug class absent: Rust agent undo is snapshot-per-tool-call (settings auto-detect inside the same snapshot). |
+| #331 | Rust UndoStack is already the PR's end state: single shared user/agent history, no session gating, no boundary plumbing. |
+| #334 | Rust never eager-hydrates: metadata lazy via ffprobe on access; thumbnails on-demand tiered (video_thumbnails); no per-open hydration pass. |
+
+## DEFERRED — applicable but blocked (tracked, with blockers)
+
+| PR | Blocker |
+|----|---------|
+| #269 (engine half) | sync_clips correlator hardening: min-overlap floor (Rust currently accepts 1-frame overlaps — worse than pre-fix Swift for thin-edge false matches), centerLag/capture-date seeding, NTSC-exact frameDuration. Contract half is DONE (tool-surface v2). **Highest-priority follow-up: the min-overlap floor is a real quality bug.** |
+| #296 | 65-point .cube LUT cap: no Rust .cube parser exists at all — `color.lut` is stored but never parsed/applied. Blocked on a LUT engine (compositor follow-up); carry the 128 cap when it lands. |
+| #285 (behavior half) | canUseCloudTranscription(cost vs credits): transcription + account/credit state are host-deferred. Description text half already DONE (tool-surface v2). |
+| #276 | models:list resubscribe backoff: no Convex client in Rust; static catalog. Carry when a live catalog subscription exists. |
+| #273 | Unreadable-media readiness classification (unprocessable vs missing + failed status): needs the media-probe host seam; Rust honest-degradation via missing_entry_ids covers part today. |
+| #339 | Scrub-audio PCM cache/prefetch: no live audio output engine in Rust (audio meter is playhead-driven). Carry with the audio playback engine. |
+| #280 | Fade-handle UI refinements (ramp display, knee clamp, directional cursors): fade math fully ported; blocked on timeline direct-manipulation UI maturity. |
+| #292 | Hosted-chat model availability: no hosted/account-proxy chat path in Rust (ANTHROPIC_API_KEY only). |
+
+## PORT — feature tier, needs an explicit go decision (not auto-ported)
+
+| PR | Scope | Effort |
+|----|-------|--------|
+| #299 | Consolidate get_projects/open_project/new_project/close_project → manage_project(action=list\|open\|create\|close) with per-action validation; changes MCP tool counts (4 assertion files) + projectNavigation instructions | M |
+| #298 | Cancellable FIFO export queue (job state machine, destination reservation, staged output writes) | L |
+| #294 (rest) | generate_audio full contract: sourceMediaRef/targetLanguage args, cleanup/dubbing categories + gating, silent-video reject, duration=source, list_models fields, catalog/payload extension (dormant until a generation backend exists) | M |
+| #330 (rest) | Nested partial-patch `style` object for add_texts/update_text/add_captions (replaces flat fields, textCase removal) + render/FCPXML semantics (fontCase, tracking, lineSpacing, background offset/outline) | L |
+| #336 (rest) | Underline/strikethrough/overline rendering bars + agent args + inspector traits | S–M |
+| #281 | Timeline clip color palette (darker TrackColor set — theme.rs/ui_constants THM-007 now stale vs merged Swift), full-opacity fills, compact duration labels, keyframe marker alignment | S |
+| #327 | Editor panel redesign (EditorPanelGroup collapsible groups, action footers, restructured inspector/media tabs) — NOTE: supersedes parts of the just-landed shell parity's visual reference | M |
+| #319 | Settings/Help/Home refresh + Skills settings UI; includes window default sizes home/settings → 1200x800 (small standalone parity fix) | L |
+| #284-leftover | Aspect-label picker polish (audit found the porting table's "picker wiring follow-up" note stale — wiring landed; remaining delta is minor UI) | S |
+
+## SKIP — Swift-only (platform/runtime) — no Rust work
+
+#341 (dead code removal), #337 (NSDocument safe-save race), #328 (Dictionary
+trap + MainActor restore batching), #335 (SwiftUI invalidation isolation),
+#334 covered above as DONE, #326/#318 (NSUndoManager semantics), #312
+(@Observable mirror batching), #311 (@MainActor preflight), #306
+(@Observable meter redundancy), #305 (AVAudioEngine threading), #275
+(main-thread stalls; Rust equivalents structurally absent), #278 (NSDocument
+mod-date), #279 (feedback English clause — Fronda has no auto-send feedback
+backend), #272 (CoreVideo color-tag passthrough), #266 (Swift file split).
+
+## SKIP — infra/telemetry — no Rust work
+
+#290/#297/#317 (PostHog analytics + tool-call tracking + MCP session
+counts), #277 (Sentry log-level downgrade), #332 (feedback lastError
+enrichment — no feedback backend), infra-batch: #316 (SPM traits/CI), #314
+(MLX drain), #313 (logging overhead), #308 (star-history token), #323/#325
+(README badges), version bumps/appcast/changelogs.
 
 ## Legend
 
