@@ -3,7 +3,8 @@
 //! Covers UIX-009 (track sizes), UIX-010 (layout constants), from spec 07.
 
 use crate::theme::{
-    Accent, Background, BorderColors, BorderWidth, FontSize, Radius, Spacing, Text, TrackColor,
+    Accent, Background, BorderColors, BorderWidth, ComponentSize, FontSize, Radius, Spacing, Text,
+    TrackColor,
 };
 use crate::timeline_model::{TimelineState, TrackKind, TrimEdge, RULER_HEIGHT, TRACK_HEADER_WIDTH};
 use gpui::{
@@ -50,6 +51,9 @@ pub struct TimelineView {
     /// Media-asset drag hovering the clip canvas: (pointer frame, target
     /// track; None track = no compatible track, drop auto-creates one).
     asset_drop_hover: Option<(i64, Option<usize>)>,
+    /// Clip id → source clip type, captured at sync time so clip fills follow
+    /// Swift's per-clip `ClipType.themeColor` (#281) without widening ClipSlot.
+    clip_types: std::collections::HashMap<String, core_model::ClipType>,
 }
 
 impl TimelineView {
@@ -80,6 +84,7 @@ impl TimelineView {
             tab_editing: None,
             tab_rename_field,
             asset_drop_hover: None,
+            clip_types: std::collections::HashMap::new(),
         };
         view.sync_from_shared_state();
         view
@@ -329,6 +334,13 @@ impl TimelineView {
         let Ok(exec) = executor.lock() else {
             return false;
         };
+        self.clip_types = exec
+            .timeline()
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .map(|c| (c.id.clone(), c.source_clip_type))
+            .collect();
         let mut next = TimelineState::from_core(exec.timeline(), exec.media_manifest());
         next.zoom_scale = self.state.zoom_scale;
         next.scroll_x = self.state.scroll_x;
@@ -469,6 +481,7 @@ impl Render for TimelineView {
         let tab_count = tab_list.len();
         let tracks = self.state.tracks.clone();
         let clips = self.state.clips.clone();
+        let clip_types = self.clip_types.clone();
         let selected_ids = self.state.selected_clip_ids.clone();
         let drag_clip_id = self.state.clip_drag.as_ref().map(|d| d.clip_id.clone());
         let drag_proposed_start = self.state.clip_drag.as_ref().map(|d| d.proposed_start);
@@ -882,8 +895,10 @@ impl Render for TimelineView {
                                                 let clip_w = ((end - start) as f32 * zoom).max(4.0);
                                                 let is_selected =
                                                     selected_ids.iter().any(|id| id == &clip.id);
-                                                let mut bg = color;
-                                                bg.a = if is_selected { 0.38 } else { 0.22 };
+                                                let bg = clip_fill_color(
+                                                    clip_types.get(clip.id.as_str()).copied(),
+                                                    color,
+                                                );
                                                 let clip_id = clip.id.clone();
                                                 div()
                                                     .id(format!("clip-{}", clip.id))
@@ -892,14 +907,15 @@ impl Render for TimelineView {
                                                     .left(px(clip_x))
                                                     .w(px(clip_w))
                                                     .h(px(track_height - 2.0))
-                                                    .rounded(px(Radius::XS))
+                                                    .rounded(px(Radius::XS_SM))
                                                     .bg(bg)
-                                                    .border_1()
-                                                    .border_color(if is_selected {
-                                                        Accent::PRIMARY
-                                                    } else {
-                                                        color
-                                                    })
+                                                    .when_some(
+                                                        clip_stroke(clip_w, is_selected),
+                                                        |el, (stroke, width)| {
+                                                            el.border(px(width))
+                                                                .border_color(stroke)
+                                                        },
+                                                    )
                                                     .overflow_hidden()
                                                     .cursor_pointer()
                                                     .on_mouse_down(
@@ -971,6 +987,34 @@ impl Render for TimelineView {
                             .when_some(snap_x, |el, sx| el.child(snap_indicator(sx))),
                     ),
             )
+    }
+}
+
+/// Clip fill by source clip type — fully opaque, mirroring Swift
+/// `ClipType.themeColor` (#281). `Shape` is a Rust-only clip type with no
+/// Swift themeColor; it and unmapped ids fall back to the lane color.
+fn clip_fill_color(clip_type: Option<core_model::ClipType>, lane: gpui::Hsla) -> gpui::Hsla {
+    use core_model::ClipType as T;
+    match clip_type {
+        Some(T::Video) => TrackColor::VIDEO,
+        Some(T::Audio) => TrackColor::AUDIO,
+        Some(T::Image) => TrackColor::IMAGE,
+        Some(T::Text) => TrackColor::TEXT,
+        Some(T::Lottie) => TrackColor::LOTTIE,
+        Some(T::Sequence) => TrackColor::SEQUENCE,
+        Some(T::Shape) | None => lane,
+    }
+}
+
+/// #281 border rules: selected = white medium ring (any width); otherwise a
+/// thin black outline only on clips at least the minimum border width.
+fn clip_stroke(width: f32, selected: bool) -> Option<(gpui::Hsla, f32)> {
+    if selected {
+        Some((Text::PRIMARY, BorderWidth::MEDIUM))
+    } else if width >= ComponentSize::TIMELINE_CLIP_BORDER_MIN_WIDTH {
+        Some((BorderColors::TIMELINE_CLIP, BorderWidth::THIN))
+    } else {
+        None
     }
 }
 
@@ -1097,5 +1141,76 @@ fn trim_handle(
     match edge {
         TrimEdge::Start => base.left_0(),
         TrimEdge::End => base.right_0(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_model::ClipType as T;
+
+    const LANE: gpui::Hsla = gpui::Hsla {
+        h: 0.5,
+        s: 0.5,
+        l: 0.5,
+        a: 1.0,
+    };
+
+    // #281: fills are the per-type palette color, fully opaque.
+    #[test]
+    fn clip_fill_is_opaque_per_source_type() {
+        assert_eq!(clip_fill_color(Some(T::Video), LANE), TrackColor::VIDEO);
+        assert_eq!(clip_fill_color(Some(T::Audio), LANE), TrackColor::AUDIO);
+        assert_eq!(clip_fill_color(Some(T::Image), LANE), TrackColor::IMAGE);
+        assert_eq!(clip_fill_color(Some(T::Text), LANE), TrackColor::TEXT);
+        assert_eq!(clip_fill_color(Some(T::Lottie), LANE), TrackColor::LOTTIE);
+        assert_eq!(
+            clip_fill_color(Some(T::Sequence), LANE),
+            TrackColor::SEQUENCE
+        );
+        for t in [
+            T::Video,
+            T::Audio,
+            T::Image,
+            T::Text,
+            T::Lottie,
+            T::Sequence,
+        ] {
+            assert!((clip_fill_color(Some(t), LANE).a - 1.0).abs() < 1e-6);
+        }
+    }
+
+    // Shape is Rust-only (no Swift themeColor); unknown ids fall back too.
+    #[test]
+    fn clip_fill_falls_back_to_lane_for_shape_and_unknown() {
+        assert_eq!(clip_fill_color(Some(T::Shape), LANE), LANE);
+        assert_eq!(clip_fill_color(None, LANE), LANE);
+    }
+
+    // #281 spec scenario: narrow clip has no border, wider clips draw it.
+    #[test]
+    fn narrow_clip_has_no_border() {
+        assert_eq!(clip_stroke(7.9, false), None);
+        assert_eq!(
+            clip_stroke(ComponentSize::TIMELINE_CLIP_BORDER_MIN_WIDTH, false),
+            Some((BorderColors::TIMELINE_CLIP, BorderWidth::THIN))
+        );
+        assert_eq!(
+            clip_stroke(100.0, false),
+            Some((BorderColors::TIMELINE_CLIP, BorderWidth::THIN))
+        );
+    }
+
+    // Selection ring is white/medium and not width-gated.
+    #[test]
+    fn selected_clip_draws_white_medium_ring() {
+        assert_eq!(
+            clip_stroke(100.0, true),
+            Some((Text::PRIMARY, BorderWidth::MEDIUM))
+        );
+        assert_eq!(
+            clip_stroke(2.0, true),
+            Some((Text::PRIMARY, BorderWidth::MEDIUM))
+        );
     }
 }

@@ -166,14 +166,15 @@ impl OpacityTokens {
     pub const PROMINENT: f64 = 0.80;
 }
 
-/// THM-007: Track color hex values.
+/// THM-007: Track color hex values (upstream #281 palette).
 pub struct TrackColors;
 impl TrackColors {
-    pub const VIDEO: &'static str = "#0091C2";
-    pub const AUDIO: &'static str = "#58A822";
-    pub const IMAGE: &'static str = "#B72DD2";
-    pub const TEXT: &'static str = "#B72DD2";
-    pub const LOTTIE: &'static str = "#E0A800";
+    pub const VIDEO: &'static str = "#1D5878";
+    pub const AUDIO: &'static str = "#2E7765";
+    pub const IMAGE: &'static str = "#715486";
+    pub const TEXT: &'static str = "#715486";
+    pub const LOTTIE: &'static str = "#A07822";
+    pub const SEQUENCE: &'static str = "#B9B29A";
 }
 
 /// THM-008: Corner radius tokens.
@@ -520,14 +521,15 @@ mod tests {
         assert_eq!(OpacityTokens::PROMINENT, 0.80);
     }
 
-    // THM-007
+    // THM-007 (upstream #281 palette)
     #[test]
     fn track_colors() {
-        assert_eq!(TrackColors::VIDEO, "#0091C2");
-        assert_eq!(TrackColors::AUDIO, "#58A822");
-        assert_eq!(TrackColors::IMAGE, "#B72DD2");
-        assert_eq!(TrackColors::TEXT, "#B72DD2");
-        assert_eq!(TrackColors::LOTTIE, "#E0A800");
+        assert_eq!(TrackColors::VIDEO, "#1D5878");
+        assert_eq!(TrackColors::AUDIO, "#2E7765");
+        assert_eq!(TrackColors::IMAGE, "#715486");
+        assert_eq!(TrackColors::TEXT, "#715486");
+        assert_eq!(TrackColors::LOTTIE, "#A07822");
+        assert_eq!(TrackColors::SEQUENCE, "#B9B29A");
     }
 
     // THM-008

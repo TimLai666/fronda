@@ -36,6 +36,11 @@
 //! upstream-m-batch (#176): added duplicate_clips, a shared clip-mutation tool
 //! (56 → 57 = 49 upstream + 8 Rust extensions). Host split: shared 52 + 4
 //! MCP-only + 1 in-app-only → MCP surface 56, in-app surface 53.
+//! manage-project-tool (upstream #299 @b8a1491d): get_projects/open_project/
+//! new_project/close_project consolidated into the single manage_project
+//! (action = list|open|create|close) (57 → 54 = 46 upstream + 8 Rust
+//! extensions). Host split: shared 52 + 1 MCP-only + 1 in-app-only →
+//! MCP surface 53, in-app surface 53.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -68,18 +73,18 @@ impl ToolDefinition {
     }
 }
 
-/// Host marker for a tool name (tool-surface-v2 C-1): the four project
-/// tools are MCP-only (the in-app agent always has its project open);
+/// Host marker for a tool name (tool-surface-v2 C-1): manage_project is
+/// MCP-only (the in-app agent always has its project open);
 /// read_skill is in-app-only (skills live in the app's prompt).
 pub fn tool_host(name: &str) -> ToolHost {
     match name {
-        "get_projects" | "open_project" | "new_project" | "close_project" => ToolHost::McpOnly,
+        "manage_project" => ToolHost::McpOnly,
         "read_skill" => ToolHost::InAppOnly,
         _ => ToolHost::Shared,
     }
 }
 
-/// The MCP server surface (C-1): shared tools + the four project tools (56).
+/// The MCP server surface (C-1): shared tools + manage_project (53).
 pub fn mcp_tools() -> Vec<ToolDefinition> {
     all_tools()
         .into_iter()
@@ -95,7 +100,7 @@ pub fn in_app_tools() -> Vec<ToolDefinition> {
         .collect()
 }
 
-/// Returns all 57 tools across both host surfaces.
+/// Returns all 54 tools across both host surfaces.
 ///
 /// TDEF-001: tool set (see the header history; design.md C-1).
 pub fn all_tools() -> Vec<ToolDefinition> {
@@ -103,7 +108,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         add_captions(),
         add_clips(),
         apply_layout(),
-        close_project(),
+        manage_project(),
         create_compound_clip(),
         create_timeline(),
         dissolve_compound_clip(),
@@ -122,7 +127,6 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         generate_video(),
         export_project(),
         get_media(),
-        get_projects(),
         get_timeline(),
         get_transcript(),
         import_media(),
@@ -137,8 +141,6 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         get_multicam(),
         move_clips(),
         duplicate_clips(),
-        new_project(),
-        open_project(),
         organize_media(),
         remove_clips(),
         remove_silence(),
@@ -221,16 +223,12 @@ Tools this editor adds beyond the upstream surface — same conventions as every
 - save_clip_preset / apply_clip_preset / list_clip_presets: capture one clip's settings (transform, crop, opacity, volume, speed, effects, blend, chroma key) as a named preset and apply it to other clips. Presets live for this session only.
 "#;
 
-/// MCP-only project-navigation section (Appendix B-2, verbatim), appended
-/// after [`SERVER_INSTRUCTIONS`] for the MCP server surface.
+/// MCP-only project-navigation section (upstream #299 @b8a1491d, verbatim),
+/// appended after [`SERVER_INSTRUCTIONS`] for the MCP server surface.
 pub const PROJECT_NAVIGATION: &str = r#"
 # Projects
-These tools choose which project you edit — every other tool acts on the active project, and you may start with none open.
-- get_projects: list known projects (id, name, path, whether open, which is active). Call this first when unsure what's available.
-- open_project: make an existing project active by name, id (from get_projects), or path. Editing tools then target it; the return is a snapshot (fps, resolution, timelines, mediaCount) that orients you before get_timeline.
-- new_project: create and open a fresh project. Give it a name; it's created in the Palmier Pro folder. Fails if that name already exists there.
-- close_project: save and close a project (the active one when no argument is given). Close projects you opened for a lookup once you're done with them.
-Only one project is active at a time — opening or creating one switches the active project, and the user sees the window change.
+manage_project chooses which project this MCP session edits, and you may start with none open. Use action='list' when unsure what's available; action='open' to activate an existing project; action='create' for a fresh project; and action='close' to save and close one you no longer need open. It never deletes projects.
+The session stays on its project if the user activates another project window. Reads still inspect the session project, but changes pause until that project is visible again or action='open' selects the visible project. Other MCP sessions and in-app chats keep their own project context.
 "#;
 
 /// TDEF-004: the in-app agent's system instruction (the skills section is
@@ -1098,20 +1096,51 @@ fn remove_clips() -> ToolDefinition {
     }
 }
 
-/// tool-surface-v2 (#263): save-and-close via the ProjectNavigator seam.
-/// Description verbatim from upstream@141c69b.
-fn close_project() -> ToolDefinition {
+/// Upstream #299 (b8a1491d): the consolidated MCP-only project tool.
+/// Description and schema verbatim from upstream.
+fn manage_project() -> ToolDefinition {
     ToolDefinition {
-        name: "close_project",
-        description: "Save and close an open project. Omit all arguments to close the active project; or identify one by name, id (from get_projects), or path. Unsaved changes are saved first. When the active project closes, the next open project becomes active (returned as `active`) — with none left, the Home window shows and editing tools need open_project/new_project again.",
-        input_schema: object_optional(&[
-            (
-                "name",
-                string("Project name, matched case-insensitively. Omit everything to close the active project."),
-            ),
-            ("id", string("Project id from get_projects.")),
-            ("path", string("Filesystem path to a .palmier package.")),
-        ]),
+        name: "manage_project",
+        description: "List, open, create, or close Palmier projects for this MCP session. Set `action` to: `list` for known projects plus session-active and visible state; `open` with a name, id from list, or .palmier path; `create` with an optional name and initial fps/aspectRatio/quality; or `close` to save and close the session project, optionally targeting another open project by name/id/path. Opening or creating changes only this session's target. Closing always completes a final save first. This tool never deletes projects or files.",
+        input_schema: object_schema(
+            &[
+                (
+                    "action",
+                    string_enum("Project operation.", &["list", "open", "create", "close"]),
+                ),
+                (
+                    "name",
+                    string("Project name. For open/close, matched case-insensitively; for create, defaults to 'Untitled Project'."),
+                ),
+                (
+                    "id",
+                    string("Project id returned by action='list'. Used by open or close."),
+                ),
+                (
+                    "path",
+                    string("Filesystem path to a .palmier package. Used by open or close."),
+                ),
+                (
+                    "fps",
+                    integer("Create only. Optional timeline frame rate (1-120)."),
+                ),
+                (
+                    "aspectRatio",
+                    string_enum(
+                        "Create only. Optional canvas aspect ratio.",
+                        &["16:9", "9:16", "1:1", "4:3", "2.4:1", "9:14"],
+                    ),
+                ),
+                (
+                    "quality",
+                    string_enum(
+                        "Create only. Optional resolution preset applied to the aspect ratio.",
+                        &["720p", "1080p", "2K", "4K"],
+                    ),
+                ),
+            ],
+            &["action"],
+        ),
     }
 }
 
@@ -1824,38 +1853,6 @@ fn list_clip_presets() -> ToolDefinition {
     }
 }
 
-// ── Issue #172: project lifecycle MCP tools ──────────────────────────────────
-
-fn get_projects() -> ToolDefinition {
-    ToolDefinition {
-        name: "get_projects",
-        description: "List the user's known projects, most recently opened first: each entry's id, name, path, whether it's currently open, and whether it's the active project (the one editing tools act on). Also returns a top-level `active` (name, path) for the current project, which may not appear in the list. Call this to discover what's available before open_project, or to find out which project is active. Takes no arguments.",
-        input_schema: object(&[]),
-    }
-}
-
-fn open_project() -> ToolDefinition {
-    ToolDefinition {
-        name: "open_project",
-        description: "Open a project and make it the active one — every editing tool then acts on it. Identify it by `id` (from get_projects) or by `path` to a .palmier package. Returns the now-active project. The user sees the window change.",
-        input_schema: object(&[
-            ("id", string("Project id from get_projects. Provide this or path.")),
-            ("path", string("Filesystem path to a .palmier package. Provide this or id.")),
-        ]),
-    }
-}
-
-fn new_project() -> ToolDefinition {
-    ToolDefinition {
-        name: "new_project",
-        description: "Create a new empty project in the user's Palmier Pro folder and make it active. Fails if a project with that name already exists — pick another name. Returns the new project's name and path.",
-        input_schema: object(&[(
-            "name",
-            string("Project name (without extension). Defaults to 'Untitled Project'."),
-        )]),
-    }
-}
-
 fn send_feedback() -> ToolDefinition {
     ToolDefinition {
         name: "send_feedback",
@@ -1876,28 +1873,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tdef_001_exactly_57_tools() {
-        // tool-surface-v2 reached 56 (48 upstream + 8 Rust extensions);
-        // upstream-m-batch added duplicate_clips (#176) → 57 = 49 upstream
-        // + 8 Rust extensions.
+    fn tdef_001_exactly_54_tools() {
+        // upstream-m-batch reached 57 (49 upstream + 8 Rust extensions);
+        // upstream #299 consolidated the four project tools into
+        // manage_project → 54 = 46 upstream + 8 Rust extensions.
         let tools = all_tools();
         assert_eq!(
             tools.len(),
-            57,
-            "TDEF-001: 57 tools (see the header history)"
+            54,
+            "TDEF-001: 54 tools (see the header history)"
         );
     }
 
     #[test]
     fn tdef_001_host_split_counts() {
-        // C-1 host split (post-#176): shared 52; MCP = shared + 4
-        // project tools = 56; in-app = shared + read_skill = 53.
+        // C-1 host split (post-#299): shared 52; MCP = shared +
+        // manage_project = 53; in-app = shared + read_skill = 53.
         let shared = all_tools()
             .iter()
             .filter(|t| t.host() == ToolHost::Shared)
             .count();
         assert_eq!(shared, 52, "shared surface");
-        assert_eq!(mcp_tools().len(), 56, "MCP surface");
+        assert_eq!(mcp_tools().len(), 53, "MCP surface");
         assert_eq!(in_app_tools().len(), 53, "in-app surface");
         let mcp_names: Vec<&str> = mcp_tools().iter().map(|t| t.name).collect();
         assert!(
@@ -1905,19 +1902,45 @@ mod tests {
             "read_skill is in-app only"
         );
         let in_app_names: Vec<&str> = in_app_tools().iter().map(|t| t.name).collect();
-        for project_tool in [
+        assert!(mcp_names.contains(&"manage_project"));
+        assert!(
+            !in_app_names.contains(&"manage_project"),
+            "manage_project is MCP-only"
+        );
+        assert!(in_app_names.contains(&"read_skill"));
+    }
+
+    #[test]
+    fn manage_project_replaces_individual_project_tools() {
+        // Upstream #299 ManageProjectToolTests.replacesIndividualProjectTools.
+        let names: Vec<&str> = mcp_tools().iter().map(|t| t.name).collect();
+        assert!(names.contains(&"manage_project"));
+        for retired in [
             "get_projects",
             "open_project",
             "new_project",
             "close_project",
         ] {
-            assert!(mcp_names.contains(&project_tool));
-            assert!(
-                !in_app_names.contains(&project_tool),
-                "{project_tool} is MCP-only"
-            );
+            assert!(!names.contains(&retired), "{retired} retired by #299");
         }
-        assert!(in_app_names.contains(&"read_skill"));
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t.name == "manage_project").unwrap();
+        let actions: Vec<&str> = tool
+            .input_schema
+            .pointer("/properties/action/enum")
+            .and_then(|v| v.as_array())
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(actions, ["list", "open", "create", "close"]);
+        assert!(!actions.contains(&"delete"), "never deletes projects");
+        let required = tool
+            .input_schema
+            .pointer("/required")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(required, &[Value::String("action".into())]);
     }
 
     #[test]
@@ -1945,7 +1968,7 @@ mod tests {
         let mut names: Vec<&str> = tools.iter().map(|t| t.name).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 57, "all 57 tool names must be unique");
+        assert_eq!(names.len(), 54, "all 54 tool names must be unique");
     }
 
     #[test]
@@ -2095,7 +2118,8 @@ mod tests {
         let mcp = mcp_instructions();
         assert!(mcp.starts_with(SERVER_INSTRUCTIONS));
         assert!(mcp.contains("# Projects"));
-        assert!(mcp.contains("close_project: save and close a project"));
+        assert!(mcp.contains("manage_project chooses which project this MCP session edits"));
+        assert!(mcp.contains("It never deletes projects."));
         assert!(
             !SYSTEM_INSTRUCTION.contains("# Projects"),
             "in-app has no project section"

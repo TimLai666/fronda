@@ -1004,6 +1004,15 @@ mod tests {
             Some("1.0.0")
         );
         assert!(result.get("capabilities").is_some());
+        // #299: instructions carry the manage_project projectNavigation text.
+        let instructions = result
+            .pointer("/instructions")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert!(
+            instructions.contains("manage_project chooses which project this MCP session edits"),
+            "projectNavigation section present"
+        );
     }
 
     #[test]
@@ -1037,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_56_tools() {
+    fn tools_list_returns_53_tools() {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: json!(1),
@@ -1050,8 +1059,8 @@ mod tests {
         let tools = result.get("tools").and_then(|v| v.as_array()).unwrap();
         assert_eq!(
             tools.len(),
-            56,
-            "MCP-003: 56 MCP-surface tools (see agent_contract tools.rs header history)"
+            53,
+            "MCP-003: 53 MCP-surface tools (see agent_contract tools.rs header history)"
         );
     }
 

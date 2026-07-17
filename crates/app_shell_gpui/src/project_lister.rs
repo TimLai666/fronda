@@ -1,4 +1,4 @@
-//! Host `ProjectLister` for the `get_projects` agent tool: reads the recents
+//! Host `ProjectLister` for `manage_project` action='list': reads the recents
 //! registry and reports the active project (read-only).
 
 use agent_contract::{KnownProject, ProjectLister};

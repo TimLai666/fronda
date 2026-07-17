@@ -344,3 +344,120 @@ code:
   - AGENTS.md
   - crates/audio_core/src/audio_sync_correlator.rs
 -->
+
+---
+### Requirement: manage_project consolidates the MCP project tools
+
+The MCP tool surface SHALL expose a single manage_project tool (action = list | open | create | close) replacing get_projects/open_project/new_project/close_project, with per-action unknown-key validation, a name/id/path exactly-one selector for open (UUID-format id check, case-insensitive unique name resolution), and list rows carrying a visible field that equals active under Fronda's single-open-project model (upstream #299; MCP tool count 56 → 53, in-app surface unchanged).
+
+#### Scenario: Open by case-insensitive name
+
+- **WHEN** manage_project is called with action "open" and a name differing only in case from one registered project
+- **THEN** that project opens; an ambiguous name yields an explicit error
+
+#### Scenario: Unknown keys are rejected per action
+
+- **WHEN** manage_project is called with action "list" plus an unrelated key
+- **THEN** the call fails validation instead of silently ignoring the key
+
+<!-- @trace
+source: manage-project-tool
+updated: 2026-07-17
+code:
+  - crates/agent_contract/src/tool_exec.rs
+  - crates/app_shell_gpui/src/lib.rs
+  - crates/mcp_server/src/server.rs
+  - crates/app_shell_gpui/src/timeline_view.rs
+  - crates/app_shell_gpui/src/window.rs
+  - crates/agent_contract/src/mutation.rs
+  - AGENTS.md
+  - crates/app_shell_gpui/src/project_lister.rs
+  - crates/app_shell_gpui/src/pane_prefs.rs
+  - crates/app_shell_gpui/src/theme.rs
+  - crates/agent_contract/src/tools.rs
+  - crates/app_shell_gpui/src/app_root.rs
+  - specs/rust-rewrite/00-runtime-packaging-design-and-shell.md
+  - crates/agent_contract/src/lib.rs
+  - crates/app_shell_gpui/src/project_navigator.rs
+  - crates/app_shell_gpui/src/skill_store.rs
+  - crates/app_contract/src/ui_constants.rs
+  - specs/rust-rewrite/03-timeline-editor-and-preview.md
+tests:
+  - crates/agent_contract/tests/spec_tool_snapshots.rs
+  - crates/mcp_server/tests/spec_mcp_contract.rs
+-->
+
+---
+### Requirement: Timeline clip visuals match the post-281 Swift palette
+
+The timeline SHALL use the upstream #281 clip styling: the darker TrackColor palette (hex source of truth, including the sequence color), fully opaque clip fills, a thin black border only on clips at least the minimum border width (8), a white medium selection ring, and the XS_SM corner radius.
+
+#### Scenario: Narrow clip has no border
+
+- **WHEN** a clip narrower than the minimum border width renders
+- **THEN** it draws without the black outline while wider clips draw it
+
+
+<!-- @trace
+source: timeline-colors-window-sizes
+updated: 2026-07-17
+code:
+  - crates/app_shell_gpui/src/pane_prefs.rs
+  - AGENTS.md
+  - specs/rust-rewrite/00-runtime-packaging-design-and-shell.md
+  - crates/app_shell_gpui/src/timeline_view.rs
+  - crates/app_contract/src/ui_constants.rs
+  - crates/agent_contract/src/lib.rs
+  - crates/app_shell_gpui/src/window.rs
+  - crates/mcp_server/src/server.rs
+  - crates/app_shell_gpui/src/project_navigator.rs
+  - crates/app_shell_gpui/src/skill_store.rs
+  - crates/agent_contract/src/tools.rs
+  - crates/app_shell_gpui/src/app_root.rs
+  - crates/agent_contract/src/tool_exec.rs
+  - crates/app_shell_gpui/src/theme.rs
+  - crates/app_shell_gpui/src/project_lister.rs
+  - specs/rust-rewrite/03-timeline-editor-and-preview.md
+  - crates/agent_contract/src/mutation.rs
+  - crates/app_shell_gpui/src/lib.rs
+tests:
+  - crates/mcp_server/tests/spec_mcp_contract.rs
+  - crates/agent_contract/tests/spec_tool_snapshots.rs
+-->
+
+---
+### Requirement: Window defaults and skill frontmatter follow post-319 Swift
+
+Home and Settings default window sizes SHALL be 1200x800, and skill loading SHALL require both a non-blank name and a non-blank description in the frontmatter, skipping (with a log line) files that fail (upstream #319 behavioral slices).
+
+#### Scenario: Skill without description is skipped
+
+- **WHEN** a skill file has a name but a blank description
+- **THEN** it is not loaded and a skip line is logged
+
+<!-- @trace
+source: timeline-colors-window-sizes
+updated: 2026-07-17
+code:
+  - crates/app_shell_gpui/src/pane_prefs.rs
+  - AGENTS.md
+  - specs/rust-rewrite/00-runtime-packaging-design-and-shell.md
+  - crates/app_shell_gpui/src/timeline_view.rs
+  - crates/app_contract/src/ui_constants.rs
+  - crates/agent_contract/src/lib.rs
+  - crates/app_shell_gpui/src/window.rs
+  - crates/mcp_server/src/server.rs
+  - crates/app_shell_gpui/src/project_navigator.rs
+  - crates/app_shell_gpui/src/skill_store.rs
+  - crates/agent_contract/src/tools.rs
+  - crates/app_shell_gpui/src/app_root.rs
+  - crates/agent_contract/src/tool_exec.rs
+  - crates/app_shell_gpui/src/theme.rs
+  - crates/app_shell_gpui/src/project_lister.rs
+  - specs/rust-rewrite/03-timeline-editor-and-preview.md
+  - crates/agent_contract/src/mutation.rs
+  - crates/app_shell_gpui/src/lib.rs
+tests:
+  - crates/mcp_server/tests/spec_mcp_contract.rs
+  - crates/agent_contract/tests/spec_tool_snapshots.rs
+-->

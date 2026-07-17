@@ -1322,41 +1322,207 @@ pub fn validate_organize_media(input: &Value) -> ValidationResult<OrganizeMediaI
     })
 }
 
-// === tool-surface-v2: close_project =========================================
+// === upstream #299: manage_project ==========================================
 
-/// Parsed and validated `close_project` input.
+/// The four `manage_project` operations (upstream b8a1491d).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManageProjectAction {
+    List,
+    Open,
+    Create,
+    Close,
+}
+
+/// Parsed and validated `manage_project` input. `fps`/`aspectRatio`/`quality`
+/// (create only) stay in the raw args; the executor validates and applies
+/// them through the set_project_settings machinery.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CloseProjectInput {
+pub struct ManageProjectInput {
+    pub action: ManageProjectAction,
     pub name: Option<String>,
     pub id: Option<String>,
     pub path: Option<String>,
 }
 
-/// Validate `close_project` input: name/id/path must be non-empty strings
-/// when present; all-absent means "close the active project".
-pub fn validate_close_project(input: &Value) -> ValidationResult<CloseProjectInput> {
-    fn opt_string(input: &Value, key: &str) -> Result<Option<String>, String> {
-        match input.get(key) {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.trim().to_string())),
-            Some(_) => Err(format!(
-                "close_project: '{key}' must be a non-empty string when present."
-            )),
-        }
+/// Unknown-key whitelist check. Swift validates unknown keys for
+/// manage_project specifically (b8a1491d validateUnknownKeys) — a deliberate
+/// exception to the Rust validators' usual ignore-unknown-keys convention.
+fn manage_project_unknown_keys(
+    map: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    path: &str,
+) -> Result<(), String> {
+    let mut unknown: Vec<&str> = map
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !allowed.contains(k))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
     }
-    let name = match opt_string(input, "name") {
-        Ok(v) => v,
-        Err(e) => return ValidationResult::Error(e),
+    unknown.sort_unstable();
+    let mut allowed_sorted: Vec<&str> = allowed.to_vec();
+    allowed_sorted.sort_unstable();
+    let allowed_fields = if allowed_sorted.is_empty() {
+        "none".to_string()
+    } else {
+        allowed_sorted.join(", ")
     };
-    let id = match opt_string(input, "id") {
-        Ok(v) => v,
-        Err(e) => return ValidationResult::Error(e),
+    Err(format!(
+        "{path}: unknown field(s) '{}'. Allowed: {allowed_fields}.",
+        unknown.join("', '")
+    ))
+}
+
+/// name/id/path selector (Swift projectSelector): at most one may be
+/// supplied (key presence counts, like Swift's `args.keys.contains`), the
+/// value must be a non-empty string, and an id must be a canonical
+/// hyphenated UUID (Swift `UUID(uuidString:)`).
+fn manage_project_selector(
+    map: &serde_json::Map<String, Value>,
+    path: &str,
+) -> Result<Option<(&'static str, String)>, String> {
+    let supplied: Vec<&'static str> = ["name", "id", "path"]
+        .into_iter()
+        .filter(|k| map.contains_key(*k))
+        .collect();
+    if supplied.len() > 1 {
+        return Err(format!("{path}: provide only one of: name, id, path."));
+    }
+    let Some(&key) = supplied.first() else {
+        return Ok(None);
     };
-    let path = match opt_string(input, "path") {
-        Ok(v) => v,
-        Err(e) => return ValidationResult::Error(e),
+    let value = match map.get(key).and_then(Value::as_str) {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => return Err(format!("{path}: '{key}' must be a non-empty string.")),
     };
-    ValidationResult::Ok(CloseProjectInput { name, id, path })
+    if key == "id" && !(value.len() == 36 && uuid::Uuid::try_parse(&value).is_ok()) {
+        return Err(format!(
+            "{path}: 'id' must be a project id returned by action='list'."
+        ));
+    }
+    Ok(Some((key, value)))
+}
+
+/// Spread a selector into (name, id, path) options.
+fn selector_fields(
+    selector: Option<(&'static str, String)>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    match selector {
+        Some(("name", v)) => (Some(v), None, None),
+        Some(("id", v)) => (None, Some(v), None),
+        Some((_, v)) => (None, None, Some(v)),
+        None => (None, None, None),
+    }
+}
+
+/// Validate `manage_project` input per action (upstream #299, b8a1491d):
+/// required action enum, per-action unknown-key whitelists, an
+/// exactly-one name/id/path selector for open (at most one for close, all
+/// absent = close the session project), UUID-format id check, and a
+/// string-type check on create's name. Error messages mirror Swift verbatim.
+pub fn validate_manage_project(input: &Value) -> ValidationResult<ManageProjectInput> {
+    let Some(map) = input.as_object() else {
+        return ValidationResult::Error("manage_project requires an 'action'.".into());
+    };
+    if let Err(e) = manage_project_unknown_keys(
+        map,
+        &["action", "name", "id", "path", "fps", "aspectRatio", "quality"],
+        "manage_project",
+    ) {
+        return ValidationResult::Error(e);
+    }
+    let Some(action) = map.get("action").and_then(Value::as_str) else {
+        return ValidationResult::Error("manage_project requires an 'action'.".into());
+    };
+    // Per-action checks run on the args minus 'action', like Swift's actionArgs.
+    let mut action_args = map.clone();
+    action_args.remove("action");
+    match action {
+        "list" => {
+            if let Err(e) =
+                manage_project_unknown_keys(&action_args, &[], "manage_project action='list'")
+            {
+                return ValidationResult::Error(e);
+            }
+            ValidationResult::Ok(ManageProjectInput {
+                action: ManageProjectAction::List,
+                name: None,
+                id: None,
+                path: None,
+            })
+        }
+        "open" => {
+            let action_path = "manage_project action='open'";
+            if let Err(e) =
+                manage_project_unknown_keys(&action_args, &["name", "id", "path"], action_path)
+            {
+                return ValidationResult::Error(e);
+            }
+            let selector = match manage_project_selector(&action_args, action_path) {
+                Ok(s) => s,
+                Err(e) => return ValidationResult::Error(e),
+            };
+            if selector.is_none() {
+                return ValidationResult::Error(format!(
+                    "{action_path} needs a name, an id from action='list', or a path."
+                ));
+            }
+            let (name, id, path) = selector_fields(selector);
+            ValidationResult::Ok(ManageProjectInput {
+                action: ManageProjectAction::Open,
+                name,
+                id,
+                path,
+            })
+        }
+        "create" => {
+            if let Err(e) = manage_project_unknown_keys(
+                &action_args,
+                &["name", "fps", "aspectRatio", "quality"],
+                "manage_project action='create'",
+            ) {
+                return ValidationResult::Error(e);
+            }
+            let name = match action_args.get("name") {
+                None => None,
+                Some(Value::String(s)) => Some(s.clone()),
+                Some(_) => {
+                    return ValidationResult::Error(
+                        "manage_project action='create': 'name' must be a string.".into(),
+                    )
+                }
+            };
+            ValidationResult::Ok(ManageProjectInput {
+                action: ManageProjectAction::Create,
+                name,
+                id: None,
+                path: None,
+            })
+        }
+        "close" => {
+            let action_path = "manage_project action='close'";
+            if let Err(e) =
+                manage_project_unknown_keys(&action_args, &["name", "id", "path"], action_path)
+            {
+                return ValidationResult::Error(e);
+            }
+            let selector = match manage_project_selector(&action_args, action_path) {
+                Ok(s) => s,
+                Err(e) => return ValidationResult::Error(e),
+            };
+            let (name, id, path) = selector_fields(selector);
+            ValidationResult::Ok(ManageProjectInput {
+                action: ManageProjectAction::Close,
+                name,
+                id,
+                path,
+            })
+        }
+        other => ValidationResult::Error(format!(
+            "Unknown project action '{other}'. Use one of: list, open, create, close."
+        )),
+    }
 }
 
 // === tool-surface-v2: import_media ==========================================
@@ -2908,35 +3074,150 @@ mod tests {
         );
     }
 
-    // ---- tool-surface-v2: close_project -----------------------------------
+    // ---- upstream #299: manage_project -------------------------------------
 
     #[test]
-    fn close_project_all_absent_means_active() {
-        let parsed = validate_close_project(&json!({}))
-            .into_ok()
-            .expect("no-arg close is valid");
+    fn manage_project_requires_a_known_action() {
+        let err = validate_manage_project(&json!({})).into_error().unwrap();
+        assert_eq!(err, "manage_project requires an 'action'.");
+        // Non-string action reads as absent (Swift args.string).
+        let err = validate_manage_project(&json!({"action": 42}))
+            .into_error()
+            .unwrap();
+        assert_eq!(err, "manage_project requires an 'action'.");
+        let err = validate_manage_project(&json!({"action": "delete"}))
+            .into_error()
+            .unwrap();
         assert_eq!(
-            parsed,
-            CloseProjectInput {
-                name: None,
-                id: None,
-                path: None
-            }
+            err,
+            "Unknown project action 'delete'. Use one of: list, open, create, close."
         );
     }
 
     #[test]
-    fn close_project_accepts_name_id_path_strings() {
-        let parsed = validate_close_project(&json!({"name": "Demo"}))
+    fn manage_project_rejects_unknown_keys_per_action() {
+        // Top-level whitelist first.
+        let err = validate_manage_project(&json!({"action": "open", "bogus": 1}))
+            .into_error()
+            .unwrap();
+        assert_eq!(
+            err,
+            "manage_project: unknown field(s) 'bogus'. Allowed: action, aspectRatio, fps, id, name, path, quality."
+        );
+        // list allows nothing.
+        let err = validate_manage_project(&json!({"action": "list", "name": "Example"}))
+            .into_error()
+            .unwrap();
+        assert_eq!(
+            err,
+            "manage_project action='list': unknown field(s) 'name'. Allowed: none."
+        );
+        // open rejects create-only keys.
+        let err = validate_manage_project(&json!({"action": "open", "fps": 30}))
+            .into_error()
+            .unwrap();
+        assert_eq!(
+            err,
+            "manage_project action='open': unknown field(s) 'fps'. Allowed: id, name, path."
+        );
+        // create rejects selector-only keys.
+        let err = validate_manage_project(
+            &json!({"action": "create", "id": "8b9df19a-6a34-4a3e-9688-5aa3ee66e29c"}),
+        )
+        .into_error()
+        .unwrap();
+        assert_eq!(
+            err,
+            "manage_project action='create': unknown field(s) 'id'. Allowed: aspectRatio, fps, name, quality."
+        );
+    }
+
+    #[test]
+    fn manage_project_selector_rules() {
+        // open needs exactly one of name/id/path.
+        let err = validate_manage_project(&json!({"action": "open"}))
+            .into_error()
+            .unwrap();
+        assert_eq!(
+            err,
+            "manage_project action='open' needs a name, an id from action='list', or a path."
+        );
+        let err = validate_manage_project(
+            &json!({"action": "open", "name": "A", "path": "/tmp/A.palmier"}),
+        )
+        .into_error()
+        .unwrap();
+        assert_eq!(
+            err,
+            "manage_project action='open': provide only one of: name, id, path."
+        );
+        // close allows zero, but not two.
+        assert!(validate_manage_project(&json!({"action": "close"}))
+            .into_ok()
+            .is_some());
+        let err = validate_manage_project(
+            &json!({"action": "close", "id": "A", "path": "/tmp/A.palmier"}),
+        )
+        .into_error()
+        .unwrap();
+        assert_eq!(
+            err,
+            "manage_project action='close': provide only one of: name, id, path."
+        );
+        // Empty / blank selector values refused.
+        let err = validate_manage_project(&json!({"action": "open", "name": ""}))
+            .into_error()
+            .unwrap();
+        assert_eq!(
+            err,
+            "manage_project action='open': 'name' must be a non-empty string."
+        );
+        let err = validate_manage_project(&json!({"action": "close", "path": "   "}))
+            .into_error()
+            .unwrap();
+        assert_eq!(
+            err,
+            "manage_project action='close': 'path' must be a non-empty string."
+        );
+    }
+
+    #[test]
+    fn manage_project_id_must_be_a_uuid() {
+        let err = validate_manage_project(&json!({"action": "open", "id": "not-a-project-id"}))
+            .into_error()
+            .unwrap();
+        assert_eq!(
+            err,
+            "manage_project action='open': 'id' must be a project id returned by action='list'."
+        );
+        // Swift UUID(uuidString:) takes only the canonical hyphenated form.
+        assert!(validate_manage_project(
+            &json!({"action": "open", "id": "8b9df19a6a344a3e96885aa3ee66e29c"})
+        )
+        .into_error()
+        .is_some());
+        let parsed = validate_manage_project(
+            &json!({"action": "open", "id": "8B9DF19A-6A34-4A3E-9688-5AA3EE66E29C"}),
+        )
+        .into_ok()
+        .unwrap();
+        assert_eq!(
+            parsed.id.as_deref(),
+            Some("8B9DF19A-6A34-4A3E-9688-5AA3EE66E29C")
+        );
+    }
+
+    #[test]
+    fn manage_project_create_name_must_be_a_string() {
+        let err = validate_manage_project(&json!({"action": "create", "name": 42}))
+            .into_error()
+            .unwrap();
+        assert_eq!(err, "manage_project action='create': 'name' must be a string.");
+        let parsed = validate_manage_project(&json!({"action": "create"}))
             .into_ok()
             .unwrap();
-        assert_eq!(parsed.name.as_deref(), Some("Demo"));
-        assert!(validate_close_project(&json!({"id": 3}))
-            .into_error()
-            .is_some());
-        assert!(validate_close_project(&json!({"path": ""}))
-            .into_error()
-            .is_some());
+        assert_eq!(parsed.action, ManageProjectAction::Create);
+        assert!(parsed.name.is_none());
     }
 
     // ---- tool-surface-v2: import_media -------------------------------------

@@ -38,9 +38,9 @@ impl WindowConfig {
         }
     }
 
-    /// WIN-001: Home default 1200×880, min 760×480 (upstream palmier-pro #204).
+    /// WIN-001: Home default 1200×800 (#319), min 760×480 (upstream #204).
     pub fn for_home() -> Self {
-        Self::new(WindowKind::Home, "Fronda", 1200.0, 880.0, 760.0, 480.0)
+        Self::new(WindowKind::Home, "Fronda", 1200.0, 800.0, 760.0, 480.0)
     }
 
     /// WIN-002: Project default 1600×1000, min 960×600.
@@ -55,13 +55,13 @@ impl WindowConfig {
         )
     }
 
-    /// WIN-004: Settings default 1200×900, min 860×640 (upstream palmier-pro #204).
+    /// WIN-004: Settings default 1200×800 (#319), min 860×640 (upstream #204).
     pub fn for_settings() -> Self {
         Self::new(
             WindowKind::Settings,
             "Settings",
             1200.0,
-            900.0,
+            800.0,
             860.0,
             640.0,
         )
@@ -94,7 +94,7 @@ mod tests {
         let cfg = WindowConfig::for_home();
         assert_eq!(cfg.kind, WindowKind::Home);
         assert_eq!(cfg.default_width, 1200.0);
-        assert_eq!(cfg.default_height, 880.0);
+        assert_eq!(cfg.default_height, 800.0);
         assert_eq!(cfg.min_width, 760.0);
         assert_eq!(cfg.min_height, 480.0);
     }
@@ -114,7 +114,7 @@ mod tests {
         let cfg = WindowConfig::for_settings();
         assert_eq!(cfg.kind, WindowKind::Settings);
         assert_eq!(cfg.default_width, 1200.0);
-        assert_eq!(cfg.default_height, 900.0);
+        assert_eq!(cfg.default_height, 800.0);
         assert_eq!(cfg.min_width, 860.0);
         assert_eq!(cfg.min_height, 640.0);
     }

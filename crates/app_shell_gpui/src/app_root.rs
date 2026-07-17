@@ -79,6 +79,8 @@ pub struct AppRoot {
     focus_handle: FocusHandle,
     active_screen: ActiveScreen,
     pane_layout: PaneLayout,
+    /// preferences.json for EDT-003 visibility persistence (test-injectable).
+    pane_prefs_path: std::path::PathBuf,
     home: HomeView,
     samples_expanded: bool,
     welcome_dismissed: bool,
@@ -131,10 +133,17 @@ type HomeCard = (
 impl AppRoot {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let handle = cx.focus_handle();
+        // EDT-003: media/inspector/agent visibility persists across launches.
+        let pane_prefs_path = crate::pane_prefs::default_prefs_path();
+        let mut pane_layout = PaneLayout::new();
+        if let Some(saved) = crate::pane_prefs::load_pane_visibility(&pane_prefs_path) {
+            saved.apply_to(&mut pane_layout.visibility);
+        }
         Self {
             focus_handle: handle.clone(),
             active_screen: ActiveScreen::Home,
-            pane_layout: PaneLayout::new(),
+            pane_layout,
+            pane_prefs_path,
             home: HomeView::new(handle),
             samples_expanded: true,
             welcome_dismissed: false,
@@ -294,6 +303,18 @@ impl AppRoot {
                     ),
             )
             .into_any_element()
+    }
+
+    /// EDT-003: save media/inspector/agent visibility. Skipped while
+    /// maximized — that projection is transient, never the persisted state.
+    fn persist_pane_visibility(&self) {
+        if self.pane_layout.is_maximized() {
+            return;
+        }
+        crate::pane_prefs::save_pane_visibility(
+            &self.pane_prefs_path,
+            crate::pane_prefs::PersistedPaneVisibility::from_layout(&self.pane_layout.visibility),
+        );
     }
 
     /// Reset preset-scoped pane sizes so the next render recomputes the
@@ -679,16 +700,20 @@ impl AppRoot {
             }
             menu::MenuAction::ToggleMediaPanel => {
                 self.pane_layout.toggle_pane(PaneId::Media);
+                self.persist_pane_visibility();
             }
             menu::MenuAction::ToggleInspector => {
                 self.pane_layout.toggle_pane(PaneId::Inspector);
+                self.persist_pane_visibility();
             }
             menu::MenuAction::ToggleAgentPanel => {
                 self.pane_layout.toggle_pane(PaneId::Agent);
+                self.persist_pane_visibility();
             }
             menu::MenuAction::MaximizeFocusedPane => {
                 if self.pane_layout.is_maximized() {
                     self.pane_layout.unmaximize();
+                    self.persist_pane_visibility();
                 } else {
                     self.pane_layout.maximize(PaneId::Preview);
                 }
@@ -1669,15 +1694,21 @@ impl Render for AppRoot {
                 // open panel). Focus/text mutation is deferred out of render.
                 let pending = PENDING_AGENT_PROMPT.lock().ok().and_then(|mut s| s.take());
                 if let Some(prompt) = pending {
+                    let mut vis_changed = false;
                     if self
                         .pane_layout
                         .maximized_pane
                         .is_some_and(|p| p != PaneId::Agent)
                     {
                         self.pane_layout.unmaximize();
+                        vis_changed = true;
                     }
                     if !self.pane_layout.is_visible(PaneId::Agent) {
                         self.pane_layout.toggle_pane(PaneId::Agent);
+                        vis_changed = true;
+                    }
+                    if vis_changed {
+                        self.persist_pane_visibility();
                     }
                     if let Some(chat) = self.chat_view.clone() {
                         cx.defer_in(window, move |_, window, cx| {

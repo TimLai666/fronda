@@ -60,6 +60,7 @@ pub mod multi_session;
 #[cfg(feature = "desktop-app")]
 pub mod native_menu;
 pub mod pane;
+pub mod pane_prefs;
 pub mod pane_resize;
 pub mod pane_tree;
 pub mod platform_adapter;

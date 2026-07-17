@@ -59,6 +59,13 @@ impl BorderColors {
         l: 1.0,
         a: 0.44,
     };
+    /// Timeline clip outline — black (Swift `Border.timelineClip`, #281).
+    pub const TIMELINE_CLIP: Hsla = Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.0,
+        a: 1.0,
+    };
 }
 
 /// Border widths (matching Swift `AppTheme.BorderWidth`).
@@ -111,37 +118,79 @@ impl Opacity {
     pub const MODERATE: f32 = 0.25;
     pub const MEDIUM: f32 = 0.35;
     pub const STRONG: f32 = 0.55;
+    pub const HIGH: f32 = 0.70;
     pub const PROMINENT: f32 = 0.80;
 }
 
-/// Track type colors (matching Swift `AppTheme.TrackColor`).
+/// Exact sRGB hex → Hsla conversion (standard RGB→HSL; h normalized 0..1).
+///
+/// Palette constants derive from the same hex source of truth as
+/// `app_contract::ui_constants::TrackColors` (THM-007) — never eyeball
+/// approximate HSL values.
+const fn hsla_from_hex(hex: u32) -> Hsla {
+    let r = ((hex >> 16) & 0xFF) as f32 / 255.0;
+    let g = ((hex >> 8) & 0xFF) as f32 / 255.0;
+    let b = (hex & 0xFF) as f32 / 255.0;
+    let max = if r >= g && r >= b {
+        r
+    } else if g >= b {
+        g
+    } else {
+        b
+    };
+    let min = if r <= g && r <= b {
+        r
+    } else if g <= b {
+        g
+    } else {
+        b
+    };
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d == 0.0 {
+        return Hsla {
+            h: 0.0,
+            s: 0.0,
+            l,
+            a: 1.0,
+        };
+    }
+    let two_l_minus_one = 2.0 * l - 1.0;
+    let abs_two_l_minus_one = if two_l_minus_one < 0.0 {
+        -two_l_minus_one
+    } else {
+        two_l_minus_one
+    };
+    let s = d / (1.0 - abs_two_l_minus_one);
+    let h6 = if max == r {
+        let v = (g - b) / d;
+        if v < 0.0 {
+            v + 6.0
+        } else {
+            v
+        }
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    Hsla {
+        h: h6 / 6.0,
+        s,
+        l,
+        a: 1.0,
+    }
+}
+
+/// Track type colors (matching Swift `AppTheme.TrackColor`, upstream #281 palette).
 pub struct TrackColor;
 impl TrackColor {
-    pub const VIDEO: Hsla = Hsla {
-        h: 196.0 / 360.0,
-        s: 1.0,
-        l: 0.38,
-        a: 1.0,
-    };
-    pub const AUDIO: Hsla = Hsla {
-        h: 100.0 / 360.0,
-        s: 0.66,
-        l: 0.40,
-        a: 1.0,
-    };
-    pub const IMAGE: Hsla = Hsla {
-        h: 288.0 / 360.0,
-        s: 0.65,
-        l: 0.50,
-        a: 1.0,
-    };
+    pub const VIDEO: Hsla = hsla_from_hex(0x1D5878);
+    pub const AUDIO: Hsla = hsla_from_hex(0x2E7765);
+    pub const IMAGE: Hsla = hsla_from_hex(0x715486);
     pub const TEXT: Hsla = Self::IMAGE;
-    pub const LOTTIE: Hsla = Hsla {
-        h: 42.0 / 360.0,
-        s: 1.0,
-        l: 0.44,
-        a: 1.0,
-    };
+    pub const LOTTIE: Hsla = hsla_from_hex(0xA07822);
+    pub const SEQUENCE: Hsla = hsla_from_hex(0xB9B29A);
 }
 
 /// Corner radii (matching Swift `AppTheme.Radius`).
@@ -318,6 +367,8 @@ impl ComponentSize {
     pub const CAPTION_PREVIEW_MAX_HEIGHT: f32 = 150.0;
     pub const TOOL_IMAGE_PREVIEW_MAX_HEIGHT: f32 = 50.0;
     pub const UPDATE_OVERLAY_WIDTH: f32 = 640.0;
+    /// Minimum clip width for the black timeline outline (#281).
+    pub const TIMELINE_CLIP_BORDER_MIN_WIDTH: f32 = 8.0;
 }
 
 /// Window size constants (matching Swift window defaults).
@@ -454,6 +505,49 @@ mod tests {
         assert!((TrackColor::IMAGE.a - 1.0).abs() < 1e-6);
         assert!((TrackColor::TEXT.a - 1.0).abs() < 1e-6);
         assert!((TrackColor::LOTTIE.a - 1.0).abs() < 1e-6);
+        assert!((TrackColor::SEQUENCE.a - 1.0).abs() < 1e-6);
+    }
+
+    fn assert_hsla(c: Hsla, h: f32, s: f32, l: f32) {
+        assert!((c.h - h).abs() < 1e-6, "h {} != {}", c.h, h);
+        assert!((c.s - s).abs() < 1e-6, "s {} != {}", c.s, s);
+        assert!((c.l - l).abs() < 1e-6, "l {} != {}", c.l, l);
+        assert!((c.a - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hsla_from_hex_known_values() {
+        assert_hsla(hsla_from_hex(0xFFFFFF), 0.0, 0.0, 1.0);
+        assert_hsla(hsla_from_hex(0x000000), 0.0, 0.0, 0.0);
+        assert_hsla(hsla_from_hex(0xFF0000), 0.0, 1.0, 0.5);
+        assert_hsla(hsla_from_hex(0x00FF00), 1.0 / 3.0, 1.0, 0.5);
+        assert_hsla(hsla_from_hex(0x0000FF), 2.0 / 3.0, 1.0, 0.5);
+    }
+
+    // THM-007: #281 palette, HSL independently derived from the hex values.
+    #[test]
+    fn track_colors_match_281_hex_palette() {
+        // #1D5878
+        assert_hsla(TrackColor::VIDEO, 0.558608059, 0.610738255, 0.292156863);
+        // #2E7765
+        assert_hsla(TrackColor::AUDIO, 0.458904110, 0.442424242, 0.323529412);
+        // #715486
+        assert_hsla(TrackColor::IMAGE, 0.763333333, 0.229357798, 0.427450980);
+        // #715486 (text aliases image)
+        assert_hsla(TrackColor::TEXT, 0.763333333, 0.229357798, 0.427450980);
+        // #A07822
+        assert_hsla(TrackColor::LOTTIE, 0.113756614, 0.649484536, 0.380392157);
+        // #B9B29A
+        assert_hsla(TrackColor::SEQUENCE, 0.129032258, 0.181286550, 0.664705882);
+    }
+
+    // #281 tokens: Border.timelineClip (black), Opacity.high, min border width.
+    #[test]
+    fn timeline_clip_tokens_281() {
+        assert_hsla(BorderColors::TIMELINE_CLIP, 0.0, 0.0, 0.0);
+        assert!((Opacity::HIGH - 0.70).abs() < 1e-6);
+        assert!(Opacity::STRONG < Opacity::HIGH && Opacity::HIGH < Opacity::PROMINENT);
+        assert_eq!(ComponentSize::TIMELINE_CLIP_BORDER_MIN_WIDTH, 8.0);
     }
 
     #[test]

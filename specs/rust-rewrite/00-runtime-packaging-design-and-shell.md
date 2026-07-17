@@ -133,7 +133,7 @@ Scope sources:
 - [x] `THM-004`: Accent tokens remain timecode color `(0.95, 0.6, 0.2)`, primary warm off-white `(0.961, 0.937, 0.894)`, and spotlight red/orange gradient.
 - [x] `THM-005`: Text tokens remain primary white `1.0`, secondary white `0.80`, tertiary white `0.62`, muted white `0.34`.
 - [x] `THM-006`: Opacity tokens remain opaque `1`, subtle `0.04`, hint `0.06`, faint `0.08`, soft `0.10`, muted `0.15`, moderate `0.25`, medium `0.35`, strong `0.55`, prominent `0.80`.
-- [x] `THM-007`: Track colors remain video `#0091C2`, audio `#58A822`, image/text `#B72DD2`, and lottie `#E0A800`.
+- [x] `THM-007`: Track colors are the upstream #281 palette — video `#1D5878`, audio `#2E7765`, image/text `#715486`, lottie `#A07822`, and sequence `#B9B29A`.
 - [x] `THM-008`: Radius tokens remain xs `3`, xsSm `4`, sm `6`, md `10`, mdLg `12`, lg `14`, xl `20`; concentric radius is `max(outer - padding, 0)`.
 - [x] `THM-009`: Spacing tokens remain xxs `2`, xs `4`, sm `6`, smMd `8`, md `10`, mdLg `12`, lg `14`, lgXl `16`, xl `20`, xlXxl `24`, xxl `28`.
 - [x] `THM-010`: Font-size tokens remain micro `8`, xxs `9`, xs `10`, sm `11`, smMd `12`, md `13`, mdLg `14`, lg `15`, xl `18`, title1 `22`, title2 `28`, display `36`.

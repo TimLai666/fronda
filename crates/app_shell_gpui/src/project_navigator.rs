@@ -1,8 +1,8 @@
-//! Host `ProjectNavigator` for open_project/new_project/close_project: loads,
-//! creates, or saves-and-closes a `.palmier` package and returns the full
-//! replacement state. Runs INSIDE the executor lock, so it must never touch
-//! the executor — it updates the hub's shared project-root handle directly
-//! and hands back freshly-built seams.
+//! Host `ProjectNavigator` for manage_project open/create/close (upstream
+//! #299): loads, creates, or saves-and-closes a `.palmier` package and
+//! returns the full replacement state. Runs INSIDE the executor lock, so it
+//! must never touch the executor — it updates the hub's shared project-root
+//! handle directly and hands back freshly-built seams.
 
 use agent_contract::{
     ActiveProjectState, ClosedProject, OpenedProject, ProjectNavigator, ProjectSeams,
@@ -41,6 +41,66 @@ impl AppProjectNavigator {
         }
     }
 
+    /// Resolve a name/id/path selector against the recents registry (name is
+    /// case-insensitive and must be unique). Error messages mirror upstream
+    /// #299 resolveProjectURL verbatim.
+    fn resolve_target(
+        &self,
+        name: Option<&str>,
+        id: Option<&str>,
+        path: Option<&str>,
+    ) -> Result<Option<PathBuf>, String> {
+        if let Some(p) = path {
+            return Ok(Some(PathBuf::from(p)));
+        }
+        if let Some(id) = id {
+            let registry = crate::project_registry_store::load_from(&self.registry_path);
+            return registry
+                .sorted_entries()
+                .into_iter()
+                .find(|e| e.id == id)
+                .map(|e| Some(e.url.clone()))
+                .ok_or_else(|| {
+                    format!(
+                        "No project with id {id}. Call manage_project with action='list' for valid ids."
+                    )
+                });
+        }
+        let Some(name) = name else { return Ok(None) };
+        let wanted = name.trim();
+        let registry = crate::project_registry_store::load_from(&self.registry_path);
+        let entries = registry.sorted_entries();
+        let matches: Vec<PathBuf> = entries
+            .iter()
+            .map(|e| e.url.clone())
+            .filter(|url| crate::project_lister::project_name(url).eq_ignore_ascii_case(wanted))
+            .collect();
+        match matches.len() {
+            1 => Ok(Some(matches.into_iter().next().expect("len checked"))),
+            0 => {
+                let known = entries
+                    .iter()
+                    .take(15)
+                    .map(|e| crate::project_lister::project_name(&e.url))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(format!(
+                    "No project named '{wanted}'. Known projects: {known}. Call manage_project with action='list' for the full list."
+                ))
+            }
+            n => {
+                let candidates = matches
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(format!(
+                    "{n} projects are named '{wanted}'. Pick one by path: {candidates}"
+                ))
+            }
+        }
+    }
+
     fn finish(&self, root: PathBuf, bundle: project_io::ProjectBundle) -> OpenedProject {
         if let Err(reason) =
             crate::project_registry_store::record_opened_at(&self.registry_path, &root)
@@ -68,22 +128,19 @@ impl AppProjectNavigator {
 }
 
 impl ProjectNavigator for AppProjectNavigator {
-    fn open(&self, id: Option<&str>, path: Option<&str>) -> Result<OpenedProject, String> {
-        let root = match (id, path) {
-            (_, Some(p)) => PathBuf::from(p),
-            (Some(id), None) => {
-                let registry = crate::project_registry_store::load_from(&self.registry_path);
-                registry
-                    .sorted_entries()
-                    .into_iter()
-                    .find(|e| e.id == id)
-                    .map(|e| e.url.clone())
-                    .ok_or_else(|| {
-                        format!("No known project with id '{id}'. get_projects lists them.")
-                    })?
-            }
-            (None, None) => return Err("open_project requires 'id' or 'path'.".to_string()),
-        };
+    fn open(
+        &self,
+        name: Option<&str>,
+        id: Option<&str>,
+        path: Option<&str>,
+    ) -> Result<OpenedProject, String> {
+        let root = self.resolve_target(name, id, path)?.ok_or_else(|| {
+            "manage_project action='open' needs a name, an id from action='list', or a path."
+                .to_string()
+        })?;
+        if !root.exists() {
+            return Err(format!("No project at {}.", root.display()));
+        }
         let bundle = project_io::ProjectBundle::open(&root).map_err(|e| e.to_string())?;
         Ok(self.finish(bundle.root.clone(), bundle))
     }
@@ -110,7 +167,7 @@ impl ProjectNavigator for AppProjectNavigator {
         Ok(self.finish(root, bundle))
     }
 
-    /// close_project (tool-surface-v2): Fronda holds ONE open project, so
+    /// manage_project action='close': Fronda holds ONE open project, so
     /// "open" means "the active one". Save-first; a save failure leaves the
     /// project open. No next project takes over — the Home state follows.
     fn close(
@@ -121,49 +178,11 @@ impl ProjectNavigator for AppProjectNavigator {
         active: ActiveProjectState,
     ) -> Result<ClosedProject, String> {
         let current = self.project_root.lock().ok().and_then(|g| g.clone());
-        let target: PathBuf = if let Some(p) = path {
-            PathBuf::from(p)
-        } else if let Some(id) = id {
-            let registry = crate::project_registry_store::load_from(&self.registry_path);
-            registry
-                .sorted_entries()
-                .into_iter()
-                .find(|e| e.id == id)
-                .map(|e| e.url.clone())
-                .ok_or_else(|| {
-                    format!("No known project with id '{id}'. get_projects lists them.")
-                })?
-        } else if let Some(name) = name {
-            let wanted = name.trim();
-            let registry = crate::project_registry_store::load_from(&self.registry_path);
-            let matches: Vec<PathBuf> = registry
-                .sorted_entries()
-                .into_iter()
-                .map(|e| e.url.clone())
-                .filter(|url| crate::project_lister::project_name(url).eq_ignore_ascii_case(wanted))
-                .collect();
-            match matches.len() {
-                0 => {
-                    return Err(format!(
-                        "No known project named '{wanted}'. get_projects lists them."
-                    ))
-                }
-                1 => matches.into_iter().next().expect("len checked"),
-                _ => {
-                    let candidates = matches
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(format!(
-                        "Ambiguous project name '{wanted}' — matches: {candidates}. Use id or path."
-                    ));
-                }
-            }
-        } else {
-            current
+        let target: PathBuf = match self.resolve_target(name, id, path)? {
+            Some(t) => t,
+            None => current
                 .clone()
-                .ok_or_else(|| "No project is open.".to_string())?
+                .ok_or_else(|| "No project is open.".to_string())?,
         };
         let is_open = current
             .as_deref()
@@ -226,7 +245,9 @@ mod tests {
         )
         .unwrap();
 
-        let opened = nav.open(None, Some(&pkg.display().to_string())).unwrap();
+        let opened = nav
+            .open(None, None, Some(&pkg.display().to_string()))
+            .unwrap();
         assert_eq!(opened.name, "Demo");
         assert_eq!(opened.timeline.fps, 24);
         assert_eq!(
@@ -238,9 +259,53 @@ mod tests {
         // The registry recorded it, so open-by-id now resolves too.
         let registry = crate::project_registry_store::load_from(&dir.join("registry.json"));
         let id = registry.sorted_entries()[0].id.clone();
-        let reopened = nav.open(Some(&id), None).unwrap();
+        let reopened = nav.open(None, Some(&id), None).unwrap();
         assert_eq!(reopened.name, "Demo");
-        assert!(nav.open(Some("ghost"), None).is_err());
+        let err = nav.open(None, Some("ghost"), None).unwrap_err();
+        assert!(err.contains("No project with id ghost"), "{err}");
+        // A missing package errors with the upstream message.
+        let gone = dir.join("Gone.palmier");
+        let err = nav
+            .open(None, None, Some(&gone.display().to_string()))
+            .unwrap_err();
+        assert!(err.starts_with("No project at "), "{err}");
+    }
+
+    #[test]
+    fn open_by_name_is_case_insensitive_and_refuses_ambiguity() {
+        let (dir, _root, nav) = temp_env("open-by-name");
+        let pkg = dir.join("Demo.palmier");
+        project_io::save_project_state(&pkg, &core_model::Timeline::default(), &Default::default())
+            .unwrap();
+        crate::project_registry_store::record_opened_at(&dir.join("registry.json"), &pkg).unwrap();
+
+        // Case differs from the registered name (upstream #299).
+        let opened = nav.open(Some("demo"), None, None).unwrap();
+        assert_eq!(opened.name, "Demo");
+
+        // Unknown name errors with the upstream message.
+        let err = nav.open(Some("Ghost"), None, None).unwrap_err();
+        assert!(err.contains("No project named 'Ghost'"), "{err}");
+        assert!(err.contains("Known projects: Demo"), "{err}");
+        assert!(
+            err.contains("Call manage_project with action='list' for the full list."),
+            "{err}"
+        );
+
+        // A same-name project in another folder makes the name ambiguous.
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let twin = sub.join("Demo.palmier");
+        project_io::save_project_state(
+            &twin,
+            &core_model::Timeline::default(),
+            &Default::default(),
+        )
+        .unwrap();
+        crate::project_registry_store::record_opened_at(&dir.join("registry.json"), &twin).unwrap();
+        let err = nav.open(Some("DEMO"), None, None).unwrap_err();
+        assert!(err.contains("2 projects are named 'DEMO'"), "{err}");
+        assert!(err.contains("Pick one by path:"), "{err}");
     }
 
     fn empty_state() -> ActiveProjectState {
@@ -261,7 +326,8 @@ mod tests {
         let pkg = dir.join("Demo.palmier");
         project_io::save_project_state(&pkg, &core_model::Timeline::default(), &Default::default())
             .unwrap();
-        nav.open(None, Some(&pkg.display().to_string())).unwrap();
+        nav.open(None, None, Some(&pkg.display().to_string()))
+            .unwrap();
         assert!(root_handle.lock().unwrap().is_some());
 
         let closed = nav.close(None, None, None, empty_state()).unwrap();
@@ -269,7 +335,10 @@ mod tests {
         assert_eq!(closed.open_count, 0);
         assert!(closed.was_active);
         assert!(closed.next_active.is_none());
-        assert!(closed.lister.is_some(), "rootless lister for get_projects");
+        assert!(
+            closed.lister.is_some(),
+            "rootless lister for manage_project action='list'"
+        );
         assert!(root_handle.lock().unwrap().is_none(), "hub root cleared");
         // Save-first happened: the package now carries the fps-50 timeline.
         let bundle = project_io::ProjectBundle::open(&pkg).unwrap();
@@ -287,7 +356,8 @@ mod tests {
         let a = dir.join("A.palmier");
         project_io::save_project_state(&a, &core_model::Timeline::default(), &Default::default())
             .unwrap();
-        nav.open(None, Some(&a.display().to_string())).unwrap();
+        nav.open(None, None, Some(&a.display().to_string()))
+            .unwrap();
         let b = dir.join("B.palmier");
         let err = nav
             .close(None, None, Some(&b.display().to_string()), empty_state())
@@ -297,7 +367,7 @@ mod tests {
         let err = nav
             .close(Some("Ghost"), None, None, empty_state())
             .unwrap_err();
-        assert!(err.contains("No known project named"), "{err}");
+        assert!(err.contains("No project named 'Ghost'"), "{err}");
     }
 
     #[test]
@@ -306,7 +376,8 @@ mod tests {
         let pkg = dir.join("Demo.palmier");
         project_io::save_project_state(&pkg, &core_model::Timeline::default(), &Default::default())
             .unwrap();
-        nav.open(None, Some(&pkg.display().to_string())).unwrap();
+        nav.open(None, None, Some(&pkg.display().to_string()))
+            .unwrap();
         let closed = nav.close(Some("demo"), None, None, empty_state()).unwrap();
         assert_eq!(closed.name, "Demo");
         assert!(root_handle.lock().unwrap().is_none());

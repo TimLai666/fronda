@@ -132,7 +132,8 @@ pub trait ExportHost: Send + Sync {
     fn export(&self, request: ExportRequest) -> Result<ExportOutcome, String>;
 }
 
-/// A project known to the app (recents registry), for `get_projects`.
+/// A project known to the app (recents registry), for `manage_project`
+/// action='list'.
 #[derive(Debug, Clone)]
 pub struct KnownProject {
     pub id: String,
@@ -142,16 +143,16 @@ pub struct KnownProject {
     pub is_active: bool,
 }
 
-/// Host seam for `get_projects`: the app shell reads its recents registry and
-/// reports the active project. Read-only. Unset on the pure/MCP path, where
-/// the tool reports it's unavailable.
+/// Host seam for `manage_project` action='list': the app shell reads its
+/// recents registry and reports the active project. Read-only. Unset on the
+/// pure/MCP path, where the tool reports it's unavailable.
 pub trait ProjectLister: Send + Sync {
     /// (known projects, active (name, path) if a project is open)
     fn list(&self) -> Result<(Vec<KnownProject>, Option<(String, String)>), String>;
 }
 
 /// Everything the executor needs to become another project (upstream
-/// open_project/new_project). The navigator builds this WITHOUT touching the
+/// manage_project open/create). The navigator builds this WITHOUT touching the
 /// executor lock (the command runs inside it), and the executor swaps itself.
 pub struct OpenedProject {
     pub name: String,
@@ -163,6 +164,15 @@ pub struct OpenedProject {
     pub seams: ProjectSeams,
 }
 
+impl std::fmt::Debug for OpenedProject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenedProject")
+            .field("name", &self.name)
+            .field("root", &self.root)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Project-scoped host seams, rebuilt for the newly active project root.
 pub struct ProjectSeams {
     pub matte_writer: Arc<dyn MatteWriter>,
@@ -171,13 +181,20 @@ pub struct ProjectSeams {
     pub project_lister: Arc<dyn ProjectLister>,
 }
 
-/// Host seam for open_project/new_project: resolves/loads (or creates) a
-/// project package and records it, returning the full replacement state.
-/// Must NOT take the executor lock. Unset on the pure path.
+/// Host seam for manage_project open/create/close: resolves/loads (or
+/// creates) a project package and records it, returning the full replacement
+/// state. Must NOT take the executor lock. Unset on the pure path.
 pub trait ProjectNavigator: Send + Sync {
-    fn open(&self, id: Option<&str>, path: Option<&str>) -> Result<OpenedProject, String>;
+    /// Open by exactly one of name (case-insensitive unique match), registry
+    /// id, or package path (upstream #299).
+    fn open(
+        &self,
+        name: Option<&str>,
+        id: Option<&str>,
+        path: Option<&str>,
+    ) -> Result<OpenedProject, String>;
     fn create(&self, name: Option<&str>) -> Result<OpenedProject, String>;
-    /// close_project (tool-surface-v2): resolve the target (all-None = the
+    /// manage_project action='close': resolve the target (all-None = the
     /// active project), refuse projects that aren't open, save `active` to the
     /// target's package FIRST (save failure leaves the project open), then
     /// close it. Must NOT take the executor lock.
@@ -191,7 +208,7 @@ pub trait ProjectNavigator: Send + Sync {
 }
 
 /// Snapshot of the executor's project state, handed to the navigator so
-/// close_project can save unsaved changes before closing.
+/// manage_project action='close' can save unsaved changes before closing.
 pub struct ActiveProjectState {
     pub timeline: Timeline,
     pub sibling_timelines: Vec<Timeline>,
@@ -211,8 +228,8 @@ pub struct ClosedProject {
     /// Replacement state when the active project closed and another open
     /// project takes over; None → the executor resets to the no-project state.
     pub next_active: Option<OpenedProject>,
-    /// Replacement `get_projects` lister for the no-project state (keeps
-    /// project discovery working after the last project closes).
+    /// Replacement lister for the no-project state (keeps manage_project
+    /// action='list' working after the last project closes).
     pub lister: Option<Arc<dyn ProjectLister>>,
 }
 
@@ -666,9 +683,10 @@ pub struct ToolExecutor {
     transcription_provider: Option<Arc<dyn TranscriptionProvider>>,
     /// Host exporter for `export_project`. `None` on the pure/MCP path.
     export_host: Option<Arc<dyn ExportHost>>,
-    /// Host recents-registry reader for `get_projects`. `None` on the pure/MCP path.
+    /// Host recents-registry reader for `manage_project` action='list'.
+    /// `None` on the pure/MCP path.
     project_lister: Option<Arc<dyn ProjectLister>>,
-    /// Host navigator for open_project/new_project. `None` on the pure path.
+    /// Host navigator for manage_project open/create/close. `None` on the pure path.
     project_navigator: Option<Arc<dyn ProjectNavigator>>,
     /// Host feedback backend for `send_feedback` (#152). `None` on the pure/MCP path,
     /// where the tool reports it's unavailable.
@@ -712,9 +730,16 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "inspect_color",
     "read_skill",
     "list_clip_presets",
-    "get_projects",
     "get_multicam",
 ];
+
+/// Whether a call is read-only for revision purposes: the read-only tools,
+/// plus manage_project action='list' (the other actions swap projects).
+fn is_read_only_call(tool_name: &str, args: &Value) -> bool {
+    READ_ONLY_TOOLS.contains(&tool_name)
+        || (tool_name == "manage_project"
+            && args.get("action").and_then(Value::as_str) == Some("list"))
+}
 
 /// A resolved organize_media item (resolution happens before any mutation).
 enum OrganizeItem {
@@ -818,12 +843,12 @@ impl ToolExecutor {
         self.export_host = Some(host);
     }
 
-    /// Install the host recents-registry reader for `get_projects`.
+    /// Install the host recents-registry reader for `manage_project` action='list'.
     pub fn set_project_lister(&mut self, lister: Arc<dyn ProjectLister>) {
         self.project_lister = Some(lister);
     }
 
-    /// Install the host navigator for open_project/new_project.
+    /// Install the host navigator for manage_project open/create/close.
     pub fn set_project_navigator(&mut self, nav: Arc<dyn ProjectNavigator>) {
         self.project_navigator = Some(nav);
     }
@@ -1171,7 +1196,7 @@ impl ToolExecutor {
         let pre_universe = self.id_universe();
         let expanded = crate::id_short::expand_input_ids(args, &pre_universe)?;
         let result = self.execute_inner(tool_name, &expanded);
-        if result.is_ok() && !READ_ONLY_TOOLS.contains(&tool_name) {
+        if result.is_ok() && !is_read_only_call(tool_name, &expanded) {
             self.revision += 1;
         }
         result.map(|value| {
@@ -1223,7 +1248,7 @@ impl ToolExecutor {
             "apply_color" => gate(m::validate_apply_color(args)),
             "apply_effect" => gate(m::validate_apply_effect(args)),
             "organize_media" => gate(m::validate_organize_media(args)),
-            "close_project" => gate(m::validate_close_project(args)),
+            "manage_project" => gate(m::validate_manage_project(args)),
             "import_media" => gate(m::validate_import_media(args)),
             "manage_multicam" => gate(m::validate_manage_multicam(args)),
             "change_cam" => gate(m::validate_change_cam(args)),
@@ -1282,13 +1307,8 @@ impl ToolExecutor {
             "organize_media" => self.exec_organize_enveloped(args),
             "import_media" => self.cmd_import_media(args),
             "duplicate_project" => self.cmd_duplicate_project(),
-            // #238 (half-ported): these tools are advertised but their full behaviour switches the
-            // whole app's active project, which needs an app-navigation seam (and delete_project is
-            // destructive). Until that lands, report the limitation honestly instead of the
-            // misleading "Unknown tool" a bare fallthrough would give.
-            "open_project" => self.cmd_open_project(args),
-            "new_project" => self.cmd_new_project(args),
-            "close_project" => self.cmd_close_project(args),
+            // Upstream #299: the consolidated MCP-only project tool.
+            "manage_project" => self.cmd_manage_project(args),
             // Advertised-but-not-yet-implemented tools (schemas landed ahead of the executor logic
             // in Issues #154/#155/#157/#158/#165/#174). Report the limitation honestly rather than
             // the misleading "Unknown tool" a fallthrough gives; each needs its own port (some are
@@ -1297,7 +1317,6 @@ impl ToolExecutor {
                 self.exec_mut(tool_name, ToolExecutor::cmd_create_compound_clip, args)
             }
             "export_project" => self.cmd_export_project(args),
-            "get_projects" => self.cmd_get_projects(),
             "send_feedback" => self.cmd_send_feedback(args),
             "update_text" => self.exec_enveloped(tool_name, ToolExecutor::cmd_update_text, args),
             "create_timeline" => self.cmd_create_timeline(args),
@@ -7164,31 +7183,52 @@ impl ToolExecutor {
         }))
     }
 
-    /// GET_PROJECTS: read-only recents list + the active project (upstream).
-    fn cmd_get_projects(&self) -> Result<Value, String> {
+    /// MANAGE_PROJECT (upstream #299): list/open/create/close in one tool.
+    /// Per-action validation (unknown keys, selector, UUID id, name type)
+    /// lives in `mutation::validate_manage_project`, gated by `validate_args`.
+    fn cmd_manage_project(&mut self, args: &Value) -> Result<Value, String> {
+        let input = match crate::mutation::validate_manage_project(args) {
+            crate::mutation::ValidationResult::Ok(i) => i,
+            crate::mutation::ValidationResult::Error(e) => return Err(e),
+        };
+        match input.action {
+            crate::mutation::ManageProjectAction::List => self.manage_project_list(),
+            crate::mutation::ManageProjectAction::Open => self.manage_project_open(&input),
+            crate::mutation::ManageProjectAction::Create => {
+                self.manage_project_create(&input, args)
+            }
+            crate::mutation::ManageProjectAction::Close => self.manage_project_close(&input),
+        }
+    }
+
+    /// action='list': read-only recents list + the active project (upstream
+    /// shape). Fronda holds one open project, so the visible (frontmost)
+    /// project always equals the session-active one (design: visible==active;
+    /// per-session isolation is the #250 follow-up).
+    fn manage_project_list(&self) -> Result<Value, String> {
         let lister = self.project_lister.clone().ok_or_else(|| {
-            "get_projects is unavailable: no project registry is connected (run it from the app)."
+            "manage_project is unavailable: no project registry is connected (run it from the app)."
                 .to_string()
         })?;
         let (projects, active) = lister.list()?;
         let list: Vec<Value> = projects
             .iter()
             .map(|p| {
-                let mut entry = json!({
+                json!({
                     "id": p.id,
                     "name": p.name,
                     "path": p.path,
                     "isOpen": p.is_open,
-                });
-                if p.is_active {
-                    entry["isActive"] = json!(true);
-                }
-                entry
+                    "isActive": p.is_active,
+                    "isVisible": p.is_active,
+                    "isAccessible": std::path::Path::new(&p.path).exists(),
+                })
             })
             .collect();
         let mut out = json!({ "projects": list });
         if let Some((name, path)) = active {
             out["active"] = json!({ "name": name, "path": path });
+            out["visible"] = json!({ "name": name, "path": path });
         }
         Ok(json!({
             "content": [{
@@ -7274,50 +7314,92 @@ impl ToolExecutor {
         (name, root)
     }
 
-    /// OPEN_PROJECT: make another project the active one (upstream).
-    fn cmd_open_project(&mut self, args: &Value) -> Result<Value, String> {
+    /// action='open': make another project this session's active one.
+    fn manage_project_open(
+        &mut self,
+        input: &crate::mutation::ManageProjectInput,
+    ) -> Result<Value, String> {
         let nav = self.project_navigator.clone().ok_or_else(|| {
-            "open_project is unavailable: no project navigator is connected (run it from the app)."
+            "manage_project is unavailable: no project navigator is connected (run it from the app)."
                 .to_string()
         })?;
-        let id = args.get("id").and_then(|v| v.as_str());
-        let path = args.get("path").and_then(|v| v.as_str());
-        if id.is_none() && path.is_none() {
-            return Err("open_project requires 'id' (from get_projects) or 'path'.".to_string());
-        }
-        let opened = nav.open(id, path)?;
+        let opened = nav.open(
+            input.name.as_deref(),
+            input.id.as_deref(),
+            input.path.as_deref(),
+        )?;
         let (name, root) = self.adopt_project(opened);
         Ok(json!({ "content": [{ "type": "text", "text": format!(
             "Opened \"{name}\" ({root}) and made it active. Re-read get_timeline and get_media before editing."
         )}]}))
     }
 
-    /// NEW_PROJECT: create an empty project and make it active (upstream).
-    fn cmd_new_project(&mut self, args: &Value) -> Result<Value, String> {
+    /// action='create': create an empty project and make it active. Optional
+    /// fps/aspectRatio/quality apply at creation (upstream: validated before
+    /// the project is created, applied through set_project_settings after).
+    fn manage_project_create(
+        &mut self,
+        input: &crate::mutation::ManageProjectInput,
+        args: &Value,
+    ) -> Result<Value, String> {
         let nav = self.project_navigator.clone().ok_or_else(|| {
-            "new_project is unavailable: no project navigator is connected (run it from the app)."
+            "manage_project is unavailable: no project navigator is connected (run it from the app)."
                 .to_string()
         })?;
-        let opened = nav.create(args.get("name").and_then(|v| v.as_str()))?;
+        let mut settings = serde_json::Map::new();
+        for key in ["fps", "aspectRatio", "quality"] {
+            if let Some(v) = args.get(key) {
+                settings.insert(key.to_string(), v.clone());
+            }
+        }
+        if !settings.is_empty() {
+            Self::validate_creation_settings(&settings)?;
+        }
+        let opened = nav.create(input.name.as_deref())?;
         let (name, root) = self.adopt_project(opened);
+        if !settings.is_empty() {
+            self.cmd_set_project_settings(&Value::Object(settings))?;
+        }
         Ok(json!({ "content": [{ "type": "text", "text": format!(
             "Created \"{name}\" ({root}) and made it active. It is empty; all edit tools now target it."
         )}]}))
     }
 
-    /// CLOSE_PROJECT (tool-surface-v2): save-first close via the navigator.
-    /// The navigator resolves the target (all-None = the active project),
-    /// refuses projects that aren't open, and saves before closing; the
-    /// executor then adopts the next active project or resets to the
-    /// no-project state.
-    fn cmd_close_project(&mut self, args: &Value) -> Result<Value, String> {
+    /// Pre-create settings validation (mirrors upstream's validate-then-create
+    /// order so a bad fps/aspectRatio/quality never leaves a stray project).
+    fn validate_creation_settings(settings: &serde_json::Map<String, Value>) -> Result<(), String> {
+        if let Some(v) = settings.get("fps") {
+            let fps = v
+                .as_i64()
+                .ok_or_else(|| "fps must be between 1 and 120".to_string())?;
+            if !(1..=120).contains(&fps) {
+                return Err(format!("fps must be between 1 and 120 (got {fps})"));
+            }
+        }
+        if let Some(a) = settings.get("aspectRatio").and_then(Value::as_str) {
+            aspect_preset_dims(a)?;
+        }
+        if let Some(q) = settings.get("quality").and_then(Value::as_str) {
+            quality_resolution(q, 1920, 1080)?;
+        }
+        Ok(())
+    }
+
+    /// action='close': save-first close via the navigator. The navigator
+    /// resolves the target (all-None = the active project), refuses projects
+    /// that aren't open, and saves before closing; the executor then adopts
+    /// the next active project or resets to the no-project state.
+    fn manage_project_close(
+        &mut self,
+        input: &crate::mutation::ManageProjectInput,
+    ) -> Result<Value, String> {
         let nav = self.project_navigator.clone().ok_or_else(|| {
-            "close_project is unavailable: no project navigator is connected (run it from the app)."
+            "manage_project is unavailable: no project navigator is connected (run it from the app)."
                 .to_string()
         })?;
-        let name = args.get("name").and_then(|v| v.as_str());
-        let id = args.get("id").and_then(|v| v.as_str());
-        let path = args.get("path").and_then(|v| v.as_str());
+        let name = input.name.as_deref();
+        let id = input.id.as_deref();
+        let path = input.path.as_deref();
         let active = ActiveProjectState {
             timeline: self.timeline.clone(),
             sibling_timelines: self.sibling_timelines.clone(),
@@ -7349,8 +7431,8 @@ impl ToolExecutor {
 
     /// Clear project-scoped state and seams after the last project closes
     /// (Home-window state). The account-scoped navigator survives, and the
-    /// navigator may hand back a rootless lister, so get_projects /
-    /// open_project / new_project keep working.
+    /// navigator may hand back a rootless lister, so every manage_project
+    /// action keeps working.
     fn reset_to_no_project(&mut self, lister: Option<Arc<dyn ProjectLister>>) {
         self.load_project(Timeline::default(), MediaManifest::default());
         self.sibling_timelines.clear();
@@ -13456,27 +13538,79 @@ mod tests {
     fn project_nav_tools_unavailable_without_navigator() {
         let mut exec = make_executor();
         let err = exec
-            .execute("open_project", &json!({"path": "/x.palmier"}))
+            .execute("manage_project", &json!({"action": "open", "path": "/x.palmier"}))
             .unwrap_err();
         assert!(err.contains("unavailable"), "{err}");
-        let err = exec.execute("new_project", &json!({})).unwrap_err();
+        let err = exec
+            .execute("manage_project", &json!({"action": "create"}))
+            .unwrap_err();
         assert!(err.contains("unavailable"), "{err}");
-        let err = exec.execute("close_project", &json!({})).unwrap_err();
+        let err = exec
+            .execute("manage_project", &json!({"action": "close"}))
+            .unwrap_err();
         assert!(err.contains("unavailable"), "{err}");
-        // The speculative names were removed with the v0.6.1 alignment.
-        let err = exec.execute("create_project", &json!({})).unwrap_err();
-        assert!(err.contains("Unknown tool"), "{err}");
+        // The four pre-#299 project tools are retired.
+        for retired in [
+            "get_projects",
+            "open_project",
+            "new_project",
+            "close_project",
+        ] {
+            let err = exec.execute(retired, &json!({})).unwrap_err();
+            assert!(err.contains("Unknown tool"), "{retired}: {err}");
+        }
     }
 
-    /// Mock navigator for close_project: records the saved state, returns a
-    /// scripted outcome.
+    #[test]
+    fn manage_project_rejects_delete_and_action_specific_fields() {
+        // Upstream #299 ManageProjectToolTests.rejectsDeleteAndActionSpecificFields.
+        // Validation runs before any seam check, so no navigator is needed.
+        let mut exec = make_executor();
+        let err = exec
+            .execute("manage_project", &json!({"action": "delete"}))
+            .unwrap_err();
+        assert!(err.contains("Unknown project action"), "{err}");
+        let err = exec
+            .execute("manage_project", &json!({"action": "list", "name": "Example"}))
+            .unwrap_err();
+        assert!(err.contains("Allowed: none"), "{err}");
+    }
+
+    #[test]
+    fn manage_project_rejects_invalid_and_conflicting_selectors() {
+        // Upstream #299 ManageProjectToolTests.rejectsInvalidAndConflictingSelectors.
+        let mut exec = make_executor();
+        let cases = [
+            json!({"action": "open"}),
+            json!({"action": "open", "name": "A", "path": "/tmp/A.palmier"}),
+            json!({"action": "close", "id": "A", "path": "/tmp/A.palmier"}),
+            json!({"action": "open", "name": ""}),
+            json!({"action": "close", "path": "   "}),
+            json!({"action": "open", "id": "not-a-project-id"}),
+            json!({"action": "create", "name": 42}),
+        ];
+        for args in &cases {
+            assert!(
+                exec.execute("manage_project", args).is_err(),
+                "Expected rejection for {args}"
+            );
+        }
+    }
+
+    /// Mock navigator for manage_project close: records the saved state,
+    /// returns a scripted outcome.
     struct MockCloseNav {
         outcome: std::sync::Mutex<Option<Result<ClosedProject, String>>>,
         saved_fps: std::sync::Mutex<Option<i64>>,
     }
 
     impl ProjectNavigator for MockCloseNav {
-        fn open(&self, _id: Option<&str>, _path: Option<&str>) -> Result<OpenedProject, String> {
+        fn open(
+            &self,
+            _name: Option<&str>,
+            _id: Option<&str>,
+            _path: Option<&str>,
+        ) -> Result<OpenedProject, String> {
             Err("not scripted".into())
         }
         fn create(&self, _name: Option<&str>) -> Result<OpenedProject, String> {
@@ -13522,7 +13656,9 @@ mod tests {
         });
         exec.set_project_navigator(nav.clone());
 
-        let res = exec.execute("close_project", &json!({})).unwrap();
+        let res = exec
+            .execute("manage_project", &json!({"action": "close"}))
+            .unwrap();
         let body: serde_json::Value =
             serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["status"], json!("closed"));
@@ -13533,7 +13669,7 @@ mod tests {
         assert_eq!(*nav.saved_fps.lock().unwrap(), Some(48));
         // The executor reset to the no-project state: default timeline, empty
         // manifest, project-scoped seams gone (matte imports unavailable) —
-        // but get_projects still answers through the replacement lister.
+        // but manage_project list still answers through the replacement lister.
         assert_eq!(exec.timeline().fps, Timeline::default().fps);
         assert!(exec.media_manifest().entries.is_empty());
         let err = exec
@@ -13543,7 +13679,9 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("unavailable"), "{err}");
-        assert!(exec.execute("get_projects", &json!({})).is_ok());
+        assert!(exec
+            .execute("manage_project", &json!({"action": "list"}))
+            .is_ok());
     }
 
     #[test]
@@ -13557,7 +13695,9 @@ mod tests {
             saved_fps: std::sync::Mutex::new(None),
         });
         exec.set_project_navigator(nav);
-        let err = exec.execute("close_project", &json!({})).unwrap_err();
+        let err = exec
+            .execute("manage_project", &json!({"action": "close"}))
+            .unwrap_err();
         assert!(err.contains("project left open"), "{err}");
         assert_eq!(exec.timeline().fps, 48, "executor untouched on failure");
         assert_eq!(exec.media_manifest().entries.len(), 1);
@@ -13594,12 +13734,181 @@ mod tests {
             saved_fps: std::sync::Mutex::new(None),
         });
         exec.set_project_navigator(nav);
-        let res = exec.execute("close_project", &json!({})).unwrap();
+        let res = exec
+            .execute("manage_project", &json!({"action": "close"}))
+            .unwrap();
         let body: serde_json::Value =
             serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["active"]["name"], json!("Next"));
         assert_eq!(body["openCount"], json!(1));
         assert_eq!(exec.timeline().fps, 60, "adopted the next project");
+    }
+
+    /// Scripted open/create mock: records the selector it was called with.
+    struct MockOpenNav {
+        opened: std::sync::Mutex<Option<(Option<String>, Option<String>, Option<String>)>>,
+        created_name: std::sync::Mutex<Option<Option<String>>>,
+    }
+
+    impl MockOpenNav {
+        fn new() -> Self {
+            Self {
+                opened: std::sync::Mutex::new(None),
+                created_name: std::sync::Mutex::new(None),
+            }
+        }
+        fn opened_project(name: &str) -> OpenedProject {
+            OpenedProject {
+                name: name.into(),
+                root: format!("/tmp/{name}.palmier"),
+                timeline: Timeline {
+                    fps: 25,
+                    ..Default::default()
+                },
+                sibling_timelines: Vec::new(),
+                manifest: MediaManifest::default(),
+                multicam_groups: Vec::new(),
+                seams: ProjectSeams {
+                    matte_writer: std::sync::Arc::new(MockMatte::default()),
+                    audio_source: std::sync::Arc::new(MockAudio),
+                    export_host: std::sync::Arc::new(MockExportHost),
+                    project_lister: std::sync::Arc::new(MockCloseLister),
+                },
+            }
+        }
+    }
+
+    impl ProjectNavigator for MockOpenNav {
+        fn open(
+            &self,
+            name: Option<&str>,
+            id: Option<&str>,
+            path: Option<&str>,
+        ) -> Result<OpenedProject, String> {
+            *self.opened.lock().unwrap() = Some((
+                name.map(String::from),
+                id.map(String::from),
+                path.map(String::from),
+            ));
+            Ok(Self::opened_project(name.unwrap_or("Demo")))
+        }
+        fn create(&self, name: Option<&str>) -> Result<OpenedProject, String> {
+            *self.created_name.lock().unwrap() = Some(name.map(String::from));
+            Ok(Self::opened_project(name.unwrap_or("Untitled Project")))
+        }
+        fn close(
+            &self,
+            _name: Option<&str>,
+            _id: Option<&str>,
+            _path: Option<&str>,
+            _active: ActiveProjectState,
+        ) -> Result<ClosedProject, String> {
+            Err("not scripted".into())
+        }
+    }
+
+    #[test]
+    fn manage_project_open_threads_the_name_selector_and_adopts() {
+        let mut exec = make_executor();
+        let nav = std::sync::Arc::new(MockOpenNav::new());
+        exec.set_project_navigator(nav.clone());
+        let res = exec
+            .execute("manage_project", &json!({"action": "open", "name": "Demo"}))
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Opened \"Demo\""), "{text}");
+        assert_eq!(
+            *nav.opened.lock().unwrap(),
+            Some((Some("Demo".into()), None, None)),
+            "name selector reaches the navigator"
+        );
+        assert_eq!(exec.timeline().fps, 25, "adopted the opened project");
+    }
+
+    #[test]
+    fn manage_project_create_applies_initial_settings() {
+        let mut exec = make_executor();
+        let nav = std::sync::Arc::new(MockOpenNav::new());
+        exec.set_project_navigator(nav.clone());
+        let res = exec
+            .execute(
+                "manage_project",
+                &json!({"action": "create", "name": "Fresh", "fps": 60, "aspectRatio": "9:16", "quality": "4K"}),
+            )
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Created \"Fresh\""), "{text}");
+        assert_eq!(
+            *nav.created_name.lock().unwrap(),
+            Some(Some("Fresh".into()))
+        );
+        assert_eq!(exec.timeline().fps, 60);
+        assert_eq!(
+            (exec.timeline().width, exec.timeline().height),
+            (2160, 3840),
+            "9:16 at 4K"
+        );
+        // Invalid settings are refused BEFORE the navigator creates anything.
+        let nav2 = std::sync::Arc::new(MockOpenNav::new());
+        exec.set_project_navigator(nav2.clone());
+        let err = exec
+            .execute("manage_project", &json!({"action": "create", "fps": 0}))
+            .unwrap_err();
+        assert!(err.contains("fps must be between 1 and 120"), "{err}");
+        assert!(
+            nav2.created_name.lock().unwrap().is_none(),
+            "no project created on invalid settings"
+        );
+    }
+
+    #[test]
+    fn manage_project_list_reports_visible_equals_active_and_stays_read_only() {
+        struct TwoProjectLister;
+        impl ProjectLister for TwoProjectLister {
+            fn list(&self) -> Result<(Vec<KnownProject>, Option<(String, String)>), String> {
+                Ok((
+                    vec![
+                        KnownProject {
+                            id: "8b9df19a-6a34-4a3e-9688-5aa3ee66e29c".into(),
+                            name: "Active".into(),
+                            path: "/tmp/Active.palmier".into(),
+                            is_open: true,
+                            is_active: true,
+                        },
+                        KnownProject {
+                            id: "0e2fbc0e-71a7-4c8e-9c34-2b4f2a9f1d55".into(),
+                            name: "Other".into(),
+                            path: "/tmp/Other.palmier".into(),
+                            is_open: false,
+                            is_active: false,
+                        },
+                    ],
+                    Some(("Active".into(), "/tmp/Active.palmier".into())),
+                ))
+            }
+        }
+        let mut exec = make_executor();
+        exec.set_project_lister(std::sync::Arc::new(TwoProjectLister));
+        let rev_before = exec.revision();
+        let res = exec
+            .execute("manage_project", &json!({"action": "list"}))
+            .unwrap();
+        assert_eq!(
+            exec.revision(),
+            rev_before,
+            "action='list' is read-only: no revision bump"
+        );
+        let body: serde_json::Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        let projects = body["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 2);
+        for p in projects {
+            // Single-open-project model: visible == active on every row.
+            assert_eq!(p["isVisible"], p["isActive"], "{p}");
+            assert!(p.get("isAccessible").is_some(), "upstream row shape: {p}");
+        }
+        assert_eq!(body["active"]["name"], json!("Active"));
+        assert_eq!(body["visible"], body["active"], "visible == active");
     }
 
     #[test]

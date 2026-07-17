@@ -64,21 +64,29 @@ pub fn parse_frontmatter(text: &str) -> (BTreeMap<String, String>, String) {
     (fields, body)
 }
 
-/// Build a `Skill` from a folder id and its SKILL.md text. Returns `None` when
-/// the frontmatter has no non-empty `name` (an unrecognized skill, skipped).
-fn parse_skill(id: &str, path: &Path, text: &str) -> Option<Skill> {
-    let (fields, _body) = parse_frontmatter(text);
+/// Mirrors Swift `SkillFrontmatter.requiredFields` (#319): both `name` and
+/// `description` must be non-blank after trimming. Returns
+/// `(name, description, body)`, or `None` for an unrecognized skill.
+pub fn required_fields(text: &str) -> Option<(String, String, String)> {
+    let (fields, body) = parse_frontmatter(text);
     let name = fields.get("name").map(|s| s.trim()).unwrap_or_default();
-    if name.is_empty() {
-        return None;
-    }
     let description = fields
         .get("description")
-        .map(|s| s.trim().to_string())
+        .map(|s| s.trim())
         .unwrap_or_default();
+    if name.is_empty() || description.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), description.to_string(), body))
+}
+
+/// Build a `Skill` from a folder id and its SKILL.md text. Returns `None` when
+/// the frontmatter lacks a non-blank `name` or `description` (#319).
+fn parse_skill(id: &str, path: &Path, text: &str) -> Option<Skill> {
+    let (name, description, _body) = required_fields(text)?;
     Some(Skill {
         id: id.to_string(),
-        name: name.to_string(),
+        name,
         description,
         path: path.to_path_buf(),
     })
@@ -104,9 +112,11 @@ pub fn load_skills(dir: &Path) -> Vec<Skill> {
         let Ok(text) = std::fs::read_to_string(&md) else {
             continue;
         };
-        if let Some(skill) = parse_skill(&id, &md, &text) {
-            found.push(skill);
-        }
+        let Some(skill) = parse_skill(&id, &md, &text) else {
+            eprintln!("Skill skipped {id}: frontmatter needs a non-empty name and description");
+            continue;
+        };
+        found.push(skill);
     }
     found.sort_by(|a, b| a.id.cmp(&b.id));
     found
@@ -132,18 +142,13 @@ pub fn load_agent_skills(dir: &Path) -> Vec<agent_contract::AgentSkill> {
         let Ok(text) = std::fs::read_to_string(&md) else {
             continue;
         };
-        let (fields, body) = parse_frontmatter(&text);
-        let name = fields.get("name").map(|s| s.trim()).unwrap_or_default();
-        if name.is_empty() {
+        let Some((name, description, body)) = required_fields(&text) else {
+            eprintln!("Skill skipped {id}: frontmatter needs a non-empty name and description");
             continue;
-        }
-        let description = fields
-            .get("description")
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
+        };
         out.push(agent_contract::AgentSkill {
             id,
-            name: name.to_string(),
+            name,
             description,
             body,
         });
@@ -215,6 +220,27 @@ mod tests {
         assert_eq!(body, text);
     }
 
+    // Swift SkillFrontmatterTests.requiresNonemptyNameAndDescription (#319).
+    #[test]
+    fn required_fields_requires_nonempty_name_and_description() {
+        let valid = "---\nname: Editing\ndescription: Edit clips.\n---\n\nInstructions";
+        let missing_name = "---\ndescription: Edit clips.\n---\n\nInstructions";
+        let empty_description = "---\nname: Editing\ndescription:   \n---\n\nInstructions";
+        let missing_description = "---\nname: Editing\n---\n\nInstructions";
+
+        assert_eq!(
+            required_fields(valid),
+            Some((
+                "Editing".to_string(),
+                "Edit clips.".to_string(),
+                "Instructions".to_string()
+            ))
+        );
+        assert_eq!(required_fields(missing_name), None);
+        assert_eq!(required_fields(empty_description), None);
+        assert_eq!(required_fields(missing_description), None);
+    }
+
     #[test]
     fn load_skills_reads_valid_and_skips_invalid() {
         let root = temp_dir("load");
@@ -230,11 +256,17 @@ mod tests {
         );
         // No name → skipped.
         write_skill(&root, "nameless", "---\ndescription: no name\n---\nbody");
+        // Blank description → skipped (#319).
+        write_skill(
+            &root,
+            "descriptionless",
+            "---\nname: NoDesc\ndescription:   \n---\nbody",
+        );
         // No SKILL.md at all → skipped (folder created empty).
         std::fs::create_dir_all(root.join("empty-folder")).unwrap();
 
         let skills = load_skills(&root);
-        assert_eq!(skills.len(), 2, "only the two named skills load");
+        assert_eq!(skills.len(), 2, "only the two fully-described skills load");
         // Sorted by id.
         assert_eq!(skills[0].id, "a-skill");
         assert_eq!(skills[0].name, "Alpha");
@@ -250,9 +282,14 @@ mod tests {
             "---\nname: Captions\ndescription: burn in\n---\n\n1. Transcribe\n2. Style",
         );
         write_skill(&root, "nameless", "---\ndescription: no name\n---\nbody");
+        write_skill(&root, "descriptionless", "---\nname: NoDesc\n---\nbody");
 
         let skills = load_agent_skills(&root);
-        assert_eq!(skills.len(), 1, "nameless skill skipped");
+        assert_eq!(
+            skills.len(),
+            1,
+            "nameless and descriptionless skills skipped"
+        );
         assert_eq!(skills[0].id, "captions");
         assert_eq!(skills[0].description, "burn in");
         assert_eq!(skills[0].body, "1. Transcribe\n2. Style");
