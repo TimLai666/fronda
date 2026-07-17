@@ -166,9 +166,9 @@ This repo's primary implementation is the cross-platform Rust app `Fronda`. The 
   behavior half, #276, #273, #339, #280, #292); feature tier
   awaiting a go decision (#299 manage_project consolidation, #298 export
   queue, #294/#330/#336 remainders, UI: #281 clip colors, #327 panel
-  redesign, #319 settings/help, #284-leftover). NOTE: the in-tree Swift
-  baseline is still the v0.6.5 merge (`f0f5b473`); v0.6.6–v0.6.10 were
-  audited from the upstream remote but are not merged locally. The 2026-07-17
+  redesign, #319 settings/help, #284-leftover). NOTE: the Swift
+  baseline was merged to v0.6.10 (`cfa9e05e`) on 2026-07-17 (merge kept the
+  fork's README and the no-SwiftPM-cache CI decision). The 2026-07-17
   audit also found the porting table's old "#284 picker wiring follow-up"
   note was stale — the wiring already landed (generation_view.rs).
 - Upstream PRs were re-audited on 2026-07-05 (upstream HEAD `771b63e`, v0.6.1),

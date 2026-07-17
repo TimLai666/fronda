@@ -21,6 +21,7 @@ workflow journal (session 2026-07-17). Items already ported before this
 audit (#293 audio meter, #291 chroma eyedropper, #283 multicam v2, #138 HDR,
 #176 duplicate_clips, #284 aspect labels core, #263 tool-surface v2,
 #274 beat detection baseline, #211 autosave, #65 wght) were not re-opened.
+The Swift baseline itself was merged to v0.6.10 in-tree on 2026-07-17.
 
 ## Ported by change `upstream-v0610-compat-ports` (2026-07-17)
 
