@@ -461,3 +461,71 @@ tests:
   - crates/mcp_server/tests/spec_mcp_contract.rs
   - crates/agent_contract/tests/spec_tool_snapshots.rs
 -->
+
+---
+### Requirement: Text styling renders and patches per Swift v0.6.10
+
+The text renderer SHALL draw underline/strikethrough/overline bars, apply fontCase display transformation, tracking, additive lineSpacing, the rich background (per-axis padding, corner radius, offsets, outline) and border-width glyph stroke; the add_texts/update_text/add_captions tools SHALL take the nested partial-patch style object (flat style fields removed, add_captions textCase removed, 6-digit hex preserving current alpha vs 8-digit setting it); FCPXML SHALL emit strokeWidth from border width and title text through fontCase (upstream #330/#336 remainders).
+
+#### Scenario: Nested style partial patch
+
+- **WHEN** update_text patches style.outline.width only
+- **THEN** outline width changes and every other style field keeps its prior value
+
+#### Scenario: Uppercase fontCase renders transformed text
+
+- **WHEN** a text clip has fontCase "uppercase"
+- **THEN** rendering and FCPXML titles use the uppercased text while the stored content is unchanged
+
+<!-- @trace
+source: text-style-v0610-full
+updated: 2026-07-17
+code:
+  - crates/app_shell_gpui/src/export_queue.rs
+  - crates/app_shell_gpui/src/export_model.rs
+  - crates/app_shell_gpui/src/export_view.rs
+  - crates/app_shell_gpui/src/lib.rs
+  - crates/app_shell_gpui/src/audio_export.rs
+  - crates/app_shell_gpui/src/video_export.rs
+  - crates/agent_contract/src/mutation.rs
+  - crates/render_core/src/text.rs
+  - crates/agent_contract/src/tools.rs
+  - crates/core_model/src/timeline.rs
+  - crates/render_core/src/fcpxml_export.rs
+  - AGENTS.md
+  - crates/agent_contract/src/tool_exec.rs
+-->
+
+---
+### Requirement: Cancellable FIFO export queue with staged output
+
+Exports SHALL run through a FIFO queue with job states waiting/preparing/exporting/canceling/completed/failed/canceled, destination reservation rejecting duplicate queued paths, cancellation of both waiting and in-flight jobs, and staged output writes so a canceled or failed export leaves no partial file at the destination (upstream #298).
+
+#### Scenario: Cancel an in-flight export
+
+- **WHEN** an exporting job is canceled
+- **THEN** the job transitions through canceling to canceled and the destination path has no partial file
+
+#### Scenario: Duplicate destination rejected
+
+- **WHEN** a second job is enqueued for an already-reserved destination
+- **THEN** the enqueue fails until the first job releases the destination
+
+<!-- @trace
+source: export-queue
+updated: 2026-07-17
+code:
+  - crates/core_model/src/timeline.rs
+  - crates/app_shell_gpui/src/lib.rs
+  - AGENTS.md
+  - crates/app_shell_gpui/src/audio_export.rs
+  - crates/app_shell_gpui/src/export_queue.rs
+  - crates/render_core/src/text.rs
+  - crates/agent_contract/src/tools.rs
+  - crates/app_shell_gpui/src/export_model.rs
+  - crates/render_core/src/fcpxml_export.rs
+  - crates/app_shell_gpui/src/export_view.rs
+  - crates/agent_contract/src/mutation.rs
+  - crates/app_shell_gpui/src/video_export.rs
+  - crates/agent_contract/src/tool_exec.rs
+-->

@@ -179,14 +179,58 @@ pub fn export_project_with_audio(
     output_fps: i64,
     progress: &std::sync::atomic::AtomicU64,
 ) -> Result<(), String> {
-    use crate::video_export::{source_time_seconds, Mp4Encoder, SourceDecoder};
+    export_project_with_audio_cancellable(
+        timeline,
+        manifest,
+        timelines,
+        project_root,
+        output,
+        width,
+        height,
+        codec,
+        output_fps,
+        progress,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+}
+
+/// [`export_project_with_audio`] with a cancellation flag (upstream #298).
+///
+/// The whole encode writes to a hidden `.partial` staging file in `output`'s
+/// directory and only renames over `output` on success — a cancelled or failed
+/// export leaves nothing at the destination. `cancel` is checked in the audio
+/// mix and at every frame of the encode loop; a cancelled run cleans up the
+/// staging file and returns [`crate::video_export::EXPORT_CANCELED_ERR`].
+#[allow(clippy::too_many_arguments)]
+pub fn export_project_with_audio_cancellable(
+    timeline: &Timeline,
+    manifest: &MediaManifest,
+    timelines: &HashMap<String, Timeline>,
+    project_root: &Path,
+    output: &Path,
+    width: u32,
+    height: u32,
+    codec: crate::video_export::VideoCodec,
+    output_fps: i64,
+    progress: &std::sync::atomic::AtomicU64,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    use crate::video_export::{
+        commit_staged, source_time_seconds, staging_path, Mp4Encoder, SourceDecoder,
+        EXPORT_CANCELED_ERR,
+    };
     use render_core::compositor::compose_frame_with_timelines;
     use std::sync::atomic::Ordering;
     use timeline_core::TimelineMathExt;
 
+    let canceled = || cancel.load(Ordering::Relaxed);
+
     let total_timeline = timeline.total_frames();
     if total_timeline <= 0 {
         return Err("timeline has no frames to export".into());
+    }
+    if canceled() {
+        return Err(EXPORT_CANCELED_ERR.into());
     }
     let fps = timeline.fps.max(1);
     // Output fps drives the encoder + how many frames we emit; each output frame
@@ -208,45 +252,77 @@ pub fn export_project_with_audio(
         arate,
         ach as usize,
         |clip: &Clip| {
+            if canceled() {
+                return None;
+            }
             let path = paths.get(clip.media_ref.as_str())?;
             decode_audio_pcm(path, arate, ach)
         },
     );
+    if canceled() {
+        return Err(EXPORT_CANCELED_ERR.into());
+    }
     let has_audio = mixed.iter().any(|&s| s != 0.0);
 
-    let audio_params = has_audio.then_some((arate, ach));
-    let mut enc =
-        Mp4Encoder::new_av_codec(output, width, height, out_fps as i32, audio_params, codec)?;
+    // Encode into a same-directory staging file; only a fully finished encode
+    // is renamed onto `output`.
+    let staging = staging_path(output);
+    let encode = || -> Result<(), String> {
+        let audio_params = has_audio.then_some((arate, ach));
+        let mut enc =
+            Mp4Encoder::new_av_codec(&staging, width, height, out_fps as i32, audio_params, codec)?;
 
-    let ew = (width & !1).max(2) as usize;
-    let eh = (height & !1).max(2) as usize;
-    let mut decoders: HashMap<String, Option<SourceDecoder>> = HashMap::new();
-    for out_frame in 0..total {
-        // Map this output frame back to a timeline frame (frame-rate conversion).
-        let tframe = out_frame * fps / out_fps;
-        let mut fetch = |clip: &Clip, local_frame: i64| {
-            let path = paths.get(clip.media_ref.as_str())?;
-            decoders
-                .entry(clip.media_ref.clone())
-                .or_insert_with(|| SourceDecoder::open(path))
-                .as_mut()?
-                .frame_at_seconds(source_time_seconds(clip, local_frame, fps))
-        };
-        let img =
-            compose_frame_with_timelines(timeline, manifest, timelines, tframe, ew, eh, &mut fetch);
-        enc.write_frame(&img)?;
-        // Report video progress as 0..=95%; the trailing 5% covers audio + mux.
-        progress.store(
-            ((out_frame + 1) as u64 * 95 / total as u64).min(95),
-            Ordering::Relaxed,
-        );
+        let ew = (width & !1).max(2) as usize;
+        let eh = (height & !1).max(2) as usize;
+        let mut decoders: HashMap<String, Option<SourceDecoder>> = HashMap::new();
+        for out_frame in 0..total {
+            if canceled() {
+                return Err(EXPORT_CANCELED_ERR.into());
+            }
+            // Map this output frame back to a timeline frame (frame-rate conversion).
+            let tframe = out_frame * fps / out_fps;
+            let mut fetch = |clip: &Clip, local_frame: i64| {
+                let path = paths.get(clip.media_ref.as_str())?;
+                decoders
+                    .entry(clip.media_ref.clone())
+                    .or_insert_with(|| SourceDecoder::open(path))
+                    .as_mut()?
+                    .frame_at_seconds(source_time_seconds(clip, local_frame, fps))
+            };
+            let img = compose_frame_with_timelines(
+                timeline, manifest, timelines, tframe, ew, eh, &mut fetch,
+            );
+            enc.write_frame(&img)?;
+            // Report video progress as 0..=95%; the trailing 5% covers audio + mux.
+            progress.store(
+                ((out_frame + 1) as u64 * 95 / total as u64).min(95),
+                Ordering::Relaxed,
+            );
+        }
+        if has_audio {
+            if canceled() {
+                return Err(EXPORT_CANCELED_ERR.into());
+            }
+            enc.write_audio(&mixed)?;
+        }
+        enc.finish()
+    };
+
+    match encode() {
+        Ok(()) if !canceled() => {
+            commit_staged(&staging, output)?;
+            progress.store(100, Ordering::Relaxed);
+            Ok(())
+        }
+        Ok(()) => {
+            let _ = std::fs::remove_file(&staging);
+            Err(EXPORT_CANCELED_ERR.into())
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&staging);
+            Err(e)
+        }
     }
-    if has_audio {
-        enc.write_audio(&mixed)?;
-    }
-    let result = enc.finish();
-    progress.store(100, Ordering::Relaxed);
-    result
 }
 
 /// Mix every audio-bearing clip of `timeline` and write a WAV stem to `out`.
@@ -269,7 +345,15 @@ pub fn export_audio_wav(
         decode_audio_pcm(path, sample_rate, channels)
     });
 
-    write_wav(out, &mixed, sample_rate, channels)
+    // Staged write: a failed export leaves nothing at the destination.
+    let staging = crate::video_export::staging_path(out);
+    match write_wav(&staging, &mixed, sample_rate, channels) {
+        Ok(()) => crate::video_export::commit_staged(&staging, out),
+        Err(e) => {
+            let _ = std::fs::remove_file(&staging);
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -287,6 +371,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Names of leftover `.partial` staging files in `dir` (should be none).
+    fn partial_files(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".partial"))
+            .collect()
     }
 
     /// A 0.1s mono 440-ish ramp WAV at 48kHz, written with our own encoder.
@@ -545,6 +639,139 @@ mod tests {
         assert!(std::fs::metadata(&out).unwrap().len() > 0);
         assert!(decode_audio_pcm(&out, 48_000, 2).is_some_and(|p| !p.is_empty()));
         assert!(crate::video_export::decode_frame_rgba(&out, 0.0).is_some());
+        assert!(
+            partial_files(&dir).is_empty(),
+            "staged output committed, no .partial leftovers"
+        );
+    }
+
+    #[test]
+    fn canceled_export_leaves_no_output_and_no_partial() {
+        use crate::video_export::encoder_available;
+        if !encoder_available() {
+            eprintln!("skipping: no video encoder");
+            return;
+        }
+        let dir = temp_dir("cancel-preflight");
+        let wav = dir.join("a.wav");
+        make_wav(&wav, 48_000, 2, 9600);
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(external_entry_audio("a1", &wav));
+        let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
+            fps: 15,
+            width: 64,
+            height: 48,
+            tracks: vec![Track {
+                id: "aud".into(),
+                r#type: ClipType::Audio,
+                muted: false,
+                hidden: false,
+                sync_locked: false,
+                display_height: 50.0,
+                clips: vec![audio_clip("a1", 0, 3)],
+            }],
+            settings_configured: true,
+            selected_clip_ids: Default::default(),
+            transcription_language: None,
+            folder_id: None,
+            compound_timelines: Default::default(),
+        };
+
+        let out = dir.join("out.mp4");
+        let progress = std::sync::atomic::AtomicU64::new(0);
+        let cancel = std::sync::atomic::AtomicBool::new(true); // canceled up front
+        let err = export_project_with_audio_cancellable(
+            &timeline,
+            &manifest,
+            &HashMap::new(),
+            &dir,
+            &out,
+            64,
+            48,
+            crate::video_export::VideoCodec::H264,
+            0,
+            &progress,
+            &cancel,
+        )
+        .expect_err("cancel produces an error, not a file");
+        assert!(crate::video_export::is_cancel_err(&err), "err={err}");
+        assert!(!out.exists(), "destination untouched");
+        assert!(partial_files(&dir).is_empty(), "no staging leftovers");
+    }
+
+    #[test]
+    fn cancel_mid_export_cleans_staging_and_destination() {
+        use crate::video_export::encoder_available;
+        if !encoder_available() {
+            eprintln!("skipping: no video encoder");
+            return;
+        }
+        let dir = temp_dir("cancel-midway");
+        let wav = dir.join("a.wav");
+        make_wav(&wav, 48_000, 1, 48_000);
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(external_entry_audio("a1", &wav));
+        // 600 frames of composition: plenty of cancel checkpoints after the
+        // flag flips, so the loop reliably observes it before the commit.
+        let timeline = Timeline {
+            id: String::new(),
+            name: String::new(),
+            fps: 15,
+            width: 64,
+            height: 48,
+            tracks: vec![Track {
+                id: "aud".into(),
+                r#type: ClipType::Audio,
+                muted: false,
+                hidden: false,
+                sync_locked: false,
+                display_height: 50.0,
+                clips: vec![audio_clip("a1", 0, 600)],
+            }],
+            settings_configured: true,
+            selected_clip_ids: Default::default(),
+            transcription_language: None,
+            folder_id: None,
+            compound_timelines: Default::default(),
+        };
+
+        let out = dir.join("out.mp4");
+        let progress = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = {
+            let (timeline, manifest, dir, out) =
+                (timeline.clone(), manifest.clone(), dir.clone(), out.clone());
+            let (progress, cancel) = (progress.clone(), cancel.clone());
+            std::thread::spawn(move || {
+                export_project_with_audio_cancellable(
+                    &timeline,
+                    &manifest,
+                    &HashMap::new(),
+                    &dir,
+                    &out,
+                    64,
+                    48,
+                    crate::video_export::VideoCodec::H264,
+                    0,
+                    &progress,
+                    &cancel,
+                )
+            })
+        };
+        // Wait until the frame loop has demonstrably started, then cancel.
+        while progress.load(std::sync::atomic::Ordering::Relaxed) == 0 && !worker.is_finished() {
+            std::thread::yield_now();
+        }
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let err = worker
+            .join()
+            .expect("no panic")
+            .expect_err("mid-export cancel errors");
+        assert!(crate::video_export::is_cancel_err(&err), "err={err}");
+        assert!(!out.exists(), "no file at the destination");
+        assert!(partial_files(&dir).is_empty(), "staging cleaned up");
     }
 
     #[test]
@@ -659,5 +886,6 @@ mod tests {
         let bytes = std::fs::read(&out).unwrap();
         assert!(bytes.len() > 44, "wav has data beyond the header");
         assert_eq!(&bytes[0..4], b"RIFF");
+        assert!(partial_files(&dir).is_empty(), "staged WAV committed cleanly");
     }
 }

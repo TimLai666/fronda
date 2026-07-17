@@ -268,12 +268,110 @@ pub fn system_instruction_with_skills(skills: &[crate::tool_exec::AgentSkill]) -
 // Tool factory functions
 // ---------------------------------------------------------------------------
 
-/// tool-surface-v2 flattened textStyle. Description verbatim from
-/// upstream@141c69b.
+/// Nested partial text-style patch schema, verbatim from upstream #330/#336
+/// (`ToolDefinitions.textStyleProperties(detailed:)`). `detailed: false`
+/// (add_texts / add_captions) strips every description and points at
+/// update_text's documented patch, mirroring Swift's schemaWithoutDescriptions.
+fn text_style_schema(detailed: bool) -> Value {
+    let mut style = serde_json::json!({
+        "type": "object",
+        "description": "Partial text-style patch. Omit properties to keep defaults or existing values.",
+        "properties": {
+            "fontName": {"type": "string", "description": "Font PostScript name."},
+            "fontSize": {"type": "number", "minimum": 12, "maximum": 300, "description": "Font size in canvas points."},
+            "bold": {"type": "boolean", "description": "Bold font trait."},
+            "italic": {"type": "boolean", "description": "Italic font trait."},
+            "underline": {"type": "boolean", "description": "Draw a line below the text."},
+            "strikethrough": {"type": "boolean", "description": "Draw a line through the text."},
+            "overline": {"type": "boolean", "description": "Draw a line above the text."},
+            "tracking": {"type": "number", "minimum": -20, "maximum": 100, "description": "Spacing between characters in canvas points."},
+            "lineSpacing": {"type": "number", "minimum": -100, "maximum": 300, "description": "Additional spacing between lines in canvas points."},
+            "fontCase": {"type": "string", "enum": ["mixed", "uppercase", "lowercase"], "description": "Non-destructive display casing."},
+            "alignment": {"type": "string", "enum": ["left", "center", "right"], "description": "Text alignment."},
+            "color": {"type": "string", "description": "Text color as #RGB, #RRGGBB, or #RRGGBBAA."},
+            "outline": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "color": {"type": "string", "description": "Outline color hex."},
+                    "width": {"type": "number", "minimum": 0, "maximum": 40, "description": "Width in canvas points."},
+                },
+            },
+            "shadow": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "color": {"type": "string", "description": "Shadow color hex. Six-digit colors preserve the current opacity."},
+                    "opacity": {"type": "number", "minimum": 0, "maximum": 1},
+                    "offset": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number", "minimum": -200, "maximum": 200},
+                            "y": {"type": "number", "minimum": -200, "maximum": 200},
+                        },
+                    },
+                    "blur": {"type": "number", "minimum": 0, "maximum": 100, "description": "Blur radius in canvas points."},
+                },
+            },
+            "background": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "color": {"type": "string", "description": "Background color hex. Six-digit colors preserve the current opacity."},
+                    "opacity": {"type": "number", "minimum": 0, "maximum": 1},
+                    "padding": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number", "minimum": 0, "maximum": 300},
+                            "y": {"type": "number", "minimum": 0, "maximum": 300},
+                        },
+                    },
+                    "center": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number", "minimum": -500, "maximum": 500},
+                            "y": {"type": "number", "minimum": -500, "maximum": 500},
+                        },
+                    },
+                    "cornerRadius": {"type": "number", "minimum": 0, "maximum": 300, "description": "Corner radius in canvas points."},
+                    "outline": {
+                        "type": "object",
+                        "properties": {
+                            "color": {"type": "string", "description": "Background outline color hex."},
+                            "width": {"type": "number", "minimum": 0, "maximum": 40, "description": "Background outline width in canvas points."},
+                        },
+                    },
+                },
+            },
+        },
+    });
+    if !detailed {
+        style = schema_without_descriptions(&style);
+        style["description"] = Value::String("Same partial style patch as update_text.".to_string());
+    }
+    style
+}
+
+/// Recursively drop every `description` key (Swift schemaWithoutDescriptions).
+fn schema_without_descriptions(schema: &Value) -> Value {
+    match schema {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(k, _)| k.as_str() != "description")
+                .map(|(k, v)| (k.clone(), schema_without_descriptions(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(schema_without_descriptions).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Nested partial style patch (upstream #330). Description verbatim from
+/// upstream@6dd183c0.
 fn update_text() -> ToolDefinition {
     ToolDefinition {
         name: "update_text",
-        description: "Updates text clips or a captionGroupId. Use for content, typography, color, outline color, background color, animation, or text-box transform. Content/typography changes auto-fit the box unless transform is passed. Unknown fields are rejected.",
+        description: "Updates text clips or a captionGroupId. The nested style object is a partial patch: omitted values stay unchanged. Use it for typography, color, outline, shadow, and background. Content and layout-affecting style changes auto-fit the box unless transform is passed. Unknown fields are rejected.",
         input_schema: object_optional(&[
             ("clipIds", array("Text clip IDs. Optional if captionGroupId is given.")),
             ("captionGroupId", string("Caption group id from get_timeline.")),
@@ -290,14 +388,7 @@ fn update_text() -> ToolDefinition {
                     &[],
                 ),
             ),
-            ("fontName", string("Font name.")),
-            ("fontSize", number("Canvas points.")),
-            ("isBold", boolean("Bold.")),
-            ("isItalic", boolean("Italic.")),
-            ("color", string("Text color hex.")),
-            ("alignment", string_enum("Text alignment.", &["left", "center", "right"])),
-            ("borderColor", string("Text outline hex; enables outline.")),
-            ("backgroundColor", string("Text box fill hex; enables fill.")),
+            ("style", text_style_schema(true)),
             (
                 "animation",
                 string_enum("Animation preset; off clears.", &["off", "fadeIn", "popIn", "slideUp", "typewriter", "wordReveal", "wordSlide", "wordPop", "wordCycle", "highlightPop", "highlightBlock"]),
@@ -307,8 +398,9 @@ fn update_text() -> ToolDefinition {
     }
 }
 
-/// tool-surface-v2 no-targeting shape. Description verbatim from
-/// upstream@141c69b.
+/// tool-surface-v2 no-targeting shape; nested style per upstream #330 (which
+/// also removed textCase — captions stay auto-cased, style.fontCase is the
+/// replacement). Description verbatim from upstream@141c69b.
 fn add_captions() -> ToolDefinition {
     ToolDefinition {
         name: "add_captions",
@@ -325,17 +417,9 @@ fn add_captions() -> ToolDefinition {
                     &[],
                 ),
             ),
-            ("textCase", string_enum("Letter case.", &["auto", "upper", "lower"])),
             ("censorProfanity", boolean("Mask profanity.")),
             ("maxWords", integer("Max words per caption.")),
-            ("fontName", string("Font name.")),
-            ("fontSize", number("Canvas points.")),
-            ("isBold", boolean("Bold.")),
-            ("isItalic", boolean("Italic.")),
-            ("color", string("Text color hex.")),
-            ("alignment", string_enum("Text alignment.", &["left", "center", "right"])),
-            ("borderColor", string("Text outline hex; enables outline.")),
-            ("backgroundColor", string("Text box fill hex; enables fill.")),
+            ("style", text_style_schema(false)),
             (
                 "animation",
                 string_enum("Caption animation preset.", &["off", "fadeIn", "popIn", "slideUp", "typewriter", "wordReveal", "wordSlide", "wordPop", "wordCycle", "highlightPop", "highlightBlock"]),
@@ -381,12 +465,12 @@ fn add_clips() -> ToolDefinition {
     }
 }
 
-/// tool-surface-v2 entries shape (flattened textStyle). Description verbatim
-/// from upstream@141c69b.
+/// tool-surface-v2 entries shape, nested style per upstream #330. Description
+/// verbatim from upstream@6dd183c0.
 fn add_texts() -> ToolDefinition {
     ToolDefinition {
         name: "add_texts",
-        description: "Adds text clips as timeline layers. Omit trackIndex on every entry to create one new top video track; otherwise set trackIndex on every entry. Transform is normalized text-box center/size; center-only auto-fits, all four fields override the box. Use add_captions for spoken audio captions. Unknown fields are rejected.",
+        description: "Adds text clips as timeline layers. Omit trackIndex on every entry to create one new top video track; otherwise set trackIndex on every entry. Transform is normalized text-box center/size; center-only auto-fits, all four fields override the box. Use the nested style object for typography, outline, shadow, and background. Use add_captions for spoken audio captions. Unknown fields are rejected.",
         input_schema: object(&[(
             "entries",
             array_of(
@@ -415,14 +499,7 @@ fn add_texts() -> ToolDefinition {
                                 &[],
                             ),
                         ),
-                        ("fontName", string("Font name.")),
-                        ("fontSize", number("Canvas points.")),
-                        ("isBold", boolean("Bold.")),
-                        ("isItalic", boolean("Italic.")),
-                        ("color", string("Text color hex.")),
-                        ("alignment", string_enum("Text alignment.", &["left", "center", "right"])),
-                        ("borderColor", string("Text outline hex; enables outline.")),
-                        ("backgroundColor", string("Text box fill hex; enables fill.")),
+                        ("style", text_style_schema(false)),
                         (
                             "animation",
                             string_enum("Animation preset; off clears.", &["off", "fadeIn", "popIn", "slideUp", "typewriter", "wordReveal", "wordSlide", "wordPop", "wordCycle", "highlightPop", "highlightBlock"]),
@@ -1941,6 +2018,77 @@ mod tests {
             .and_then(|v| v.as_array())
             .unwrap();
         assert_eq!(required, &[Value::String("action".into())]);
+    }
+
+    #[test]
+    fn text_tools_carry_the_nested_style_schema() {
+        // Upstream #330/#336: add_texts / update_text / add_captions take the
+        // nested partial `style` patch; the flat fields and add_captions'
+        // textCase are gone.
+        let tools = all_tools();
+        let schema_of = |name: &str| {
+            tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap()
+                .input_schema
+                .clone()
+        };
+
+        let update = schema_of("update_text");
+        let style = update.pointer("/properties/style").expect("nested style");
+        assert_eq!(
+            style.pointer("/properties/fontSize/minimum"),
+            Some(&Value::from(12))
+        );
+        assert_eq!(
+            style.pointer("/properties/tracking/maximum"),
+            Some(&Value::from(100))
+        );
+        for key in ["underline", "strikethrough", "overline"] {
+            assert!(
+                style.pointer(&format!("/properties/{key}")).is_some(),
+                "#336 line style '{key}'"
+            );
+        }
+        assert!(style.pointer("/properties/shadow/properties/offset/properties/x").is_some());
+        assert!(style
+            .pointer("/properties/background/properties/outline/properties/width")
+            .is_some());
+        for flat in ["fontName", "fontSize", "isBold", "isItalic", "color", "alignment", "borderColor", "backgroundColor"] {
+            assert!(
+                update.pointer(&format!("/properties/{flat}")).is_none(),
+                "flat '{flat}' removed from update_text"
+            );
+        }
+
+        // Non-detailed variants strip descriptions and point at update_text.
+        let entry_style = schema_of("add_texts")
+            .pointer("/properties/entries/items/properties/style")
+            .expect("add_texts entry style")
+            .clone();
+        assert_eq!(
+            entry_style.get("description"),
+            Some(&Value::String("Same partial style patch as update_text.".into()))
+        );
+        assert!(
+            entry_style
+                .pointer("/properties/fontSize/description")
+                .is_none(),
+            "nested descriptions stripped"
+        );
+        assert_eq!(
+            entry_style.pointer("/properties/fontSize/minimum"),
+            Some(&Value::from(12)),
+            "ranges survive the strip"
+        );
+
+        let captions = schema_of("add_captions");
+        assert!(captions.pointer("/properties/style").is_some());
+        assert!(
+            captions.pointer("/properties/textCase").is_none(),
+            "#330 removed add_captions textCase"
+        );
     }
 
     #[test]

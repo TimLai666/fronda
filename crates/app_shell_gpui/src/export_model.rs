@@ -175,8 +175,11 @@ impl ExportViewModel {
         self.panel.settings.format = format;
     }
 
+    /// Whether a new export can be submitted. Since the export queue (upstream
+    /// #298) serializes runs, starting while another export is active just
+    /// enqueues — only invalid settings block.
     pub fn can_start_export(&self) -> bool {
-        self.panel.settings_valid() && self.panel.stage != ExportStage::Exporting
+        self.panel.settings_valid()
     }
 
     pub fn start(&mut self) {
@@ -379,8 +382,8 @@ mod tests {
         assert!(!vm.settings_expanded);
         assert_eq!(vm.panel.stage, ExportStage::Exporting);
         assert!(
-            !vm.can_start_export(),
-            "already exporting — can't start again"
+            vm.can_start_export(),
+            "queued exports: submitting while one runs enqueues (#298)"
         );
     }
 

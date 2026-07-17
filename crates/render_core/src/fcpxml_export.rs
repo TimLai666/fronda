@@ -1080,9 +1080,10 @@ fn kf_rows<V>(
 
 /// Emit a text overlay as a `<title>` generator (#254). The title references the shared
 /// `titleBasic` effect and carries a `<text>`/`<text-style-def>` pair (font family/face/size/
-/// colour/alignment), a fit-conform + position transform, and static opacity. Font family is
-/// the name's family part and face derives from weight (Rust has no NSFont resolution, so the
-/// exact system face match Swift does is approximated); border stroke is not yet emitted.
+/// colour/alignment, #330 fontCase display text, border stroke), a fit-conform + position
+/// transform, and static opacity. Font family is the name's family part and face derives from
+/// weight (Rust has no NSFont resolution, so the exact system face match Swift does is
+/// approximated).
 #[allow(clippy::too_many_arguments)]
 fn write_title(
     xml: &mut String,
@@ -1114,13 +1115,14 @@ fn write_title(
         core_model::TextAlignment::Center => "center",
         core_model::TextAlignment::Right => "right",
     };
-    // Border → glyph stroke. Swift's glyphBorderStrokeWidth is -4 (a percent-of-font-size
-    // convention), so strokeWidth = |−4|/100 * fontSize = 0.04 * fontSize.
+    // Border → glyph stroke. Upstream #330: strokeWidth is the border width in
+    // canvas points (Swift `max(0, style.border.width)`), pre-#330 legacy
+    // `border.padding` honoured via effective_border_width.
     let stroke = if style.border.enabled {
         format!(
             " strokeColor=\"{}\" strokeWidth=\"{}\"",
             color_string(&style.border.color),
-            format_number(0.04 * font_size)
+            format_number(crate::text::effective_border_width(&style))
         )
     } else {
         String::new()
@@ -1133,10 +1135,12 @@ fn write_title(
         time_str(clip.duration_frames.max(1), fps)
     );
     let _ = writeln!(xml, "                <text>");
+    // #330: the emitted text is the DISPLAY text (fontCase applied); the title
+    // name attribute above keeps the stored content, mirroring Swift.
     let _ = writeln!(
         xml,
         "                  <text-style ref=\"{style_id}\">{}</text-style>",
-        xml_escape(content)
+        xml_escape(&crate::text::display_text(&style, content))
     );
     let _ = writeln!(xml, "                </text>");
     let _ = writeln!(xml, "                <text-style-def id=\"{style_id}\">");
@@ -2239,11 +2243,14 @@ mod tests {
 
     #[test]
     fn fcpxml_title_border_emits_stroke() {
+        // Upstream #330: strokeWidth is the border width in canvas points —
+        // NOT scaled by fontSize/fontScale (fontScale 2 must not double it).
         let mut c = clip("t1", "", ClipType::Text, 0, 60);
         c.media_type = ClipType::Text;
         c.text_content = Some("Outlined".to_string());
         c.text_style = Some(core_model::TextStyle {
-            font_size: 50.0,
+            font_size: 96.0,
+            font_scale: 2.0,
             border: core_model::TextFill {
                 enabled: true,
                 color: core_model::TextRgba {
@@ -2255,14 +2262,66 @@ mod tests {
                 padding: None,
                 corner_radius: None,
             },
+            border_width: 7.0,
             ..Default::default()
         });
         let tl = timeline(vec![track(ClipType::Video, vec![c])]);
         let xml = FcpxmlExport::export(&tl, &MediaManifest::default());
-        // strokeWidth = 0.04 * 50 = 2.
         assert!(
-            xml.contains("strokeColor=\"0 0 0 1\" strokeWidth=\"2\""),
+            xml.contains("strokeColor=\"0 0 0 1\" strokeWidth=\"7\""),
             "border stroke\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_title_border_stroke_uses_legacy_padding_fallback() {
+        // Pre-#330 Rust files kept the stroke width in border.padding; while
+        // border_width still holds the decode fallback (4) the legacy value wins.
+        let mut c = clip("t1", "", ClipType::Text, 0, 60);
+        c.media_type = ClipType::Text;
+        c.text_content = Some("Outlined".to_string());
+        c.text_style = Some(core_model::TextStyle {
+            border: core_model::TextFill {
+                enabled: true,
+                color: core_model::TextRgba {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+                padding: Some(3.0),
+                corner_radius: None,
+            },
+            ..Default::default()
+        });
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &MediaManifest::default());
+        assert!(
+            xml.contains("strokeColor=\"0 0 0 1\" strokeWidth=\"3\""),
+            "legacy border stroke\n{xml}"
+        );
+    }
+
+    #[test]
+    fn fcpxml_title_text_goes_through_font_case() {
+        // Upstream #330: the <text-style ref> text is the DISPLAY text
+        // (fontCase applied); the title name attribute stays the stored content.
+        let mut c = clip("t1", "", ClipType::Text, 0, 60);
+        c.media_type = ClipType::Text;
+        c.text_content = Some("hook".to_string());
+        c.text_style = Some(core_model::TextStyle {
+            font_case: "uppercase".to_string(),
+            ..Default::default()
+        });
+        let tl = timeline(vec![track(ClipType::Video, vec![c])]);
+        let xml = FcpxmlExport::export(&tl, &MediaManifest::default());
+        assert!(
+            xml.contains(">HOOK</text-style>"),
+            "display text uppercased\n{xml}"
+        );
+        assert!(
+            xml.contains("name=\"hook\""),
+            "title name keeps the stored content\n{xml}"
         );
     }
 

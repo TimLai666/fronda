@@ -27,6 +27,7 @@ pub mod editor_state_hub;
 pub mod editor_view;
 pub mod export_host;
 pub mod export_model;
+pub mod export_queue;
 #[cfg(feature = "desktop-app")]
 pub mod export_view;
 #[cfg(feature = "desktop-app")]

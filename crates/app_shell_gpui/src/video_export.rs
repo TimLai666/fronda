@@ -29,6 +29,54 @@ fn init_ffmpeg() {
     });
 }
 
+/// Error message for a cancelled export; hosts match with [`is_cancel_err`].
+pub const EXPORT_CANCELED_ERR: &str = "Export canceled";
+
+/// Whether an export error string is the cancellation sentinel.
+pub fn is_cancel_err(error: &str) -> bool {
+    error == EXPORT_CANCELED_ERR
+}
+
+/// Hidden sibling staging file for `dest` — same directory, so the final
+/// [`commit_staged`] rename stays atomic. Mirrors Swift
+/// `ExportService.stagingURL`: `.{stem}-{nonce}.partial[.{ext}]`.
+pub fn staging_path(dest: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let stem = dest
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("export");
+    let nonce = format!(
+        "{}-{}",
+        std::process::id(),
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let name = match dest.extension().and_then(|e| e.to_str()) {
+        Some(ext) if !ext.is_empty() => format!(".{stem}-{nonce}.partial.{ext}"),
+        _ => format!(".{stem}-{nonce}.partial"),
+    };
+    dest.with_file_name(name)
+}
+
+/// Move the finished staging file over `dest`. `rename` replaces atomically on
+/// POSIX; on Windows it fails when `dest` exists, so remove-then-rename there.
+pub fn commit_staged(staging: &Path, dest: &Path) -> Result<(), String> {
+    match std::fs::rename(staging, dest) {
+        Ok(()) => Ok(()),
+        Err(first) => {
+            if dest.exists() {
+                std::fs::remove_file(dest)
+                    .map_err(|e| format!("replace {}: {e}", dest.display()))?;
+                std::fs::rename(staging, dest)
+                    .map_err(|e| format!("commit {}: {e}", dest.display()))
+            } else {
+                Err(format!("commit {}: {first}", dest.display()))
+            }
+        }
+    }
+}
+
 /// First available mp4-compatible video encoder: H.264 if present, else the
 /// always-available native MPEG-4 Part 2. `None` when neither is compiled in.
 fn pick_encoder() -> Option<ffmpeg::codec::Codec> {
@@ -842,6 +890,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn staging_path_is_hidden_partial_sibling() {
+        let dest = Path::new("/out/dir/Timeline.mp4");
+        let staging = staging_path(dest);
+        assert_eq!(staging.parent(), dest.parent(), "same directory");
+        let name = staging.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with(".Timeline-"), "hidden, stem-based: {name}");
+        assert!(name.contains(".partial."), "marked partial: {name}");
+        assert!(name.ends_with(".mp4"), "keeps the extension: {name}");
+        assert_ne!(staging, staging_path(dest), "nonce makes each unique");
+
+        let bare = staging_path(Path::new("/out/noext"));
+        assert!(bare.file_name().unwrap().to_str().unwrap().ends_with(".partial"));
+    }
+
+    #[test]
+    fn commit_staged_replaces_existing_destination() {
+        let dir = temp_dir("commit-staged");
+        let dest = dir.join("out.mp4");
+        std::fs::write(&dest, b"old").unwrap();
+        let staging = staging_path(&dest);
+        std::fs::write(&staging, b"new").unwrap();
+        commit_staged(&staging, &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        assert!(!staging.exists(), "staging file consumed");
+
+        // Fresh destination (no pre-existing file) also commits.
+        let dest2 = dir.join("fresh.mp4");
+        let staging2 = staging_path(&dest2);
+        std::fs::write(&staging2, b"data").unwrap();
+        commit_staged(&staging2, &dest2).unwrap();
+        assert_eq!(std::fs::read(&dest2).unwrap(), b"data");
+    }
+
+    #[test]
+    fn cancel_err_sentinel_matches() {
+        assert!(is_cancel_err(EXPORT_CANCELED_ERR));
+        assert!(!is_cancel_err("disk full"));
     }
 
     fn full_frame_clip(id: &str, media_ref: &str, start: i64, dur: i64) -> Clip {

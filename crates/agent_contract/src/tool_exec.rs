@@ -1233,9 +1233,17 @@ impl ToolExecutor {
             "manage_tracks" => gate(m::validate_manage_tracks(args)),
             "add_texts" => {
                 // Mirror cmd_add_texts targeting: an in-range explicit
-                // trackIndex targets that track; anything else auto-picks.
+                // trackIndex (top-level or on the first entry) targets that
+                // track; anything else auto-picks.
                 let track_type = args
                     .get("trackIndex")
+                    .or_else(|| {
+                        args.get("entries")
+                            .or_else(|| args.get("texts"))
+                            .and_then(|v| v.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|e| e.get("trackIndex"))
+                    })
                     .and_then(|v| v.as_i64())
                     .and_then(|i| usize::try_from(i).ok())
                     .and_then(|i| self.timeline.tracks.get(i))
@@ -6908,7 +6916,29 @@ impl ToolExecutor {
 
     /// UPDATE_TEXT (upstream): merge content/typography/transform/animation
     /// changes into existing text clips, addressed by clipIds or captionGroupId.
+    /// Top-level update_text keys: the #330 nested-style shape, plus the flat
+    /// `fontName`/`fontSize`/`color`/`alignment` aliases the in-repo inspector
+    /// (app_shell_gpui inspector_view.rs) still sends — kept as a deprecated
+    /// compat path until the inspector migrates to `style`; the nested patch
+    /// wins when both are present.
+    const UPDATE_TEXT_KEYS: &'static [&'static str] = &[
+        "alignment",
+        "animation",
+        "captionGroupId",
+        "clipIds",
+        "color",
+        "content",
+        "fontName",
+        "fontSize",
+        "highlightColor",
+        "style",
+        "transform",
+    ];
+
     fn cmd_update_text(&mut self, args: &Value) -> Result<Value, String> {
+        if let Some(obj) = args.as_object() {
+            crate::mutation::validate_unknown_keys(obj, Self::UPDATE_TEXT_KEYS, "update_text")?;
+        }
         let mut ids: Vec<String> = args
             .get("clipIds")
             .and_then(|v| v.as_array())
@@ -6954,21 +6984,35 @@ impl ToolExecutor {
 
         // Parse shared updates once (invalid values reject before any mutation).
         let content = args.get("content").and_then(|v| v.as_str());
-        let font_name = args.get("fontName").and_then(|v| v.as_str());
-        let font_size = args.get("fontSize").and_then(|v| v.as_f64());
-        let font_weight = args.get("fontWeight").and_then(|v| v.as_f64());
-        let color = match args.get("color").and_then(|v| v.as_str()) {
-            Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
-                format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
-            })?),
-            None => None,
-        };
-        let alignment = match args.get("alignment").and_then(|v| v.as_str()) {
-            Some(a) => Some(core_model::TextAlignment::from_name(a).ok_or_else(|| {
-                format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
-            })?),
-            None => None,
-        };
+        // #330 nested partial style patch. The deprecated flat inspector
+        // aliases fold into the same patch; nested keys win.
+        let mut style_patch = crate::mutation::parse_text_style_patch(args, "update_text")?
+            .unwrap_or_default();
+        if style_patch.font_name.is_none() {
+            style_patch.font_name = args
+                .get("fontName")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
+        if style_patch.font_size.is_none() {
+            style_patch.font_size = args.get("fontSize").and_then(|v| v.as_f64());
+        }
+        if style_patch.color.is_none() {
+            style_patch.color = match args.get("color").and_then(|v| v.as_str()) {
+                Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+                    format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
+                })?),
+                None => None,
+            };
+        }
+        if style_patch.alignment.is_none() {
+            style_patch.alignment = match args.get("alignment").and_then(|v| v.as_str()) {
+                Some(a) => Some(core_model::TextAlignment::from_name(a).ok_or_else(|| {
+                    format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
+                })?),
+                None => None,
+            };
+        }
         let animation_raw = args.get("animation").and_then(|v| v.as_str());
         let clear_animation = animation_raw == Some("off");
         let animation = if clear_animation {
@@ -6991,23 +7035,16 @@ impl ToolExecutor {
                 flip_vertical: None,
             });
 
-        // v2 flattened style additions: isBold/isItalic/borderColor/backgroundColor.
-        let is_bold = args.get("isBold").and_then(|v| v.as_bool());
-        let is_italic = args.get("isItalic").and_then(|v| v.as_bool());
-        let border_color = match args.get("borderColor").and_then(|v| v.as_str()) {
-            Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
-                format!("invalid borderColor '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
-            })?),
-            None => None,
-        };
-        let background_color = match args.get("backgroundColor").and_then(|v| v.as_str()) {
-            Some(hex) => Some(core_model::TextRgba::from_hex(hex).ok_or_else(|| {
-                format!(
-                    "invalid backgroundColor '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'"
-                )
-            })?),
-            None => None,
-        };
+        // Swift parity (#330): a call that names targets but patches nothing
+        // is a mistake, not a no-op.
+        if content.is_none()
+            && !style_patch.has_any_field()
+            && partial_transform.is_none()
+            && animation_raw.is_none()
+            && args.get("highlightColor").is_none()
+        {
+            return Err("update_text needs at least one text property to apply".to_string());
+        }
 
         for id in &ids {
             let loc = timeline_core::find_clip(&self.timeline, id).expect("validated above");
@@ -7015,46 +7052,9 @@ impl ToolExecutor {
             if let Some(c) = content {
                 clip.text_content = Some(c.to_string());
             }
-            if font_name.is_some()
-                || font_size.is_some()
-                || font_weight.is_some()
-                || color.is_some()
-                || alignment.is_some()
-                || is_bold.is_some()
-                || is_italic.is_some()
-                || border_color.is_some()
-                || background_color.is_some()
-            {
+            if style_patch.has_any_field() {
                 let style = clip.text_style.get_or_insert_with(TextStyle::default);
-                if let Some(f) = font_name {
-                    style.font_name = f.to_string();
-                }
-                if let Some(sz) = font_size {
-                    style.font_size = sz;
-                }
-                if let Some(w) = font_weight {
-                    style.font_weight = w;
-                }
-                if let Some(b) = is_bold {
-                    style.font_weight = if b { 700.0 } else { 400.0 };
-                }
-                if let Some(i) = is_italic {
-                    style.is_italic = i;
-                }
-                if let Some(c) = color {
-                    style.color = c;
-                }
-                if let Some(a) = alignment {
-                    style.alignment = a;
-                }
-                if let Some(bc) = &border_color {
-                    style.border.enabled = true;
-                    style.border.color = *bc;
-                }
-                if let Some(bg) = &background_color {
-                    style.background.enabled = true;
-                    style.background.color = *bg;
-                }
+                crate::mutation::apply_text_style_patch(&style_patch, style);
             }
             if let Some(pt) = &partial_transform {
                 clip.transform = pt.merge_into(&clip.transform);
@@ -7540,7 +7540,7 @@ impl ToolExecutor {
             }
         }
 
-        for t_val in texts_val {
+        for (idx, t_val) in texts_val.iter().enumerate() {
             // Accept Swift's `content` key, falling back to `text`.
             let text = t_val
                 .get("content")
@@ -7569,46 +7569,13 @@ impl ToolExecutor {
                 ));
             }
 
-            // Per-entry text styling (reuses the set_clip_properties parsers).
+            // Per-entry nested style patch onto the defaults (upstream #330;
+            // the flat fontName/fontSize/… fields were removed with it).
             let mut style = TextStyle::default();
-            if let Some(f) = t_val.get("fontName").and_then(|v| v.as_str()) {
-                style.font_name = f.to_string();
-            }
-            if let Some(s) = t_val.get("fontSize").and_then(|v| v.as_f64()) {
-                style.font_size = s;
-            }
-            if let Some(w) = t_val.get("fontWeight").and_then(|v| v.as_f64()) {
-                style.font_weight = w;
-            }
-            if let Some(b) = t_val.get("isBold").and_then(|v| v.as_bool()) {
-                style.font_weight = if b { 700.0 } else { 400.0 };
-            }
-            if let Some(i) = t_val.get("isItalic").and_then(|v| v.as_bool()) {
-                style.is_italic = i;
-            }
-            if let Some(hex) = t_val.get("color").and_then(|v| v.as_str()) {
-                style.color = core_model::TextRgba::from_hex(hex).ok_or_else(|| {
-                    format!("invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
-                })?;
-            }
-            if let Some(a) = t_val.get("alignment").and_then(|v| v.as_str()) {
-                style.alignment = core_model::TextAlignment::from_name(a).ok_or_else(|| {
-                    format!("invalid alignment '{a}'. Expected 'left', 'center', or 'right'")
-                })?;
-            }
-            if let Some(hex) = t_val.get("borderColor").and_then(|v| v.as_str()) {
-                style.border.enabled = true;
-                style.border.color = core_model::TextRgba::from_hex(hex).ok_or_else(|| {
-                    format!(
-                        "invalid borderColor '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'"
-                    )
-                })?;
-            }
-            if let Some(hex) = t_val.get("backgroundColor").and_then(|v| v.as_str()) {
-                style.background.enabled = true;
-                style.background.color = core_model::TextRgba::from_hex(hex).ok_or_else(|| {
-                    format!("invalid backgroundColor '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'")
-                })?;
+            if let Some(patch) =
+                crate::mutation::parse_text_style_patch(t_val, &format!("entries[{idx}]"))?
+            {
+                crate::mutation::apply_text_style_patch(&patch, &mut style);
             }
 
             // Explicit box override; partial (centre-only) shifts position, keeping
@@ -11931,7 +11898,8 @@ mod tests {
         let mut exec = make_executor();
         let err = exec.execute("add_texts", &json!({})).unwrap_err();
         // wire-mutation-validators: MUT-019 gate message (also rejects []).
-        assert!(err.contains("missing or empty 'texts'"), "got: {err}");
+        // The v2 contract key is 'entries' (legacy 'texts' still parses).
+        assert!(err.contains("missing or empty 'entries'"), "got: {err}");
     }
 
     #[test]
@@ -12071,17 +12039,21 @@ mod tests {
 
     #[test]
     fn add_texts_applies_per_entry_style_and_transform() {
+        // #330: per-entry styling arrives as the nested `style` patch (the
+        // flat fontName/fontSize/… fields were removed with the upstream PR).
         let mut exec = make_executor();
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         exec.execute(
             "add_texts",
             &json!({"texts": [{
                 "content": "Title",
-                "fontName": "Anton",
-                "fontSize": 72.0,
-                "fontWeight": 700.0,
-                "color": "#00FF00",
-                "alignment": "left",
+                "style": {
+                    "fontName": "Anton",
+                    "fontSize": 72.0,
+                    "bold": true,
+                    "color": "#00FF00",
+                    "alignment": "left"
+                },
                 "transform": {"centerX": 0.5, "centerY": 0.9}
             }]}),
         )
@@ -12091,7 +12063,7 @@ mod tests {
         let ts = clip.text_style.as_ref().unwrap();
         assert_eq!(ts.font_name, "Anton");
         assert_eq!(ts.font_size, 72.0);
-        assert_eq!(ts.font_weight, 700.0);
+        assert_eq!(ts.font_weight, 700.0, "bold maps to weight 700");
         assert_eq!((ts.color.r, ts.color.g, ts.color.b), (0.0, 1.0, 0.0));
         assert_eq!(ts.alignment, core_model::TextAlignment::Left);
         // Centre-only transform repositions; the y matches the request.
@@ -12105,7 +12077,7 @@ mod tests {
         let err = exec
             .execute(
                 "add_texts",
-                &json!({"texts": [{"content": "x", "color": "zzz"}]}),
+                &json!({"texts": [{"content": "x", "style": {"color": "zzz"}}]}),
             )
             .unwrap_err();
         assert!(err.contains("invalid color"), "got: {err}");
@@ -14974,7 +14946,7 @@ mod tests {
             "add_texts",
             &json!({"texts": [
                 {"content": "Hello", "startFrame": 0, "durationFrames": 60,
-                 "fontSize": 40.0, "animation": "popIn"},
+                 "style": {"fontSize": 40.0}, "animation": "popIn"},
                 {"content": "World", "startFrame": 60, "durationFrames": 60}
             ]}),
         )
@@ -14996,7 +14968,7 @@ mod tests {
         // Merge semantics: change color + content on clip 0; fontSize stays.
         exec.execute(
             "update_text",
-            &json!({"clipIds": [ids[0]], "content": "Hi", "color": "#ff0000"}),
+            &json!({"clipIds": [ids[0]], "content": "Hi", "style": {"color": "#ff0000"}}),
         )
         .unwrap();
         let c0 = exec.timeline().tracks[0]
@@ -15031,7 +15003,7 @@ mod tests {
         // captionGroupId addressing.
         exec.execute(
             "update_text",
-            &json!({"captionGroupId": "cg1", "fontName": "Anton"}),
+            &json!({"captionGroupId": "cg1", "style": {"fontName": "Anton"}}),
         )
         .unwrap();
         let c1 = exec.timeline().tracks[0]
@@ -15049,6 +15021,263 @@ mod tests {
             .execute("update_text", &json!({"captionGroupId": "nope"}))
             .unwrap_err();
         assert!(err.contains("No caption clips"), "{err}");
+    }
+
+    // ── Upstream #330/#336: nested text-style patch (text-style-v0610-full) ──
+
+    /// One text clip on track 0; returns its id.
+    fn executor_with_text_clip() -> (ToolExecutor, String) {
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_texts",
+            &json!({"entries": [{"trackIndex": 0, "startFrame": 0, "endFrame": 60, "content": "Styled"}]}),
+        )
+        .unwrap();
+        let id = exec.timeline().tracks[0].clips[0].id.clone();
+        (exec, id)
+    }
+
+    #[test]
+    fn add_texts_applies_nested_rich_style_fields() {
+        // Transplant of upstream addTextsAppliesRichTextStyleFields
+        // (#330 + the #336 line styles).
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        exec.execute(
+            "add_texts",
+            &json!({"entries": [{
+                "trackIndex": 0,
+                "startFrame": 0,
+                "endFrame": 60,
+                "content": "Styled",
+                "style": {
+                    "fontSize": 54,
+                    "tracking": 5,
+                    "lineSpacing": 12,
+                    "fontCase": "uppercase",
+                    "underline": true,
+                    "strikethrough": true,
+                    "overline": true,
+                    "outline": {"enabled": true, "width": 3},
+                    "shadow": {"opacity": 0.4, "offset": {"x": 0, "y": -3}},
+                    "background": {
+                        "enabled": true,
+                        "padding": {"x": 20, "y": 10},
+                        "cornerRadius": 9
+                    }
+                }
+            }]}),
+        )
+        .unwrap();
+        let ts = exec.timeline().tracks[0].clips[0]
+            .text_style
+            .clone()
+            .expect("style applied");
+        assert_eq!(ts.font_size, 54.0);
+        assert_eq!(ts.tracking, 5.0);
+        assert_eq!(ts.line_spacing, 12.0);
+        assert_eq!(ts.font_case, "uppercase");
+        assert!(ts.is_underlined && ts.is_struck_through && ts.is_overlined);
+        assert!(ts.border.enabled);
+        assert_eq!(ts.border_width, 3.0, "outline.width lands in border_width");
+        assert_eq!(ts.shadow.color.a, 0.4);
+        assert_eq!((ts.shadow.offset_x, ts.shadow.offset_y), (0.0, -3.0));
+        assert!(ts.background.enabled);
+        assert_eq!(ts.background_style.padding_x, 20.0);
+        assert_eq!(ts.background_style.padding_y, 10.0);
+        assert_eq!(ts.background_style.corner_radius, 9.0);
+    }
+
+    #[test]
+    fn add_texts_rejects_legacy_flat_style_field() {
+        // Transplant of upstream addTextsRejectsLegacyStyleField: a flat
+        // fontSize on the entry is an unknown field post-#330.
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let err = exec
+            .execute(
+                "add_texts",
+                &json!({"entries": [{
+                    "trackIndex": 0,
+                    "startFrame": 0,
+                    "endFrame": 60,
+                    "content": "Invalid",
+                    "fontSize": 48
+                }]}),
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("unknown field") && err.contains("fontSize"),
+            "got: {err}"
+        );
+        assert!(exec.timeline().tracks[0].clips.is_empty(), "no partial state");
+    }
+
+    #[test]
+    fn update_text_style_partial_patch_keeps_unpatched_fields() {
+        // Spec scenario: patching style.outline.width only leaves every other
+        // style field at its prior value.
+        let (mut exec, id) = executor_with_text_clip();
+        exec.execute(
+            "update_text",
+            &json!({"clipIds": [id], "style": {
+                "fontSize": 80,
+                "tracking": 7,
+                "outline": {"enabled": true, "color": "#102030", "width": 5}
+            }}),
+        )
+        .unwrap();
+        exec.execute(
+            "update_text",
+            &json!({"clipIds": [id], "style": {"outline": {"width": 9}}}),
+        )
+        .unwrap();
+        let ts = exec.timeline().tracks[0].clips[0]
+            .text_style
+            .clone()
+            .unwrap();
+        assert_eq!(ts.border_width, 9.0, "patched key applied");
+        assert_eq!(ts.font_size, 80.0, "unpatched fontSize kept");
+        assert_eq!(ts.tracking, 7.0, "unpatched tracking kept");
+        assert!(ts.border.enabled, "unpatched outline.enabled kept");
+        assert!(
+            (ts.border.color.b - 48.0 / 255.0).abs() < 1e-9,
+            "unpatched outline.color kept"
+        );
+    }
+
+    #[test]
+    fn update_text_nested_color_preserves_separate_opacity() {
+        // Transplant of upstream updateTextNestedColorPreservesSeparateOpacity:
+        // a six-digit hex keeps the target's alpha; opacity is its own knob.
+        let (mut exec, id) = executor_with_text_clip();
+        exec.execute(
+            "update_text",
+            &json!({"clipIds": [id], "style": {"shadow": {"opacity": 0.25}}}),
+        )
+        .unwrap();
+        exec.execute(
+            "update_text",
+            &json!({"clipIds": [id], "style": {"shadow": {"color": "#FF0000"}}}),
+        )
+        .unwrap();
+        let shadow = exec.timeline().tracks[0].clips[0]
+            .text_style
+            .clone()
+            .unwrap()
+            .shadow;
+        assert_eq!(
+            (shadow.color.r, shadow.color.g, shadow.color.b),
+            (1.0, 0.0, 0.0)
+        );
+        assert_eq!(shadow.color.a, 0.25, "six-digit hex preserves alpha");
+
+        // Eight digits DO set the alpha (Swift RGBA(hex:) semantics).
+        exec.execute(
+            "update_text",
+            &json!({"clipIds": [id], "style": {"background": {"enabled": true, "color": "#00000080"}}}),
+        )
+        .unwrap();
+        let bg = exec.timeline().tracks[0].clips[0]
+            .text_style
+            .clone()
+            .unwrap()
+            .background;
+        assert!(
+            (bg.color.a - 128.0 / 255.0).abs() < 1e-9,
+            "eight-digit hex sets alpha, got {}",
+            bg.color.a
+        );
+    }
+
+    #[test]
+    fn update_text_rejects_out_of_range_and_unknown_style_values() {
+        let (mut exec, id) = executor_with_text_clip();
+        let err = exec
+            .execute(
+                "update_text",
+                &json!({"clipIds": [id], "style": {"fontSize": 8}}),
+            )
+            .unwrap_err();
+        assert!(err.contains("must be between 12 and 300"), "got: {err}");
+        let err = exec
+            .execute(
+                "update_text",
+                &json!({"clipIds": [id], "style": {"fontCase": "shouty"}}),
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("expected mixed, uppercase, or lowercase"),
+            "got: {err}"
+        );
+        let err = exec
+            .execute(
+                "update_text",
+                &json!({"clipIds": [id], "style": {"isBold": true}}),
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("unknown field") && err.contains("isBold"),
+            "flat isBold is gone from the style patch: {err}"
+        );
+    }
+
+    #[test]
+    fn update_text_requires_at_least_one_property() {
+        let (mut exec, id) = executor_with_text_clip();
+        let err = exec
+            .execute("update_text", &json!({"clipIds": [id]}))
+            .unwrap_err();
+        assert!(
+            err.contains("needs at least one text property"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn update_text_flat_inspector_aliases_still_apply() {
+        // Deprecated compat path: the in-repo inspector still sends flat
+        // fontSize/fontName/color/alignment; the nested patch wins over them.
+        let (mut exec, id) = executor_with_text_clip();
+        exec.execute("update_text", &json!({"clipIds": [id], "fontSize": 40.0}))
+            .unwrap();
+        assert_eq!(
+            exec.timeline().tracks[0].clips[0]
+                .text_style
+                .clone()
+                .unwrap()
+                .font_size,
+            40.0
+        );
+        exec.execute(
+            "update_text",
+            &json!({"clipIds": [id], "fontSize": 60.0, "style": {"fontSize": 90.0}}),
+        )
+        .unwrap();
+        assert_eq!(
+            exec.timeline().tracks[0].clips[0]
+                .text_style
+                .clone()
+                .unwrap()
+                .font_size,
+            90.0,
+            "nested style wins over the flat alias"
+        );
+    }
+
+    #[test]
+    fn add_captions_rejects_text_case() {
+        // Upstream #330 removed add_captions' textCase (captions stay
+        // auto-cased; style.fontCase is the replacement).
+        let mut exec = make_executor();
+        let err = exec
+            .execute("add_captions", &json!({"textCase": "upper"}))
+            .unwrap_err();
+        assert!(
+            err.contains("unknown field") && err.contains("textCase"),
+            "got: {err}"
+        );
     }
 
     struct MockExportHost;

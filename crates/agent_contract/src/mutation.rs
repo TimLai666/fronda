@@ -866,6 +866,499 @@ pub fn validate_ripple_delete_ranges(input: &Value) -> ValidationResult<RippleDe
     })
 }
 
+// === Upstream #330/#336: nested text-style patch ===========================
+//
+// The `style` object on add_texts / update_text / add_captions is a PARTIAL
+// patch: only the keys present are applied. Shapes, ranges, and messages
+// mirror Swift `ToolExecutor+Texts.swift` (ParsedTextStylePatch and friends).
+
+/// Reject keys outside `allowed` with Swift's validateUnknownKeys message.
+pub fn validate_unknown_keys(
+    obj: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    path: &str,
+) -> Result<(), String> {
+    let mut unknown: Vec<&str> = obj
+        .keys()
+        .map(|k| k.as_str())
+        .filter(|k| !allowed.contains(k))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    let mut allowed_sorted: Vec<&str> = allowed.to_vec();
+    allowed_sorted.sort_unstable();
+    Err(format!(
+        "{path}: unknown field(s) '{}'. Allowed: {}.",
+        unknown.join("', '"),
+        allowed_sorted.join(", ")
+    ))
+}
+
+/// A parsed colour plus whether the hex carried its own alpha: 8-digit hex
+/// sets the target's opacity, 3/6-digit preserves it (Swift semantics).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextColorPatch {
+    pub value: core_model::TextRgba,
+    pub includes_opacity: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TextOutlinePatch {
+    pub enabled: Option<bool>,
+    pub color: Option<core_model::TextRgba>,
+    pub width: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TextShadowPatch {
+    pub enabled: Option<bool>,
+    pub color: Option<TextColorPatch>,
+    pub opacity: Option<f64>,
+    pub offset_x: Option<f64>,
+    pub offset_y: Option<f64>,
+    pub blur: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TextBackgroundPatch {
+    pub enabled: Option<bool>,
+    pub color: Option<TextColorPatch>,
+    pub opacity: Option<f64>,
+    pub padding_x: Option<f64>,
+    pub padding_y: Option<f64>,
+    pub offset_x: Option<f64>,
+    pub offset_y: Option<f64>,
+    pub corner_radius: Option<f64>,
+    pub outline_color: Option<core_model::TextRgba>,
+    pub outline_width: Option<f64>,
+}
+
+impl TextBackgroundPatch {
+    /// Keys that land in the rich `TextBackgroundStyle` layout fields.
+    fn touches_layout(&self) -> bool {
+        self.padding_x.is_some()
+            || self.padding_y.is_some()
+            || self.offset_x.is_some()
+            || self.offset_y.is_some()
+            || self.corner_radius.is_some()
+            || self.outline_color.is_some()
+            || self.outline_width.is_some()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TextStylePatch {
+    pub font_name: Option<String>,
+    pub font_size: Option<f64>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    pub strikethrough: Option<bool>,
+    pub overline: Option<bool>,
+    pub tracking: Option<f64>,
+    pub line_spacing: Option<f64>,
+    pub font_case: Option<String>,
+    pub color: Option<core_model::TextRgba>,
+    pub alignment: Option<core_model::TextAlignment>,
+    pub outline: Option<TextOutlinePatch>,
+    pub shadow: Option<TextShadowPatch>,
+    pub background: Option<TextBackgroundPatch>,
+}
+
+impl TextStylePatch {
+    pub fn has_any_field(&self) -> bool {
+        self.font_name.is_some()
+            || self.font_size.is_some()
+            || self.bold.is_some()
+            || self.italic.is_some()
+            || self.underline.is_some()
+            || self.strikethrough.is_some()
+            || self.overline.is_some()
+            || self.tracking.is_some()
+            || self.line_spacing.is_some()
+            || self.font_case.is_some()
+            || self.color.is_some()
+            || self.alignment.is_some()
+            || self.outline.is_some_and(|o| o != TextOutlinePatch::default())
+            || self.shadow.is_some_and(|s| s != TextShadowPatch::default())
+            || self
+                .background
+                .is_some_and(|b| b != TextBackgroundPatch::default())
+    }
+}
+
+fn as_object<'v>(
+    raw: &'v Value,
+    path: &str,
+) -> Result<&'v serde_json::Map<String, Value>, String> {
+    raw.as_object().ok_or_else(|| format!("{path}: expected object"))
+}
+
+fn opt_bool(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<Option<bool>, String> {
+    match obj.get(key) {
+        None => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(format!("{path}.{key}: expected boolean")),
+    }
+}
+
+fn opt_number(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    path: &str,
+    range: Option<(f64, f64)>,
+) -> Result<Option<f64>, String> {
+    let Some(raw) = obj.get(key) else {
+        return Ok(None);
+    };
+    let value = raw
+        .as_f64()
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| format!("{path}.{key}: expected finite number"))?;
+    if let Some((lo, hi)) = range {
+        if !(lo..=hi).contains(&value) {
+            return Err(format!("{path}.{key}: must be between {lo} and {hi}"));
+        }
+    }
+    Ok(Some(value))
+}
+
+fn opt_nonempty_string(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
+    match obj.get(key) {
+        None => Ok(None),
+        Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.clone())),
+        Some(_) => Err(format!("{path}.{key}: expected non-empty string")),
+    }
+}
+
+fn opt_color(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<Option<TextColorPatch>, String> {
+    let Some(raw) = obj.get(key) else {
+        return Ok(None);
+    };
+    let hex = raw
+        .as_str()
+        .ok_or_else(|| format!("{path}.{key}: expected string"))?;
+    let value = core_model::TextRgba::from_hex(hex).ok_or_else(|| {
+        format!("{path}.{key}: invalid color '{hex}'. Expected '#RGB', '#RRGGBB', or '#RRGGBBAA'.")
+    })?;
+    let digits = hex.trim().trim_start_matches('#');
+    Ok(Some(TextColorPatch {
+        value,
+        includes_opacity: digits.len() == 8,
+    }))
+}
+
+/// `{x, y}` pair with both members optional (shadow offset, background
+/// padding/center).
+fn opt_pair(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    path: &str,
+    range: (f64, f64),
+) -> Result<(Option<f64>, Option<f64>), String> {
+    let Some(raw) = obj.get(key) else {
+        return Ok((None, None));
+    };
+    let pair = as_object(raw, &format!("{path}.{key}"))?;
+    let pair_path = format!("{path}.{key}");
+    validate_unknown_keys(pair, &["x", "y"], &pair_path)?;
+    Ok((
+        opt_number(pair, "x", &pair_path, Some(range))?,
+        opt_number(pair, "y", &pair_path, Some(range))?,
+    ))
+}
+
+fn parse_outline_patch(raw: Option<&Value>, path: &str) -> Result<Option<TextOutlinePatch>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    let obj = as_object(raw, path)?;
+    validate_unknown_keys(obj, &["enabled", "color", "width"], path)?;
+    Ok(Some(TextOutlinePatch {
+        enabled: opt_bool(obj, "enabled", path)?,
+        color: opt_color(obj, "color", path)?.map(|c| c.value),
+        width: opt_number(obj, "width", path, Some((0.0, 40.0)))?,
+    }))
+}
+
+fn parse_shadow_patch(raw: Option<&Value>, path: &str) -> Result<Option<TextShadowPatch>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    let obj = as_object(raw, path)?;
+    validate_unknown_keys(obj, &["enabled", "color", "opacity", "offset", "blur"], path)?;
+    let (offset_x, offset_y) = opt_pair(obj, "offset", path, (-200.0, 200.0))?;
+    Ok(Some(TextShadowPatch {
+        enabled: opt_bool(obj, "enabled", path)?,
+        color: opt_color(obj, "color", path)?,
+        opacity: opt_number(obj, "opacity", path, Some((0.0, 1.0)))?,
+        offset_x,
+        offset_y,
+        blur: opt_number(obj, "blur", path, Some((0.0, 100.0)))?,
+    }))
+}
+
+fn parse_background_patch(
+    raw: Option<&Value>,
+    path: &str,
+) -> Result<Option<TextBackgroundPatch>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    let obj = as_object(raw, path)?;
+    validate_unknown_keys(
+        obj,
+        &["enabled", "color", "opacity", "padding", "center", "cornerRadius", "outline"],
+        path,
+    )?;
+    let (padding_x, padding_y) = opt_pair(obj, "padding", path, (0.0, 300.0))?;
+    let (offset_x, offset_y) = opt_pair(obj, "center", path, (-500.0, 500.0))?;
+    let (outline_color, outline_width) = match obj.get("outline") {
+        None => (None, None),
+        Some(raw) => {
+            let outline_path = format!("{path}.outline");
+            let outline = as_object(raw, &outline_path)?;
+            validate_unknown_keys(outline, &["color", "width"], &outline_path)?;
+            (
+                opt_color(outline, "color", &outline_path)?.map(|c| c.value),
+                opt_number(outline, "width", &outline_path, Some((0.0, 40.0)))?,
+            )
+        }
+    };
+    Ok(Some(TextBackgroundPatch {
+        enabled: opt_bool(obj, "enabled", path)?,
+        color: opt_color(obj, "color", path)?,
+        opacity: opt_number(obj, "opacity", path, Some((0.0, 1.0)))?,
+        padding_x,
+        padding_y,
+        offset_x,
+        offset_y,
+        corner_radius: opt_number(obj, "cornerRadius", path, Some((0.0, 300.0)))?,
+        outline_color,
+        outline_width,
+    }))
+}
+
+/// Parse the nested `style` object out of `args` (Ok(None) when absent).
+/// `path` names the carrier for error messages ("update_text",
+/// "entries[0]", "add_captions").
+pub fn parse_text_style_patch(args: &Value, path: &str) -> Result<Option<TextStylePatch>, String> {
+    let Some(raw) = args.get("style") else {
+        return Ok(None);
+    };
+    let style_path = format!("{path}.style");
+    let obj = as_object(raw, &style_path)?;
+    validate_unknown_keys(
+        obj,
+        &[
+            "fontName",
+            "fontSize",
+            "bold",
+            "italic",
+            "underline",
+            "strikethrough",
+            "overline",
+            "tracking",
+            "lineSpacing",
+            "fontCase",
+            "color",
+            "alignment",
+            "outline",
+            "shadow",
+            "background",
+        ],
+        &style_path,
+    )?;
+    let font_case = match obj.get("fontCase") {
+        None => None,
+        Some(v) => match v.as_str() {
+            Some(s @ ("mixed" | "uppercase" | "lowercase")) => Some(s.to_string()),
+            _ => {
+                return Err(format!(
+                    "{style_path}.fontCase: expected mixed, uppercase, or lowercase"
+                ))
+            }
+        },
+    };
+    let alignment = match obj.get("alignment") {
+        None => None,
+        Some(v) => {
+            let raw = v
+                .as_str()
+                .ok_or_else(|| format!("{style_path}.alignment: expected string"))?;
+            Some(core_model::TextAlignment::from_name(raw).ok_or_else(|| {
+                format!(
+                    "{style_path}.alignment: invalid alignment '{raw}'. Expected 'left', 'center', or 'right'."
+                )
+            })?)
+        }
+    };
+    Ok(Some(TextStylePatch {
+        font_name: opt_nonempty_string(obj, "fontName", &style_path)?,
+        font_size: opt_number(obj, "fontSize", &style_path, Some((12.0, 300.0)))?,
+        bold: opt_bool(obj, "bold", &style_path)?,
+        italic: opt_bool(obj, "italic", &style_path)?,
+        underline: opt_bool(obj, "underline", &style_path)?,
+        strikethrough: opt_bool(obj, "strikethrough", &style_path)?,
+        overline: opt_bool(obj, "overline", &style_path)?,
+        tracking: opt_number(obj, "tracking", &style_path, Some((-20.0, 100.0)))?,
+        line_spacing: opt_number(obj, "lineSpacing", &style_path, Some((-100.0, 300.0)))?,
+        font_case,
+        color: opt_color(obj, "color", &style_path)?.map(|c| c.value),
+        alignment,
+        outline: parse_outline_patch(obj.get("outline"), &format!("{style_path}.outline"))?,
+        shadow: parse_shadow_patch(obj.get("shadow"), &format!("{style_path}.shadow"))?,
+        background: parse_background_patch(
+            obj.get("background"),
+            &format!("{style_path}.background"),
+        )?,
+    }))
+}
+
+/// Apply a parsed patch onto a `TextStyle` (Swift `applyTextStylePatch`).
+/// `bold` maps to font_weight 700/400 (the Rust model keeps a weight, not a
+/// bool); outline width lands in `border_width`; the background layout keys
+/// land in `background_style`, migrating any pre-#330 legacy
+/// `padding`/`corner_radius` first so a partial patch keeps them.
+pub fn apply_text_style_patch(patch: &TextStylePatch, style: &mut core_model::TextStyle) {
+    if let Some(f) = &patch.font_name {
+        style.font_name = f.clone();
+    }
+    if let Some(s) = patch.font_size {
+        style.font_size = s;
+    }
+    if let Some(b) = patch.bold {
+        style.font_weight = if b { 700.0 } else { 400.0 };
+    }
+    if let Some(i) = patch.italic {
+        style.is_italic = i;
+    }
+    if let Some(u) = patch.underline {
+        style.is_underlined = u;
+    }
+    if let Some(s) = patch.strikethrough {
+        style.is_struck_through = s;
+    }
+    if let Some(o) = patch.overline {
+        style.is_overlined = o;
+    }
+    if let Some(t) = patch.tracking {
+        style.tracking = t;
+    }
+    if let Some(l) = patch.line_spacing {
+        style.line_spacing = l;
+    }
+    if let Some(fc) = &patch.font_case {
+        style.font_case = fc.clone();
+    }
+    if let Some(c) = patch.color {
+        style.color = c;
+    }
+    if let Some(a) = patch.alignment {
+        style.alignment = a;
+    }
+    if let Some(outline) = &patch.outline {
+        if let Some(e) = outline.enabled {
+            style.border.enabled = e;
+        }
+        if let Some(c) = outline.color {
+            style.border.color = c;
+        }
+        if let Some(w) = outline.width {
+            style.border_width = w;
+            // An explicit width retires the pre-#330 legacy stroke width so the
+            // renderer's fallback can't shadow it.
+            style.border.padding = None;
+        }
+    }
+    if let Some(shadow) = &patch.shadow {
+        if let Some(e) = shadow.enabled {
+            style.shadow.enabled = e;
+        }
+        if let Some(c) = shadow.color {
+            if c.includes_opacity {
+                style.shadow.color = c.value;
+            } else {
+                let a = style.shadow.color.a;
+                style.shadow.color = core_model::TextRgba { a, ..c.value };
+            }
+        }
+        if let Some(o) = shadow.opacity {
+            style.shadow.color.a = o;
+        }
+        if let Some(x) = shadow.offset_x {
+            style.shadow.offset_x = x;
+        }
+        if let Some(y) = shadow.offset_y {
+            style.shadow.offset_y = y;
+        }
+        if let Some(b) = shadow.blur {
+            style.shadow.blur = b;
+        }
+    }
+    if let Some(background) = &patch.background {
+        if background.touches_layout() {
+            if style.background_style == core_model::TextBackgroundStyle::default()
+                && (style.background.padding.is_some() || style.background.corner_radius.is_some())
+            {
+                // Migrate the pre-#330 legacy layout into the rich fields so a
+                // partial patch keeps un-patched padding/radius…
+                let pad = style.background.padding.unwrap_or(0.0);
+                style.background_style.padding_x = pad;
+                style.background_style.padding_y = pad;
+                style.background_style.corner_radius =
+                    style.background.corner_radius.unwrap_or(0.0);
+            }
+            // …then retire the legacy keys (the renderer fallback keys on them).
+            style.background.padding = None;
+            style.background.corner_radius = None;
+        }
+        if let Some(e) = background.enabled {
+            style.background.enabled = e;
+        }
+        if let Some(c) = background.color {
+            if c.includes_opacity {
+                style.background.color = c.value;
+            } else {
+                let a = style.background.color.a;
+                style.background.color = core_model::TextRgba { a, ..c.value };
+            }
+        }
+        if let Some(o) = background.opacity {
+            style.background.color.a = o;
+        }
+        if let Some(x) = background.padding_x {
+            style.background_style.padding_x = x;
+        }
+        if let Some(y) = background.padding_y {
+            style.background_style.padding_y = y;
+        }
+        if let Some(x) = background.offset_x {
+            style.background_style.offset_x = x;
+        }
+        if let Some(y) = background.offset_y {
+            style.background_style.offset_y = y;
+        }
+        if let Some(r) = background.corner_radius {
+            style.background_style.corner_radius = r;
+        }
+        if let Some(c) = background.outline_color {
+            style.background_style.outline_color = c;
+        }
+        if let Some(w) = background.outline_width {
+            style.background_style.outline_width = w;
+        }
+    }
+}
+
 // === MUT-019/020: add_texts ===============================================
 
 /// Parsed and validated text entry for `add_texts`. Fields the executor
@@ -886,8 +1379,26 @@ pub struct AddTextsInput {
     pub track_index: Option<usize>,
 }
 
-/// MUT-019: Validate `add_texts` input. Auto-creates visual track when all
-/// entries omit trackIndex.
+/// Per-entry keys: the v2 shape (upstream #330) plus the Rust-legacy
+/// `text`/`durationFrames` aliases older callers still send. Flat style
+/// fields (fontSize, color, …) were removed by #330 — they reject here.
+const ADD_TEXTS_ENTRY_KEYS: &[&str] = &[
+    "animation",
+    "content",
+    "durationFrames",
+    "endFrame",
+    "highlightColor",
+    "startFrame",
+    "style",
+    "text",
+    "trackIndex",
+    "transform",
+];
+
+/// MUT-019: Validate `add_texts` input (v2 `entries` array; the legacy
+/// `texts` key still parses). Auto-creates visual track when all entries omit
+/// trackIndex. Unknown entry fields and invalid nested `style` patches
+/// (upstream #330) reject the whole call.
 /// MUT-020: Rejects audio tracks.
 ///
 /// The `track_type` parameter identifies the target track's type
@@ -906,10 +1417,21 @@ pub fn validate_add_texts(
         }
     }
 
-    let texts = match input.get("texts").and_then(|v| v.as_array()) {
+    let entries = input.get("entries").or_else(|| input.get("texts"));
+    let texts = match entries.and_then(|v| v.as_array()) {
         Some(arr) if !arr.is_empty() => {
             let mut parsed: Vec<TextInput> = Vec::with_capacity(arr.len());
-            for entry in arr {
+            for (idx, entry) in arr.iter().enumerate() {
+                let path = format!("entries[{idx}]");
+                // One bad entry rejects the whole call (no partial state).
+                if let Some(obj) = entry.as_object() {
+                    if let Err(e) = validate_unknown_keys(obj, ADD_TEXTS_ENTRY_KEYS, &path) {
+                        return ValidationResult::Error(e);
+                    }
+                }
+                if let Err(e) = parse_text_style_patch(entry, &path) {
+                    return ValidationResult::Error(e);
+                }
                 let text = entry
                     .get("content")
                     .or_else(|| entry.get("text"))
@@ -917,7 +1439,6 @@ pub fn validate_add_texts(
                     .map(String::from);
                 let start_frame = entry.get("startFrame").and_then(|v| v.as_i64());
                 let duration_frames = entry.get("durationFrames").and_then(|v| v.as_i64());
-                // One bad entry rejects the whole call (no partial state).
                 if let Some(f) = start_frame {
                     if f < 0 {
                         return ValidationResult::Error(format!(
@@ -947,7 +1468,7 @@ pub fn validate_add_texts(
             parsed
         }
         _ => {
-            return ValidationResult::Error("add_texts: missing or empty 'texts' array".into());
+            return ValidationResult::Error("add_texts: missing or empty 'entries' array".into());
         }
     };
 
@@ -971,9 +1492,34 @@ pub struct AddCaptionsInput {
     pub words_per_caption: Option<u32>,
 }
 
+/// Top-level keys per upstream #330 (`textCase` REMOVED — captions stay
+/// auto-cased; the nested `style.fontCase` is the replacement) plus the
+/// Rust-legacy `clipIds`/`wordsPerCaption` aliases.
+const ADD_CAPTIONS_KEYS: &[&str] = &[
+    "animation",
+    "censorProfanity",
+    "clipIds",
+    "highlightColor",
+    "language",
+    "maxWords",
+    "style",
+    "transform",
+    "wordsPerCaption",
+];
+
 /// MUT-021: Supports explicit `clipIds` or auto-detect.
 /// When `clipIds` is None, captions are auto-detected from the timeline.
+/// Upstream #330: unknown fields (notably the retired `textCase`) and invalid
+/// nested `style` patches reject.
 pub fn validate_add_captions(input: &Value) -> ValidationResult<AddCaptionsInput> {
+    if let Some(obj) = input.as_object() {
+        if let Err(e) = validate_unknown_keys(obj, ADD_CAPTIONS_KEYS, "add_captions") {
+            return ValidationResult::Error(e);
+        }
+    }
+    if let Err(e) = parse_text_style_patch(input, "add_captions") {
+        return ValidationResult::Error(e);
+    }
     let clip_ids = match input.get("clipIds").and_then(|v| v.as_array()) {
         Some(arr) => {
             let ids: Vec<String> = arr
@@ -2939,6 +3485,169 @@ mod tests {
         });
         let result = validate_add_texts(&input, Some("video".to_string()));
         assert!(result.into_ok().is_some(), "MUT-020: video allowed");
+    }
+
+    // ---- Upstream #330/#336: nested text-style patch --------------------
+
+    #[test]
+    fn add_texts_accepts_v2_entries_key() {
+        // The v2 contract key is 'entries'; before this change the gate only
+        // read the legacy 'texts' key and rejected every schema-shaped call.
+        let input = json!({
+            "entries": [{"content": "T", "startFrame": 0, "endFrame": 60}]
+        });
+        assert!(validate_add_texts(&input, None).into_ok().is_some());
+    }
+
+    #[test]
+    fn add_texts_rejects_unknown_entry_and_style_keys() {
+        let flat = json!({"entries": [{"content": "T", "fontSize": 48}]});
+        let err = validate_add_texts(&flat, None).into_error().unwrap();
+        assert!(
+            err.contains("entries[0]") && err.contains("'fontSize'"),
+            "got: {err}"
+        );
+        let nested = json!({"entries": [{"content": "T", "style": {"isBold": true}}]});
+        let err = validate_add_texts(&nested, None).into_error().unwrap();
+        assert!(
+            err.contains("entries[0].style") && err.contains("'isBold'"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn add_captions_rejects_retired_text_case_key() {
+        let err = validate_add_captions(&json!({"textCase": "upper"}))
+            .into_error()
+            .unwrap();
+        assert!(
+            err.contains("add_captions") && err.contains("'textCase'"),
+            "got: {err}"
+        );
+        // The nested replacement passes.
+        assert!(
+            validate_add_captions(&json!({"style": {"fontCase": "uppercase"}}))
+                .into_ok()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn text_style_patch_parses_types_ranges_and_paths() {
+        let patch = parse_text_style_patch(
+            &json!({"style": {"tracking": -20, "lineSpacing": 300, "bold": false}}),
+            "update_text",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(patch.tracking, Some(-20.0));
+        assert_eq!(patch.line_spacing, Some(300.0));
+        assert_eq!(patch.bold, Some(false));
+        assert!(patch.has_any_field());
+
+        let err = parse_text_style_patch(&json!({"style": {"tracking": -21}}), "update_text")
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "update_text.style.tracking: must be between -20 and 100"
+        );
+        let err = parse_text_style_patch(&json!({"style": {"bold": 1}}), "update_text")
+            .unwrap_err();
+        assert_eq!(err, "update_text.style.bold: expected boolean");
+        let err = parse_text_style_patch(
+            &json!({"style": {"shadow": {"offset": {"x": 0, "z": 1}}}}),
+            "entries[0]",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("entries[0].style.shadow.offset") && err.contains("'z'"),
+            "got: {err}"
+        );
+        let err = parse_text_style_patch(
+            &json!({"style": {"outline": {"color": "nope"}}}),
+            "update_text",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("update_text.style.outline.color: invalid color 'nope'"),
+            "got: {err}"
+        );
+        // Absent style is fine; a non-object style is not.
+        assert!(parse_text_style_patch(&json!({}), "update_text")
+            .unwrap()
+            .is_none());
+        assert!(parse_text_style_patch(&json!({"style": 3}), "update_text").is_err());
+    }
+
+    #[test]
+    fn apply_text_style_patch_hex_alpha_semantics() {
+        let mut style = core_model::TextStyle::default();
+        style.shadow.color.a = 0.6;
+        // Six digits: RGB only, alpha preserved.
+        let patch = parse_text_style_patch(
+            &json!({"style": {"shadow": {"color": "#FF0000"}}}),
+            "t",
+        )
+        .unwrap()
+        .unwrap();
+        apply_text_style_patch(&patch, &mut style);
+        assert_eq!(
+            (style.shadow.color.r, style.shadow.color.a),
+            (1.0, 0.6),
+            "six-digit hex preserves the current alpha"
+        );
+        // Eight digits: alpha comes from the hex.
+        let patch = parse_text_style_patch(
+            &json!({"style": {"background": {"color": "#00FF0080"}}}),
+            "t",
+        )
+        .unwrap()
+        .unwrap();
+        apply_text_style_patch(&patch, &mut style);
+        assert!((style.background.color.a - 128.0 / 255.0).abs() < 1e-9);
+        // The opacity knob overrides either.
+        let patch = parse_text_style_patch(
+            &json!({"style": {"shadow": {"color": "#11223344", "opacity": 0.9}}}),
+            "t",
+        )
+        .unwrap()
+        .unwrap();
+        apply_text_style_patch(&patch, &mut style);
+        assert_eq!(style.shadow.color.a, 0.9);
+    }
+
+    #[test]
+    fn apply_text_style_patch_migrates_legacy_background_layout() {
+        // A pre-#330 style keeps its single padding/radius when a partial
+        // patch touches another rich-layout key…
+        let mut style = core_model::TextStyle::default();
+        style.background.enabled = true;
+        style.background.padding = Some(8.0);
+        style.background.corner_radius = Some(4.0);
+        let patch =
+            parse_text_style_patch(&json!({"style": {"background": {"center": {"x": 12}}}}), "t")
+                .unwrap()
+                .unwrap();
+        apply_text_style_patch(&patch, &mut style);
+        assert_eq!(style.background_style.padding_x, 8.0);
+        assert_eq!(style.background_style.padding_y, 8.0);
+        assert_eq!(style.background_style.corner_radius, 4.0);
+        assert_eq!(style.background_style.offset_x, 12.0);
+        assert_eq!(
+            (style.background.padding, style.background.corner_radius),
+            (None, None),
+            "legacy keys retired so the renderer fallback can't shadow the patch"
+        );
+
+        // …and an explicit outline width retires the legacy border padding.
+        let mut style = core_model::TextStyle::default();
+        style.border.padding = Some(3.0);
+        let patch = parse_text_style_patch(&json!({"style": {"outline": {"width": 9}}}), "t")
+            .unwrap()
+            .unwrap();
+        apply_text_style_patch(&patch, &mut style);
+        assert_eq!(style.border_width, 9.0);
+        assert_eq!(style.border.padding, None);
     }
 
     // ---- MUT-021: add_captions ------------------------------------------

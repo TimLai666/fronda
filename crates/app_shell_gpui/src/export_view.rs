@@ -12,13 +12,40 @@
 
 #![cfg(feature = "desktop-app")]
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+
 use gpui::prelude::*;
 use gpui::*;
 
 use crate::export_model::{ExportMode, ExportViewModel};
-use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Text};
+use crate::export_queue::{ExportJobStatus, ExportQueue, JobId};
+use crate::theme::{Accent, Background, BorderColors, FontSize, Radius, Spacing, Status, Text};
 use render_core::fcpxml_export::FcpxmlTarget;
 use render_core::{ExportFormat, ExportResolution};
+
+// Queue pane layout, mirroring Swift `AppTheme.Export` queue constants.
+const QUEUE_PANE_WIDTH: f32 = 320.0;
+const QUEUE_TIMESTAMP_WIDTH: f32 = 56.0;
+const QUEUE_PROGRESS_BAR_WIDTH: f32 = 72.0;
+const QUEUE_PROGRESS_WIDTH: f32 = 32.0;
+/// Success green (Swift `AppTheme.Status.success` #4FB85F).
+const STATUS_SUCCESS: gpui::Hsla = gpui::Hsla {
+    h: 129.0 / 360.0,
+    s: 0.43,
+    l: 0.52,
+    a: 1.0,
+};
+
+/// Captured settings for a queued video export, applied when its turn comes.
+struct QueuedVideoJob {
+    codec: crate::video_export::VideoCodec,
+    resolution: ExportResolution,
+    out_fps: i64,
+    path: PathBuf,
+}
 
 /// Export sheet view.
 pub struct ExportView {
@@ -29,6 +56,11 @@ pub struct ExportView {
     selected_resolution: usize, // 0=720p, 1=1080p, 2=2K, 3=4K, 4=Match
     selected_fps: usize,        // 0=24, 1=30, 2=60
     output_path: String,
+    // Export queue (upstream #298): serialized cancellable video exports.
+    queue: ExportQueue,
+    pending_jobs: HashMap<JobId, QueuedVideoJob>,
+    cancel_flags: HashMap<JobId, Arc<AtomicBool>>,
+    submission_error: Option<String>,
 }
 
 impl ExportView {
@@ -40,6 +72,178 @@ impl ExportView {
             selected_resolution: 1,
             selected_fps: 1,
             output_path: "~/Desktop/Export.mp4".to_string(),
+            queue: ExportQueue::new(),
+            pending_jobs: HashMap::new(),
+            cancel_flags: HashMap::new(),
+            submission_error: None,
+        }
+    }
+
+    /// Queue scope id for the open project (Swift `exportQueueProjectID`).
+    fn project_queue_id() -> String {
+        crate::editor_state_hub::EditorStateHub::global()
+            .project_root()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "untitled".into())
+    }
+
+    /// Reserve the destination and queue a video export; starts it immediately
+    /// when nothing is running. A destination conflict surfaces as
+    /// `submission_error` instead of a job.
+    fn enqueue_video_job(
+        &mut self,
+        path: PathBuf,
+        codec: crate::video_export::VideoCodec,
+        resolution: ExportResolution,
+        out_fps: i64,
+        cx: &mut Context<Self>,
+    ) {
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        match self
+            .queue
+            .enqueue(path.clone(), &Self::project_queue_id(), now_ms)
+        {
+            Err(e) => self.submission_error = Some(e.to_string()),
+            Ok(sub) => {
+                self.submission_error = None;
+                self.pending_jobs.insert(
+                    sub.job_id,
+                    QueuedVideoJob {
+                        codec,
+                        resolution,
+                        out_fps,
+                        path,
+                    },
+                );
+                self.cancel_flags
+                    .insert(sub.job_id, Arc::new(AtomicBool::new(false)));
+                self.start_next_job(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// FIFO driver: start the next waiting job if the slot is free.
+    fn start_next_job(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.queue.next_ready() else {
+            return;
+        };
+        let Some(job) = self.pending_jobs.remove(&id) else {
+            // Parameters vanished — fail the job and keep the queue moving.
+            let _ = self.queue.mark_preparing(id);
+            let _ = self.queue.mark_failed(id, "Export produced no output.");
+            return self.start_next_job(cx);
+        };
+        if self.queue.mark_preparing(id).is_err() {
+            return;
+        }
+        let cancel = self.cancel_flags.entry(id).or_default().clone();
+        self.model.start();
+        cx.notify();
+
+        // Shared progress (0..=100) the encoder updates; a ticker mirrors it
+        // into the queue row + inline progress bar until this job finishes.
+        let progress = Arc::new(AtomicU64::new(0));
+        let prog_tick = progress.clone();
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(150))
+                .await;
+            let p = prog_tick.load(Ordering::Relaxed) as f64 / 100.0;
+            let running = this
+                .update(cx, |view, cx| {
+                    let pending = view.queue.job(id).is_some_and(|j| j.status.is_pending());
+                    if pending {
+                        let _ = view.queue.set_progress(id, p);
+                        view.model.panel.update_progress(p, None);
+                        cx.notify();
+                    }
+                    pending
+                })
+                .unwrap_or(false);
+            if !running {
+                break;
+            }
+        })
+        .detach();
+
+        let (codec, resolution, out_fps, out) =
+            (job.codec, job.resolution, job.out_fps, job.path.clone());
+        let prog_enc = progress.clone();
+        cx.spawn(async move |this, cx| {
+            let (timeline, manifest, timelines, root) = {
+                let hub = crate::editor_state_hub::EditorStateHub::global();
+                let exec = hub.executor();
+                let guard = exec.lock().unwrap();
+                let root = hub
+                    .project_root()
+                    .unwrap_or_else(|| std::env::home_dir().unwrap_or_else(|| ".".into()));
+                (
+                    guard.timeline().clone(),
+                    guard.media_manifest().clone(),
+                    guard.sibling_timeline_map(),
+                    root,
+                )
+            };
+            let _ = this.update(cx, |view, cx| {
+                let _ = view.queue.mark_exporting(id);
+                cx.notify();
+            });
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let size = resolution.render_size(&timeline);
+                    let w = size.width.max(2) as u32;
+                    let h = size.height.max(2) as u32;
+                    crate::audio_export::export_project_with_audio_cancellable(
+                        &timeline, &manifest, &timelines, &root, &out, w, h, codec, out_fps,
+                        &prog_enc, &cancel,
+                    )
+                    .map(|()| out.clone())
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| view.finish_job(id, result, cx));
+        })
+        .detach();
+    }
+
+    /// Resolve a finished background run into its queue state and start the
+    /// next job. A cancel that raced past the commit still completes (#298).
+    fn finish_job(&mut self, id: JobId, result: Result<PathBuf, String>, cx: &mut Context<Self>) {
+        match result {
+            Ok(p) => {
+                let _ = self.queue.mark_committed(id);
+                let _ = self.queue.mark_completed(id);
+                crate::platform_adapter::reveal_in_file_manager(&p);
+                self.model.set_interchange_result(Ok(p));
+            }
+            Err(e) if crate::video_export::is_cancel_err(&e) => {
+                let _ = self.queue.mark_canceled(id);
+                self.model.panel.stage = generation_core::export_panel::ExportStage::Failed;
+                self.model.panel.status_message = Some("Export canceled".into());
+            }
+            Err(e) => {
+                let _ = self.queue.mark_failed(id, e.clone());
+                self.model.set_interchange_result(Err(e));
+            }
+        }
+        self.cancel_flags.remove(&id);
+        self.start_next_job(cx);
+        cx.notify();
+    }
+
+    /// Cancel a queue row: waiting jobs drop immediately; the running job gets
+    /// its cancel flag set and confirms via `finish_job`.
+    fn cancel_job(&mut self, id: JobId, cx: &mut Context<Self>) {
+        let was_waiting = self.queue.job(id).map(|j| j.status) == Some(ExportJobStatus::Waiting);
+        if self.queue.cancel(id) {
+            if was_waiting {
+                self.pending_jobs.remove(&id);
+                self.cancel_flags.remove(&id);
+            } else if let Some(flag) = self.cancel_flags.get(&id) {
+                flag.store(true, Ordering::Relaxed);
+            }
+            cx.notify();
         }
     }
 }
@@ -47,6 +251,261 @@ impl ExportView {
 impl Focusable for ExportView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+impl ExportView {
+    fn status_color(status: ExportJobStatus) -> gpui::Hsla {
+        match status {
+            ExportJobStatus::Waiting => Text::TERTIARY,
+            ExportJobStatus::Preparing | ExportJobStatus::Canceling => Text::SECONDARY,
+            ExportJobStatus::Exporting => Accent::PRIMARY,
+            ExportJobStatus::Completed => STATUS_SUCCESS,
+            ExportJobStatus::Failed => Status::ERROR,
+            ExportJobStatus::Canceled => Text::MUTED,
+        }
+    }
+
+    /// Right-hand export queue pane (Swift ExportView "Export Queue" log pane):
+    /// header with pending count + Clear, rows with time / status / filename /
+    /// progress / action.
+    fn render_queue_pane(&self, cx: &mut Context<Self>) -> AnyElement {
+        use chrono::TimeZone as _;
+
+        let project = Self::project_queue_id();
+        let jobs: Vec<crate::export_queue::ExportJob> = self
+            .queue
+            .jobs_for(&project)
+            .into_iter()
+            .rev()
+            .cloned()
+            .collect();
+        let pending = jobs.iter().filter(|j| j.status.is_pending()).count();
+        let any_finished = jobs.iter().any(|j| j.status.is_finished());
+
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(Spacing::SM))
+            .px(px(Spacing::LG))
+            .py(px(Spacing::MD))
+            .border_b_1()
+            .border_color(BorderColors::PRIMARY)
+            .child(
+                div()
+                    .text_size(px(FontSize::MD))
+                    .text_color(Text::PRIMARY)
+                    .child("Export Queue"),
+            )
+            .when(pending > 0, |el| {
+                el.child(
+                    div()
+                        .text_size(px(FontSize::XS))
+                        .text_color(Text::SECONDARY)
+                        .child(format!("{pending}")),
+                )
+            })
+            .child(div().flex_1())
+            .when(any_finished, |el| {
+                el.child(
+                    div()
+                        .id("queue-clear-finished")
+                        .px(px(Spacing::SM))
+                        .py(px(Spacing::XXS))
+                        .rounded(px(Radius::XS_SM))
+                        .cursor_pointer()
+                        .text_size(px(FontSize::XS))
+                        .text_color(Text::SECONDARY)
+                        .child("Clear")
+                        .on_click(cx.listener(|this, _: &ClickEvent, _: &mut Window, cx| {
+                            this.queue.clear_finished(&Self::project_queue_id());
+                            cx.notify();
+                        })),
+                )
+            });
+
+        let body = if jobs.is_empty() {
+            div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_size(px(FontSize::SM))
+                        .text_color(Text::MUTED)
+                        .child("No exports yet"),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .id("export-queue-rows")
+                .flex_1()
+                .flex()
+                .flex_col()
+                .overflow_y_scroll()
+                .children(jobs.into_iter().map(|job| {
+                    let id = job.id;
+                    let status = job.status;
+                    let time = chrono::Local
+                        .timestamp_millis_opt(job.created_at_ms as i64)
+                        .single()
+                        .map(|t| t.format("%H:%M").to_string())
+                        .unwrap_or_default();
+                    let exporting = status == ExportJobStatus::Exporting;
+                    let progress = job.progress as f32;
+                    let output_path = job.output_path.clone();
+
+                    let mut row = div()
+                        .flex()
+                        .flex_col()
+                        .px(px(Spacing::LG))
+                        .py(px(Spacing::SM))
+                        .border_b_1()
+                        .border_color(BorderColors::SUBTLE)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(Spacing::SM))
+                                .child(
+                                    div()
+                                        .w(px(QUEUE_TIMESTAMP_WIDTH))
+                                        .text_size(px(FontSize::XXS))
+                                        .text_color(Text::MUTED)
+                                        .child(time),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(FontSize::XXS))
+                                        .text_color(Self::status_color(status))
+                                        .child(status.label()),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .overflow_hidden()
+                                        .text_size(px(FontSize::XS))
+                                        .text_color(Text::PRIMARY)
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .child(job.filename.clone()),
+                                )
+                                .when(exporting, |el| {
+                                    el.child(
+                                        div()
+                                            .relative()
+                                            .w(px(QUEUE_PROGRESS_BAR_WIDTH))
+                                            .h(px(3.0))
+                                            .rounded_full()
+                                            .bg(BorderColors::SUBTLE)
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .top_0()
+                                                    .left_0()
+                                                    .h_full()
+                                                    .w(relative(progress))
+                                                    .rounded_full()
+                                                    .bg(Accent::PRIMARY),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(QUEUE_PROGRESS_WIDTH))
+                                            .text_size(px(FontSize::XXS))
+                                            .text_color(Text::SECONDARY)
+                                            .child(format!("{}%", (progress * 100.0) as u32)),
+                                    )
+                                })
+                                .child(match status {
+                                    ExportJobStatus::Waiting
+                                    | ExportJobStatus::Preparing
+                                    | ExportJobStatus::Exporting => div()
+                                        .id(("queue-cancel", id))
+                                        .px(px(Spacing::XS))
+                                        .py(px(Spacing::XXS))
+                                        .rounded(px(Radius::XS_SM))
+                                        .cursor_pointer()
+                                        .text_size(px(FontSize::XS))
+                                        .text_color(Text::SECONDARY)
+                                        .child("✕")
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _: &mut Window, cx| {
+                                                this.cancel_job(id, cx);
+                                            },
+                                        ))
+                                        .into_any_element(),
+                                    ExportJobStatus::Completed => div()
+                                        .id(("queue-reveal", id))
+                                        .px(px(Spacing::XS))
+                                        .py(px(Spacing::XXS))
+                                        .rounded(px(Radius::XS_SM))
+                                        .cursor_pointer()
+                                        .text_size(px(FontSize::XS))
+                                        .text_color(Text::SECONDARY)
+                                        .child("Show")
+                                        .on_click(cx.listener(
+                                            move |_, _: &ClickEvent, _: &mut Window, _| {
+                                                crate::platform_adapter::reveal_in_file_manager(
+                                                    &output_path,
+                                                );
+                                            },
+                                        ))
+                                        .into_any_element(),
+                                    ExportJobStatus::Failed | ExportJobStatus::Canceled => div()
+                                        .id(("queue-dismiss", id))
+                                        .px(px(Spacing::XS))
+                                        .py(px(Spacing::XXS))
+                                        .rounded(px(Radius::XS_SM))
+                                        .cursor_pointer()
+                                        .text_size(px(FontSize::XS))
+                                        .text_color(Text::MUTED)
+                                        .child("✕")
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _: &mut Window, cx| {
+                                                this.queue.remove(id);
+                                                cx.notify();
+                                            },
+                                        ))
+                                        .into_any_element(),
+                                    ExportJobStatus::Canceling => {
+                                        div().w(px(Spacing::LG)).into_any_element()
+                                    }
+                                }),
+                        );
+                    if status == ExportJobStatus::Failed {
+                        if let Some(error) = job.error.clone() {
+                            row = row.child(
+                                div()
+                                    .pl(px(QUEUE_TIMESTAMP_WIDTH + Spacing::SM))
+                                    .text_size(px(FontSize::XXS))
+                                    .text_color(Status::ERROR)
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .overflow_hidden()
+                                    .child(error),
+                            );
+                        }
+                    }
+                    row
+                }))
+                .into_any_element()
+        };
+
+        div()
+            .w(px(QUEUE_PANE_WIDTH))
+            .h_full()
+            .flex()
+            .flex_col()
+            .border_l_1()
+            .border_color(BorderColors::PRIMARY)
+            .bg(Background::RAISED)
+            .child(header)
+            .child(body)
+            .into_any_element()
     }
 }
 
@@ -122,6 +581,7 @@ impl Render for ExportView {
         let can_start = self.model.can_start_export();
         let mode = self.model.mode;
         let is_exporting = !self.model.settings_expanded;
+        let queue_busy = self.queue.has_activity();
         let progress = self.model.progress_fraction() as f32;
         let selected_codec = self.selected_codec;
         let selected_resolution = self.selected_resolution;
@@ -140,7 +600,7 @@ impl Render for ExportView {
             .track_focus(&self.focus_handle.clone())
             .flex()
             .flex_col()
-            .w(px(860.0))
+            .w(px(860.0 + QUEUE_PANE_WIDTH))
             .h(px(560.0))
             .bg(Background::RAISED)
             // ── body row ──────────────────────────────────────────────────
@@ -497,7 +957,16 @@ impl Render for ExportView {
                                     }
                                     col.into_any_element()
                                 },
-                            }),
+                            })
+                            // Destination conflict (queue reservation, #298)
+                            .children(self.submission_error.clone().map(|e| {
+                                div()
+                                    .px(px(Spacing::LG))
+                                    .py(px(Spacing::SM))
+                                    .text_size(px(FontSize::XS))
+                                    .text_color(Status::ERROR)
+                                    .child(e)
+                            })),
                     )
                     // Preview panel (right, flex)
                     .child(
@@ -562,7 +1031,9 @@ impl Render for ExportView {
                                         ),
                                 )
                             }),
-                    ),
+                    )
+                    // Export queue pane (right, upstream #298)
+                    .child(self.render_queue_pane(cx)),
             )
             // ── bottom bar ───────────────────────────────────────────────
             .child(
@@ -734,8 +1205,8 @@ impl Render for ExportView {
                                     })
                                     .detach();
                                 } else if mode == ExportMode::Video {
-                                    // Real pixel render: pick an .mp4 path, then
-                                    // composite + encode the timeline off-thread.
+                                    // Real pixel render, routed through the export
+                                    // queue (#298): pick a path, reserve it, run FIFO.
                                     let start_dir =
                                         std::env::home_dir().unwrap_or_else(|| ".".into());
                                     let resolution = this.model.panel.settings.resolution;
@@ -766,71 +1237,13 @@ impl Render for ExportView {
                                             return;
                                         };
                                         let _ = this.update(cx, |view, cx| {
-                                            view.model.start();
-                                            cx.notify();
-                                        });
-                                        // Shared progress (0..=100) the encoder
-                                        // updates; a ticker mirrors it to the UI.
-                                        let progress = std::sync::Arc::new(
-                                            std::sync::atomic::AtomicU64::new(0),
-                                        );
-                                        let prog_tick = progress.clone();
-                                        let ticker_this = this.clone();
-                                        cx.spawn(async move |cx| loop {
-                                            cx.background_executor()
-                                                .timer(std::time::Duration::from_millis(150))
-                                                .await;
-                                            let p = prog_tick
-                                                .load(std::sync::atomic::Ordering::Relaxed)
-                                                as f64
-                                                / 100.0;
-                                            let running = ticker_this
-                                                .update(cx, |view, cx| {
-                                                    view.model.panel.update_progress(p, None);
-                                                    cx.notify();
-                                                    view.model.panel.stage
-                                                        == generation_core::export_panel::ExportStage::Exporting
-                                                })
-                                                .unwrap_or(false);
-                                            if !running {
-                                                break;
-                                            }
-                                        })
-                                        .detach();
-                                        let (timeline, manifest, timelines, root) = {
-                                            let hub =
-                                                crate::editor_state_hub::EditorStateHub::global();
-                                            let exec = hub.executor();
-                                            let guard = exec.lock().unwrap();
-                                            let root = hub.project_root().unwrap_or_else(|| {
-                                                std::env::home_dir().unwrap_or_else(|| ".".into())
-                                            });
-                                            (
-                                                guard.timeline().clone(),
-                                                guard.media_manifest().clone(),
-                                                guard.sibling_timeline_map(),
-                                                root,
-                                            )
-                                        };
-                                        let out = path.clone();
-                                        let prog_enc = progress.clone();
-                                        let result = cx
-                                            .background_executor()
-                                            .spawn(async move {
-                                                let size = resolution.render_size(&timeline);
-                                                let w = size.width.max(2) as u32;
-                                                let h = size.height.max(2) as u32;
-                                                crate::audio_export::export_project_with_audio(
-                                                    &timeline, &manifest, &timelines, &root, &out,
-                                                    w, h, video_codec, out_fps, &prog_enc,
-                                                )
-                                                .map(|()| out.clone())
-                                            })
-                                            .await;
-                                        let _ = this.update(cx, |view, cx| {
-                                            if let Ok(ref p) = result { crate::platform_adapter::reveal_in_file_manager(p); }
-                                            view.model.set_interchange_result(result);
-                                            cx.notify();
+                                            view.enqueue_video_job(
+                                                path,
+                                                video_codec,
+                                                resolution,
+                                                out_fps,
+                                                cx,
+                                            );
                                         });
                                     })
                                     .detach();
@@ -843,7 +1256,15 @@ impl Render for ExportView {
                                 div()
                                     .text_size(px(FontSize::SM))
                                     .text_color(if can_start { Background::BASE } else { Text::MUTED })
-                                    .child(if is_exporting { "Exporting…" } else { "Export" }),
+                                    // Swift #298: while the queue is busy the
+                                    // button reads "Add to Queue".
+                                    .child(if mode == ExportMode::Video && queue_busy {
+                                        "Add to Queue"
+                                    } else if is_exporting && mode != ExportMode::Video {
+                                        "Exporting…"
+                                    } else {
+                                        "Export"
+                                    }),
                             ),
                     ),
             )

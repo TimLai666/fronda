@@ -828,11 +828,11 @@ pub struct TextStyle {
     /// Italic flag (Swift `isItalic`, #65 compat). Preserved on round-trip; the Rust text
     /// renderer does not yet slant glyphs, but the FCPXML `fontFace` reflects it.
     pub is_italic: bool,
-    /// Underline flag (Swift `isUnderlined`, #336). Round-trip-only; rendering is a follow-up.
+    /// Underline flag (Swift `isUnderlined`, #336).
     pub is_underlined: bool,
-    /// Strikethrough flag (Swift `isStruckThrough`, #336). Round-trip-only.
+    /// Strikethrough flag (Swift `isStruckThrough`, #336).
     pub is_struck_through: bool,
-    /// Overline flag (Swift `isOverlined`, #336). Round-trip-only.
+    /// Overline flag (Swift `isOverlined`, #336).
     pub is_overlined: bool,
     /// Letter tracking (Swift `tracking`, #330; non-optional there — always
     /// written). Distinct from the Rust-native `letter_spacing`.
