@@ -328,6 +328,7 @@ mod tests {
             variable_font_axes: None,
             letter_spacing: None,
             line_height: None,
+            ..Default::default()
         }
     }
 

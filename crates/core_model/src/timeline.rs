@@ -117,11 +117,13 @@ pub enum ClipType {
 
 impl ClipType {
     /// Classify a file extension into a ClipType.
-    /// Upstream PR #105: added .aifc and .flac.
+    /// Upstream PR #105: added .aifc and .flac. Upstream PR #338: added .caf.
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_lowercase().as_str() {
             "mov" | "mp4" | "m4v" => Some(Self::Video),
-            "mp3" | "wav" | "aac" | "m4a" | "aiff" | "aif" | "aifc" | "flac" => Some(Self::Audio),
+            "mp3" | "wav" | "aac" | "m4a" | "aiff" | "aif" | "aifc" | "caf" | "flac" => {
+                Some(Self::Audio)
+            }
             "png" | "jpg" | "jpeg" | "tiff" | "heic" | "webp" => Some(Self::Image),
             "json" | "lottie" => Some(Self::Lottie),
             _ => None,
@@ -139,6 +141,7 @@ impl ClipType {
             "wav" => Some("audio/wav"),
             "aac" => Some("audio/aac"),
             "m4a" => Some("audio/mp4"),
+            "caf" => Some("audio/x-caf"),
             "png" => Some("image/png"),
             "jpg" | "jpeg" => Some("image/jpeg"),
             "tiff" | "tif" => Some("image/tiff"),
@@ -525,10 +528,138 @@ pub struct TextFill {
     pub corner_radius: Option<f64>,
 }
 
-/// Serde bridge for [`TextStyle`] (on-disk compat, #65): Swift's `TextStyle` stores `isBold`/
-/// `isItalic` bools (bold-by-default), Rust keeps a richer `font_weight`. On load we accept
-/// EITHER key set; on save we write BOTH, so a `.palmier` written by either app round-trips
-/// bold/italic. `fontWeight` wins when present (it's more expressive); `isBold` maps 700/400.
+/// Rich caption-background layout written by Swift v0.6.9+ (upstream #330):
+/// per-axis padding, corner radius, offsets, and a background outline. Lives
+/// beside the legacy [`TextFill`] subset (`TextStyle.background`) so existing
+/// readers keep compiling; the wire bridge nests it under the same
+/// `background` JSON object using Swift's key names. Rendering these is a
+/// follow-up — the fields round-trip so Swift-authored styles aren't lost.
+/// Defaults mirror Swift `TextStyle.Background`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextBackgroundStyle {
+    pub padding_x: f64,
+    pub padding_y: f64,
+    pub corner_radius: f64,
+    pub offset_x: f64,
+    pub offset_y: f64,
+    pub outline_color: TextRgba,
+    pub outline_width: f64,
+}
+
+impl Default for TextBackgroundStyle {
+    fn default() -> Self {
+        Self {
+            padding_x: 0.0,
+            padding_y: 0.0,
+            corner_radius: 0.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            outline_color: default_outline_color(),
+            outline_width: 0.0,
+        }
+    }
+}
+
+fn default_outline_color() -> TextRgba {
+    TextRgba {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    }
+}
+
+/// Swift `TextStyle.Outline.width` decode fallback (reference-canvas points).
+fn default_border_width() -> f64 {
+    4.0
+}
+
+/// Wire form of the `background` object: the legacy [`TextFill`] keys (`padding` and
+/// snake-case `corner_radius` are Rust-native, Issue #18) plus Swift v0.6.9's rich
+/// Background keys (#330). The two key sets are distinct contracts and round-trip
+/// independently — note `corner_radius` (Rust) vs `cornerRadius` (Swift).
+#[derive(Serialize, Deserialize)]
+struct TextBackgroundWire {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_shadow_color")]
+    color: TextRgba,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    padding: Option<f64>,
+    #[serde(rename = "corner_radius", default, skip_serializing_if = "Option::is_none")]
+    legacy_corner_radius: Option<f64>,
+    #[serde(rename = "paddingX", default, skip_serializing_if = "Option::is_none")]
+    padding_x: Option<f64>,
+    #[serde(rename = "paddingY", default, skip_serializing_if = "Option::is_none")]
+    padding_y: Option<f64>,
+    #[serde(rename = "cornerRadius", default, skip_serializing_if = "Option::is_none")]
+    corner_radius: Option<f64>,
+    #[serde(rename = "offsetX", default, skip_serializing_if = "Option::is_none")]
+    offset_x: Option<f64>,
+    #[serde(rename = "offsetY", default, skip_serializing_if = "Option::is_none")]
+    offset_y: Option<f64>,
+    #[serde(rename = "outlineColor", default, skip_serializing_if = "Option::is_none")]
+    outline_color: Option<TextRgba>,
+    #[serde(rename = "outlineWidth", default, skip_serializing_if = "Option::is_none")]
+    outline_width: Option<f64>,
+}
+
+impl Default for TextBackgroundWire {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: default_shadow_color(),
+            padding: None,
+            legacy_corner_radius: None,
+            padding_x: None,
+            padding_y: None,
+            corner_radius: None,
+            offset_x: None,
+            offset_y: None,
+            outline_color: None,
+            outline_width: None,
+        }
+    }
+}
+
+/// Wire form of the `border` object: legacy [`TextFill`] keys plus Swift
+/// `Outline.width` (#330, defaults to 4 like Swift's decode fallback).
+#[derive(Serialize, Deserialize)]
+struct TextBorderWire {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_outline_color")]
+    color: TextRgba,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    padding: Option<f64>,
+    #[serde(rename = "corner_radius", default, skip_serializing_if = "Option::is_none")]
+    corner_radius: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    width: Option<f64>,
+}
+
+impl Default for TextBorderWire {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: default_outline_color(),
+            padding: None,
+            corner_radius: None,
+            width: None,
+        }
+    }
+}
+
+/// Serde bridge for [`TextStyle`] (on-disk compat, #65/#330/#336): Swift's `TextStyle`
+/// stores `isBold`/`isItalic` bools (bold-by-default), Rust keeps a richer `font_weight`.
+/// On load we accept EITHER key set; on save we write BOTH, so a `.palmier` written by
+/// either app round-trips bold/italic. `fontWeight` wins when present (it's more
+/// expressive); `isBold` maps 700/400.
+///
+/// The #330/#336 fields (`tracking`, `lineSpacing`, `fontCase`, the three line-style
+/// bools, `border.width`, and the rich `background` keys) follow the same dual-write
+/// policy: read tolerant of pre-0.6.9 files (missing keys → Swift defaults), write the
+/// full Swift v0.6.10 key set.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TextStyleWire {
@@ -544,16 +675,28 @@ struct TextStyleWire {
     alignment: TextAlignment,
     #[serde(default)]
     shadow: TextShadow,
-    #[serde(default = "default_text_background")]
-    background: TextFill,
-    #[serde(default = "default_text_border")]
-    border: TextFill,
+    #[serde(default)]
+    background: TextBackgroundWire,
+    #[serde(default)]
+    border: TextBorderWire,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     font_weight: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     is_bold: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     is_italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    is_underlined: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    is_struck_through: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    is_overlined: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tracking: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line_spacing: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    font_case: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     variable_font_axes: Option<std::collections::HashMap<String, f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -569,6 +712,7 @@ impl From<TextStyleWire> for TextStyle {
             .font_weight
             .or_else(|| w.is_bold.map(|b| if b { 700.0 } else { 400.0 }))
             .unwrap_or_else(default_font_weight);
+        let bg = w.background;
         TextStyle {
             font_name: w.font_name,
             font_size: w.font_size,
@@ -576,10 +720,36 @@ impl From<TextStyleWire> for TextStyle {
             color: w.color,
             alignment: w.alignment,
             shadow: w.shadow,
-            background: w.background,
-            border: w.border,
+            background: TextFill {
+                enabled: bg.enabled,
+                color: bg.color,
+                padding: bg.padding,
+                corner_radius: bg.legacy_corner_radius,
+            },
+            background_style: TextBackgroundStyle {
+                padding_x: bg.padding_x.unwrap_or(0.0),
+                padding_y: bg.padding_y.unwrap_or(0.0),
+                corner_radius: bg.corner_radius.unwrap_or(0.0),
+                offset_x: bg.offset_x.unwrap_or(0.0),
+                offset_y: bg.offset_y.unwrap_or(0.0),
+                outline_color: bg.outline_color.unwrap_or_else(default_outline_color),
+                outline_width: bg.outline_width.unwrap_or(0.0),
+            },
+            border: TextFill {
+                enabled: w.border.enabled,
+                color: w.border.color,
+                padding: w.border.padding,
+                corner_radius: w.border.corner_radius,
+            },
+            border_width: w.border.width.unwrap_or_else(default_border_width),
             font_weight,
             is_italic: w.is_italic.unwrap_or(false),
+            is_underlined: w.is_underlined.unwrap_or(false),
+            is_struck_through: w.is_struck_through.unwrap_or(false),
+            is_overlined: w.is_overlined.unwrap_or(false),
+            tracking: w.tracking.unwrap_or(0.0),
+            line_spacing: w.line_spacing.unwrap_or(0.0),
+            font_case: w.font_case.unwrap_or_else(|| "mixed".to_string()),
             variable_font_axes: w.variable_font_axes,
             letter_spacing: w.letter_spacing,
             line_height: w.line_height,
@@ -596,12 +766,37 @@ impl From<TextStyle> for TextStyleWire {
             color: s.color,
             alignment: s.alignment,
             shadow: s.shadow,
-            background: s.background,
-            border: s.border,
+            background: TextBackgroundWire {
+                enabled: s.background.enabled,
+                color: s.background.color,
+                padding: s.background.padding,
+                legacy_corner_radius: s.background.corner_radius,
+                padding_x: Some(s.background_style.padding_x),
+                padding_y: Some(s.background_style.padding_y),
+                corner_radius: Some(s.background_style.corner_radius),
+                offset_x: Some(s.background_style.offset_x),
+                offset_y: Some(s.background_style.offset_y),
+                outline_color: Some(s.background_style.outline_color),
+                outline_width: Some(s.background_style.outline_width),
+            },
+            border: TextBorderWire {
+                enabled: s.border.enabled,
+                color: s.border.color,
+                padding: s.border.padding,
+                corner_radius: s.border.corner_radius,
+                width: Some(s.border_width),
+            },
             font_weight: Some(s.font_weight),
             // Written for Swift (which reads isBold/isItalic, not fontWeight).
             is_bold: Some(s.font_weight >= 700.0),
             is_italic: Some(s.is_italic),
+            is_underlined: Some(s.is_underlined),
+            is_struck_through: Some(s.is_struck_through),
+            is_overlined: Some(s.is_overlined),
+            // v0.6.10 key set: absent-in-memory values write the Swift defaults.
+            tracking: Some(s.tracking),
+            line_spacing: Some(s.line_spacing),
+            font_case: Some(s.font_case),
             variable_font_axes: s.variable_font_axes,
             letter_spacing: s.letter_spacing,
             line_height: s.line_height,
@@ -619,13 +814,35 @@ pub struct TextStyle {
     pub alignment: TextAlignment,
     pub shadow: TextShadow,
     pub background: TextFill,
+    /// Rich background layout (Swift #330). Round-trip-only for now; the caption
+    /// renderer still reads the legacy [`TextFill`] fields above.
+    pub background_style: TextBackgroundStyle,
     pub border: TextFill,
+    /// Border/outline stroke width in reference-canvas points (Swift `border.width`,
+    /// #330; Swift decode fallback 4). Round-trip-only: the Rust glyph outline still
+    /// derives its stroke from `border.padding`.
+    pub border_width: f64,
     /// Font weight (400 = normal, 700 = bold). Upstream PR #65. On disk it round-trips via BOTH
     /// `fontWeight` (Rust) and `isBold` (Swift) — see [`TextStyleWire`].
     pub font_weight: f64,
     /// Italic flag (Swift `isItalic`, #65 compat). Preserved on round-trip; the Rust text
     /// renderer does not yet slant glyphs, but the FCPXML `fontFace` reflects it.
     pub is_italic: bool,
+    /// Underline flag (Swift `isUnderlined`, #336). Round-trip-only; rendering is a follow-up.
+    pub is_underlined: bool,
+    /// Strikethrough flag (Swift `isStruckThrough`, #336). Round-trip-only.
+    pub is_struck_through: bool,
+    /// Overline flag (Swift `isOverlined`, #336). Round-trip-only.
+    pub is_overlined: bool,
+    /// Letter tracking (Swift `tracking`, #330; non-optional there — always
+    /// written). Distinct from the Rust-native `letter_spacing`.
+    pub tracking: f64,
+    /// Line spacing in canvas points (Swift `lineSpacing`, #330; non-optional).
+    /// Distinct from the Rust-native `line_height` multiplier.
+    pub line_spacing: f64,
+    /// Text case (Swift `fontCase` rawValue: "mixed"/"uppercase"/"lowercase", #330).
+    /// Kept as the raw string so unknown future cases round-trip.
+    pub font_case: String,
     /// Variable font axis values (Issue #50). Maps OpenType axis tag → value.
     pub variable_font_axes: Option<std::collections::HashMap<String, f64>>,
     /// Letter spacing in points (Issue #50 / motion typography).
@@ -644,9 +861,17 @@ impl Default for TextStyle {
             alignment: TextAlignment::Center,
             shadow: TextShadow::default(),
             background: default_text_background(),
+            background_style: TextBackgroundStyle::default(),
             border: default_text_border(),
+            border_width: default_border_width(),
             font_weight: 400.0,
             is_italic: false,
+            is_underlined: false,
+            is_struck_through: false,
+            is_overlined: false,
+            tracking: 0.0,
+            line_spacing: 0.0,
+            font_case: "mixed".to_string(),
             variable_font_axes: None,
             letter_spacing: None,
             line_height: None,
@@ -983,8 +1208,23 @@ mod tests {
 
     #[test]
     fn clip_type_from_extension_audio() {
-        for ext in &["mp3", "wav", "aac", "m4a", "aiff", "aif", "aifc", "flac"] {
+        for ext in &["mp3", "wav", "aac", "m4a", "aiff", "aif", "aifc", "caf", "flac"] {
             assert_eq!(ClipType::from_extension(ext), Some(ClipType::Audio));
+        }
+    }
+
+    #[test]
+    fn upstream_338_caf_extension_table() {
+        // Swift authority: ClipType.swift:44 (caf → .audio) and
+        // GenerationService.swift:385 (caf → audio/x-caf).
+        let table: &[(&str, Option<ClipType>, Option<&str>)] = &[
+            ("caf", Some(ClipType::Audio), Some("audio/x-caf")),
+            ("CAF", Some(ClipType::Audio), Some("audio/x-caf")),
+            ("Caf", Some(ClipType::Audio), Some("audio/x-caf")),
+        ];
+        for (ext, clip_type, mime) in table {
+            assert_eq!(ClipType::from_extension(ext), *clip_type, "ext={ext}");
+            assert_eq!(ClipType::content_type_for_extension(ext), *mime, "ext={ext}");
         }
     }
 

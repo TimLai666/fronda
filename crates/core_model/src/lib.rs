@@ -33,7 +33,8 @@ pub use shape_style::{
 pub use text_animation::{TextAnimation, TextAnimationPreset, TextAnimationRenderMode, WordTiming};
 pub use timeline::{
     AnimPair, BlendMode, ChromaKey, Clip, ClipType, Crop, Interpolation, Keyframe, KeyframeTrack,
-    TextAlignment, TextFill, TextRgba, TextShadow, TextStyle, Timeline, Track, Transform,
+    TextAlignment, TextBackgroundStyle, TextFill, TextRgba, TextShadow, TextStyle, Timeline,
+    Track, Transform,
 };
 pub use video_layout::{LayoutFit, LayoutRect, LayoutSlot, VideoLayout};
 

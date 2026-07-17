@@ -18,6 +18,20 @@ const HOP: usize = 512;
 const MIN_BPM: f64 = 60.0;
 const MAX_BPM: f64 = 200.0;
 
+/// 60 / median inter-beat interval (Swift `BeatDetector.estimateBPM`, upstream
+/// #274 follow-up): windowed detect_beats calls recompute tempo from the beats
+/// inside the window. Needs more than two beats; `None` otherwise or when the
+/// median interval is not positive.
+pub fn estimate_bpm(beats: &[f64]) -> Option<f64> {
+    if beats.len() <= 2 {
+        return None;
+    }
+    let mut intervals: Vec<f64> = beats.windows(2).map(|w| w[1] - w[0]).collect();
+    intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = intervals[intervals.len() / 2];
+    (median > 0.0).then(|| 60.0 / median)
+}
+
 /// Detect beats in interleaved PCM. Returns an empty analysis for silence or
 /// aperiodic material (speech, ambience).
 pub fn detect_beats(pcm: &[f32], channels: usize, sample_rate: u32) -> BeatAnalysis {
@@ -221,6 +235,31 @@ mod tests {
             let nearest = (d / 2.0).round() * 2.0;
             assert!((d - nearest).abs() < 0.025, "downbeat {d} off the bar grid");
         }
+    }
+
+    #[test]
+    fn estimate_bpm_needs_more_than_two_beats() {
+        // Swift parity: `guard beats.count > 2 else { return nil }`.
+        assert_eq!(estimate_bpm(&[]), None);
+        assert_eq!(estimate_bpm(&[1.0]), None);
+        assert_eq!(estimate_bpm(&[1.0, 1.5]), None);
+        assert!(estimate_bpm(&[0.0, 0.5, 1.0]).is_some());
+    }
+
+    #[test]
+    fn estimate_bpm_is_sixty_over_median_interval() {
+        // Uniform 0.5s spacing → 120 BPM.
+        let bpm = estimate_bpm(&[0.0, 0.5, 1.0, 1.5, 2.0]).unwrap();
+        assert!((bpm - 120.0).abs() < 1e-9, "bpm={bpm}");
+        // Median is robust to one outlier interval: [1,1,1,7] → median 1 → 60.
+        let bpm = estimate_bpm(&[0.0, 1.0, 2.0, 3.0, 10.0]).unwrap();
+        assert!((bpm - 60.0).abs() < 1e-9, "bpm={bpm}");
+    }
+
+    #[test]
+    fn estimate_bpm_rejects_non_positive_median() {
+        // Coincident beats give a zero median interval — no tempo.
+        assert_eq!(estimate_bpm(&[1.0, 1.0, 1.0, 1.0]), None);
     }
 
     #[test]

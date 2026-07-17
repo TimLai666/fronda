@@ -17,7 +17,7 @@
 
 - `Track` 已有穩定 `id`；`cmd_manage_tracks` 的 move/remove/set 選擇器接受 `{trackId}` 或 `{index}`（互斥），純 index 整數形式維持向後相容。
 - reorder 目的地超出 zone 由 clamp 改為硬錯誤（對齊 Swift `d87faaea`）。
-- 回傳 envelope extras 增加 `reorderedTracks` / `removedTracks` 回執；移除舊的「Track indices changed」note。
+- 回傳 envelope extras 增加回執；移除舊的「Track indices changed」note。（施工註記：上游 `d87faaea` 的實際鍵名是 `reordered` + `removedTracks`，依「逐字對齊上游」原則採上游鍵名。）
 - `get_timeline` 的 track 物件曝露 `trackId`；`id_universe` 納入 track ids；`SCALAR_ID_KEYS` 加 `"trackId"`（短 id 展開/縮寫自動生效）。
 - schema/描述/system-instruction track bullet 逐字對齊 `d87faaea`。
 - 數值邊界：Swift 接受整數浮點（2.0）作 index；Rust 維持 `as_i64` 嚴格性——文件化差異（audit 已標注，行為擇嚴格側，拒絕 2.5 與 "2"）。
@@ -25,7 +25,7 @@
 ### #274-followups detect_beats 契約
 
 - 前置 `has_audio == Some(false)` 拒絕（沿用 tool_exec 既有 guard 模式），錯誤訊息對齊 Swift。
-- windowed 呼叫以窗內 beats 重算 bpm：`audio_core::beat_detector` 曝露純函式 `estimate_bpm(beats) = 60 / median(inter-beat interval)`，空/單 beat 回 None。
+- windowed 呼叫以窗內 beats 重算 bpm：`audio_core::beat_detector` 曝露純函式 `estimate_bpm(beats) = 60 / median(inter-beat interval)`。（施工註記：Swift 實碼是 `count > 2` 才計算——≤2 beats 皆回 None，採 Swift 實碼並以測試釘住。）
 - 空分析回 `note: "No beats found…"`；窗內無 beats 回獨立 note；bpm 為 None／downbeats 空時省略欄位（對齊 Swift 省略語意）。
 - `beat_cache` key 增加檔案 (size, mtime) 標記：同 mediaRef 但檔案變更即重算。stat 走 executor 既有 `std::fs` 用法（同 import_media 路徑），MCP/headless 無檔案時視為無標記（不阻擋）。
 

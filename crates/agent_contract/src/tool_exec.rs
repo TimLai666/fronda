@@ -628,6 +628,14 @@ struct ClipPreset {
     chroma_key: Option<core_model::ChromaKey>,
 }
 
+/// One beat_cache entry: the analysis plus the source file's identity at
+/// analysis time (upstream #274 follow-up — a changed file invalidates).
+struct CachedBeatAnalysis {
+    /// `(size, mtime)` when the file was stat-able, `None` otherwise.
+    file_marker: Option<(u64, std::time::SystemTime)>,
+    analysis: audio_core::beat_detector::BeatAnalysis,
+}
+
 pub struct ToolExecutor {
     timeline: Timeline,
     media_manifest: MediaManifest,
@@ -681,8 +689,10 @@ pub struct ToolExecutor {
     /// `currentFrame`). The host app sets it; 0 on the pure/MCP path.
     current_frame: i64,
     /// detect_beats analyses cache, keyed by mediaRef — the whole file is
-    /// analysed once; windowed calls only trim the response.
-    beat_cache: std::collections::HashMap<String, audio_core::beat_detector::BeatAnalysis>,
+    /// analysed once; windowed calls only trim the response. Entries carry a
+    /// (size, mtime) marker of the source file so a replaced file recomputes
+    /// (#274 follow-up); an unstattable file falls back to key-only caching.
+    beat_cache: std::collections::HashMap<String, CachedBeatAnalysis>,
     /// Multicam groups (upstream #283), from `ProjectFile.multicam_groups`.
     /// Unreferenced groups stay in memory (undo can restore their clips) but
     /// are filtered from saves via `saved_multicam_groups`.
@@ -1118,19 +1128,22 @@ impl ToolExecutor {
     }
 
     /// The full id universe for the short-id contract (C-3): timelines,
-    /// clips, linkGroupIds, captionGroupIds (active + siblings), and media
-    /// assets.
+    /// tracks (#307), clips, linkGroupIds, captionGroupIds (active +
+    /// siblings), and media assets.
     fn id_universe(&self) -> Vec<String> {
         let mut ids: Vec<String> = Vec::new();
         for t in std::iter::once(&self.timeline).chain(self.sibling_timelines.iter()) {
             ids.push(t.id.clone());
-            for clip in t.tracks.iter().flat_map(|tr| &tr.clips) {
-                ids.push(clip.id.clone());
-                if let Some(lg) = &clip.link_group_id {
-                    ids.push(lg.clone());
-                }
-                if let Some(cg) = &clip.caption_group_id {
-                    ids.push(cg.clone());
+            for track in &t.tracks {
+                ids.push(track.id.clone());
+                for clip in &track.clips {
+                    ids.push(clip.id.clone());
+                    if let Some(lg) = &clip.link_group_id {
+                        ids.push(lg.clone());
+                    }
+                    if let Some(cg) = &clip.caption_group_id {
+                        ids.push(cg.clone());
+                    }
                 }
             }
         }
@@ -1443,6 +1456,8 @@ impl ToolExecutor {
         let mut tracks_json: Vec<Value> = Vec::new();
         for (ti, track) in self.timeline.tracks.iter().enumerate() {
             let mut tj = serde_json::Map::new();
+            // #307: the stable id manage_tracks selectors take.
+            tj.insert("trackId".into(), json!(track.id));
             tj.insert("index".into(), json!(ti));
             tj.insert("label".into(), json!(track_label(&self.timeline, ti)));
             tj.insert("type".into(), json!(track.r#type.name()));
@@ -2660,43 +2675,80 @@ impl ToolExecutor {
         None
     }
 
-    /// MANAGE_TRACKS (tool-surface-v2, replaces remove_tracks): reorder → set
-    /// → remove in one undoable action. Every index is resolved to a track id
-    /// against the CALL-TIME order up front, so indexes never drift within a
-    /// call; reorder entries then apply live, one after another, with the
-    /// destination clamped to the track's type zone (video moves stay in the
-    /// video zone, audio in audio).
+    /// MANAGE_TRACKS (tool-surface-v2, replaces remove_tracks; upstream #307):
+    /// reorder → set → remove in one undoable action. Entries address tracks
+    /// by stable trackId or by call-time index — every selector resolves to a
+    /// track id against the CALL-TIME order up front, so indexes never drift
+    /// within a call. Reorder destinations outside the track's type zone are
+    /// a hard error (no clamping); the response carries reordered /
+    /// removedTracks receipts and trackId on every track row.
     fn cmd_manage_tracks(&mut self, args: &Value) -> Result<Value, String> {
         let parsed = match crate::mutation::validate_manage_tracks(args) {
             crate::mutation::ValidationResult::Ok(p) => p,
             crate::mutation::ValidationResult::Error(e) => return Err(e),
         };
-        let resolve = |index: i64, what: &str| -> Result<String, String> {
-            usize::try_from(index)
-                .ok()
-                .and_then(|i| self.timeline.tracks.get(i))
-                .map(|t| t.id.clone())
-                .ok_or_else(|| {
-                    format!(
-                        "manage_tracks: {what} index {index} is out of range (the timeline has {} tracks).",
-                        self.timeline.tracks.len()
-                    )
-                })
+        let resolve = |selector: &crate::mutation::TrackSelector,
+                       path: &str|
+         -> Result<String, String> {
+            match selector {
+                crate::mutation::TrackSelector::Id(id) => {
+                    if self.timeline.tracks.iter().any(|t| &t.id == id) {
+                        Ok(id.clone())
+                    } else {
+                        // Swift #307: an unknown trackId gets the selector
+                        // guard's message ("current" is the operative word).
+                        Err(format!("{path}: pass one current trackId or index"))
+                    }
+                }
+                crate::mutation::TrackSelector::Index(index) => usize::try_from(*index)
+                    .ok()
+                    .and_then(|i| self.timeline.tracks.get(i))
+                    .map(|t| t.id.clone())
+                    .ok_or_else(|| {
+                        format!(
+                            "manage_tracks: {path} index {index} is out of range (the timeline has {} tracks).",
+                            self.timeline.tracks.len()
+                        )
+                    }),
+            }
         };
-        let reorders: Vec<(String, i64)> = parsed
-            .reorder
-            .iter()
-            .map(|(index, to)| resolve(*index, "reorder").map(|id| (id, *to)))
-            .collect::<Result<_, _>>()?;
+        // Reorders resolve AND zone-check up front against the call-time
+        // order: a destination outside the track's video/audio zone is a hard
+        // error (#307 — was a silent clamp) and nothing mutates.
+        let mut reorders: Vec<(String, i64)> = Vec::new();
+        for (i, r) in parsed.reorder.iter().enumerate() {
+            let path = format!("reorder[{i}]");
+            let id = resolve(&r.selector, &path)?;
+            let from_is_audio = self
+                .timeline
+                .tracks
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| t.r#type == ClipType::Audio)
+                .expect("resolved above");
+            let dest_in_zone = usize::try_from(r.to)
+                .ok()
+                .and_then(|d| self.timeline.tracks.get(d))
+                .is_some_and(|t| (t.r#type == ClipType::Audio) == from_is_audio);
+            if !dest_in_zone {
+                return Err(format!(
+                    "{path}: destination index {} is outside the track's type zone",
+                    r.to
+                ));
+            }
+            reorders.push((id, r.to));
+        }
         let sets: Vec<(String, &crate::mutation::ManageTrackSetInput)> = parsed
             .set
             .iter()
-            .map(|s| resolve(s.index, "set").map(|id| (id, s)))
+            .enumerate()
+            .map(|(i, s)| resolve(&s.selector, &format!("set[{i}]")).map(|id| (id, s)))
             .collect::<Result<_, _>>()?;
         let mut remove_ids: Vec<String> = parsed
             .remove
             .iter()
-            .map(|i| resolve(*i, "remove"))
+            .enumerate()
+            .map(|(i, sel)| resolve(sel, &format!("remove[{i}]")))
             .collect::<Result<_, _>>()?;
         remove_ids.dedup();
 
@@ -2728,6 +2780,27 @@ impl ToolExecutor {
             );
         }
 
+        // removedTracks receipt reads the CALL-TIME order (Swift computes it
+        // from the pre-mutation snapshot: call-time index and label).
+        let remove_id_set: std::collections::HashSet<&str> =
+            remove_ids.iter().map(String::as_str).collect();
+        let removed_tracks: Vec<Value> = self
+            .timeline
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| remove_id_set.contains(t.id.as_str()))
+            .map(|(i, t)| {
+                json!({
+                    "trackId": t.id,
+                    "index": i,
+                    "label": track_label(&self.timeline, i),
+                    "type": t.r#type.name(),
+                })
+            })
+            .collect();
+
+        let mut reorder_results: Vec<(String, usize, usize)> = Vec::new();
         for (id, to) in &reorders {
             let pos = self
                 .timeline
@@ -2735,6 +2808,8 @@ impl ToolExecutor {
                 .iter()
                 .position(|t| &t.id == id)
                 .expect("resolved up front");
+            // Zone-validated up front against the call-time order; the live
+            // clamp stays as a safety net for chained reorders.
             let is_audio = self.timeline.tracks[pos].r#type == ClipType::Audio;
             let zone: Vec<usize> = self
                 .timeline
@@ -2753,6 +2828,13 @@ impl ToolExecutor {
             self.timeline
                 .tracks
                 .insert(dest.min(self.timeline.tracks.len()), track);
+            let destination = self
+                .timeline
+                .tracks
+                .iter()
+                .position(|t| &t.id == id)
+                .unwrap_or(pos);
+            reorder_results.push((id.clone(), pos, destination));
         }
         for (id, s) in &sets {
             let track = self
@@ -2784,6 +2866,7 @@ impl ToolExecutor {
             .enumerate()
             .map(|(i, t)| {
                 let mut o = json!({
+                    "trackId": t.id,
                     "index": i,
                     "label": track_label(&self.timeline, i),
                     "type": t.r#type.name(),
@@ -2800,11 +2883,21 @@ impl ToolExecutor {
                 o
             })
             .collect();
+        // #307 receipts replace the old "Track indices changed" note.
         let mut out = json!({ "tracks": tracks });
-        if !reorders.is_empty() || !remove_ids.is_empty() {
-            out["notes"] = json!([
-                "Track indices changed — 'tracks' is the new order; index 0 renders on top."
-            ]);
+        if !reorder_results.is_empty() {
+            out["reordered"] = json!(reorder_results
+                .iter()
+                .map(|(id, from, to)| json!({
+                    "trackId": id,
+                    "from": from,
+                    "to": to,
+                    "changed": from != to,
+                }))
+                .collect::<Vec<_>>());
+        }
+        if !removed_tracks.is_empty() {
+            out["removedTracks"] = json!(removed_tracks);
         }
         Ok(out)
     }
@@ -3977,11 +4070,35 @@ impl ToolExecutor {
 
         // Place each clip at its own startFrame; same-track overlap is
         // resolved by place_clips (trim/split/remove — the UI's drag-onto-track
-        // overwrite, #124). Auto mode shares one video track for visual
-        // entries and one audio track for audio entries (created if absent).
+        // overwrite, #124). Auto mode always creates FRESH shared tracks
+        // (upstream #342): one new video track on top for visual entries and
+        // one new audio track appended at the bottom for audio entries — so
+        // linked dialogue on A1 stays put and music/VO land on A2+, never
+        // overwritten by the same-track overwrite semantics.
         let mut placed_visual_ids: Vec<String> = Vec::new();
         let mut auto_video_track: Option<usize> = None;
         let mut auto_audio_track: Option<usize> = None;
+        if auto_tracks {
+            let needs_video = placements
+                .iter()
+                .flat_map(|(clips, _)| clips)
+                .any(|c| c.media_type.is_visual());
+            let needs_audio = placements
+                .iter()
+                .flat_map(|(clips, _)| clips)
+                .any(|c| !c.media_type.is_visual());
+            if needs_video {
+                let ti = timeline_core::insert_track_at(&mut self.timeline, 0, ClipType::Video)
+                    .map_err(|_| "Failed to create video track".to_string())?;
+                auto_video_track = Some(ti);
+            }
+            if needs_audio {
+                let at = self.timeline.tracks.len();
+                let ti = timeline_core::insert_track_at(&mut self.timeline, at, ClipType::Audio)
+                    .map_err(|_| "Failed to create audio track".to_string())?;
+                auto_audio_track = Some(ti);
+            }
+        }
         for (clips, track_index) in placements {
             for clip in clips {
                 // An explicit track only takes type-compatible clips; a nest's
@@ -5489,7 +5606,7 @@ impl ToolExecutor {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let kind = ClipType::from_extension(ext).ok_or_else(|| {
             format!(
-                "import_media: unsupported file type '.{ext}' — supported: video (mov, mp4, m4v),                  audio (mp3, wav, aac, m4a, aiff, aifc, flac), image (png, jpg, jpeg, tiff, heic)."
+                "import_media: unsupported file type '.{ext}' — supported: video (mov, mp4, m4v),                  audio (mp3, wav, aac, m4a, aiff, aifc, caf, flac), image (png, jpg, jpeg, tiff, heic)."
             )
         })?;
         let file_name = path
@@ -6336,9 +6453,23 @@ impl ToolExecutor {
         Ok(json!({ "synced": synced, "skipped": skipped }))
     }
 
+    /// `(size, mtime)` of a local media file for the beat cache (#274
+    /// follow-up). `None` when the source has no stat-able absolute path
+    /// (MCP/headless, project-relative, or missing file) — the cache then
+    /// behaves as before (key-only).
+    fn beat_file_marker(entry: &MediaManifestEntry) -> Option<(u64, std::time::SystemTime)> {
+        let MediaSource::External { absolute_path } = &entry.source else {
+            return None;
+        };
+        let meta = std::fs::metadata(absolute_path).ok()?;
+        let mtime = meta.modified().ok()?;
+        Some((meta.len(), mtime))
+    }
+
     /// DETECT_BEATS (tool-surface-v2): on-device beat/downbeat detection on a
     /// media asset's audio, in SOURCE seconds + estimated bpm. The whole file
-    /// is analysed once and cached; startSeconds/endSeconds trim the response.
+    /// is analysed once and cached; startSeconds/endSeconds trim the response
+    /// and recompute bpm from the windowed beats (upstream #274 follow-ups).
     /// Decoding runs through the ClipAudioSource host seam.
     fn cmd_detect_beats(&mut self, args: &Value) -> Result<Value, String> {
         let media_ref = args
@@ -6349,14 +6480,27 @@ impl ToolExecutor {
             .media_manifest
             .entry_for(media_ref)
             .ok_or_else(|| format!("Media '{media_ref}' not found"))?;
-        if !matches!(entry.r#type, ClipType::Audio | ClipType::Video) {
+        // Upstream #274 follow-up (1189579b): a silent video rejects up
+        // front — before any decode — matching the context menu.
+        let is_silent_video =
+            entry.r#type == ClipType::Video && entry.has_audio == Some(false);
+        if !matches!(entry.r#type, ClipType::Audio | ClipType::Video) || is_silent_video {
             return Err(format!(
-                "detect_beats works on audio or video assets; '{}' is {}.",
-                entry.name,
-                entry.r#type.name()
+                "detect_beats needs audio: {media_ref} is {}{}.",
+                entry.r#type.name(),
+                if entry.r#type == ClipType::Video {
+                    " with no audio track"
+                } else {
+                    ""
+                }
             ));
         }
-        if !self.beat_cache.contains_key(media_ref) {
+        let marker = Self::beat_file_marker(entry);
+        let cached_fresh = self
+            .beat_cache
+            .get(media_ref)
+            .is_some_and(|c| c.file_marker == marker);
+        if !cached_fresh {
             let audio = self.audio_source.clone().ok_or_else(|| {
                 "detect_beats is unavailable: no audio decoder is connected (run it from the app)."
                     .to_string()
@@ -6366,11 +6510,27 @@ impl ToolExecutor {
                 .decode_source_pcm(&entry.source, sample_rate, 1)
                 .ok_or_else(|| format!("Could not decode audio from '{}'.", entry.name))?;
             let analysis = audio_core::beat_detector::detect_beats(&pcm, 1, sample_rate);
-            self.beat_cache.insert(media_ref.to_string(), analysis);
+            self.beat_cache.insert(
+                media_ref.to_string(),
+                CachedBeatAnalysis {
+                    file_marker: marker,
+                    analysis,
+                },
+            );
         }
-        let analysis = &self.beat_cache[media_ref];
+        let analysis = &self.beat_cache[media_ref].analysis;
+        // The empty check reads the FULL analysis — beats and downbeats
+        // peak-pick independently (f4c4fca6), and a window that filters out
+        // every beat must not masquerade as a beatless track (a9e4b97e).
+        if analysis.beats.is_empty() && analysis.downbeats.is_empty() {
+            return Ok(Self::json_content(&json!({
+                "beats": [],
+                "note": "No beats found — the audio may lack rhythmic content."
+            })));
+        }
         let start = args.get("startSeconds").and_then(|v| v.as_f64());
         let end = args.get("endSeconds").and_then(|v| v.as_f64());
+        let windowed = start.is_some() || end.is_some();
         let in_range =
             |t: f64| -> bool { start.is_none_or(|s| t >= s) && end.is_none_or(|e| t <= e) };
         let beats: Vec<f64> = analysis
@@ -6378,20 +6538,39 @@ impl ToolExecutor {
             .iter()
             .copied()
             .filter(|t| in_range(*t))
-            .map(crate::timeline_v2::round3)
             .collect();
         let downbeats: Vec<f64> = analysis
             .downbeats
             .iter()
             .copied()
             .filter(|t| in_range(*t))
-            .map(crate::timeline_v2::round3)
             .collect();
-        Ok(Self::json_content(&json!({
-            "bpm": crate::timeline_v2::round3(analysis.bpm),
-            "beats": beats,
-            "downbeats": downbeats,
-        })))
+        if windowed && beats.is_empty() && downbeats.is_empty() {
+            return Ok(Self::json_content(&json!({
+                "beats": [],
+                "note": "No beats in the requested window; the track has beats elsewhere — widen or drop startSeconds/endSeconds."
+            })));
+        }
+        let mut out = json!({
+            "beats": beats.iter().copied().map(crate::timeline_v2::round3).collect::<Vec<_>>(),
+        });
+        if !downbeats.is_empty() {
+            out["downbeats"] = json!(downbeats
+                .iter()
+                .copied()
+                .map(crate::timeline_v2::round3)
+                .collect::<Vec<_>>());
+        }
+        // Windowed calls report the WINDOW's tempo, not the whole track's.
+        let bpm = if windowed {
+            audio_core::beat_detector::estimate_bpm(&beats).unwrap_or(0.0)
+        } else {
+            analysis.bpm
+        };
+        if bpm > 0.0 {
+            out["bpm"] = json!(crate::timeline_v2::round3(bpm));
+        }
+        Ok(Self::json_content(&out))
     }
 
     /// DENOISE_AUDIO (upstream #251): toggle the `audio.denoise` effect on audio
@@ -8712,6 +8891,68 @@ mod tests {
     }
 
     #[test]
+    fn add_clips_omitting_audio_track_index_appends_below_linked_audio() {
+        // Upstream #342: all-omitted trackIndex always creates FRESH shared
+        // tracks — the music must land on a new audio track BELOW the linked
+        // dialogue's A1, never reuse it (place_clips overwrite would trim or
+        // remove the dialogue audio).
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(media_entry("dialog", ClipType::Video, true, 1.0)); // 30f
+        manifest
+            .entries
+            .push(media_entry("music", ClipType::Audio, false, 1.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+
+        exec.execute(
+            "add_clips",
+            &json!({"entries": [{"mediaRef": "dialog", "startFrame": 0, "endFrame": 30}]}),
+        )
+        .unwrap();
+        exec.execute(
+            "add_clips",
+            &json!({"entries": [{"mediaRef": "music", "startFrame": 0, "endFrame": 30}]}),
+        )
+        .unwrap();
+
+        let audio_tracks: Vec<(usize, &core_model::Track)> = exec
+            .timeline()
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.r#type == ClipType::Audio)
+            .collect();
+        assert_eq!(audio_tracks.len(), 2, "music gets its own audio track");
+        let (linked_idx, linked_track) = audio_tracks[0];
+        let (music_idx, music_track) = audio_tracks[1];
+        assert_eq!(track_label(exec.timeline(), linked_idx), "A1");
+        assert_eq!(track_label(exec.timeline(), music_idx), "A2");
+        assert!(
+            linked_track
+                .clips
+                .iter()
+                .any(|c| c.link_group_id.is_some() && c.media_ref == "dialog"),
+            "linked dialogue audio stays on A1"
+        );
+        assert!(
+            music_track
+                .clips
+                .iter()
+                .any(|c| c.media_ref == "music" && c.link_group_id.is_none()),
+            "music lands on A2"
+        );
+        // The dialogue audio is untouched — full [0, 30) span survives.
+        let dialogue_audio = linked_track
+            .clips
+            .iter()
+            .find(|c| c.media_ref == "dialog")
+            .unwrap();
+        assert_eq!(dialogue_audio.start_frame, 0);
+        assert_eq!(dialogue_audio.duration_frames, 30);
+    }
+
+    #[test]
     fn add_clips_overwrite_linked_pair_clears_stranded_audio_no_extra_track() {
         // Upstream #124: overwriting a linked V+A pair cleared only the video
         // range — the audio fragment stayed (double playback) and the new clip's
@@ -9959,33 +10200,135 @@ mod tests {
         let body: Value =
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(body["tracks"][1]["hidden"], json!(true));
-        assert!(
-            body["notes"][0]
-                .as_str()
-                .unwrap()
-                .contains("Track indices changed"),
-            "reorder adds the note: {body}"
-        );
+        // #307: the reorder receipt replaced the "Track indices changed" note.
+        assert!(body.get("notes").is_none(), "note dropped for receipts: {body}");
+        let receipt = &body["reordered"][0];
+        assert_eq!(receipt["from"], json!(0));
+        assert_eq!(receipt["to"], json!(1));
+        assert_eq!(receipt["changed"], json!(true));
     }
 
     #[test]
-    fn manage_tracks_reorder_clamps_to_type_zone() {
-        // An audio track can't move into the video zone: 'to' clamps.
+    fn manage_tracks_reorder_out_of_zone_is_a_hard_error() {
+        // Upstream #307 (d87faaea): an audio track can't move into the video
+        // zone — the old silent clamp is now a hard error and nothing moves.
         let mut exec = make_executor();
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 2, ClipType::Audio);
         let _ = timeline_core::insert_track_at(exec.timeline_mut(), 3, ClipType::Audio);
-        let audio_id = exec.timeline().tracks[3].id.clone();
+        let before = exec.timeline().clone();
+        let err = exec
+            .execute(
+                "manage_tracks",
+                &json!({"reorder": [{"index": 3, "to": 0}]}),
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("destination index 0 is outside the track's type zone"),
+            "{err}"
+        );
+        // Out-of-bounds destinations get the same hard error.
+        let err = exec
+            .execute(
+                "manage_tracks",
+                &json!({"reorder": [{"index": 1, "to": 99}]}),
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("destination index 99 is outside the track's type zone"),
+            "{err}"
+        );
+        // Fractional remove indexes are refused at validation.
+        let err = exec
+            .execute("manage_tracks", &json!({"remove": [1.5]}))
+            .unwrap_err();
+        assert!(
+            err.contains("must be an integer index or track selector object"),
+            "{err}"
+        );
+        assert_eq!(*exec.timeline(), before, "nothing mutated on rejection");
+    }
+
+    #[test]
+    fn manage_tracks_track_id_addresses_across_reorder() {
+        // Upstream #307: a trackId from get_timeline keeps addressing the
+        // same track after reorders move it; receipts report the outcome.
+        let mut exec = make_executor();
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 0, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 1, ClipType::Video);
+        let _ = timeline_core::insert_track_at(exec.timeline_mut(), 2, ClipType::Audio);
+        let gt = exec.execute("get_timeline", &json!({})).unwrap();
+        let gtv: Value = serde_json::from_str(gt["content"][0]["text"].as_str().unwrap()).unwrap();
+        let top_ref = gtv["tracks"][0]["trackId"].as_str().unwrap().to_string();
+        let top_full = exec.timeline().tracks[0].id.clone();
+        assert!(
+            top_full.starts_with(&top_ref) && top_ref.len() >= 8,
+            "get_timeline reports the short trackId: {top_ref}"
+        );
+
+        // Move the top track down by index, then address it by its trackId:
+        // the same track is targeted even though its index changed.
         exec.execute(
             "manage_tracks",
-            &json!({"reorder": [{"index": 3, "to": 0}]}),
+            &json!({"reorder": [{"index": 0, "to": 1}]}),
         )
         .unwrap();
-        // Clamped to the top of the AUDIO zone (index 2), not index 0.
-        assert_eq!(exec.timeline().tracks[2].id, audio_id);
-        assert_eq!(exec.timeline().tracks[2].r#type, ClipType::Audio);
-        assert_eq!(exec.timeline().tracks[0].r#type, ClipType::Video);
+        assert_eq!(exec.timeline().tracks[1].id, top_full);
+        let res = exec
+            .execute(
+                "manage_tracks",
+                &json!({"set": [{"trackId": top_ref, "hidden": true}]}),
+            )
+            .unwrap();
+        assert!(exec.timeline().tracks[1].hidden, "trackId found the moved track");
+        let body: Value =
+            serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(body["tracks"][1]["trackId"].is_string());
+
+        // A no-op reorder by trackId reports changed:false.
+        let noop = exec
+            .execute(
+                "manage_tracks",
+                &json!({"reorder": [{"trackId": top_ref, "to": 1}]}),
+            )
+            .unwrap();
+        let nv: Value =
+            serde_json::from_str(noop["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(nv["reordered"][0]["changed"], json!(false), "{nv}");
+
+        // Remove by trackId: the receipt names the removed track.
+        let removed = exec
+            .execute(
+                "manage_tracks",
+                &json!({"remove": [{"trackId": top_ref}]}),
+            )
+            .unwrap();
+        let rv: Value =
+            serde_json::from_str(removed["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(
+            !exec.timeline().tracks.iter().any(|t| t.id == top_full),
+            "track removed"
+        );
+        let receipt = &rv["removedTracks"][0];
+        assert!(
+            top_full.starts_with(receipt["trackId"].as_str().unwrap()),
+            "{rv}"
+        );
+        assert_eq!(receipt["index"], json!(1), "call-time index reported");
+        assert_eq!(receipt["type"], json!("video"));
+
+        // An unknown trackId is the selector guard's hard error.
+        let err = exec
+            .execute(
+                "manage_tracks",
+                &json!({"remove": [{"trackId": top_ref}]}),
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("pass one current trackId or index"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -11355,12 +11698,33 @@ mod tests {
     }
 
     #[test]
+    fn import_media_path_accepts_caf_audio() {
+        // Upstream #338: .caf registers as an audio asset through the path
+        // import (cross-line: needs core_model ClipType::from_extension caf).
+        let mut exec = make_executor();
+        let result = exec
+            .execute(
+                "import_media",
+                &json!({"source": {"path": "/abs/sound.caf"}}),
+            )
+            .unwrap();
+        assert_eq!(exec.media_manifest.entries[0].r#type, ClipType::Audio);
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["type"], json!("audio"));
+        assert_eq!(body["status"], json!("ready"));
+    }
+
+    #[test]
     fn import_media_rejects_unsupported_extension_and_shape() {
         let mut exec = make_executor();
         let err = exec
             .execute("import_media", &json!({"source": {"path": "/notes.txt"}}))
             .unwrap_err();
         assert!(err.contains("unsupported file type"), "got: {err}");
+        // Upstream #338: the rejection message names caf among the audio
+        // extensions.
+        assert!(err.contains("aiff, aifc, caf, flac"), "got: {err}");
         let err = exec
             .execute("import_media", &json!({"path": "/a.mp4"}))
             .unwrap_err();
@@ -15032,7 +15396,9 @@ mod tests {
         assert_eq!(t0["label"], json!("V1"));
         assert_eq!(t0["type"], json!("video"));
         assert!(t0.get("muted").is_none(), "default flags stripped");
-        assert!(t0.get("id").is_none(), "track id not exposed");
+        // #307: the stable trackId manage_tracks takes, as a short id.
+        assert!(t0["trackId"].is_string(), "trackId exposed: {t0}");
+        assert!(t0.get("id").is_none(), "raw id key not exposed");
         assert!(
             t0.get("displayHeight").is_none(),
             "displayHeight not exposed"
@@ -15305,6 +15671,189 @@ mod tests {
         let err = exec
             .execute("detect_beats", &json!({"mediaRef": "img"}))
             .unwrap_err();
-        assert!(err.contains("audio or video"), "{err}");
+        // Upstream 1189579b message shape.
+        assert_eq!(err, "detect_beats needs audio: img is image.");
+    }
+
+    #[test]
+    fn detect_beats_rejects_silent_video_before_decode() {
+        // Upstream #274 follow-up (1189579b): hasAudio == false videos reject
+        // up front. No audio source is connected, so reaching the decode path
+        // would error "unavailable" instead — the specific message proves the
+        // guard fires first.
+        let mut manifest = MediaManifest::default();
+        manifest
+            .entries
+            .push(media_entry("vid", ClipType::Video, false, 8.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let err = exec
+            .execute("detect_beats", &json!({"mediaRef": "vid"}))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "detect_beats needs audio: vid is video with no audio track."
+        );
+        // A video whose hasAudio is unknown (None) is NOT rejected up front.
+        let mut manifest = MediaManifest::default();
+        let mut unknown = media_entry("vid2", ClipType::Video, false, 8.0);
+        unknown.has_audio = None;
+        manifest.entries.push(unknown);
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let err = exec
+            .execute("detect_beats", &json!({"mediaRef": "vid2"}))
+            .unwrap_err();
+        assert!(err.contains("unavailable"), "{err}");
+    }
+
+    fn seed_beats(exec: &mut ToolExecutor, media_ref: &str, bpm: f64, beats: Vec<f64>, downbeats: Vec<f64>) {
+        exec.beat_cache.insert(
+            media_ref.to_string(),
+            CachedBeatAnalysis {
+                file_marker: None,
+                analysis: audio_core::beat_detector::BeatAnalysis {
+                    bpm,
+                    beats,
+                    downbeats,
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn detect_beats_windowed_call_reports_window_local_bpm() {
+        // Upstream a9e4b97e: two tempo regions — the full read reports the
+        // analysis bpm; a window over the second region recomputes 60/median
+        // IBI from the windowed beats.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("music", 16.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        seed_beats(
+            &mut exec,
+            "music",
+            60.0,
+            vec![0.0, 1.0, 2.0, 3.0, 10.0, 10.5, 11.0, 11.5, 12.0],
+            vec![],
+        );
+        let full = exec
+            .execute("detect_beats", &json!({"mediaRef": "music"}))
+            .unwrap();
+        let fv: Value = serde_json::from_str(full["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(fv["bpm"].as_f64(), Some(60.0), "{fv}");
+
+        let win = exec
+            .execute(
+                "detect_beats",
+                &json!({"mediaRef": "music", "startSeconds": 9.75, "endSeconds": 12.25}),
+            )
+            .unwrap();
+        let wv: Value = serde_json::from_str(win["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            wv["bpm"].as_f64(),
+            Some(120.0),
+            "window-local tempo: {wv}"
+        );
+        assert_eq!(wv["beats"].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn detect_beats_empty_analysis_and_empty_window_notes() {
+        // Empty analysis (both arrays — f4c4fca6 checks the FULL analysis).
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("speech", 8.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        seed_beats(&mut exec, "speech", 0.0, vec![], vec![]);
+        let res = exec
+            .execute("detect_beats", &json!({"mediaRef": "speech"}))
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["beats"], json!([]));
+        assert_eq!(
+            v["note"],
+            json!("No beats found — the audio may lack rhythmic content.")
+        );
+        assert!(v.get("bpm").is_none(), "{v}");
+        assert!(v.get("downbeats").is_none(), "{v}");
+
+        // Window that filters everything out gets the distinct note.
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("music", 8.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        seed_beats(&mut exec, "music", 120.0, vec![0.0, 0.5, 1.0], vec![0.0]);
+        let res = exec
+            .execute(
+                "detect_beats",
+                &json!({"mediaRef": "music", "startSeconds": 5.0, "endSeconds": 7.0}),
+            )
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["beats"], json!([]));
+        assert_eq!(
+            v["note"],
+            json!("No beats in the requested window; the track has beats elsewhere — widen or drop startSeconds/endSeconds.")
+        );
+    }
+
+    #[test]
+    fn detect_beats_omits_bpm_and_downbeats_when_absent() {
+        // bpm 0 (no periodicity) and no downbeats → both keys omitted, beats
+        // still listed (upstream omission semantics).
+        let mut manifest = MediaManifest::default();
+        manifest.entries.push(audio_media("music", 8.0));
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        seed_beats(&mut exec, "music", 0.0, vec![0.0, 0.7, 1.9], vec![]);
+        let res = exec
+            .execute("detect_beats", &json!({"mediaRef": "music"}))
+            .unwrap();
+        let v: Value = serde_json::from_str(res["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["beats"].as_array().unwrap().len(), 3);
+        assert!(v.get("bpm").is_none(), "{v}");
+        assert!(v.get("downbeats").is_none(), "{v}");
+        assert!(v.get("note").is_none(), "{v}");
+    }
+
+    #[test]
+    fn detect_beats_cache_invalidates_when_the_file_changes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingClickAudio(std::sync::Arc<AtomicUsize>);
+        impl ClipAudioSource for CountingClickAudio {
+            fn decode_source_pcm(
+                &self,
+                source: &core_model::MediaSource,
+                sample_rate: u32,
+                channels: usize,
+            ) -> Option<Vec<f32>> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                MockClickAudio.decode_source_pcm(source, sample_rate, channels)
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!("fronda-beats-{}.wav", Uuid::new_v4()));
+        std::fs::write(&path, b"one").unwrap();
+
+        let mut manifest = MediaManifest::default();
+        let mut entry = audio_media("music", 8.0);
+        entry.source = core_model::MediaSource::External {
+            absolute_path: path.to_string_lossy().into_owned(),
+        };
+        manifest.entries.push(entry);
+        let mut exec = ToolExecutor::new(Timeline::default(), manifest);
+        let decodes = std::sync::Arc::new(AtomicUsize::new(0));
+        exec.set_audio_source(std::sync::Arc::new(CountingClickAudio(decodes.clone())));
+
+        exec.execute("detect_beats", &json!({"mediaRef": "music"}))
+            .unwrap();
+        assert_eq!(decodes.load(Ordering::SeqCst), 1, "first call analyses");
+        exec.execute("detect_beats", &json!({"mediaRef": "music"}))
+            .unwrap();
+        assert_eq!(decodes.load(Ordering::SeqCst), 1, "unchanged file hits the cache");
+
+        // Replace the file (size change makes the marker differ even on
+        // coarse-mtime filesystems) → the next call recomputes.
+        std::fs::write(&path, b"one-two-three").unwrap();
+        exec.execute("detect_beats", &json!({"mediaRef": "music"}))
+            .unwrap();
+        assert_eq!(decodes.load(Ordering::SeqCst), 2, "changed file recomputes");
+        let _ = std::fs::remove_file(&path);
     }
 }

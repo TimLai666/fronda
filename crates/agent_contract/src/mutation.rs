@@ -487,10 +487,25 @@ pub fn validate_insert_clips(input: &Value) -> ValidationResult<InsertClipsInput
 
 // === MUT-006 (tool-surface-v2): manage_tracks ==============================
 
+/// A `manage_tracks` track selector (upstream #307): the stable trackId from
+/// get_timeline, or a call-time index (mutually exclusive per entry).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrackSelector {
+    Id(String),
+    Index(i64),
+}
+
+/// One parsed `manage_tracks` reorder entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManageTrackReorderInput {
+    pub selector: TrackSelector,
+    pub to: i64,
+}
+
 /// One parsed `manage_tracks` set entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ManageTrackSetInput {
-    pub index: i64,
+    pub selector: TrackSelector,
     pub muted: Option<bool>,
     pub hidden: Option<bool>,
     pub sync_locked: Option<bool>,
@@ -499,78 +514,94 @@ pub struct ManageTrackSetInput {
 /// Parsed and validated `manage_tracks` input (replaces remove_tracks).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ManageTracksInput {
-    /// (index, to) pairs, applied in order against the live track list.
-    pub reorder: Vec<(i64, i64)>,
+    /// Applied in order against the live track list.
+    pub reorder: Vec<ManageTrackReorderInput>,
     pub set: Vec<ManageTrackSetInput>,
-    pub remove: Vec<i64>,
+    pub remove: Vec<TrackSelector>,
 }
 
-/// MUT-006 (v2): shape-validate manage_tracks. Indexes must be non-negative
-/// integers; every set entry needs at least one flag; an empty call (all
-/// three arrays absent/empty) is refused.
+/// #307: exactly one of `trackId` (non-empty string) or `index` (non-negative
+/// integer). Error text matches Swift's `trackId(_:_:)` selector guard.
+/// Documented strict-side divergence: Swift accepts integer-valued doubles
+/// (2.0) as indexes; Rust's `as_i64` rejects every float form, and negatives
+/// are refused here rather than at executor resolution.
+fn parse_track_selector(entry: &Value, path: &str) -> Result<TrackSelector, String> {
+    let track_id = entry.get("trackId");
+    let index = entry.get("index");
+    match (track_id, index) {
+        (Some(Value::String(id)), None) if !id.is_empty() => Ok(TrackSelector::Id(id.clone())),
+        (None, Some(v)) => match v.as_i64() {
+            Some(i) if i >= 0 => Ok(TrackSelector::Index(i)),
+            _ => Err(format!("{path}: pass one current trackId or index")),
+        },
+        _ => Err(format!("{path}: pass one current trackId or index")),
+    }
+}
+
+/// MUT-006 (v2) + upstream #307: shape-validate manage_tracks. Every entry
+/// addresses a track by trackId XOR index; reorder needs an integer 'to';
+/// every set entry needs at least one flag; remove items are bare integers
+/// (legacy) or selector objects; an empty call is refused.
 pub fn validate_manage_tracks(input: &Value) -> ValidationResult<ManageTracksInput> {
-    let mut reorder: Vec<(i64, i64)> = Vec::new();
+    let mut reorder: Vec<ManageTrackReorderInput> = Vec::new();
     if let Some(arr) = input.get("reorder").and_then(|v| v.as_array()) {
         for (i, entry) in arr.iter().enumerate() {
-            let (Some(index), Some(to)) = (
-                entry.get("index").and_then(|v| v.as_i64()),
-                entry.get("to").and_then(|v| v.as_i64()),
-            ) else {
+            let path = format!("reorder[{i}]");
+            let Some(to) = entry.get("to").and_then(|v| v.as_i64()) else {
                 return ValidationResult::Error(format!(
-                    "manage_tracks: reorder[{i}] needs integer 'index' and 'to'."
+                    "{path}: 'to' is required and must be an integer"
                 ));
             };
-            if index < 0 || to < 0 {
-                return ValidationResult::Error(format!(
-                    "manage_tracks: reorder[{i}] indexes must be non-negative."
-                ));
-            }
-            reorder.push((index, to));
+            let selector = match parse_track_selector(entry, &path) {
+                Ok(s) => s,
+                Err(e) => return ValidationResult::Error(e),
+            };
+            reorder.push(ManageTrackReorderInput { selector, to });
         }
     }
     let mut set: Vec<ManageTrackSetInput> = Vec::new();
     if let Some(arr) = input.get("set").and_then(|v| v.as_array()) {
         for (i, entry) in arr.iter().enumerate() {
-            let Some(index) = entry.get("index").and_then(|v| v.as_i64()) else {
-                return ValidationResult::Error(format!(
-                    "manage_tracks: set[{i}] needs an integer 'index'."
-                ));
-            };
-            if index < 0 {
-                return ValidationResult::Error(format!(
-                    "manage_tracks: set[{i}].index must be non-negative."
-                ));
-            }
+            let path = format!("set[{i}]");
             let muted = entry.get("muted").and_then(|v| v.as_bool());
             let hidden = entry.get("hidden").and_then(|v| v.as_bool());
             let sync_locked = entry.get("syncLocked").and_then(|v| v.as_bool());
             if muted.is_none() && hidden.is_none() && sync_locked.is_none() {
                 return ValidationResult::Error(format!(
-                    "manage_tracks: set[{i}] needs at least one of muted, hidden, or syncLocked."
+                    "{path}: pass at least one of muted, hidden, syncLocked"
                 ));
             }
+            let selector = match parse_track_selector(entry, &path) {
+                Ok(s) => s,
+                Err(e) => return ValidationResult::Error(e),
+            };
             set.push(ManageTrackSetInput {
-                index,
+                selector,
                 muted,
                 hidden,
                 sync_locked,
             });
         }
     }
-    let mut remove: Vec<i64> = Vec::new();
+    let mut remove: Vec<TrackSelector> = Vec::new();
     if let Some(arr) = input.get("remove").and_then(|v| v.as_array()) {
         for (i, entry) in arr.iter().enumerate() {
-            let Some(index) = entry.as_i64() else {
-                return ValidationResult::Error(format!(
-                    "manage_tracks: remove[{i}] must be an integer track index."
-                ));
-            };
-            if index < 0 {
-                return ValidationResult::Error(format!(
-                    "manage_tracks: remove[{i}] must be non-negative."
-                ));
+            let path = format!("remove[{i}]");
+            if entry.is_object() {
+                match parse_track_selector(entry, &path) {
+                    Ok(s) => remove.push(s),
+                    Err(e) => return ValidationResult::Error(e),
+                }
+                continue;
             }
-            remove.push(index);
+            match entry.as_i64() {
+                Some(index) if index >= 0 => remove.push(TrackSelector::Index(index)),
+                _ => {
+                    return ValidationResult::Error(format!(
+                        "{path} must be an integer index or track selector object"
+                    ))
+                }
+            }
         }
     }
     if reorder.is_empty() && set.is_empty() && remove.is_empty() {
@@ -2182,12 +2213,73 @@ mod tests {
         let parsed = validate_manage_tracks(&input)
             .into_ok()
             .expect("MUT-006: valid");
-        assert_eq!(parsed.reorder, vec![(2, 0)]);
-        assert_eq!(parsed.set[0].index, 1);
+        assert_eq!(
+            parsed.reorder,
+            vec![ManageTrackReorderInput {
+                selector: TrackSelector::Index(2),
+                to: 0
+            }]
+        );
+        assert_eq!(parsed.set[0].selector, TrackSelector::Index(1));
         assert_eq!(parsed.set[0].muted, Some(true));
         assert_eq!(parsed.set[0].hidden, None);
         assert_eq!(parsed.set[0].sync_locked, Some(false));
-        assert_eq!(parsed.remove, vec![3]);
+        assert_eq!(parsed.remove, vec![TrackSelector::Index(3)]);
+    }
+
+    #[test]
+    fn mut_006_manage_tracks_track_id_selectors_307() {
+        // Upstream #307: trackId addresses every action; index stays legal.
+        let input = json!({
+            "reorder": [{"trackId": "track-a", "to": 1}],
+            "set": [{"trackId": "track-b", "hidden": true}],
+            "remove": [{"trackId": "track-c"}, 0, {"index": 2}],
+        });
+        let parsed = validate_manage_tracks(&input)
+            .into_ok()
+            .expect("trackId selectors valid");
+        assert_eq!(
+            parsed.reorder[0].selector,
+            TrackSelector::Id("track-a".into())
+        );
+        assert_eq!(parsed.set[0].selector, TrackSelector::Id("track-b".into()));
+        assert_eq!(
+            parsed.remove,
+            vec![
+                TrackSelector::Id("track-c".into()),
+                TrackSelector::Index(0),
+                TrackSelector::Index(2)
+            ]
+        );
+
+        // trackId and index are mutually exclusive per entry.
+        let err = validate_manage_tracks(
+            &json!({"set": [{"trackId": "t", "index": 0, "muted": true}]}),
+        )
+        .into_error()
+        .expect("both selectors refused");
+        assert_eq!(err, "set[0]: pass one current trackId or index");
+
+        // Neither selector is refused too.
+        let err = validate_manage_tracks(&json!({"set": [{"muted": true}]}))
+            .into_error()
+            .expect("selectorless set refused");
+        assert_eq!(err, "set[0]: pass one current trackId or index");
+
+        // A non-integer remove item names both accepted forms.
+        let err = validate_manage_tracks(&json!({"remove": [1.5]}))
+            .into_error()
+            .expect("fractional index refused");
+        assert_eq!(
+            err,
+            "remove[0] must be an integer index or track selector object"
+        );
+
+        // reorder still requires an integer 'to'.
+        let err = validate_manage_tracks(&json!({"reorder": [{"trackId": "t"}]}))
+            .into_error()
+            .expect("missing to refused");
+        assert_eq!(err, "reorder[0]: 'to' is required and must be an integer");
     }
 
     #[test]

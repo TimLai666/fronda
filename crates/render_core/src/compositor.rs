@@ -2015,6 +2015,7 @@ mod tests {
             variable_font_axes: None,
             letter_spacing: None,
             line_height: None,
+            ..Default::default()
         });
         let timeline = tl(vec![c]);
         // Text is procedural — fetch_source is never consulted. Use a tall canvas

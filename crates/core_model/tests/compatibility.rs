@@ -1,8 +1,8 @@
 use core_model::{
     AgentContentBlock, AnimPair, ChatSession, Clip, ClipType, Crop, Effect, Fill, GenerationLog,
     GenerationLogEntry, Interpolation, Keyframe, KeyframeTrack, MediaManifest, MediaSource, Rgba,
-    ShapeKind, ShapeStyle, Stroke, TextAlignment, TextFill, TextRgba, TextShadow, TextStyle,
-    Timeline, ToolResultBlock, Track, Transform,
+    ShapeKind, ShapeStyle, Stroke, TextAlignment, TextBackgroundStyle, TextFill, TextRgba,
+    TextShadow, TextStyle, Timeline, ToolResultBlock, Track, Transform,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -177,6 +177,192 @@ fn upstream_065_font_weight_legacy_missing_defaults_to_400() {
         "expected 400, got {}",
         style.font_weight
     );
+}
+
+#[test]
+fn upstream_330_336_text_style_v0610_round_trip_key_for_key() {
+    // A Swift v0.6.10-authored TextStyle (post-#330 rich styling + #336 line styles)
+    // must survive a Fronda load→save key-for-key. Swift's synthesized encoder always
+    // writes every CodingKey, so every key below is present in real files.
+    let swift = json!({
+        "fontName": "Anton",
+        "fontSize": 72.5,
+        "fontScale": 1.1,
+        "tracking": 2.5,
+        "lineSpacing": 12.25,
+        "fontCase": "uppercase",
+        "isBold": true,
+        "isItalic": false,
+        "isUnderlined": true,
+        "isStruckThrough": true,
+        "isOverlined": true,
+        "color": {"r": 1.0, "g": 0.5, "b": 0.25, "a": 1.0},
+        "alignment": "left",
+        "shadow": {"enabled": true, "color": {"r": 0.0, "g": 0.0, "b": 0.0, "a": 0.6},
+                   "offsetX": 1.5, "offsetY": -3.0, "blur": 5.0},
+        "background": {"enabled": true, "color": {"r": 0.0, "g": 0.0, "b": 0.0, "a": 0.6},
+                       "paddingX": 10.5, "paddingY": 6.5, "cornerRadius": 12.5,
+                       "offsetX": 3.5, "offsetY": -4.5,
+                       "outlineColor": {"r": 0.2, "g": 0.4, "b": 0.6, "a": 1.0},
+                       "outlineWidth": 2.5},
+        "border": {"enabled": true, "color": {"r": 0.0, "g": 1.0, "b": 0.0, "a": 1.0},
+                   "width": 7.5}
+    });
+    let s: TextStyle = serde_json::from_value(swift).unwrap();
+
+    // In-memory: every new field carries the Swift value.
+    approx_eq(s.tracking, 2.5);
+    approx_eq(s.line_spacing, 12.25);
+    assert_eq!(s.font_case, "uppercase");
+    assert!(s.is_underlined);
+    assert!(s.is_struck_through);
+    assert!(s.is_overlined);
+    approx_eq(s.border_width, 7.5);
+    approx_eq(s.background_style.padding_x, 10.5);
+    approx_eq(s.background_style.padding_y, 6.5);
+    approx_eq(s.background_style.corner_radius, 12.5);
+    approx_eq(s.background_style.offset_x, 3.5);
+    approx_eq(s.background_style.offset_y, -4.5);
+    approx_eq(s.background_style.outline_color.r, 0.2);
+    approx_eq(s.background_style.outline_color.g, 0.4);
+    approx_eq(s.background_style.outline_color.b, 0.6);
+    approx_eq(s.background_style.outline_width, 2.5);
+    // Old readers keep seeing the TextFill subset.
+    assert!(s.background.enabled);
+    approx_eq(s.background.color.a, 0.6);
+    assert!(s.border.enabled);
+    approx_eq(s.border.color.g, 1.0);
+
+    // Re-encode: key-for-key against the Swift original.
+    let j = serde_json::to_value(&s).unwrap();
+    approx_eq(j["tracking"].as_f64().unwrap(), 2.5);
+    approx_eq(j["lineSpacing"].as_f64().unwrap(), 12.25);
+    assert_eq!(j["fontCase"], json!("uppercase"));
+    assert_eq!(j["isBold"], json!(true));
+    assert_eq!(j["isItalic"], json!(false));
+    assert_eq!(j["isUnderlined"], json!(true));
+    assert_eq!(j["isStruckThrough"], json!(true));
+    assert_eq!(j["isOverlined"], json!(true));
+    approx_eq(j["border"]["width"].as_f64().unwrap(), 7.5);
+    assert_eq!(j["border"]["enabled"], json!(true));
+    approx_eq(j["border"]["color"]["g"].as_f64().unwrap(), 1.0);
+    assert_eq!(j["background"]["enabled"], json!(true));
+    approx_eq(j["background"]["paddingX"].as_f64().unwrap(), 10.5);
+    approx_eq(j["background"]["paddingY"].as_f64().unwrap(), 6.5);
+    approx_eq(j["background"]["cornerRadius"].as_f64().unwrap(), 12.5);
+    approx_eq(j["background"]["offsetX"].as_f64().unwrap(), 3.5);
+    approx_eq(j["background"]["offsetY"].as_f64().unwrap(), -4.5);
+    approx_eq(j["background"]["outlineColor"]["r"].as_f64().unwrap(), 0.2);
+    approx_eq(j["background"]["outlineColor"]["g"].as_f64().unwrap(), 0.4);
+    approx_eq(j["background"]["outlineColor"]["b"].as_f64().unwrap(), 0.6);
+    approx_eq(j["background"]["outlineWidth"].as_f64().unwrap(), 2.5);
+    approx_eq(j["fontSize"].as_f64().unwrap(), 72.5);
+    approx_eq(j["shadow"]["offsetX"].as_f64().unwrap(), 1.5);
+}
+
+#[test]
+fn upstream_330_text_style_pre_0609_decodes_with_defaults() {
+    // A pre-#330/#336 file (old Fill-shaped background/border, none of the new keys)
+    // still decodes; the new fields land on their Swift defaults.
+    let old = json!({
+        "fontName": "Poppins",
+        "fontSize": 96.0,
+        "isBold": false,
+        "background": {"enabled": true, "color": {"r": 0.0, "g": 0.0, "b": 0.0, "a": 0.3}},
+        "border": {"enabled": true, "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}}
+    });
+    let s: TextStyle = serde_json::from_value(old).unwrap();
+    approx_eq(s.tracking, 0.0);
+    approx_eq(s.line_spacing, 0.0);
+    assert_eq!(s.font_case, "mixed");
+    assert!(!s.is_underlined);
+    assert!(!s.is_struck_through);
+    assert!(!s.is_overlined);
+    // Swift's Outline.width decode fallback is 4.
+    approx_eq(s.border_width, 4.0);
+    // Background extras fall back to Swift Background defaults.
+    approx_eq(s.background_style.padding_x, 0.0);
+    approx_eq(s.background_style.padding_y, 0.0);
+    approx_eq(s.background_style.corner_radius, 0.0);
+    approx_eq(s.background_style.offset_x, 0.0);
+    approx_eq(s.background_style.offset_y, 0.0);
+    approx_eq(s.background_style.outline_color.r, 0.0);
+    approx_eq(s.background_style.outline_color.a, 1.0);
+    approx_eq(s.background_style.outline_width, 0.0);
+    // The old subset is untouched.
+    assert!(s.background.enabled);
+    approx_eq(s.background.color.a, 0.3);
+    assert!(s.border.enabled);
+}
+
+#[test]
+fn upstream_330_text_style_default_writes_v0610_key_set() {
+    // On save Fronda writes the full Swift v0.6.10 key set (same dual-write policy
+    // as #65's isBold/isItalic), so a Swift open sees the shape it expects.
+    let j = serde_json::to_value(TextStyle::default()).unwrap();
+    approx_eq(j["tracking"].as_f64().unwrap(), 0.0);
+    approx_eq(j["lineSpacing"].as_f64().unwrap(), 0.0);
+    assert_eq!(j["fontCase"], json!("mixed"));
+    assert_eq!(j["isUnderlined"], json!(false));
+    assert_eq!(j["isStruckThrough"], json!(false));
+    assert_eq!(j["isOverlined"], json!(false));
+    approx_eq(j["border"]["width"].as_f64().unwrap(), 4.0);
+    let bg = j["background"].as_object().unwrap();
+    for key in [
+        "paddingX",
+        "paddingY",
+        "cornerRadius",
+        "offsetX",
+        "offsetY",
+        "outlineWidth",
+    ] {
+        approx_eq(bg[key].as_f64().unwrap(), 0.0);
+    }
+    approx_eq(bg["outlineColor"]["a"].as_f64().unwrap(), 1.0);
+    approx_eq(bg["outlineColor"]["r"].as_f64().unwrap(), 0.0);
+    // #65 keys still written.
+    assert!(j["fontWeight"].is_number());
+    assert!(j["isBold"].is_boolean());
+}
+
+#[test]
+fn upstream_330_text_style_font_case_preserves_unknown_raw_value() {
+    // fontCase is kept as the raw string so a future Swift case doesn't get
+    // coerced/dropped by a Rust enum. Round-trips verbatim.
+    let s: TextStyle =
+        serde_json::from_value(json!({"fontName": "X", "fontCase": "smallCaps"})).unwrap();
+    assert_eq!(s.font_case, "smallCaps");
+    let j = serde_json::to_value(&s).unwrap();
+    assert_eq!(j["fontCase"], json!("smallCaps"));
+}
+
+#[test]
+fn upstream_330_text_style_rust_native_background_keys_coexist() {
+    // Rust's #18 caption-background keys (`padding`, snake `corner_radius`) are a
+    // separate contract from Swift's paddingX/paddingY/cornerRadius. Both sets
+    // round-trip independently — no key collision, no data loss.
+    let mixed = json!({
+        "fontName": "X",
+        "background": {
+            "enabled": true,
+            "color": {"r": 0.0, "g": 0.0, "b": 0.0, "a": 0.6},
+            "padding": 8.0,
+            "corner_radius": 4.0,
+            "paddingX": 1.5,
+            "cornerRadius": 9.5
+        }
+    });
+    let s: TextStyle = serde_json::from_value(mixed).unwrap();
+    assert_eq!(s.background.padding, Some(8.0));
+    assert_eq!(s.background.corner_radius, Some(4.0));
+    approx_eq(s.background_style.padding_x, 1.5);
+    approx_eq(s.background_style.corner_radius, 9.5);
+
+    let j = serde_json::to_value(&s).unwrap();
+    approx_eq(j["background"]["padding"].as_f64().unwrap(), 8.0);
+    approx_eq(j["background"]["corner_radius"].as_f64().unwrap(), 4.0);
+    approx_eq(j["background"]["paddingX"].as_f64().unwrap(), 1.5);
+    approx_eq(j["background"]["cornerRadius"].as_f64().unwrap(), 9.5);
 }
 
 #[test]
@@ -515,6 +701,34 @@ fn upstream_216_generation_status_round_trips_on_entry() {
 }
 
 #[test]
+fn upstream_294_generation_input_target_language_round_trips() {
+    // Upstream #294 (dubbing): Swift writes generationInput.targetLanguage via
+    // encodeIfPresent — present value must survive a Fronda open→save, absent
+    // field must stay absent (no key, no null).
+    let encoded = json!({
+        "prompt": "dub this", "model": "eleven-dub-v1", "duration": 12, "aspectRatio": "16:9",
+        "targetLanguage": "es"
+    });
+    let gi: core_model::GenerationInput = serde_json::from_value(encoded).unwrap();
+    assert_eq!(gi.target_language.as_deref(), Some("es"));
+
+    let re = serde_json::to_value(&gi).unwrap();
+    assert_eq!(re["targetLanguage"], json!("es"));
+
+    // Absent stays absent: no key is written (Swift's encodeIfPresent semantics).
+    let bare: core_model::GenerationInput = serde_json::from_value(json!({
+        "prompt": "p", "model": "m", "duration": 3, "aspectRatio": "16:9"
+    }))
+    .unwrap();
+    assert!(bare.target_language.is_none());
+    let re_bare = serde_json::to_value(&bare).unwrap();
+    assert!(
+        !re_bare.as_object().unwrap().contains_key("targetLanguage"),
+        "absent targetLanguage must not be written: {re_bare}"
+    );
+}
+
+#[test]
 fn upstream_238_agent_message_role_system_round_trips() {
     // A `system` role (upstream #238 MCP notices) must decode, not fail the session.
     use core_model::AgentMessageRole;
@@ -750,6 +964,27 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
                         variable_font_axes: None,
                         letter_spacing: None,
                         line_height: None,
+                        tracking: 1.5,
+                        line_spacing: 4.25,
+                        font_case: "lowercase".to_string(),
+                        is_underlined: true,
+                        is_struck_through: false,
+                        is_overlined: true,
+                        border_width: 6.5,
+                        background_style: TextBackgroundStyle {
+                            padding_x: 2.5,
+                            padding_y: 3.5,
+                            corner_radius: 5.5,
+                            offset_x: 1.25,
+                            offset_y: -1.75,
+                            outline_color: TextRgba {
+                                r: 0.1,
+                                g: 0.2,
+                                b: 0.3,
+                                a: 1.0,
+                            },
+                            outline_width: 1.5,
+                        },
                     }),
                     opacity_track: Some(KeyframeTrack {
                         keyframes: vec![
@@ -1030,6 +1265,21 @@ fn fmt_009_timeline_round_trip_preserves_all_fields() {
     approx_eq(ts.border.color.r, 1.0);
     approx_eq(ts.border.color.g, 1.0);
     approx_eq(ts.border.color.b, 1.0);
+    // #330/#336 styling fields survive the full-project round-trip.
+    approx_eq(ts.tracking, 1.5);
+    approx_eq(ts.line_spacing, 4.25);
+    assert_eq!(ts.font_case, "lowercase");
+    assert!(ts.is_underlined);
+    assert!(!ts.is_struck_through);
+    assert!(ts.is_overlined);
+    approx_eq(ts.border_width, 6.5);
+    approx_eq(ts.background_style.padding_x, 2.5);
+    approx_eq(ts.background_style.padding_y, 3.5);
+    approx_eq(ts.background_style.corner_radius, 5.5);
+    approx_eq(ts.background_style.offset_x, 1.25);
+    approx_eq(ts.background_style.offset_y, -1.75);
+    approx_eq(ts.background_style.outline_color.b, 0.3);
+    approx_eq(ts.background_style.outline_width, 1.5);
 
     // Keyframes — opacity
     let ot = clip.opacity_track.as_ref().unwrap();

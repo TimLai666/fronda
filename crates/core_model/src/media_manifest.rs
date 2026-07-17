@@ -163,6 +163,16 @@ pub struct GenerationInput {
     pub lyrics: Option<String>,
     pub style_instructions: Option<String>,
     pub instrumental: Option<bool>,
+    /// Dubbing target language (upstream #294). Swift declares `targetLanguage: String?`
+    /// and encodes it via encodeIfPresent, so absent stays absent on the wire.
+    /// (`rename` is what camelCase would produce anyway; kept explicit as the key is
+    /// a cross-app contract.)
+    #[serde(
+        rename = "targetLanguage",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub target_language: Option<String>,
     pub generate_audio: Option<bool>,
     #[serde(rename = "referenceImageURLs", alias = "referenceImageUrls")]
     pub reference_image_urls: Option<Vec<String>>,
@@ -212,6 +222,7 @@ impl Default for GenerationInput {
             lyrics: None,
             style_instructions: None,
             instrumental: None,
+            target_language: None,
             generate_audio: None,
             reference_image_urls: None,
             reference_video_urls: None,

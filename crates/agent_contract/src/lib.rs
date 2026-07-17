@@ -45,8 +45,9 @@ pub use mutation::{
     validate_set_chroma_key, validate_set_clip_properties, validate_set_color_grade,
     validate_set_keyframes, validate_split_clip, volume_ceiling_linear, AddCaptionsInput,
     AddClipsInput, AddTextsInput, CloseProjectInput, DuplicateProjectInput, GenerateMusicInput,
-    ImportMediaInput, InsertClipsInput, ManageTrackSetInput, ManageTracksInput, MoveClipsInput,
-    OrganizeMediaInput, OrganizeMoveInput, OrganizeRenameInput, RemoveClipsInput,
-    RippleDeleteRangesInput, SetBlendModeInput, SetChromaKeyInput, SetClipPropertiesInput,
-    SetColorGradeInput, SetKeyframesInput, SplitClipInput, TextInput, MAX_TOOL_FRAME,
+    ImportMediaInput, InsertClipsInput, ManageTrackReorderInput, ManageTrackSetInput,
+    ManageTracksInput, MoveClipsInput, OrganizeMediaInput, OrganizeMoveInput, OrganizeRenameInput,
+    RemoveClipsInput, RippleDeleteRangesInput, SetBlendModeInput, SetChromaKeyInput,
+    SetClipPropertiesInput, SetColorGradeInput, SetKeyframesInput, SplitClipInput, TextInput,
+    TrackSelector, MAX_TOOL_FRAME,
 };

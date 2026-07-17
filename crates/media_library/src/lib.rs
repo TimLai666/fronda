@@ -486,7 +486,7 @@ pub struct SupportedExtensions;
 impl SupportedExtensions {
     pub const VIDEO: &'static [&'static str] = &["mov", "mp4", "m4v"];
     pub const AUDIO: &'static [&'static str] =
-        &["mp3", "wav", "aac", "m4a", "aiff", "aif", "aifc", "flac"];
+        &["mp3", "wav", "aac", "m4a", "aiff", "aif", "aifc", "caf", "flac"];
     pub const IMAGE: &'static [&'static str] = &["png", "jpg", "jpeg", "tiff", "heic", "webp"];
     pub const LOTTIE: &'static [&'static str] = &["json", "lottie"];
 
@@ -1165,6 +1165,17 @@ mod tests {
                 Some(ClipType::Lottie)
             );
         }
+    }
+
+    #[test]
+    fn med_001_caf_is_supported_audio() {
+        // Upstream #338: CAF assets from Swift-authored projects import.
+        assert!(SupportedExtensions::is_supported("caf"));
+        assert!(SupportedExtensions::is_supported("CAF"));
+        assert_eq!(
+            clip_type_from_extension("/path/to/sound.caf"),
+            Some(ClipType::Audio)
+        );
     }
 
     #[test]

@@ -168,7 +168,7 @@ pub const SERVER_INSTRUCTIONS: &str = r#"You are a creative AI assistant connect
 
 # Core model
 - Timing: TIMELINE positions are project frames (startFrame, frames pairs, gaps, ranges); SOURCE positions are seconds (source spans, search hits, asset transcripts and durations). Tools convert between them — never multiply by fps yourself.
-- Tracks are ordered and typed (video or audio); index 0 renders on top. Video clips, images, and text overlays all live on video tracks.
+- Tracks are ordered and typed (video or audio); index 0 renders on top. For manage_tracks, use stable trackId values because indexes change. Video, images, and text use video tracks.
 - A clip occupies frames [start, end). Placement takes startFrame + endFrame or source: [startSeconds, endSeconds]; lengths elsewhere are durationFrames. A video clip's linked audio is folded into it as audio: {id, track, …} — use that nested id to edit the audio side.
 - A project can hold several timelines; exactly one is active and every read/edit tool targets it (get_media lists them; switch with set_active_timeline, then re-read). A nested timeline appears as a clip with mediaType 'sequence'.
 - IDs are short prefixes — pass them back exactly as given, never padded or completed. Folders have no ids: they are paths ('B-roll/Sunset'), created on demand.
@@ -351,7 +351,7 @@ fn add_captions() -> ToolDefinition {
 fn add_clips() -> ToolDefinition {
     ToolDefinition {
         name: "add_clips",
-        description: "Places one or more media assets on the timeline as a single undoable action. Each entry's asset type must be compatible with its target track (video/image are interchangeable across video/image tracks; audio requires an audio track). When a video asset with audio is placed on a video track, a linked audio clip is automatically created on an audio track (an existing one if available, otherwise a new one). The whole batch is one undo step.\n\ntrackIndex is optional. Omit it on all entries and the tool auto-creates the needed tracks — one shared video track for visual entries and one shared audio track for audio entries (matches the captioning pattern in add_texts). To target existing tracks, set trackIndex on every entry. Mixing (some entries specify, others omit) is rejected — split into two calls.\n\nTracks work as layers: clips on the SAME track are sequential — if a new clip's range overlaps an existing clip on that track, the existing clip is trimmed/split/removed to make room, matching the UI's drag-onto-track overwrite behavior.\n\nNESTING: mediaRef may also be a timelineId — the timeline is placed as a single live nested clip (mediaType 'sequence'), with a linked audio clip when the child has audio. Duration defaults to the child's full length; source and endFrame work as for video. Cycles (a timeline containing itself) and empty timelines are rejected.",
+        description: "Places one or more media assets on the timeline as a single undoable action. Each entry's asset type must be compatible with its target track (video/image are interchangeable across video/image tracks; audio requires an audio track). When a video asset with audio is placed on a video track, a linked audio clip is automatically created on an audio track (an existing one if available, otherwise a new one). The whole batch is one undo step.\n\ntrackIndex is optional. Omit it on all entries and the tool auto-creates the needed tracks — one shared video track for visual entries (above existing visuals) and one shared audio track for audio entries (appended below existing audio, so linked dialogue on A1 stays put and music/VO land on A2+). To target existing tracks, set trackIndex on every entry. Mixing (some entries specify, others omit) is rejected — split into two calls.\n\nTracks work as layers: clips on the SAME track are sequential — if a new clip's range overlaps an existing clip on that track, the existing clip is trimmed/split/removed to make room, matching the UI's drag-onto-track overwrite behavior.\n\nNESTING: mediaRef may also be a timelineId — the timeline is placed as a single live nested clip (mediaType 'sequence'), with a linked audio clip when the child has audio. Duration defaults to the child's full length; source and endFrame work as for video. Cycles (a timeline containing itself) and empty timelines are rejected.",
         input_schema: object(&[(
             "entries",
             array_of(
@@ -621,7 +621,7 @@ fn get_media() -> ToolDefinition {
 fn get_timeline() -> ToolDefinition {
     ToolDefinition {
         name: "get_timeline",
-        description: "Always call at the start of a session. Returns project settings (fps, resolution, totalFrames, durationSeconds), tracks with their index (what every trackIndex parameter takes), type, and clips, plus canGenerate (if false, generation/upscale tools will fail — tell the user to sign in to Palmier and subscribe before attempting them). The clipId values here are what every other tool accepts.\n\nEvery clip occupies frames: [start, end) — timeline frames, end exclusive, duration = end − start. gaps on a track lists its empty [start, end) spans; no gaps key means contiguous. A video clip's linked audio partner is folded into it as audio: {id, track, …} carrying only what deviates (volume, effects, differing trims); the partner is not repeated on its own track, which instead reports linkedClips (its folded count). Address the audio side by its nested id.\n\nFields equal to their defaults are omitted: mediaType 'video', sourceClipType = mediaType, speed 1, volume 1, opacity 1, trims/fades 0, identity transform/crop, default textStyle, track muted/hidden false. Text clips never report trims. Keyframe tracks that animate nothing are shown as what they are: identity tracks are dropped, constant ones appear as the static field (e.g. crop: {left: 0.31}). A graded clip carries `color` — its grade in apply_color's own vocabulary, pasteable to other clips via apply_color's color parameter. Other effects appear as effects: [{type, params}], the exact shape apply_effect accepts.\n\nCaption clips (sharing a captionGroupId) come back per track as captionGroups summaries: clipCount, frameRange, shared style, and a textPreview — individual caption clips and their ids are NOT listed. That summary is all you need to restyle (update_text with captionGroupId) or judge coverage; the spoken words live in get_transcript. Only when you must touch individual caption clips (retime one, delete one, fix one word's style), re-read with captionDetail:true — ideally windowed — to get [clipId, startFrame, endFrame, text] rows, capped at 200 per group. Caption clips whose properties deviate from the group always appear individually in clips.",
+        description: "Always call at the start of a session. Returns project settings (fps, resolution, totalFrames, durationSeconds), tracks with a stable trackId, their current index (what every trackIndex parameter takes), type, and clips, plus canGenerate (if false, generation/upscale tools will fail — tell the user to sign in to Palmier and subscribe before attempting them). Clip ids are accepted by clip mutation tools; trackId is accepted by manage_tracks.\n\nEvery clip occupies frames: [start, end) — timeline frames, end exclusive, duration = end − start. gaps on a track lists its empty [start, end) spans; no gaps key means contiguous. A video clip's linked audio partner is folded into it as audio: {id, track, …} carrying only what deviates (volume, effects, differing trims); the partner is not repeated on its own track, which instead reports linkedClips (its folded count). Address the audio side by its nested id.\n\nFields equal to their defaults are omitted: mediaType 'video', sourceClipType = mediaType, speed 1, volume 1, opacity 1, trims/fades 0, identity transform/crop, default textStyle, track muted/hidden false. Text clips never report trims. Keyframe tracks that animate nothing are shown as what they are: identity tracks are dropped, constant ones appear as the static field (e.g. crop: {left: 0.31}). A graded clip carries `color` — its grade in apply_color's own vocabulary, pasteable to other clips via apply_color's color parameter. Other effects appear as effects: [{type, params}], the exact shape apply_effect accepts.\n\nCaption clips (sharing a captionGroupId) come back per track as captionGroups summaries: clipCount, frameRange, shared style, and a textPreview — individual caption clips and their ids are NOT listed. That summary is all you need to restyle (update_text with captionGroupId) or judge coverage; the spoken words live in get_transcript. Only when you must touch individual caption clips (retime one, delete one, fix one word's style), re-read with captionDetail:true — ideally windowed — to get [clipId, startFrame, endFrame, text] rows, capped at 200 per group. Caption clips whose properties deviate from the group always appear individually in clips.",
         input_schema: object_optional(&[
             (
                 "startFrame",
@@ -672,12 +672,12 @@ fn get_transcript() -> ToolDefinition {
 fn import_media() -> ToolDefinition {
     ToolDefinition {
         name: "import_media",
-        description: "Imports external media into the project's library — the bridge for assets coming from other MCP servers (stock libraries, music services, web search) or local files the user already has. The 'source' object must set exactly one of: url (HTTPS only — downloaded in the background, the dominant case; max 1 GB), path (absolute local file path — copied into the project in the background; may also be a directory, which is imported recursively, mirroring its subfolder structure as media folders), bytes (base64-encoded inline data — max ~15 MB of base64 ≈ 11 MB binary; use url/path for anything larger), or matte (a generated solid-color PNG). For url, type is inferred from the URL path's file extension unless source.mimeType is set as an override (needed for signed URLs whose path has no usable extension). For bytes, source.mimeType is required.\n\nSupported types and extensions: video (mov, mp4, m4v), audio (mp3, wav, aac, m4a, aiff, aifc, flac), image (png, jpg, jpeg, tiff, heic). Anything else is rejected — the caller must transcode externally.\n\nurl and file-path imports run in the background and return {mediaRef, status:'downloading'} — poll get_media with ids:[mediaRef] until generationStatus clears, then the asset is usable in add_clips. Directory, bytes, and matte imports finish inline with status:'ready'. Costs nothing.",
+        description: "Imports external media into the project's library — the bridge for assets coming from other MCP servers (stock libraries, music services, web search) or local files the user already has. The 'source' object must set exactly one of: url (HTTPS only — downloaded in the background, the dominant case; max 1 GB), path (absolute local file path — referenced in place and not copied into the project; may also be a directory, which is imported recursively, mirroring its subfolder structure as media folders), bytes (base64-encoded inline data — max ~15 MB of base64 ≈ 11 MB binary; use url/path for anything larger), or matte (a generated solid-color PNG). For url, type is inferred from the URL path's file extension unless source.mimeType is set as an override (needed for signed URLs whose path has no usable extension). For bytes, source.mimeType is required.\n\nSupported types and extensions: video (mov, mp4, m4v), audio (mp3, wav, aac, m4a, aiff, aifc, caf, flac), image (png, jpg, jpeg, tiff, heic). Anything else is rejected — the caller must transcode externally.\n\nURL imports run in the background and return {mediaRef, status:'downloading'} — poll get_media with ids:[mediaRef] until generationStatus clears, then the asset is usable in add_clips. Path, directory, bytes, and matte imports finish inline with status:'ready'. Costs nothing.",
         input_schema: {
             let source = object_schema(
                 &[
                     ("url", string("HTTPS URL. Pre-signed URLs are fine but must not expire mid-download.")),
-                    ("path", string("Absolute local file or directory path, readable by the Palmier process. A directory is imported recursively — every openable file is pulled in and the folder structure is replicated as media folders.")),
+                    ("path", string("Absolute local file or directory path, readable by the Palmier process. Files are referenced in place and must remain available. A directory is imported recursively and its folder structure is replicated as media folders.")),
                     ("bytes", string("Base64-encoded media data. Prefer url or path for anything over ~10MB.")),
                     (
                         "matte",
@@ -927,11 +927,12 @@ fn duplicate_clips() -> ToolDefinition {
 }
 
 /// tool-surface-v2 (#263): multi-action track management, replacing
-/// remove_tracks. Description verbatim from upstream@141c69b.
+/// remove_tracks. Description and schema verbatim from upstream #307
+/// (d87faaea): stable trackId selectors, hard-error zone check, receipts.
 fn manage_tracks() -> ToolDefinition {
     ToolDefinition {
         name: "manage_tracks",
-        description: "Track-level operations in one undoable action: reorder (stacking order — index 0 renders on top; a video track can only move within the video zone, audio within audio), set flags (muted silences an audio track; hidden excludes a video track from the render; syncLocked controls whether ripple edits shift it), and remove (deletes tracks with every clip on them; linked partners on OTHER tracks stay). Arrays run reorder → set → remove; every index refers to the track order at call time (resolved up front). Returns the resulting track order — remaining indexes shift after reorder/remove. Tracks holding multicam clips can't be removed or sync-unlocked (mute/hide stay free).",
+        description: "Reorders, configures, or removes tracks in one undoable action. Prefer stable trackId selectors; numeric indexes use the order at call time. Index 0 renders on top, and reorder destinations must stay within the track's video/audio zone. Arrays run reorder → set → remove. Returns receipts and the resulting track order. Tracks holding multicam clips can't be removed or sync-unlocked.",
         input_schema: object_optional(&[
             (
                 "reorder",
@@ -939,10 +940,11 @@ fn manage_tracks() -> ToolDefinition {
                     "Moves, applied in order. Use to fix stacking, e.g. bring a PIP inset's track to index 0.",
                     object_schema(
                         &[
+                            ("trackId", string("Stable track ID from get_timeline.")),
                             ("index", integer("Track to move (0-based, current order).")),
-                            ("to", integer("Destination index; clamped to the track's type zone.")),
+                            ("to", integer("Exact destination index in the same type zone.")),
                         ],
-                        &["index", "to"],
+                        &["to"],
                     ),
                 ),
             ),
@@ -952,18 +954,26 @@ fn manage_tracks() -> ToolDefinition {
                     "Flag changes, applied per track.",
                     object_schema(
                         &[
+                            ("trackId", string("Stable track ID from get_timeline.")),
                             ("index", integer("Track to change (0-based, current order).")),
                             ("muted", boolean("Silence/unsilence the track's audio.")),
                             ("hidden", boolean("Exclude/include a video track in the render.")),
                             ("syncLocked", boolean("Whether ripple edits shift this track along.")),
                         ],
-                        &["index"],
+                        &[],
                     ),
                 ),
             ),
             (
                 "remove",
-                array("Track indexes to remove, with all their clips."),
+                serde_json::json!({
+                    "type": "array",
+                    "description": "Tracks to remove with all their clips. Prefer {trackId}; bare integers are legacy current indexes.",
+                    "items": {
+                        "type": ["integer", "object"],
+                        "properties": {"trackId": {"type": "string"}},
+                    },
+                }),
             ),
         ]),
     }
@@ -1955,6 +1965,49 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    #[test]
+    fn import_media_description_matches_in_place_semantics() {
+        // Upstream #333: file-path imports register in place and return ready
+        // synchronously — the copied-in-background/poll wording is stale.
+        // Upstream #338: caf joins the accepted audio extensions.
+        let tools = all_tools();
+        let tool = tools.iter().find(|t| t.name == "import_media").unwrap();
+        assert!(
+            tool.description
+                .contains("referenced in place and not copied into the project"),
+            "in-place path contract"
+        );
+        assert!(
+            tool.description.contains(
+                "Path, directory, bytes, and matte imports finish inline with status:'ready'"
+            ),
+            "path imports finish synchronously"
+        );
+        assert!(
+            !tool.description
+                .contains("copied into the project in the background"),
+            "stale copy-in-background wording removed"
+        );
+        assert!(
+            !tool.description
+                .contains("url and file-path imports run in the background"),
+            "path imports no longer described as background/polled"
+        );
+        assert!(
+            tool.description.contains("aiff, aifc, caf, flac"),
+            "caf listed among audio extensions"
+        );
+        let path_desc = tool
+            .input_schema
+            .pointer("/properties/source/properties/path/description")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert!(
+            path_desc.contains("Files are referenced in place and must remain available"),
+            "path property carries the in-place contract"
+        );
     }
 
     #[test]
