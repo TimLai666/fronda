@@ -228,11 +228,28 @@ no-provider stays absent). Also cleaned a pre-existing `question_mark` clippy ni
 in `selected_provider_model`. Workspace green (3214 default + 619 desktop-app,
 0 failed); clippy clean on all touched crates.
 
+## Network-mode hardening — bounded stores (2026-07-18)
+
+Completes the network-mode robustness triad started with finding #1 (reject a
+network bind without a token) and #2 (provider HTTP timeouts): the third leg is
+**memory**. The `JobStore`/`ResultStore` were unbounded — fine for a local
+single-user run, but a long-running / network-exposed gateway (now a supported,
+validated mode) would grow without limit, and the result store holds whole
+images. Both now carry an insertion-order cap (`DEFAULT_JOB_CAP` 4096,
+`DEFAULT_RESULT_CAP` 256): `create`/`put` evict oldest-first once over cap, under
+the same lock as the map (an added `VecDeque` order queue, so map and order never
+diverge). Deliberately **size-only, no TTL** — a generous size cap bounds RAM
+without the time-based eviction that could drop a result before #216 recovery
+fetches it. In realistic single-user use nothing is ever evicted (a result is
+fetched seconds after it is stored, then Fronda caches it per #135); the cap is a
+safety-net against runaway growth, and the oldest (most likely already-fetched)
+records are dropped first. A `with_cap` constructor lets tests force eviction (2
+tests: past-cap eviction bounds `len`, drops oldest, keeps newest; ids stay
+monotonic). Tunable — a busy multi-user deployment serving results lazily may
+raise `DEFAULT_RESULT_CAP` or hand back provider-hosted URLs instead.
+
 ## Reference-gateway known limitations (follow-ups, not bugs)
 
-- The in-memory job/result store is unbounded — fine for a local single-user
-  reference gateway; a long-running/multi-user deployment wants eviction (TTL or
-  LRU) and/or on-disk results.
 - Provider `submit` uses `tokio::spawn`, so it must be called from within a
   tokio runtime (it always is — the axum handler). A caller invoking `submit`
   outside a runtime would panic; the sync-trait/async-work bridge is deliberate
