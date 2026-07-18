@@ -172,6 +172,37 @@ pub fn save_whisper_model_path(path: &Path, raw: &str) {
     write_prefs_root(path, &root);
 }
 
+pub const GENERATION_URL_KEY: &str = "generationEndpointUrl";
+pub const GENERATION_TOKEN_KEY: &str = "generationEndpointToken";
+
+/// The generation endpoint (URL, token) from preferences.json — a GUI-set
+/// config, not env. `None` unless BOTH are present and non-blank, so the
+/// generate tools keep their honest error when unconfigured.
+pub fn load_generation_endpoint(path: &Path) -> Option<(String, String)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let url = value.get(GENERATION_URL_KEY)?.as_str()?.trim();
+    let token = value.get(GENERATION_TOKEN_KEY)?.as_str()?.trim();
+    (!url.is_empty() && !token.is_empty()).then(|| (url.to_string(), token.to_string()))
+}
+
+/// Read-modify-write each field: blank removes its key, otherwise stores the
+/// trimmed value. Other keys survive; the write is atomic.
+pub fn save_generation_endpoint(path: &Path, url: &str, token: &str) {
+    let mut root = read_prefs_root(path);
+    for (key, raw) in [(GENERATION_URL_KEY, url), (GENERATION_TOKEN_KEY, token)] {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            if let Some(obj) = root.as_object_mut() {
+                obj.remove(key);
+            }
+        } else {
+            root[key] = serde_json::Value::String(trimmed.to_string());
+        }
+    }
+    write_prefs_root(path, &root);
+}
+
 /// Missing file, unreadable JSON, or a missing/malformed `paneVisibility`
 /// object → `None`; boot keeps the defaults.
 pub fn load_pane_visibility(path: &Path) -> Option<PersistedPaneVisibility> {
@@ -475,6 +506,49 @@ mod tests {
         assert_eq!(upper.media, Some(2000.0));
         assert_eq!(upper.inspector, None);
         assert_eq!(upper.timeline_height, Some(pr::TIMELINE_MIN));
+    }
+
+    #[test]
+    fn generation_endpoint_round_trips_and_trims() {
+        let path = temp_prefs("gen-endpoint-roundtrip.json");
+        save_generation_endpoint(&path, "  http://127.0.0.1:8787  ", "  tok-abc  ");
+        assert_eq!(
+            load_generation_endpoint(&path),
+            Some(("http://127.0.0.1:8787".to_string(), "tok-abc".to_string()))
+        );
+    }
+
+    #[test]
+    fn generation_endpoint_needs_both_url_and_token() {
+        // Only one field set → None (no backend installed, honest error kept).
+        let url_only = temp_prefs("gen-url-only.json");
+        save_generation_endpoint(&url_only, "http://gw", "");
+        assert_eq!(load_generation_endpoint(&url_only), None);
+        let token_only = temp_prefs("gen-token-only.json");
+        save_generation_endpoint(&token_only, "", "tok");
+        assert_eq!(load_generation_endpoint(&token_only), None);
+    }
+
+    #[test]
+    fn generation_endpoint_blank_save_removes_keys_and_preserves_others() {
+        let path = temp_prefs("gen-endpoint-clear.json");
+        std::fs::write(&path, r#"{"mcpServerEnabled": true}"#).unwrap();
+        save_generation_endpoint(&path, "http://gw", "tok");
+        save_generation_endpoint(&path, "  ", "  ");
+        assert_eq!(load_generation_endpoint(&path), None);
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value.get(GENERATION_URL_KEY).is_none());
+        assert!(value.get(GENERATION_TOKEN_KEY).is_none());
+        assert_eq!(value.get("mcpServerEnabled"), Some(&serde_json::Value::Bool(true)));
+    }
+
+    #[test]
+    fn generation_endpoint_load_missing_or_malformed_returns_none() {
+        assert_eq!(load_generation_endpoint(&temp_prefs("gen-missing.json")), None);
+        let corrupt = temp_prefs("gen-corrupt.json");
+        std::fs::write(&corrupt, "{not json").unwrap();
+        assert_eq!(load_generation_endpoint(&corrupt), None);
     }
 
     #[test]

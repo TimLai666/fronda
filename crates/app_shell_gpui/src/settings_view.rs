@@ -107,6 +107,17 @@ pub fn skill_matches(query: &str, name: &str, description: &str) -> bool {
     name.to_lowercase().contains(&q) || description.to_lowercase().contains(&q)
 }
 
+/// Whether committing (url, token) differs from the last-saved pair — the skip
+/// check in `commit_generation_endpoint`. Inputs are already trimmed.
+pub fn generation_endpoint_needs_commit(
+    url: &str,
+    token: &str,
+    saved_url: &str,
+    saved_token: &str,
+) -> bool {
+    url != saved_url || token != saved_token
+}
+
 /// Skill editor sheet state (Swift `SkillDetailSheet`).
 struct SkillSheet {
     id: String,
@@ -159,6 +170,18 @@ pub struct SettingsView {
     whisper_model_saved: String,
     /// Focus-out commit hook, registered on first render (`new` has no Window).
     whisper_blur_sub: Option<Subscription>,
+    /// Generation endpoint URL entry — commits `generationEndpointUrl` (with the
+    /// token) on Enter/blur.
+    generation_url_field: Entity<TextField>,
+    /// Generation endpoint bearer token entry — committed alongside the URL.
+    generation_token_field: Entity<TextField>,
+    /// Last committed URL ("" = key removed); commit skips no-op writes.
+    generation_url_saved: String,
+    /// Last committed token ("" = key removed).
+    generation_token_saved: String,
+    /// Focus-out commit hooks for the two generation-endpoint fields.
+    generation_url_blur_sub: Option<Subscription>,
+    generation_token_blur_sub: Option<Subscription>,
     // Skills
     skill_store: SkillStore,
     skills_search: Entity<TextField>,
@@ -195,6 +218,25 @@ impl SettingsView {
             }
         })
         .detach();
+        let (generation_url_saved, generation_token_saved) =
+            crate::pane_prefs::load_generation_endpoint(&crate::pane_prefs::default_prefs_path())
+                .unwrap_or_default();
+        let generation_url_field = cx.new(|cx| TextField::new(cx, "http://127.0.0.1:8787"));
+        generation_url_field.update(cx, |f, cx| f.set_text(generation_url_saved.clone(), cx));
+        let generation_token_field = cx.new(|cx| TextField::new(cx, "bearer token"));
+        generation_token_field.update(cx, |f, cx| f.set_text(generation_token_saved.clone(), cx));
+        cx.subscribe(&generation_url_field, |this: &mut Self, _, event, cx| {
+            if matches!(event, TextFieldEvent::Submitted) {
+                this.commit_generation_endpoint(cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&generation_token_field, |this: &mut Self, _, event, cx| {
+            if matches!(event, TextFieldEvent::Submitted) {
+                this.commit_generation_endpoint(cx);
+            }
+        })
+        .detach();
         Self {
             focus_handle: cx.focus_handle(),
             active_tab: initial_tab,
@@ -218,6 +260,12 @@ impl SettingsView {
             whisper_model_field,
             whisper_model_saved,
             whisper_blur_sub: None,
+            generation_url_field,
+            generation_token_field,
+            generation_url_saved,
+            generation_token_saved,
+            generation_url_blur_sub: None,
+            generation_token_blur_sub: None,
             skill_store: SkillStore::default_location(),
             skills_search,
             skill_sheet: None,
@@ -239,6 +287,32 @@ impl SettingsView {
         );
         self.whisper_model_saved = trimmed.clone();
         self.whisper_model_field.update(cx, |f, cx| f.set_text(trimmed, cx));
+        cx.notify();
+    }
+
+    /// Persist the generation endpoint (Enter or focus loss on either field).
+    /// Both fields commit together; a blank field removes its key; an unchanged
+    /// pair skips the write.
+    fn commit_generation_endpoint(&mut self, cx: &mut Context<Self>) {
+        let url = self.generation_url_field.read(cx).text().trim().to_string();
+        let token = self.generation_token_field.read(cx).text().trim().to_string();
+        if !generation_endpoint_needs_commit(
+            &url,
+            &token,
+            &self.generation_url_saved,
+            &self.generation_token_saved,
+        ) {
+            return;
+        }
+        crate::pane_prefs::save_generation_endpoint(
+            &crate::pane_prefs::default_prefs_path(),
+            &url,
+            &token,
+        );
+        self.generation_url_saved = url.clone();
+        self.generation_token_saved = token.clone();
+        self.generation_url_field.update(cx, |f, cx| f.set_text(url, cx));
+        self.generation_token_field.update(cx, |f, cx| f.set_text(token, cx));
         cx.notify();
     }
 
@@ -1023,6 +1097,38 @@ impl SettingsView {
                     .text_color(Text::PRIMARY)
                     .child(self.whisper_model_field.clone())
                     .into_any_element(),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(Spacing::XS))
+                    .pt(px(Spacing::SM))
+                    .child(
+                        div()
+                            .text_color(Text::PRIMARY)
+                            .text_size(px(FontSize::MD))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child("Generation endpoint"),
+                    )
+                    .child(body_text(
+                        "Point Fronda at a Protocol v1 generation service. Leave blank for none.",
+                    ))
+                    .into_any_element(),
+                themed_surface(Background::RAISED, Radius::SM)
+                    .w_full()
+                    .px(px(Spacing::MD))
+                    .py(px(Spacing::SM_MD))
+                    .text_size(px(FontSize::SM))
+                    .text_color(Text::PRIMARY)
+                    .child(self.generation_url_field.clone())
+                    .into_any_element(),
+                themed_surface(Background::RAISED, Radius::SM)
+                    .w_full()
+                    .px(px(Spacing::MD))
+                    .py(px(Spacing::SM_MD))
+                    .text_size(px(FontSize::SM))
+                    .text_color(Text::PRIMARY)
+                    .child(self.generation_token_field.clone())
+                    .into_any_element(),
             ],
         );
 
@@ -1799,6 +1905,26 @@ impl Render for SettingsView {
                 }
             }));
         }
+        if self.generation_url_blur_sub.is_none() {
+            let field_focus = self.generation_url_field.read(cx).focus_handle(cx);
+            let weak = cx.entity().downgrade();
+            self.generation_url_blur_sub =
+                Some(window.on_focus_out(&field_focus, cx, move |_, _, cx| {
+                    if let Some(view) = weak.upgrade() {
+                        view.update(cx, |this, cx| this.commit_generation_endpoint(cx));
+                    }
+                }));
+        }
+        if self.generation_token_blur_sub.is_none() {
+            let field_focus = self.generation_token_field.read(cx).focus_handle(cx);
+            let weak = cx.entity().downgrade();
+            self.generation_token_blur_sub =
+                Some(window.on_focus_out(&field_focus, cx, move |_, _, cx| {
+                    if let Some(view) = weak.upgrade() {
+                        view.update(cx, |this, cx| this.commit_generation_endpoint(cx));
+                    }
+                }));
+        }
         let mut mcp_status_label = String::from("Stopped");
         if let Ok(svc) = crate::mcp_service::McpService::global().lock() {
             self.mcp_enabled = svc.is_enabled_preference();
@@ -2051,6 +2177,25 @@ mod tests {
         assert!(skill_matches("CAP", "Captions", "burn in"));
         assert!(skill_matches("BURN", "Captions", "burn in captions"));
         assert!(!skill_matches("montage", "Captions", "burn in"));
+    }
+
+    #[test]
+    fn generation_endpoint_commit_skips_only_unchanged_pair() {
+        // Unchanged pair → no write.
+        assert!(!generation_endpoint_needs_commit(
+            "http://gw", "tok", "http://gw", "tok"
+        ));
+        // Either field changed → commit.
+        assert!(generation_endpoint_needs_commit(
+            "http://gw2", "tok", "http://gw", "tok"
+        ));
+        assert!(generation_endpoint_needs_commit(
+            "http://gw", "tok2", "http://gw", "tok"
+        ));
+        // Clearing both from a saved pair is a commit (removes the keys).
+        assert!(generation_endpoint_needs_commit("", "", "http://gw", "tok"));
+        // Both blank and both saved-blank → nothing to do.
+        assert!(!generation_endpoint_needs_commit("", "", "", ""));
     }
 
     // Swift AppTheme.Settings values (#319).

@@ -17,18 +17,26 @@ endpoint.
 
 ## Configuration
 
-The backend resolves from two environment variables (both required,
-whitespace-trimmed; either missing or blank → no backend installed):
+Fronda is a GUI app, so the endpoint is configured through **Settings**, not
+environment variables. Both values are stored in `preferences.json` and read
+by `GenerationBackendConfig::from_prefs()` (both required, whitespace-trimmed;
+either missing or blank → no backend installed, generate tools keep their
+honest error):
 
-| Variable | Meaning |
-|----------|---------|
-| `FRONDA_GENERATION_URL` | Base URL of the Protocol v1 service, e.g. `https://gen.example.com`. Trailing slash tolerated. |
-| `FRONDA_GENERATION_TOKEN` | Bearer token sent as `Authorization: Bearer <token>` on every request. |
+| preferences.json key | Meaning |
+|----------------------|---------|
+| `generationEndpointUrl` | Base URL of the Protocol v1 service, e.g. `http://127.0.0.1:8787`. Trailing slash tolerated. |
+| `generationEndpointToken` | Bearer token sent as `Authorization: Bearer <token>` on every request. |
 
-Resolution is `GenerationBackendConfig::from_env()`; the host installs the
-backend in `EditorStateHub::install_matte_writer` (alongside the matte/audio
-seams), so it is available for both submit and generation-recovery whenever a
-project is open.
+The Settings AI/Agent pane exposes both as text fields (next to the Whisper
+model path); the host installs the backend in
+`EditorStateHub::install_matte_writer` (alongside the matte/audio seams), so it
+is available for both submit and generation-recovery whenever a project is
+open. (The token is stored in plaintext preferences.json for now, consistent
+with the app's local config; OS-keychain-backed secure storage is a separate
+follow-up.) The gated `live_round_trip_...` test reads `FRONDA_GENERATION_URL`/
+`_TOKEN` purely to inject test parameters — that is test-only, not a production
+config path.
 
 ## Transport
 

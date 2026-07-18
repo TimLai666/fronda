@@ -7,10 +7,16 @@ which unit tests (pure request/response building) could not cover.
 
 ## Setup
 
+Gateway (a server daemon — env/config is conventional for a server):
 ```
 FRONDA_GEN_GATEWAY_ADDR=127.0.0.1:8791 FRONDA_GEN_GATEWAY_TOKEN=e2e-secret \
   ./target/debug/fronda-gen-gateway
 ```
+
+Fronda side (change `generation-endpoint-settings-ui`): the endpoint URL +
+token are GUI-set via Settings → AI/Agent pane, persisted to preferences.json
+(`generationEndpointUrl`/`generationEndpointToken`) — NOT env vars (Fronda is a
+GUI app). The gated live test below reads env only to inject test parameters.
 
 ## Gateway HTTP (via curl) — PASS
 

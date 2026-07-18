@@ -19,8 +19,6 @@ use agent_contract::GenerationBackend;
 use generation_core::{GenerationOutcome, GenerationRequest, GenerationSubmission, ModelKind};
 use serde_json::Value;
 
-const GENERATION_URL_ENV: &str = "FRONDA_GENERATION_URL";
-const GENERATION_TOKEN_ENV: &str = "FRONDA_GENERATION_TOKEN";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Endpoint + credential configuration for a Protocol v1 generation service.
@@ -40,15 +38,13 @@ impl GenerationBackendConfig {
         }
     }
 
-    /// Resolve from the environment: `FRONDA_GENERATION_URL` +
-    /// `FRONDA_GENERATION_TOKEN`. Either missing or blank/whitespace yields
-    /// `None` so the generate tools keep their honest "requires a remote API"
-    /// error (no backend installed).
-    pub fn from_env() -> Option<Self> {
-        resolve_config(
-            std::env::var(GENERATION_URL_ENV).ok(),
-            std::env::var(GENERATION_TOKEN_ENV).ok(),
-        )
+    /// Resolve from preferences.json (GUI-set, via Settings): the generation
+    /// endpoint URL + token. Either missing or blank yields `None` so the
+    /// generate tools keep their honest "requires a remote API" error (no
+    /// backend installed). This is a GUI app — config is UI-driven, not env.
+    pub fn from_prefs(prefs_path: &std::path::Path) -> Option<Self> {
+        let (url, token) = crate::pane_prefs::load_generation_endpoint(prefs_path)?;
+        resolve_config(Some(url), Some(token))
     }
 
     /// The submit endpoint for this config. Trailing slash tolerated.
@@ -62,8 +58,8 @@ impl GenerationBackendConfig {
     }
 }
 
-/// Pure config resolution (env read factored out so tests avoid process-global
-/// env mutation): both values must be present and non-blank.
+/// Pure config resolution (prefs read factored out so tests avoid disk I/O):
+/// both values must be present and non-blank.
 fn resolve_config(url: Option<String>, token: Option<String>) -> Option<GenerationBackendConfig> {
     let base_url = non_blank(url)?;
     let token = non_blank(token)?;
@@ -91,10 +87,10 @@ impl HttpGenerationBackend {
         Ok(Self { client, config })
     }
 
-    /// Build from the environment; missing/blank config → `None` (no backend
-    /// installed, honest error preserved).
+    /// Build from preferences.json (GUI-set via Settings); missing/blank config
+    /// → `None` (no backend installed, honest error preserved).
     pub fn from_config() -> Option<Self> {
-        let config = GenerationBackendConfig::from_env()?;
+        let config = GenerationBackendConfig::from_prefs(&crate::pane_prefs::default_prefs_path())?;
         Self::new(config).ok()
     }
 }
