@@ -56,6 +56,51 @@ impl GenerationBackendConfig {
     pub fn job_url(&self, job_id: &str) -> String {
         format!("{}/v1/jobs/{job_id}", self.base_url.trim_end_matches('/'))
     }
+
+    /// The provider-catalog discovery endpoint (v1.1). Trailing slash tolerated.
+    pub fn providers_url(&self) -> String {
+        format!("{}/v1/providers", self.base_url.trim_end_matches('/'))
+    }
+}
+
+/// One provider registered for a kind, with the model ids it exposes
+/// (`GET /v1/providers` — v1.1). Serde mirrors the wire object verbatim.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProviderEntry {
+    pub name: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+/// The `GET /v1/providers` catalog: providers per kind, default first. Missing
+/// kinds decode to an empty list so a partial gateway response stays valid.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProvidersCatalog {
+    #[serde(default)]
+    pub video: Vec<ProviderEntry>,
+    #[serde(default)]
+    pub image: Vec<ProviderEntry>,
+    #[serde(default)]
+    pub audio: Vec<ProviderEntry>,
+}
+
+impl ProvidersCatalog {
+    /// The provider entries registered for a kind (empty for Upscale, which the
+    /// catalog does not cover).
+    pub fn entries_for(&self, kind: &ModelKind) -> &[ProviderEntry] {
+        match kind {
+            ModelKind::Video => &self.video,
+            ModelKind::Image => &self.image,
+            ModelKind::Audio => &self.audio,
+            ModelKind::Upscale => &[],
+        }
+    }
+
+    /// True when the catalog registers no providers for any kind — the gateway
+    /// answered but has nothing to offer, so a picker has nothing to show.
+    pub fn is_empty(&self) -> bool {
+        self.video.is_empty() && self.image.is_empty() && self.audio.is_empty()
+    }
 }
 
 /// Pure config resolution (prefs read factored out so tests avoid disk I/O):
@@ -93,6 +138,25 @@ impl HttpGenerationBackend {
         let config = GenerationBackendConfig::from_prefs(&crate::pane_prefs::default_prefs_path())?;
         Self::new(config).ok()
     }
+
+    /// Fetch the `GET /v1/providers` catalog (v1.1), bearer-authed. A UI
+    /// convenience for populating the provider/model picker — deliberately NOT
+    /// on the `GenerationBackend` seam, which stays scoped to submit + recovery.
+    /// Errors (unreachable, non-2xx, undecodable) propagate so the caller can
+    /// simply hide the picker.
+    pub fn fetch_providers(&self) -> Result<ProvidersCatalog, String> {
+        let response = self
+            .client
+            .get(self.config.providers_url())
+            .bearer_auth(&self.config.token)
+            .send()
+            .map_err(|e| format!("generation providers request failed: {e}"))?;
+        let status = response.status().as_u16();
+        let body: Value = response
+            .json()
+            .map_err(|e| format!("generation providers: decode response: {e}"))?;
+        parse_providers_response(status, &body)
+    }
 }
 
 /// Lowercase protocol token for a model kind.
@@ -111,6 +175,9 @@ pub fn build_submit_body(req: &GenerationRequest) -> Value {
     let mut body = serde_json::Map::new();
     body.insert("kind".into(), Value::String(kind_token(&req.kind).into()));
     body.insert("model".into(), Value::String(req.model.clone()));
+    if let Some(provider) = &req.provider {
+        body.insert("provider".into(), Value::String(provider.clone()));
+    }
     body.insert("prompt".into(), Value::String(req.prompt.clone()));
     if let Some(duration) = req.duration_seconds {
         body.insert("durationSeconds".into(), serde_json::json!(duration));
@@ -193,6 +260,18 @@ pub fn parse_poll_response(status: u16, body: &Value) -> Result<GenerationOutcom
     }
 }
 
+/// Parse a `GET /v1/providers` response into a catalog (v1.1). A non-2xx is an
+/// error carrying the status and any server message; a 2xx body that is not a
+/// catalog-shaped object is a decode error. A well-formed object with missing
+/// kinds decodes to empty lists (a valid, empty catalog).
+pub fn parse_providers_response(status: u16, body: &Value) -> Result<ProvidersCatalog, String> {
+    if !is_success(status) {
+        return Err(error_message(status, body));
+    }
+    serde_json::from_value(body.clone())
+        .map_err(|e| format!("generation providers: decode response: {e}"))
+}
+
 fn is_success(status: u16) -> bool {
     (200..300).contains(&status)
 }
@@ -252,6 +331,7 @@ mod tests {
         GenerationRequest {
             kind: ModelKind::Video,
             model: "veo-3".into(),
+            provider: None,
             prompt: "a cat surfing".into(),
             duration_seconds: Some(5.0),
             source_url: Some("https://cdn/in.png".into()),
@@ -307,6 +387,7 @@ mod tests {
         let req = GenerationRequest {
             kind: ModelKind::Image,
             model: "flux".into(),
+            provider: None,
             prompt: "a logo".into(),
             duration_seconds: None,
             source_url: None,
@@ -316,10 +397,26 @@ mod tests {
         let body = build_submit_body(&req);
         assert_eq!(body["kind"], "image");
         let obj = body.as_object().unwrap();
+        assert!(!obj.contains_key("provider"));
         assert!(!obj.contains_key("durationSeconds"));
         assert!(!obj.contains_key("sourceUrl"));
         assert!(!obj.contains_key("targetLanguage"));
         assert!(!obj.contains_key("params"));
+    }
+
+    #[test]
+    fn submit_body_includes_provider_when_set() {
+        // v1.1 provider passthrough: present → the "provider" field is on the
+        // wire; the sample request (provider: None) proves it is omitted.
+        assert!(!build_submit_body(&sample_request())
+            .as_object()
+            .unwrap()
+            .contains_key("provider"));
+        let mut req = sample_request();
+        req.provider = Some("gemini".into());
+        let body = build_submit_body(&req);
+        assert_eq!(body["provider"], "gemini");
+        assert_eq!(body["model"], "veo-3");
     }
 
     #[test]
@@ -434,6 +531,64 @@ mod tests {
         assert!(HttpGenerationBackend::new(cfg).is_ok());
     }
 
+    // ─── provider catalog (v1.1) ───
+
+    #[test]
+    fn providers_url_tolerates_trailing_slash() {
+        let cfg = GenerationBackendConfig::new("http://localhost:8080/", "tok");
+        assert_eq!(cfg.providers_url(), "http://localhost:8080/v1/providers");
+    }
+
+    #[test]
+    fn providers_2xx_decodes_catalog() {
+        let body = serde_json::json!({
+            "video": [{ "name": "stub", "models": ["stub-video"] }],
+            "image": [
+                { "name": "gemini", "models": ["imagen-4", "imagen-4-fast"] },
+                { "name": "stub", "models": ["stub-image"] }
+            ],
+            "audio": [{ "name": "stub", "models": ["stub-audio"] }]
+        });
+        let cat = parse_providers_response(200, &body).unwrap();
+        assert_eq!(cat.video.len(), 1);
+        assert_eq!(cat.video[0].name, "stub");
+        assert_eq!(cat.image.len(), 2);
+        assert_eq!(cat.image[0].name, "gemini");
+        assert_eq!(cat.image[0].models, vec!["imagen-4", "imagen-4-fast"]);
+        assert_eq!(cat.entries_for(&ModelKind::Image).len(), 2);
+        assert!(cat.entries_for(&ModelKind::Upscale).is_empty());
+        assert!(!cat.is_empty());
+    }
+
+    #[test]
+    fn providers_2xx_missing_kinds_decode_to_empty_lists() {
+        // A well-formed but partial object is a valid (possibly empty) catalog,
+        // not an error — missing kinds default to empty.
+        let cat = parse_providers_response(200, &serde_json::json!({})).unwrap();
+        assert!(cat.video.is_empty() && cat.image.is_empty() && cat.audio.is_empty());
+        assert!(cat.is_empty());
+        // models omitted on an entry → empty model list.
+        let cat = parse_providers_response(200, &serde_json::json!({
+            "image": [{ "name": "gemini" }]
+        }))
+        .unwrap();
+        assert_eq!(cat.image[0].models.len(), 0);
+    }
+
+    #[test]
+    fn providers_bad_body_and_non_2xx_are_err() {
+        // 2xx but wrong shape (a kind that is not an array) → decode error.
+        let wrong_shape = serde_json::json!({ "video": "not-an-array" });
+        assert!(parse_providers_response(200, &wrong_shape).is_err());
+        // 2xx but not even an object → decode error.
+        assert!(parse_providers_response(200, &serde_json::json!("nope")).is_err());
+        // Non-2xx carries the status + server message.
+        let server_err = serde_json::json!({ "error": "unauthorized" });
+        let err = parse_providers_response(401, &server_err).unwrap_err();
+        assert!(err.contains("401"), "{err}");
+        assert!(err.contains("unauthorized"), "{err}");
+    }
+
     /// Live round-trip against a running Protocol v1.1 endpoint (e.g. the
     /// `fronda-gen-gateway` stub). Gated on FRONDA_GENERATION_URL/_TOKEN so CI
     /// skips it; the same trade-off as anthropic_transport / the whisper test.
@@ -450,9 +605,21 @@ mod tests {
         };
         let backend =
             HttpGenerationBackend::new(GenerationBackendConfig::new(url, token)).unwrap();
+        // v1.1 catalog: the picker's data source. Against the stub gateway this
+        // lists at least the stub video provider.
+        let catalog = backend.fetch_providers().expect("catalog fetches");
+        assert!(
+            catalog
+                .entries_for(&ModelKind::Video)
+                .iter()
+                .any(|e| e.name == "stub"),
+            "video catalog lists the stub provider: {catalog:?}"
+        );
+        // Submit with an explicit provider selection (what the picker sends).
         let req = GenerationRequest {
             kind: ModelKind::Video,
             model: "stub-video".to_string(),
+            provider: Some("stub".to_string()),
             prompt: "a cat surfing".to_string(),
             duration_seconds: Some(5.0),
             source_url: None,

@@ -5,6 +5,7 @@
 //! Model data comes from `generation_core::model_catalog`; cost math mirrors
 //! the Fal-era Swift `CostEstimator` (upstream `9dfde8d^`, USD prices).
 
+use crate::http_generation_backend::{ProviderEntry, ProvidersCatalog};
 use crate::text_area::{TextArea, TextAreaEvent};
 use crate::theme::{
     Accent, Background, BorderColors, DropZone, FontSize, GenerationPanel, Opacity, Radius,
@@ -169,6 +170,16 @@ pub enum RefSlot {
     Reference,
 }
 
+/// The user's provider/model choice for one kind, from the fetched catalog
+/// (v1.1). `provider = None` means "use the gateway's default provider" — the
+/// field is then omitted from the request, preserving v1 behavior.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProviderPick {
+    pub provider: Option<String>,
+    /// Chosen model id within the provider; rides on the request's `model`.
+    pub model: Option<String>,
+}
+
 /// State for the generation panel.
 #[derive(Debug, Clone)]
 pub struct GenerationState {
@@ -196,6 +207,14 @@ pub struct GenerationState {
     pub show_settings: bool,
     pub show_credit_popover: bool,
     pub asset_picker: Option<RefSlot>,
+    /// Provider catalog fetched from the backend's `GET /v1/providers` (v1.1).
+    /// None until fetched (or when no endpoint is configured / fetch failed) —
+    /// the picker is hidden and generation behaves exactly as before.
+    pub providers: Option<ProvidersCatalog>,
+    pub video_provider: ProviderPick,
+    pub image_provider: ProviderPick,
+    pub audio_provider: ProviderPick,
+    pub show_provider_picker: bool,
 }
 
 impl Default for GenerationState {
@@ -226,6 +245,11 @@ impl Default for GenerationState {
             show_settings: false,
             show_credit_popover: false,
             asset_picker: None,
+            providers: None,
+            video_provider: ProviderPick::default(),
+            image_provider: ProviderPick::default(),
+            audio_provider: ProviderPick::default(),
+            show_provider_picker: false,
         };
         state.params.sanitize_for(state.selected_model());
         state
@@ -308,11 +332,13 @@ impl GenerationState {
             || self.show_voice_picker
             || self.show_settings
             || self.show_credit_popover
+            || self.show_provider_picker
             || self.asset_picker.is_some();
         self.show_model_picker = false;
         self.show_voice_picker = false;
         self.show_settings = false;
         self.show_credit_popover = false;
+        self.show_provider_picker = false;
         self.asset_picker = None;
         was_open
     }
@@ -331,9 +357,120 @@ impl GenerationState {
             },
         }
     }
+
+    // ── Provider/model picker (v1.1 catalog) ────────────────────────────
+
+    /// Install a fetched provider catalog (clears the pending picker flag).
+    pub fn set_providers(&mut self, catalog: ProvidersCatalog) {
+        self.providers = Some(catalog);
+    }
+
+    fn provider_pick(&self) -> &ProviderPick {
+        match self.selected_type {
+            GenerationType::Video => &self.video_provider,
+            GenerationType::Image => &self.image_provider,
+            GenerationType::Audio => &self.audio_provider,
+        }
+    }
+
+    fn provider_pick_mut(&mut self) -> &mut ProviderPick {
+        match self.selected_type {
+            GenerationType::Video => &mut self.video_provider,
+            GenerationType::Image => &mut self.image_provider,
+            GenerationType::Audio => &mut self.audio_provider,
+        }
+    }
+
+    /// Provider entries the fetched catalog registers for the active kind.
+    /// Empty when no catalog was fetched (or none for this kind).
+    fn provider_entries(&self) -> &[ProviderEntry] {
+        match &self.providers {
+            Some(cat) => cat.entries_for(&self.selected_type.kind()),
+            None => &[],
+        }
+    }
+
+    /// True when there is a catalog with providers for the active kind — the
+    /// only case the provider/model picker is shown.
+    pub fn has_provider_picker(&self) -> bool {
+        !self.provider_entries().is_empty()
+    }
+
+    /// Provider names to list in the provider dropdown (catalog order, default
+    /// first), for the active kind.
+    pub fn provider_options(&self) -> Vec<&str> {
+        self.provider_entries()
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect()
+    }
+
+    /// The user's chosen provider for the active kind, or None to route to the
+    /// gateway default (the field is then omitted from the request).
+    pub fn selected_provider(&self) -> Option<&str> {
+        self.provider_pick().provider.as_deref()
+    }
+
+    /// Model ids to list in the model dropdown for the active kind: the models
+    /// of the chosen provider, or the default (first) provider when none is
+    /// chosen. Empty when no catalog is present.
+    pub fn provider_model_options(&self) -> Vec<&str> {
+        let entries = self.provider_entries();
+        let entry = match self.selected_provider() {
+            Some(name) => entries.iter().find(|p| p.name == name),
+            None => entries.first(),
+        };
+        entry
+            .map(|p| p.models.iter().map(|m| m.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    /// The model id that rides on the request when a provider is chosen: the
+    /// explicit pick, else the chosen provider's first model. None when no
+    /// provider is chosen (the request keeps its catalog-model selection).
+    pub fn selected_provider_model(&self) -> Option<&str> {
+        if self.selected_provider().is_none() {
+            return None;
+        }
+        self.provider_pick()
+            .model
+            .as_deref()
+            .or_else(|| self.provider_model_options().into_iter().next())
+    }
+
+    /// Pick a provider for the active kind; resets the model pick so
+    /// `selected_provider_model` falls back to that provider's first model.
+    pub fn select_provider(&mut self, name: &str) {
+        let pick = self.provider_pick_mut();
+        pick.provider = Some(name.to_string());
+        pick.model = None;
+    }
+
+    /// Clear the provider choice for the active kind — route to the gateway
+    /// default (no provider on the request, catalog-model selection kept).
+    pub fn clear_provider(&mut self) {
+        *self.provider_pick_mut() = ProviderPick::default();
+    }
+
+    /// Pick a specific model within the chosen provider for the active kind.
+    pub fn select_provider_model(&mut self, id: &str) {
+        self.provider_pick_mut().model = Some(id.to_string());
+    }
 }
 
 // ── Pure panel logic (unit-tested) ─────────────────────────────────
+
+/// Footer label for the provider button: "provider · model", the provider
+/// name, or "Default provider" when routing to the gateway default.
+pub fn provider_footer_label(state: &GenerationState) -> String {
+    match state.selected_provider() {
+        Some(p) => match state.selected_provider_model() {
+            Some(m) => format!("{p} · {m}"),
+            None => p.to_string(),
+        },
+        None => "Default provider".to_string(),
+    }
+}
 
 fn video_caps(state: &GenerationState) -> Option<&'static model_catalog::VideoCaps> {
     match &state.selected_model().caps {
@@ -1045,6 +1182,14 @@ pub fn generation_tool_call(state: &GenerationState) -> (&'static str, serde_jso
     if let Some(ids) = &input.reference_audio_asset_ids {
         set("referenceAudioAssetIds", serde_json::json!(ids));
     }
+    // v1.1: a chosen provider rides on the request and selects the model within
+    // it (overriding the catalog-model selection). Nothing set → v1 behavior.
+    if let Some(provider) = state.selected_provider() {
+        set("provider", serde_json::json!(provider));
+        if let Some(model_id) = state.selected_provider_model() {
+            set("model", serde_json::json!(model_id));
+        }
+    }
     let tool = match &model.caps {
         ModelCaps::Video(_) => "generate_video",
         ModelCaps::Image(_) => "generate_image",
@@ -1164,7 +1309,33 @@ impl GenerationView {
             media_revision: u64::MAX,
         };
         view.sync_media_items();
+        view.fetch_providers(cx);
         view
+    }
+
+    /// Kick off a one-shot provider-catalog fetch off the UI thread (v1.1).
+    /// No configured endpoint or a failed fetch simply leaves `providers` None,
+    /// so the picker stays hidden and generation behaves exactly as before.
+    fn fetch_providers(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let catalog = cx
+                .background_executor()
+                .spawn(async move {
+                    let backend =
+                        crate::http_generation_backend::HttpGenerationBackend::from_config()?;
+                    backend.fetch_providers().ok()
+                })
+                .await;
+            if let Some(catalog) = catalog {
+                if !catalog.is_empty() {
+                    let _ = this.update(cx, |view, cx| {
+                        view.state.set_providers(catalog);
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
     }
 
     /// Refresh picker items + inflight flag from the shared manifest.
@@ -2039,7 +2210,7 @@ impl GenerationView {
             );
         }
 
-        // ── Footer: model · voice · gear · spacer · cost · generate ──
+        // ── Footer: model · provider · voice · gear · spacer · cost · generate ──
         let mut footer = div()
             .flex()
             .flex_row()
@@ -2076,6 +2247,39 @@ impl GenerationView {
                             .child("⌄"),
                     ),
             );
+
+        // v1.1 provider picker — only when the fetched catalog has providers for
+        // this kind. Absent catalog → hidden, generation unchanged.
+        if st.has_provider_picker() {
+            footer = footer.child(
+                div()
+                    .id("btn-gen-provider-picker")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(2.0))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        let open = this.state.show_provider_picker;
+                        this.state.close_popovers();
+                        this.state.show_provider_picker = !open;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_color(Text::MUTED)
+                            .text_size(px(FontSize::XXS))
+                            .child(provider_footer_label(st)),
+                    )
+                    .child(
+                        div()
+                            .text_color(Text::MUTED)
+                            .text_size(px(FontSize::XXS))
+                            .child("⌄"),
+                    ),
+            );
+        }
 
         if let Some(_voices) = &voices {
             let voice_label = if st.params.voice.is_empty() {
@@ -2269,6 +2473,127 @@ impl GenerationView {
             prompt_box = prompt_box.child(
                 div()
                     .id("gen-model-picker-dropdown")
+                    .border_t_1()
+                    .border_color(BorderColors::SUBTLE)
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(list),
+            );
+        }
+
+        // ── Provider picker dropdown (v1.1 catalog): provider rows, then the
+        //    chosen provider's model rows ──
+        if st.show_provider_picker {
+            let transparent = Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 1.0,
+                a: 0.0,
+            };
+            let selected_provider = st.selected_provider().map(str::to_string);
+            let selected_model = st.selected_provider_model().map(str::to_string);
+            let check = |on: bool| {
+                div()
+                    .text_color(if on { Accent::PRIMARY } else { transparent })
+                    .text_size(px(FontSize::XS))
+                    .child("✓")
+            };
+            let mut list = div()
+                .id("gen-provider-list")
+                .flex()
+                .flex_col()
+                .max_h(px(GenerationPanel::LOADING_HEIGHT))
+                .overflow_y_scroll();
+            // "Default provider" clears the pick → the gateway routes by default.
+            list = list.child(
+                div()
+                    .id("gen-provider-default")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .px(px(Spacing::SM_MD))
+                    .py(px(Spacing::XS))
+                    .gap(px(Spacing::SM))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.state.clear_provider();
+                        cx.notify();
+                    }))
+                    .child(check(selected_provider.is_none()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(Text::PRIMARY)
+                            .text_size(px(FontSize::SM))
+                            .child("Default provider"),
+                    ),
+            );
+            for name in st.provider_options() {
+                let is_selected = selected_provider.as_deref() == Some(name);
+                let owned = name.to_string();
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!("gen-provider-{name}")))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .px(px(Spacing::SM_MD))
+                        .py(px(Spacing::XS))
+                        .gap(px(Spacing::SM))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.state.select_provider(&owned);
+                            cx.notify();
+                        }))
+                        .child(check(is_selected))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_color(Text::PRIMARY)
+                                .text_size(px(FontSize::SM))
+                                .child(name.to_string()),
+                        ),
+                );
+            }
+            // The chosen provider's models (headed by a divider).
+            if selected_provider.is_some() {
+                list = list.child(divider());
+                for id in st.provider_model_options() {
+                    let is_selected = selected_model.as_deref() == Some(id);
+                    let owned = id.to_string();
+                    list = list.child(
+                        div()
+                            .id(SharedString::from(format!("gen-provider-model-{id}")))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .px(px(Spacing::SM_MD))
+                            .py(px(Spacing::XS))
+                            .gap(px(Spacing::SM))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.state.select_provider_model(&owned);
+                                this.state.show_provider_picker = false;
+                                cx.notify();
+                            }))
+                            .child(check(is_selected))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_color(Text::TERTIARY)
+                                    .text_size(px(FontSize::SM))
+                                    .child(id.to_string()),
+                            ),
+                    );
+                }
+            }
+            prompt_box = prompt_box.child(
+                div()
+                    .id("gen-provider-picker-dropdown")
                     .border_t_1()
                     .border_color(BorderColors::SUBTLE)
                     .flex()
@@ -3168,6 +3493,115 @@ mod tests {
         let (tool, args) = generation_tool_call(&em);
         assert_eq!(tool, "generate_audio");
         assert_eq!(args["duration"], 30.0);
+    }
+
+    // ── 2.1 provider/model picker (v1.1 catalog) ───────────────────────
+
+    fn sample_catalog() -> ProvidersCatalog {
+        ProvidersCatalog {
+            video: vec![ProviderEntry {
+                name: "stub".into(),
+                models: vec!["stub-video".into()],
+            }],
+            image: vec![
+                ProviderEntry {
+                    name: "gemini".into(),
+                    models: vec!["imagen-4".into(), "imagen-4-fast".into()],
+                },
+                ProviderEntry {
+                    name: "stub".into(),
+                    models: vec!["stub-image".into()],
+                },
+            ],
+            audio: vec![],
+        }
+    }
+
+    #[test]
+    fn no_catalog_hides_picker_and_omits_provider() {
+        // Zero-regression: without a fetched catalog the picker is hidden and
+        // no provider rides on the request.
+        let mut st = image_state("gpt-image-2");
+        st.prompt = "a fox".into();
+        assert!(!st.has_provider_picker());
+        assert!(st.provider_options().is_empty());
+        assert!(st.selected_provider().is_none());
+        let (_tool, args) = generation_tool_call(&st);
+        assert!(args.get("provider").is_none());
+        assert_eq!(args["model"], "gpt-image-2", "catalog model unchanged");
+    }
+
+    #[test]
+    fn picker_options_reflect_catalog_per_kind() {
+        let mut st = image_state("gpt-image-2");
+        st.set_providers(sample_catalog());
+        assert!(st.has_provider_picker());
+        assert_eq!(st.provider_options(), vec!["gemini", "stub"]);
+        // No provider chosen yet → model options come from the default (first).
+        assert_eq!(
+            st.provider_model_options(),
+            vec!["imagen-4", "imagen-4-fast"]
+        );
+        // Switching to a kind the catalog doesn't cover hides the picker.
+        st.select_type(GenerationType::Audio);
+        assert!(!st.has_provider_picker());
+        assert!(st.provider_options().is_empty());
+        // Video kind has its own single provider.
+        st.select_type(GenerationType::Video);
+        assert_eq!(st.provider_options(), vec!["stub"]);
+        assert_eq!(st.provider_model_options(), vec!["stub-video"]);
+    }
+
+    #[test]
+    fn selecting_provider_defaults_to_its_first_model_then_overrides_request() {
+        let mut st = image_state("gpt-image-2");
+        st.prompt = "a fox".into();
+        st.set_providers(sample_catalog());
+
+        st.select_provider("gemini");
+        assert_eq!(st.selected_provider(), Some("gemini"));
+        // Model pick resets → falls back to the provider's first model.
+        assert_eq!(st.selected_provider_model(), Some("imagen-4"));
+        assert_eq!(provider_footer_label(&st), "gemini · imagen-4");
+
+        let (tool, args) = generation_tool_call(&st);
+        assert_eq!(tool, "generate_image");
+        assert_eq!(args["provider"], "gemini");
+        assert_eq!(args["model"], "imagen-4", "provider model overrides model");
+
+        // Explicitly pick the second model.
+        st.select_provider_model("imagen-4-fast");
+        let (_t, args) = generation_tool_call(&st);
+        assert_eq!(args["model"], "imagen-4-fast");
+    }
+
+    #[test]
+    fn clearing_provider_returns_to_gateway_default() {
+        let mut st = image_state("gpt-image-2");
+        st.prompt = "a fox".into();
+        st.set_providers(sample_catalog());
+        st.select_provider("gemini");
+        st.clear_provider();
+        assert!(st.selected_provider().is_none());
+        assert!(st.selected_provider_model().is_none());
+        assert_eq!(provider_footer_label(&st), "Default provider");
+        let (_tool, args) = generation_tool_call(&st);
+        assert!(args.get("provider").is_none(), "no provider → omitted");
+        assert_eq!(args["model"], "gpt-image-2", "catalog model restored");
+    }
+
+    #[test]
+    fn provider_pick_is_per_kind() {
+        let mut st = image_state("gpt-image-2");
+        st.set_providers(sample_catalog());
+        st.select_provider("gemini");
+        // Switch to video: its own (unpicked) provider slot, default routing.
+        st.select_type(GenerationType::Video);
+        assert!(st.selected_provider().is_none());
+        st.select_provider("stub");
+        // Back to image: the earlier gemini pick survived the kind switch.
+        st.select_type(GenerationType::Image);
+        assert_eq!(st.selected_provider(), Some("gemini"));
     }
 
     #[test]

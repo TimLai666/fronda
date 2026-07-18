@@ -623,6 +623,10 @@ pub fn apply_generation_outcome(
 pub struct GenerationRequest {
     pub kind: ModelKind,
     pub model: String,
+    /// v1.1 multi-provider: selects a provider within the kind. Absent → the
+    /// gateway routes to its configured default provider (fully v1-compatible).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<f64>,
@@ -1276,6 +1280,7 @@ mod tests {
         let req = GenerationRequest {
             kind: ModelKind::Audio,
             model: "elevenlabs-dubbing".into(),
+            provider: Some("elevenlabs".into()),
             prompt: "hello".into(),
             duration_seconds: Some(12.5),
             source_url: Some("https://cdn/in.mp4".into()),
@@ -1284,6 +1289,7 @@ mod tests {
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["kind"], "audio");
+        assert_eq!(json["provider"], "elevenlabs");
         assert_eq!(json["durationSeconds"], 12.5);
         assert_eq!(json["sourceUrl"], "https://cdn/in.mp4");
         assert_eq!(json["targetLanguage"], "es");
@@ -1297,6 +1303,7 @@ mod tests {
         let req = GenerationRequest {
             kind: ModelKind::Image,
             model: "nano-banana-2".into(),
+            provider: None,
             prompt: "a fox".into(),
             duration_seconds: None,
             source_url: None,
@@ -1305,6 +1312,7 @@ mod tests {
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["kind"], "image");
+        assert!(json.get("provider").is_none());
         assert!(json.get("durationSeconds").is_none());
         assert!(json.get("sourceUrl").is_none());
         assert!(json.get("targetLanguage").is_none());

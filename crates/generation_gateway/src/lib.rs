@@ -6,19 +6,23 @@
 //! phase 2.
 
 pub mod config;
+pub mod gemini;
 pub mod jobs;
 pub mod protocol;
 pub mod provider;
 pub mod registry;
+pub mod results;
 pub mod server;
 pub mod stub;
 
 pub use config::GatewayConfig;
+pub use gemini::{GeminiConfig, GeminiImageProvider};
 pub use protocol::{
     ErrorResponse, GenerateRequest, JobStatusResponse, ProviderCatalogEntry, ProvidersCatalog,
     SubmitResponse,
 };
 pub use provider::{GenerationProvider, ProviderJob, ProviderKind, ProviderStatus};
 pub use registry::{ProviderRegistry, RouteError};
-pub use server::{build_router, build_stub_registry, stub_app_state, AppState};
+pub use results::ResultStore;
+pub use server::{app_state, build_router, build_stub_registry, stub_app_state, AppState};
 pub use stub::StubProvider;

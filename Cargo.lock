@@ -2114,10 +2114,12 @@ name = "fronda-gen-gateway"
 version = "0.6.5"
 dependencies = [
  "axum",
+ "base64",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -624,6 +624,7 @@ fn generate_audio() -> ToolDefinition {
                 "folder",
                 string("Optional destination folder path, e.g. 'Hero shots/Takes'. Created if missing. Omit for the project root."),
             ),
+            ("provider", generation_provider_prop()),
         ]),
     }
 }
@@ -632,7 +633,13 @@ fn generate_image() -> ToolDefinition {
     ToolDefinition {
         name: "generate_image",
         description: "Generate an image using the configured model.",
-        input_schema: object(&[("prompt", string("Description of the image to generate"))]),
+        input_schema: object_schema(
+            &[
+                ("prompt", string("Description of the image to generate")),
+                ("provider", generation_provider_prop()),
+            ],
+            &["prompt"],
+        ),
     }
 }
 
@@ -671,11 +678,21 @@ fn generate_video() -> ToolDefinition {
     ToolDefinition {
         name: "generate_video",
         description: "Generate a video clip using the configured model.",
-        input_schema: object(&[
-            ("prompt", string("Description of the video to generate")),
-            ("duration", number("Duration in seconds")),
-        ]),
+        input_schema: object_schema(
+            &[
+                ("prompt", string("Description of the video to generate")),
+                ("duration", number("Duration in seconds")),
+                ("provider", generation_provider_prop()),
+            ],
+            &["prompt", "duration"],
+        ),
     }
+}
+
+/// Shared schema for the optional `provider` field on the generate tools
+/// (v1.1 multi-provider). Omit to route to the gateway's default provider.
+fn generation_provider_prop() -> Value {
+    string("Optional. Generation provider to route to. Omit to use the endpoint's default provider for this kind; model still selects the specific model within the chosen provider.")
 }
 
 /// tool-surface-v2 (absorbs list_folders). Description verbatim from

@@ -107,3 +107,42 @@ code:
 tests:
   - crates/generation_gateway/tests/gateway_http.rs
 -->
+
+---
+### Requirement: Gateway serves generated media and hosts a real image provider
+
+The gateway SHALL store generated media bytes and serve them at `GET /v1/results/{id}` (bearer, correct content-type), so a succeeded job's resultUrls are fetchable real media (not placeholder schemes). A Gemini image provider SHALL implement the provider trait using the Gemini generateContent REST surface with a bring-your-own key, decoding the inlineData image bytes into the result store; it is registered only when a key is configured.
+
+#### Scenario: Real bytes round-trip through the pipeline (key-free)
+
+- **WHEN** a mock provider returns image bytes and a client submits then polls to success
+- **THEN** the resultUrl serves those exact bytes with the correct content-type
+
+#### Scenario: Gemini registers only with a key
+
+- **WHEN** no Gemini API key is configured
+- **THEN** the image catalog lists only the stub provider and the gateway still starts
+
+<!-- @trace
+source: gemini-image-provider
+updated: 2026-07-18
+code:
+  - crates/generation_gateway/src/config.rs
+  - crates/generation_gateway/src/lib.rs
+  - crates/agent_contract/src/tools.rs
+  - crates/generation_gateway/Cargo.toml
+  - crates/generation_gateway/src/results.rs
+  - crates/app_shell_gpui/src/http_generation_backend.rs
+  - crates/generation_gateway/src/main.rs
+  - crates/app_shell_gpui/src/generation_view.rs
+  - specs/rust-rewrite/VERIFY-2026-07-18-generation-gateway.md
+  - crates/generation_core/src/lib.rs
+  - specs/rust-rewrite/98-generation-protocol.md
+  - crates/agent_contract/src/tool_exec.rs
+  - crates/generation_gateway/src/server.rs
+  - AGENTS.md
+  - specs/rust-rewrite/99-decisions-2026-07-17.md
+  - crates/generation_gateway/src/gemini.rs
+tests:
+  - crates/generation_gateway/tests/gemini_pipeline.rs
+-->

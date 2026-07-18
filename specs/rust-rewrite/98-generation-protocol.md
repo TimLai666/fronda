@@ -184,6 +184,21 @@ Bearer-authed discovery so the client can populate a provider/model picker:
 Each kind lists its registered providers (default first) and each provider's
 available model ids.
 
+### `GET {base}/v1/results/{id}` — served media (capability URL)
+
+When a provider generates media inline (e.g. a Gemini image returned as base64),
+the gateway stores the bytes and a succeeded job's `resultUrls` point back at
+`{publicBase}/v1/results/{id}`. Unlike the control endpoints, this route is
+**unauthenticated** — it is a *capability URL*: the `id` is an unguessable
+random token (UUID v4), and that unguessability is what gates access. This is
+deliberate so a generic media downloader (Fronda's `cachedRemoteURL` fetch,
+#135), which carries no gateway token, can fetch the result. The response is the
+raw bytes with the stored `Content-Type`; an unknown id → 404 (not 401).
+
+A gateway may instead return provider-hosted URLs (a vendor CDN / signed URL)
+directly in `resultUrls` and skip its own result store — the client only cares
+that the URLs are fetchable.
+
 ## Reference gateway (`crates/generation_gateway`)
 
 `fronda-gen-gateway` is the in-repo reference implementation (axum + tokio):

@@ -8539,6 +8539,7 @@ impl ToolExecutor {
         name: &str,
         prompt: &str,
         model: &str,
+        provider: Option<String>,
         duration_seconds: Option<f64>,
         source_url: Option<String>,
         target_language: Option<String>,
@@ -8548,6 +8549,7 @@ impl ToolExecutor {
         let req = generation_core::GenerationRequest {
             kind: kind.clone(),
             model: model.to_string(),
+            provider,
             prompt: prompt.to_string(),
             duration_seconds,
             source_url,
@@ -8614,6 +8616,10 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing prompt".to_string())?;
         let duration = args.get("duration").and_then(|v| v.as_f64()).unwrap_or(5.0);
+        let provider = args
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let model = self
             .resolve_generation_model(
                 generation_core::ModelKind::Video,
@@ -8626,6 +8632,7 @@ impl ToolExecutor {
             prompt,
             prompt,
             model,
+            provider,
             Some(duration),
             None,
             None,
@@ -8651,6 +8658,10 @@ impl ToolExecutor {
             .get("prompt")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "Missing prompt".to_string())?;
+        let provider = args
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let model = self
             .resolve_generation_model(
                 generation_core::ModelKind::Image,
@@ -8663,6 +8674,7 @@ impl ToolExecutor {
             prompt,
             prompt,
             model,
+            provider,
             None,
             None,
             None,
@@ -8858,11 +8870,16 @@ impl ToolExecutor {
         } else {
             prompt
         };
+        let provider = args
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         if let Some(res) = self.submit_generation(
             generation_core::ModelKind::Audio,
             name,
             prompt,
             model.id,
+            provider,
             duration_seconds.map(|d| d as f64),
             None,
             params.target_language.clone(),
@@ -11554,6 +11571,34 @@ mod tests {
             mock.submitted.lock().unwrap()[0].kind,
             generation_core::ModelKind::Audio
         );
+    }
+
+    #[test]
+    fn generate_tools_forward_provider_when_supplied_and_omit_otherwise() {
+        // provider透傳半: a provider arg rides on the assembled request; omitting
+        // it leaves the field None so the gateway routes to its default.
+        let mut exec = make_executor();
+        let mock = std::sync::Arc::new(MockGenerationBackend::default());
+        exec.set_generation_backend(mock.clone());
+
+        exec.execute(
+            "generate_image",
+            &json!({"prompt": "a fox", "model": "nano-banana-2", "provider": "gemini"}),
+        )
+        .unwrap();
+        exec.execute("generate_video", &json!({"prompt": "a cat", "duration": 4.0}))
+            .unwrap();
+        exec.execute(
+            "generate_audio",
+            &json!({"prompt": "narration", "provider": "elevenlabs"}),
+        )
+        .unwrap();
+
+        let recorded = mock.submitted.lock().unwrap();
+        assert_eq!(recorded.len(), 3);
+        assert_eq!(recorded[0].provider.as_deref(), Some("gemini"));
+        assert_eq!(recorded[1].provider, None, "no provider arg → None");
+        assert_eq!(recorded[2].provider.as_deref(), Some("elevenlabs"));
     }
 
     #[test]

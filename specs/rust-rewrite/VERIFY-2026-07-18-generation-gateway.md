@@ -53,3 +53,45 @@ Real provider adapters (Gemini, fal, Replicate, ElevenLabs, …) behind the same
 provider/model picker reading `GET /v1/providers`. The stub proves the
 plumbing and the multi-provider architecture; real providers return real
 media URLs instead of `stub://…`.
+
+## Phase 2 addendum — real provider + picker + capability URLs
+
+Changes `gemini-image-provider` and `generation-provider-picker`.
+
+### Media pipeline delivers real bytes (key-free) — PASS
+Gateway integration test `gemini_pipeline_serves_exact_original_png_bytes_key_free`:
+a mock Gemini server returns base64 `inlineData` (a real 1×1 PNG); the gateway
+decodes it, stores it, and serves it from `/v1/results/{id}`. Submitting
+`provider:"gemini"` then polling to success yields a result URL that, **fetched
+with no bearer token**, returns the byte-equal PNG with `Content-Type:
+image/png`. This proves generation→store→serve→fetch end to end with zero
+external key.
+
+### Capability-URL results (download-path safe) — PASS
+`/v1/results/{id}` is unauthenticated with unguessable UUID ids (the control
+endpoints stay bearer-protected). Fronda's generic media downloader carries no
+gateway token, so a bearer-gated results route would 401 every download; the
+capability-URL model fixes that. Tests assert a tokenless GET returns the bytes
+(200) and an unknown id returns 404 (not 401).
+
+### Gemini image provider — code complete, live needs the user's key
+`GeminiImageProvider` calls `generateContent` (`x-goog-api-key`,
+`responseModalities:["TEXT","IMAGE"]`, base/model/version configurable) and
+decodes `inlineData`. Registered only when a key is set. Real Gemini output is
+verified by the gated `live_gemini_returns_real_image_bytes` test —
+`FRONDA_GEMINI_API_KEY` set → real call; unset → skip. **The real-image check is
+the user's to run with their Google API key** (BYO); the pipeline itself is
+proven key-free above.
+
+### Full v1.1 client loop (catalog + provider-tagged submit) — PASS
+The gated `live_round_trip_submits_and_polls_to_success` was extended: against a
+running stub gateway, Fronda's real `HttpGenerationBackend` calls
+`fetch_providers()` (asserts the video catalog lists `stub` — the picker's data
+source), then submits with `provider:Some("stub")` and polls to success. Skips
+cleanly without the env vars (CI-safe).
+
+### Fronda picker — code complete, interaction is manual
+`GenerationRequest.provider` threads panel → tool → request → wire; the panel
+fetches the catalog on open and shows provider/model dropdowns. gpui interaction
+(live fetch, dropdown selection) is verified by compile + structural tests per
+repo convention; a manual pass belongs to a future D9-style interactive check.

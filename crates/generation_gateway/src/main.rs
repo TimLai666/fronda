@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 
-use fronda_gen_gateway::{build_router, stub_app_state, GatewayConfig};
+use fronda_gen_gateway::{app_state, build_router, GatewayConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,10 +25,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let state = stub_app_state(config);
+    let has_gemini = config.provider_key("gemini").is_some();
+    let state = app_state(config);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     println!(
-        "fronda-gen-gateway (Protocol v1.1, stub providers) listening on http://{}",
+        "fronda-gen-gateway (Protocol v1.1, stub{}) listening on http://{}",
+        if has_gemini { " + gemini image" } else { "" },
         listener.local_addr()?
     );
 
