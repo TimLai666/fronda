@@ -190,10 +190,16 @@ missed — the picker's getter was unit-tested, but the full submit path was not
   when the provider advertises it, else the provider default. Proven end-to-end
   by a URI-capturing Pollinations mock: `model=sana` (advertised) is forwarded to
   the upstream URL; an unadvertised id is dropped → server default.
-- **Pollinations catalog corrected.** Its advertised model was the stale `flux`;
-  `GET https://image.pollinations.ai/models` returned `["sana"]` on 2026-07-18,
-  so the catalog now advertises `sana`. The list is volatile (was `flux` weeks
-  prior) — advertising the live `/models` set at startup is a noted follow-up.
+- **Pollinations catalog now fetched live.** Its advertised model was the stale
+  `flux`; the list is volatile (`GET https://image.pollinations.ai/models`
+  returned `["sana"]` on 2026-07-18). Rather than hardcode a snapshot that rots,
+  the gateway now fetches `/models` at startup (best-effort, 5 s timeout, silent
+  fall-through to the hardcoded `sana` on any failure) and advertises the live
+  set — so the picker reflects what the provider actually offers. Verified
+  end-to-end against real Pollinations: startup logs `advertising live models
+  ["sana"]` and `/v1/providers` serves the fetched list. Tests: `parse_models_response`
+  (array / empty→None / invalid→None / whitespace-trim) and `from_gateway`
+  (fetched list advertised as-is; empty→hardcoded default).
 
 Tests: `resolve_effective_model` unit (honored/default/whitespace), the
 Pollinations forward/omit integration test, and two tool-layer tests

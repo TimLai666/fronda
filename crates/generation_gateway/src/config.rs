@@ -46,6 +46,11 @@ pub struct GatewayConfig {
     pub gemini_api_version: Option<String>,
     /// Pollinations image API base URL override; `None` → default public base.
     pub pollinations_base: Option<String>,
+    /// Pollinations' live model list, fetched from `{base}/models` at startup so
+    /// the `/v1/providers` catalog reflects what the provider actually offers
+    /// today (the list is volatile — was `flux`, now `sana`). `None`/empty →
+    /// the hardcoded `DEFAULT_POLLINATIONS_MODEL` fallback. Not env-derived.
+    pub pollinations_models: Option<Vec<String>>,
 }
 
 impl Default for GatewayConfig {
@@ -60,6 +65,7 @@ impl Default for GatewayConfig {
             gemini_base: None,
             gemini_api_version: None,
             pollinations_base: None,
+            pollinations_models: None,
         }
     }
 }

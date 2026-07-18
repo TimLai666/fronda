@@ -41,23 +41,65 @@ pub const DEFAULT_POLLINATIONS_BASE: &str = "https://image.pollinations.ai";
 pub const DEFAULT_POLLINATIONS_MODEL: &str = "sana";
 
 /// Resolved Pollinations connection settings. `base` is overridable (env/config);
-/// there is no key — the provider is always available.
+/// there is no key — the provider is always available. `models` is the advertised
+/// model list: the live `/models` set when the gateway fetched it at startup, else
+/// the hardcoded default.
 #[derive(Debug, Clone)]
 pub struct PollinationsConfig {
     pub base: String,
+    pub models: Vec<String>,
 }
 
 impl PollinationsConfig {
     /// Build from the gateway config. Always succeeds — no key is required — so the
-    /// provider is registered unconditionally.
+    /// provider is registered unconditionally. A non-empty `pollinations_models`
+    /// (fetched live at startup) is advertised as-is; otherwise the single
+    /// hardcoded default.
     pub fn from_gateway(config: &GatewayConfig) -> Self {
+        let models = config
+            .pollinations_models
+            .clone()
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| vec![DEFAULT_POLLINATIONS_MODEL.to_string()]);
         Self {
             base: config
                 .pollinations_base
                 .clone()
                 .unwrap_or_else(|| DEFAULT_POLLINATIONS_BASE.to_string()),
+            models,
         }
     }
+}
+
+/// Parse the Pollinations `GET {base}/models` response — a JSON array of model-id
+/// strings (e.g. `["sana"]`). Returns `None` on invalid JSON or an empty list, so
+/// the caller falls back to the hardcoded default rather than advertising nothing.
+pub fn parse_models_response(body: &str) -> Option<Vec<String>> {
+    let ids: Vec<String> = serde_json::from_str(body).ok()?;
+    let ids: Vec<String> = ids
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if ids.is_empty() {
+        None
+    } else {
+        Some(ids)
+    }
+}
+
+/// Best-effort fetch of Pollinations' live model list from `{base}/models`. Any
+/// failure (network, non-2xx, bad body, empty list) → `None` so the gateway keeps
+/// its hardcoded default. The caller supplies a short-timeout client so a slow
+/// Pollinations never stalls gateway startup.
+pub async fn fetch_models(base: &str, client: &reqwest::Client) -> Option<Vec<String>> {
+    let url = format!("{}/models", base.trim_end_matches('/'));
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body = resp.text().await.ok()?;
+    parse_models_response(&body)
 }
 
 /// The optional query parameters Pollinations accepts, extracted from a request's
@@ -180,7 +222,7 @@ impl GenerationProvider for PollinationsImageProvider {
     }
 
     fn models(&self) -> Vec<String> {
-        vec![DEFAULT_POLLINATIONS_MODEL.to_string()]
+        self.config.models.clone()
     }
 
     fn submit(&self, req: &GenerateRequest) -> Result<ProviderJob, String> {
@@ -458,6 +500,51 @@ mod tests {
         let config = GatewayConfig::default();
         let pollinations = PollinationsConfig::from_gateway(&config);
         assert_eq!(pollinations.base, DEFAULT_POLLINATIONS_BASE);
+        // No fetched list → the single hardcoded default is advertised.
+        assert_eq!(pollinations.models, vec![DEFAULT_POLLINATIONS_MODEL.to_string()]);
+    }
+
+    #[test]
+    fn from_gateway_advertises_fetched_models_else_default() {
+        // A live-fetched (non-empty) list is advertised as-is.
+        let config = GatewayConfig {
+            pollinations_models: Some(vec!["sana".into(), "flux".into()]),
+            ..GatewayConfig::default()
+        };
+        assert_eq!(
+            PollinationsConfig::from_gateway(&config).models,
+            vec!["sana".to_string(), "flux".to_string()]
+        );
+        // An empty fetched list falls back to the hardcoded default (never advertise nothing).
+        let config = GatewayConfig {
+            pollinations_models: Some(vec![]),
+            ..GatewayConfig::default()
+        };
+        assert_eq!(
+            PollinationsConfig::from_gateway(&config).models,
+            vec![DEFAULT_POLLINATIONS_MODEL.to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_models_response_reads_array_and_rejects_empty_or_invalid() {
+        assert_eq!(
+            parse_models_response(r#"["sana"]"#),
+            Some(vec!["sana".to_string()])
+        );
+        assert_eq!(
+            parse_models_response(r#"["sana", "flux", "turbo"]"#),
+            Some(vec!["sana".to_string(), "flux".to_string(), "turbo".to_string()])
+        );
+        // Whitespace/blank ids are trimmed and dropped.
+        assert_eq!(
+            parse_models_response(r#"[" sana ", "", "  "]"#),
+            Some(vec!["sana".to_string()])
+        );
+        // Empty array / invalid JSON / wrong shape → None (caller keeps the default).
+        assert_eq!(parse_models_response("[]"), None);
+        assert_eq!(parse_models_response("not json"), None);
+        assert_eq!(parse_models_response(r#"{"models":["x"]}"#), None);
     }
 
     #[test]
@@ -485,6 +572,7 @@ mod tests {
         let config = PollinationsConfig {
             base: std::env::var("FRONDA_GEN_POLLINATIONS_BASE")
                 .unwrap_or_else(|_| DEFAULT_POLLINATIONS_BASE.to_string()),
+            models: vec![DEFAULT_POLLINATIONS_MODEL.to_string()],
         };
         let client = reqwest::Client::new();
         let params = PollinationsParams {
