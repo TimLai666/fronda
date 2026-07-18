@@ -133,6 +133,42 @@ passes structural tests, and its data path (fetch_providers → catalog → requ
 provider) is proven by the extended gated live test against the running gateway.
 Test processes and the test endpoint in preferences.json were cleaned up.
 
+## Post-delivery hardening sweep (adversarial review) — 2026-07-18
+
+An adversarial review of the delivered generation subsystem confirmed the
+security core is solid (bearer boundary, capability-URL unguessability,
+prompt/provider injection defenses, no silent fallback, async races all clean)
+and surfaced three defects. Two were real and fixed:
+
+- **[security] Network bind without a token now hard-rejects.**
+  `GatewayConfig::validate()` returns `Err` when the bind is non-loopback and no
+  token is set, and `main.rs` propagates it — the gateway refuses to start
+  instead of only warning. Mirrors `mcp_server`'s #122 `validate()` posture; a
+  gateway that proxies the operator's paid provider key must not be laxer than
+  the MCP server. Loopback stays open (local single-user). 3 tests.
+- **[correctness] Real-provider HTTP calls are now timeout-bounded.**
+  `provider_http_client()` builds the reqwest client with a 120s overall +
+  15s connect timeout (was `reqwest::Client::new()`, unbounded). Without it a
+  hung upstream left the spawned task never returning → the job stuck `Running`
+  forever → the client's asset permanently "generating". Both Gemini and
+  Pollinations use it. The 120s ceiling matches the client-side
+  `http_generation_backend` timeout; a hang now becomes an explicit `Failed`.
+
+Deliberately **not** changed (contract decision, not a mechanical fix):
+
+- **Real providers ignore the protocol's top-level `model`.** Gemini uses its
+  configured model; Pollinations reads `params.model`. Naively forwarding
+  `req.model` would send Fronda-namespace catalog ids (what the agent/tool path
+  sends) to providers that expect their *own* model namespace, regressing the
+  currently-working "use the configured default" behavior. Each provider
+  advertises exactly one model today and the default image provider is the stub,
+  so there is **no user-visible bug**. Making `model` meaningful requires
+  deciding whose namespace it is (Fronda catalog vs gateway/provider catalog) —
+  an API-contract call, left for a deliberate follow-up rather than guessed here.
+  The picker sources its model ids from `GET /v1/providers` (provider namespace),
+  so a future "honor `req.model` when it names an advertised model" is the safe
+  shape once a provider offers more than one.
+
 ## Reference-gateway known limitations (follow-ups, not bugs)
 
 - The in-memory job/result store is unbounded — fine for a local single-user

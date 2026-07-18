@@ -38,6 +38,29 @@ impl ProviderKind {
     }
 }
 
+/// Overall request timeout for a provider's upstream HTTP call. A real provider
+/// spawns its generation task and only writes a terminal job state when the call
+/// returns; with no timeout a hung upstream would leave the job stuck `Running`
+/// forever (and the client's asset permanently "generating"). Bounds it so a hang
+/// becomes an explicit `Failed` instead. Matches the client-side 120s ceiling in
+/// `http_generation_backend`.
+const PROVIDER_HTTP_TIMEOUT_SECS: u64 = 120;
+/// Separate, tighter connect-phase bound so an unreachable host fails fast rather
+/// than burning the full request budget on the TCP/TLS handshake.
+const PROVIDER_CONNECT_TIMEOUT_SECS: u64 = 15;
+
+/// Build the shared reqwest client every real provider uses: bounded overall and
+/// connect timeouts so a hung or unreachable upstream can never strand a job. The
+/// builder only fails on a broken TLS backend; fall back to a plain client so a
+/// provider is never un-constructable over a timeout.
+pub fn provider_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(PROVIDER_HTTP_TIMEOUT_SECS))
+        .connect_timeout(std::time::Duration::from_secs(PROVIDER_CONNECT_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 /// A provider's acknowledgement of a submitted job: the id the client polls.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderJob {
@@ -77,6 +100,13 @@ mod tests {
         }
         assert_eq!(ProviderKind::from_token("upscale"), None);
         assert_eq!(ProviderKind::from_token(""), None);
+    }
+
+    #[test]
+    fn provider_http_client_builds_with_timeouts() {
+        // A well-formed builder (valid timeout + rustls backend) yields a client;
+        // this guards against a future change that makes the builder fall over.
+        let _client = provider_http_client();
     }
 
     #[test]

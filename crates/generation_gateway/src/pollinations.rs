@@ -24,7 +24,9 @@ use serde_json::Value;
 use crate::config::GatewayConfig;
 use crate::jobs::JobStore;
 use crate::protocol::GenerateRequest;
-use crate::provider::{GenerationProvider, ProviderJob, ProviderKind, ProviderStatus};
+use crate::provider::{
+    provider_http_client, GenerationProvider, ProviderJob, ProviderKind, ProviderStatus,
+};
 use crate::results::ResultStore;
 
 /// The name the Pollinations provider registers under.
@@ -142,7 +144,7 @@ impl PollinationsImageProvider {
             store,
             results,
             public_base: public_base.into(),
-            client: reqwest::Client::new(),
+            client: provider_http_client(),
         }
     }
 

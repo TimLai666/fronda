@@ -145,8 +145,7 @@ impl GatewayConfig {
             .unwrap_or_else(|| format!("http://{}", self.bind_addr))
     }
 
-    /// True when the bind address targets loopback. A network bind without a
-    /// token is a security risk (main.rs warns).
+    /// True when the bind address targets loopback.
     pub fn is_loopback(&self) -> bool {
         let host = self
             .bind_addr
@@ -154,6 +153,22 @@ impl GatewayConfig {
             .map(|(h, _)| h)
             .unwrap_or(&self.bind_addr);
         host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
+    }
+
+    /// Reject a network-accessible bind with no token — the gateway proxies the
+    /// operator's paid provider keys and serves generated media, so an
+    /// unauthenticated network bind is a real exposure. Mirrors `mcp_server`'s
+    /// #122 `validate()` posture (hard error, not a warning). Loopback stays
+    /// open for local single-user use.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.is_loopback() && self.auth_token.is_none() {
+            return Err(format!(
+                "gateway bound to '{}' (network-accessible) requires {}. \
+                 Set a token or bind to 127.0.0.1 for local-only access.",
+                self.bind_addr, TOKEN_ENV
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -211,6 +226,30 @@ mod tests {
     fn unknown_default_kind_is_ignored() {
         let config = GatewayConfig::from_vars(vars(&[("FRONDA_GEN_DEFAULT_UPSCALE", "x")]));
         assert!(config.default_providers.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_network_bind_without_token() {
+        // Non-loopback bind + no token → hard error (mirrors mcp_server #122).
+        let config = GatewayConfig::from_vars(vars(&[(ADDR_ENV, "0.0.0.0:9000")]));
+        assert!(config.auth_token.is_none());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_allows_network_bind_with_token() {
+        let config =
+            GatewayConfig::from_vars(vars(&[(ADDR_ENV, "0.0.0.0:9000"), (TOKEN_ENV, "secret")]));
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_allows_loopback_without_token() {
+        // Default bind is loopback; local single-user use needs no token.
+        let config = GatewayConfig::from_vars(vars(&[]));
+        assert!(config.is_loopback());
+        assert!(config.auth_token.is_none());
+        assert!(config.validate().is_ok());
     }
 
     #[test]

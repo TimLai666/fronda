@@ -17,13 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     })?;
 
-    if !config.is_loopback() && config.auth_token.is_none() {
-        eprintln!(
-            "warning: bound to a network address ({addr}) without {}; \
-             requests are unauthenticated",
-            fronda_gen_gateway::config::TOKEN_ENV
-        );
-    }
+    config.validate()?;
 
     let has_gemini = config.provider_key("gemini").is_some();
     let state = app_state(config);
