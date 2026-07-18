@@ -117,3 +117,28 @@ of any kind** — the gap Gemini (paid, BYO Google key) leaves to the user. The
 gated `live_pollinations_returns_real_image_bytes` test also passed against the
 real service (2.37s). Everything remains key-free and offline in CI (stub
 default + mock provider tests); the live paths are env-gated.
+
+
+## Picker UI interactive check — BLOCKED on the locked machine (user-only)
+
+Attempted a live macOS pass of the provider/model picker: wrote the endpoint to
+preferences.json pointing at a running keyless gateway (image providers
+pollinations+stub confirmed via curl), launched Fronda into the editor. The
+display had auto-locked after hours idle; waking it showed the macOS lock screen
+(Touch ID / password). Unlocking needs the user's credential, which the agent
+must not enter — so the *visual* confirmation that the dropdowns render and
+populate could not be completed. It joins the user-only checks (physical
+audio-out, real-Gemini-with-key). The picker is otherwise built, compiles,
+passes structural tests, and its data path (fetch_providers → catalog → request
+provider) is proven by the extended gated live test against the running gateway.
+Test processes and the test endpoint in preferences.json were cleaned up.
+
+## Reference-gateway known limitations (follow-ups, not bugs)
+
+- The in-memory job/result store is unbounded — fine for a local single-user
+  reference gateway; a long-running/multi-user deployment wants eviction (TTL or
+  LRU) and/or on-disk results.
+- Provider `submit` uses `tokio::spawn`, so it must be called from within a
+  tokio runtime (it always is — the axum handler). A caller invoking `submit`
+  outside a runtime would panic; the sync-trait/async-work bridge is deliberate
+  for the axum usage.
