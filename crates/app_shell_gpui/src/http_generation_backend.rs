@@ -164,7 +164,7 @@ pub fn parse_poll_response(status: u16, body: &Value) -> Result<GenerationOutcom
         .ok_or_else(|| format!("generation poll: response missing status: {body}"))?;
     match job_status {
         "succeeded" => {
-            let result_urls = body
+            let result_urls: Vec<String> = body
                 .get("resultUrls")
                 .and_then(Value::as_array)
                 .map(|urls| {
@@ -174,6 +174,15 @@ pub fn parse_poll_response(status: u16, body: &Value) -> Result<GenerationOutcom
                         .collect()
                 })
                 .unwrap_or_default();
+            // A "succeeded" job with no URLs delivered nothing: applying it as
+            // Success flips the asset to ready (generation_status "none") with
+            // no media, leaving a dangling done-but-empty entry. Treat it as a
+            // failure so the asset stays honest and retryable.
+            if result_urls.is_empty() {
+                return Ok(GenerationOutcome::Failure {
+                    reason: "generation reported success but returned no result URLs".to_string(),
+                });
+            }
             Ok(GenerationOutcome::Success { result_urls })
         }
         "failed" => {
@@ -407,14 +416,20 @@ mod tests {
     }
 
     #[test]
-    fn poll_succeeded_without_urls_is_empty_success() {
-        let body = serde_json::json!({ "status": "succeeded" });
-        assert_eq!(
-            parse_poll_response(200, &body).unwrap(),
-            GenerationOutcome::Success {
-                result_urls: vec![]
+    fn poll_succeeded_without_urls_is_a_failure_not_empty_success() {
+        // A success carrying no URLs would flip the asset to ready-with-no-media
+        // (a dangling done-but-empty entry); it must map to Failure instead.
+        for body in [
+            serde_json::json!({ "status": "succeeded" }),
+            serde_json::json!({ "status": "succeeded", "resultUrls": [] }),
+        ] {
+            match parse_poll_response(200, &body).unwrap() {
+                GenerationOutcome::Failure { reason } => {
+                    assert!(reason.contains("no result URLs"), "{reason}");
+                }
+                other => panic!("expected Failure, got {other:?}"),
             }
-        );
+        }
     }
 
     #[test]
