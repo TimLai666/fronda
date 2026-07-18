@@ -312,7 +312,10 @@ impl ExportQueue {
                 job.status = ExportJobStatus::Canceling;
                 true
             }
-            ExportJobStatus::Canceling => true,
+            // Already canceling — but a commit may have raced in past the cancel
+            // (mark_committed is legal while Canceling). A committed job is going
+            // to complete, so it refuses cancel here too, per the contract.
+            ExportJobStatus::Canceling => !job.committed,
             _ => false,
         }
     }
@@ -513,6 +516,26 @@ mod tests {
         q.mark_exporting(sub.job_id).unwrap();
         assert_eq!(status(&q, sub.job_id), ExportJobStatus::Canceling);
 
+        q.mark_completed(sub.job_id).unwrap();
+        assert_eq!(status(&q, sub.job_id), ExportJobStatus::Completed);
+    }
+
+    // A commit that races in AFTER the cancel (legal while Canceling) makes the
+    // job committed; a second cancel must then refuse (contract: committed →
+    // false), and the job still completes.
+    #[test]
+    fn cancel_refuses_once_a_commit_races_in_while_canceling() {
+        let mut q = ExportQueue::new();
+        let sub = enqueue(&mut q, "commit-then-cancel.mp4");
+        q.mark_preparing(sub.job_id).unwrap();
+        q.mark_exporting(sub.job_id).unwrap();
+        assert!(q.cancel(sub.job_id));
+        assert_eq!(status(&q, sub.job_id), ExportJobStatus::Canceling);
+        q.mark_committed(sub.job_id).unwrap();
+        assert!(
+            !q.cancel(sub.job_id),
+            "a committed (racing) job refuses a second cancel even while canceling"
+        );
         q.mark_completed(sub.job_id).unwrap();
         assert_eq!(status(&q, sub.job_id), ExportJobStatus::Completed);
     }
