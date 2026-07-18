@@ -437,4 +437,45 @@ mod tests {
         let cfg = GenerationBackendConfig::new("https://gen.example", "tok");
         assert!(HttpGenerationBackend::new(cfg).is_ok());
     }
+
+    /// Live round-trip against a running Protocol v1.1 endpoint (e.g. the
+    /// `fronda-gen-gateway` stub). Gated on FRONDA_GENERATION_URL/_TOKEN so CI
+    /// skips it; the same trade-off as anthropic_transport / the whisper test.
+    /// Submits and polls until terminal, asserting a Success with a URL — this
+    /// is the only test that exercises the real reqwest→server round-trip.
+    #[test]
+    fn live_round_trip_submits_and_polls_to_success() {
+        let (Some(url), Some(token)) = (
+            std::env::var("FRONDA_GENERATION_URL").ok(),
+            std::env::var("FRONDA_GENERATION_TOKEN").ok(),
+        ) else {
+            eprintln!("skipping: FRONDA_GENERATION_URL/_TOKEN not set");
+            return;
+        };
+        let backend =
+            HttpGenerationBackend::new(GenerationBackendConfig::new(url, token)).unwrap();
+        let req = GenerationRequest {
+            kind: ModelKind::Video,
+            model: "stub-video".to_string(),
+            prompt: "a cat surfing".to_string(),
+            duration_seconds: Some(5.0),
+            source_url: None,
+            target_language: None,
+            params: Value::Null,
+        };
+        let submission = backend.submit(&req).expect("submit succeeds");
+        assert!(!submission.backend_job_id.is_empty());
+        // Poll until terminal (the stub reports running, then succeeded).
+        for _ in 0..10 {
+            match backend.resume_job(&submission.backend_job_id) {
+                Ok(GenerationOutcome::Success { result_urls }) => {
+                    assert!(!result_urls.is_empty(), "success carries a URL");
+                    return;
+                }
+                Ok(GenerationOutcome::Failure { reason }) => panic!("generation failed: {reason}"),
+                Err(_) => continue, // still queued/running
+            }
+        }
+        panic!("job did not reach a terminal state after 10 polls");
+    }
 }

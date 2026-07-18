@@ -1,4 +1,4 @@
-# Fronda Generation Protocol v1
+# Fronda Generation Protocol v1 (v1.1)
 
 Status: adapter shipped (change `generation-backend-d6`). This is a
 Fronda-defined protocol for a **bring-your-own generation endpoint**, not a
@@ -88,7 +88,8 @@ Status → outcome mapping (pure `parse_poll_response(status, &body)`):
 
 | `status` | Result | Effect on the manifest entry |
 |----------|--------|------------------------------|
-| `succeeded` | `GenerationOutcome::Success { result_urls }` (empty vec if `resultUrls` absent) | status → `"none"`, `result_urls` stored |
+| `succeeded` (with ≥1 `resultUrls`) | `GenerationOutcome::Success { result_urls }` | status → `"none"`, `result_urls` stored |
+| `succeeded` (no/empty `resultUrls`) | `GenerationOutcome::Failure` — a success delivering nothing would flip the asset to ready-with-no-media (a dangling done-but-empty entry), so it is treated as a failure | status → `"failed"` |
 | `failed` | `GenerationOutcome::Failure { reason }` (`error` string, default `"generation failed"`) | status → `"failed"` |
 | `queued` / `running` / other | `Err("still <status>")` | entry stays `"generating"`; retried next recovery pass |
 | non-2xx / missing `status` / unreachable | `Err(...)` | entry untouched; retried next recovery pass |
@@ -138,6 +139,53 @@ A minimal compatible service needs to:
 The protocol is deliberately small; model-specific inputs ride in the opaque
 `params` object so a service can support any catalog model without a schema
 change here.
+
+## v1.1 additions — multi-provider (backward compatible)
+
+A gateway may front **multiple providers per kind** (e.g. several
+image-generation vendors), each bring-your-own-key. v1.1 adds provider
+selection and discovery; a v1 client that sends neither is fully compatible —
+the gateway routes to the kind's default provider.
+
+### Provider selection on submit
+
+`POST /v1/generate` accepts an optional `provider` string:
+
+```json
+{ "kind": "image", "provider": "gemini", "model": "imagen-4", "prompt": "…" }
+```
+
+- Absent → the gateway routes to the configured default provider for that
+  `kind`.
+- A named provider the gateway does not have (for that kind) → an explicit
+  error (4xx), not a silent fallback.
+- `model` still selects the specific model **within** the chosen provider.
+
+### `GET {base}/v1/providers`
+
+Bearer-authed discovery so the client can populate a provider/model picker:
+
+```json
+{
+  "video": [{ "name": "stub", "models": ["stub-video"] }],
+  "image": [{ "name": "stub", "models": ["stub-image"] }],
+  "audio": [{ "name": "stub", "models": ["stub-audio"] }]
+}
+```
+
+Each kind lists its registered providers (default first) and each provider's
+available model ids.
+
+## Reference gateway (`crates/generation_gateway`)
+
+`fronda-gen-gateway` is the in-repo reference implementation (axum + tokio):
+a `GenerationProvider` trait + registry routes `(kind, provider)` to a
+provider, each reading its own key from config (bring-your-own-key). Phase 1
+ships **stub providers** so the full submit→poll→succeeded loop runs with no
+external keys — this is what lets the Fronda `HttpGenerationBackend` be
+exercised end to end against a real endpoint. Real providers (Gemini, fal,
+Replicate, ElevenLabs, …) are added as further trait implementations without
+protocol changes.
 
 ## Testing
 

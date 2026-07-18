@@ -1,0 +1,24 @@
+[package]
+name = "fronda-gen-gateway"
+version = "0.6.5"
+edition = "2021"
+publish = false
+
+[lib]
+name = "fronda_gen_gateway"
+
+[[bin]]
+name = "fronda-gen-gateway"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[lints]
+workspace = true

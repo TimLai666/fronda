@@ -63,3 +63,47 @@ code:
   - crates/app_shell_gpui/src/http_generation_backend.rs
   - crates/generation_core/src/lib.rs
 -->
+
+---
+### Requirement: Self-hosted generation gateway with pluggable providers
+
+A gateway service SHALL implement Fronda Generation Protocol v1.1 (submit, poll, and a providers catalog) and route each request to a provider selected by kind and optional provider name, defaulting per kind when unspecified. Providers SHALL be registered behind a common trait so multiple providers per kind coexist, each with its own bring-your-own-key configuration. Phase 1 SHALL ship stub providers so the full submit→poll→succeeded loop runs with no external keys.
+
+#### Scenario: Stub loop completes end to end
+
+- **WHEN** a client submits a generate request to the gateway and polls the returned job id
+- **THEN** the poll transitions running → succeeded and returns a result URL, with no external provider key required
+
+#### Scenario: Provider selection and defaulting
+
+- **WHEN** a request omits the provider field
+- **THEN** the gateway routes to the kind's default provider; an unknown named provider yields an explicit error
+
+#### Scenario: Auth is enforced
+
+- **WHEN** a request omits or mismatches the bearer token
+- **THEN** the gateway responds 401 and does not run the job
+
+<!-- @trace
+source: generation-gateway-stub
+updated: 2026-07-18
+code:
+  - crates/app_shell_gpui/src/http_generation_backend.rs
+  - crates/generation_gateway/Cargo.toml
+  - crates/generation_gateway/src/stub.rs
+  - specs/rust-rewrite/99-decisions-2026-07-17.md
+  - specs/rust-rewrite/VERIFY-2026-07-18-generation-gateway.md
+  - crates/generation_gateway/src/jobs.rs
+  - crates/generation_gateway/src/server.rs
+  - crates/generation_gateway/src/main.rs
+  - Cargo.toml
+  - crates/generation_gateway/src/registry.rs
+  - crates/generation_gateway/src/protocol.rs
+  - crates/generation_gateway/src/lib.rs
+  - AGENTS.md
+  - crates/generation_gateway/src/provider.rs
+  - crates/generation_gateway/src/config.rs
+  - specs/rust-rewrite/98-generation-protocol.md
+tests:
+  - crates/generation_gateway/tests/gateway_http.rs
+-->
