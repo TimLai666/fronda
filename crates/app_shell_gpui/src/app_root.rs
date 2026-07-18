@@ -1097,7 +1097,7 @@ impl AppRoot {
                 })
                 .detach();
             }
-            menu::MenuAction::Export => {}
+            menu::MenuAction::Export => open_export_window(cx),
             menu::MenuAction::Undo => {
                 crate::timeline_view::TimelineView::run_history_tool("undo");
                 cx.notify();
@@ -2307,6 +2307,22 @@ fn open_settings_window(cx: &mut gpui::App) {
             ..Default::default()
         },
         |_, cx| cx.new(|cx| crate::settings_view::SettingsView::new(backend_configured, cx)),
+    );
+}
+
+/// Open the Export dialog (File → Export…, ⌘E). A separate window mirroring
+/// `open_settings_window`; `ExportView` reads the open project from the global
+/// `EditorStateHub` and drives the real render/queue itself.
+fn open_export_window(cx: &mut gpui::App) {
+    let cfg = crate::window::WindowConfig::for_export();
+    let size = size(px(cfg.default_width as f32), px(cfg.default_height as f32));
+    let bounds = Bounds::centered(None, size, cx);
+    let _ = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        |_, cx| cx.new(crate::export_view::ExportView::new),
     );
 }
 

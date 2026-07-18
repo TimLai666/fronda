@@ -6,6 +6,7 @@ pub enum WindowKind {
     Settings,
     Help,
     Feedback,
+    Export,
 }
 
 /// Window configuration.
@@ -83,6 +84,12 @@ impl WindowConfig {
             420.0,
         )
     }
+
+    /// Export dialog. Mirrors Swift `AppTheme.Export.sheetWidthWithLog`
+    /// (600 options + 420 queue/log pane) × `sheetHeight` 600.
+    pub fn for_export() -> Self {
+        Self::new(WindowKind::Export, "Export", 1020.0, 600.0, 760.0, 520.0)
+    }
 }
 
 #[cfg(test)]
@@ -127,5 +134,16 @@ mod tests {
         assert_eq!(cfg.default_height, 480.0);
         assert_eq!(cfg.min_width, 480.0);
         assert_eq!(cfg.min_height, 420.0);
+    }
+
+    #[test]
+    fn export_window_size() {
+        let cfg = WindowConfig::for_export();
+        assert_eq!(cfg.kind, WindowKind::Export);
+        // 600 options + 420 queue/log pane, mirroring Swift sheetWidthWithLog.
+        assert_eq!(cfg.default_width, 1020.0);
+        assert_eq!(cfg.default_height, 600.0);
+        assert_eq!(cfg.min_width, 760.0);
+        assert_eq!(cfg.min_height, 520.0);
     }
 }
