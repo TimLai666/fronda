@@ -2115,6 +2115,7 @@ version = "0.6.5"
 dependencies = [
  "axum",
  "base64",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",

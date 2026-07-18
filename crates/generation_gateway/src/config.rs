@@ -9,6 +9,7 @@
 //!   FRONDA_GEN_GEMINI_MODEL         — Gemini model id override
 //!   FRONDA_GEN_GEMINI_BASE          — Gemini API base URL override
 //!   FRONDA_GEN_GEMINI_API_VERSION   — Gemini API version override
+//!   FRONDA_GEN_POLLINATIONS_BASE    — Pollinations image API base URL override
 //!
 //! Stub mode needs no key, so a bare environment still yields a runnable config.
 
@@ -24,6 +25,7 @@ pub const DEFAULT_PREFIX: &str = "FRONDA_GEN_DEFAULT_";
 pub const GEMINI_MODEL_ENV: &str = "FRONDA_GEN_GEMINI_MODEL";
 pub const GEMINI_BASE_ENV: &str = "FRONDA_GEN_GEMINI_BASE";
 pub const GEMINI_API_VERSION_ENV: &str = "FRONDA_GEN_GEMINI_API_VERSION";
+pub const POLLINATIONS_BASE_ENV: &str = "FRONDA_GEN_POLLINATIONS_BASE";
 pub const DEFAULT_ADDR: &str = "127.0.0.1:8787";
 
 #[derive(Debug, Clone)]
@@ -42,6 +44,8 @@ pub struct GatewayConfig {
     pub gemini_model: Option<String>,
     pub gemini_base: Option<String>,
     pub gemini_api_version: Option<String>,
+    /// Pollinations image API base URL override; `None` → default public base.
+    pub pollinations_base: Option<String>,
 }
 
 impl Default for GatewayConfig {
@@ -55,6 +59,7 @@ impl Default for GatewayConfig {
             gemini_model: None,
             gemini_base: None,
             gemini_api_version: None,
+            pollinations_base: None,
         }
     }
 }
@@ -99,6 +104,11 @@ impl GatewayConfig {
                 let trimmed = value.trim();
                 if !trimmed.is_empty() {
                     config.gemini_api_version = Some(trimmed.to_string());
+                }
+            } else if key == POLLINATIONS_BASE_ENV {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    config.pollinations_base = Some(trimmed.to_string());
                 }
             } else if let Some(provider) = key.strip_prefix(KEY_PREFIX) {
                 if !provider.is_empty() {
@@ -228,5 +238,23 @@ mod tests {
         assert_eq!(config.gemini_model.as_deref(), Some("gemini-3-image"));
         assert_eq!(config.gemini_base.as_deref(), Some("http://127.0.0.1:1234"));
         assert_eq!(config.gemini_api_version.as_deref(), Some("v1"));
+    }
+
+    #[test]
+    fn parses_pollinations_base_override() {
+        let config = GatewayConfig::from_vars(vars(&[(
+            POLLINATIONS_BASE_ENV,
+            "http://127.0.0.1:4321",
+        )]));
+        assert_eq!(
+            config.pollinations_base.as_deref(),
+            Some("http://127.0.0.1:4321")
+        );
+    }
+
+    #[test]
+    fn blank_pollinations_base_stays_none() {
+        let config = GatewayConfig::from_vars(vars(&[(POLLINATIONS_BASE_ENV, "   ")]));
+        assert!(config.pollinations_base.is_none());
     }
 }

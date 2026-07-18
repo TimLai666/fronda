@@ -150,8 +150,9 @@ async fn unknown_result_id_is_404() {
 }
 
 #[tokio::test]
-async fn without_key_image_catalog_is_stub_only_and_gemini_is_rejected() {
-    // No gemini key configured → gateway still starts, gemini not registered.
+async fn without_key_image_catalog_omits_gemini_and_rejects_it() {
+    // No gemini key configured → gateway still starts, gemini not registered. The
+    // keyless pollinations provider is always present alongside the stub.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let router = build_router(app_state(GatewayConfig {
@@ -173,8 +174,10 @@ async fn without_key_image_catalog_is_stub_only_and_gemini_is_rejected() {
         .await
         .unwrap();
     let image = catalog["image"].as_array().unwrap();
-    assert_eq!(image.len(), 1);
-    assert_eq!(image[0]["name"], "stub");
+    let names: Vec<&str> = image.iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"stub"), "names were: {names:?}");
+    assert!(names.contains(&"pollinations"), "names were: {names:?}");
+    assert!(!names.contains(&"gemini"), "names were: {names:?}");
 
     // Explicitly asking for gemini is an explicit 400, never a silent fallback.
     let resp = client

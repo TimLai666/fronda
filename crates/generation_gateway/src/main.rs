@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = app_state(config);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     println!(
-        "fronda-gen-gateway (Protocol v1.1, stub{}) listening on http://{}",
+        "fronda-gen-gateway (Protocol v1.1, stub + pollinations image{}) listening on http://{}",
         if has_gemini { " + gemini image" } else { "" },
         listener.local_addr()?
     );

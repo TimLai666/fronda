@@ -146,3 +146,37 @@ code:
 tests:
   - crates/generation_gateway/tests/gemini_pipeline.rs
 -->
+
+---
+### Requirement: No-key image provider (Pollinations)
+
+The gateway SHALL register a keyless Pollinations image provider that fetches a generated image from `{base}/prompt/{url-encoded prompt}` (base configurable) and stores the returned bytes in the result store, so real AI media flows end to end with no credential. It coexists with the stub and the (key-gated) Gemini provider; the image default remains the stub.
+
+#### Scenario: Keyless real-media round-trip (mock)
+
+- **WHEN** a client submits with provider "pollinations" against a mock returning JPEG bytes and polls to success
+- **THEN** the resultUrl serves those exact bytes with the returned content-type, with no API key anywhere
+
+#### Scenario: Always registered
+
+- **WHEN** the gateway starts with no keys configured
+- **THEN** the image catalog lists both stub and pollinations
+
+<!-- @trace
+source: pollinations-image-provider
+updated: 2026-07-18
+code:
+  - crates/generation_gateway/src/main.rs
+  - crates/generation_gateway/src/server.rs
+  - crates/generation_gateway/Cargo.toml
+  - specs/rust-rewrite/98-generation-protocol.md
+  - AGENTS.md
+  - specs/rust-rewrite/VERIFY-2026-07-18-generation-gateway.md
+  - crates/generation_gateway/src/config.rs
+  - crates/generation_gateway/src/lib.rs
+  - specs/rust-rewrite/99-decisions-2026-07-17.md
+  - crates/generation_gateway/src/pollinations.rs
+tests:
+  - crates/generation_gateway/tests/pollinations_pipeline.rs
+  - crates/generation_gateway/tests/gemini_pipeline.rs
+-->

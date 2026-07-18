@@ -18,6 +18,7 @@ use axum::{
 use crate::config::GatewayConfig;
 use crate::gemini::GeminiImageProvider;
 use crate::jobs::JobStore;
+use crate::pollinations::PollinationsImageProvider;
 use crate::protocol::{ErrorResponse, GenerateRequest, JobStatusResponse, SubmitResponse};
 use crate::provider::ProviderKind;
 use crate::registry::ProviderRegistry;
@@ -62,14 +63,24 @@ pub fn stub_app_state(config: GatewayConfig) -> AppState {
     }
 }
 
-/// Assemble full app state: stub providers for every kind, plus any real
-/// providers whose key is configured (Gemini image when a Gemini key is set),
-/// then per-kind default overrides. This is what the binary serves.
+/// Assemble full app state: stub providers for every kind, the keyless
+/// Pollinations image provider (always registered), plus any real providers whose
+/// key is configured (Gemini image when a Gemini key is set), then per-kind
+/// default overrides. The image default stays the stub. This is what the binary
+/// serves.
 pub fn app_state(config: GatewayConfig) -> AppState {
     let store = Arc::new(JobStore::new());
     let results = Arc::new(ResultStore::new());
     let public_base = config.public_base();
     let mut registry = build_stub_registry(&store);
+
+    // Keyless — always available, so the real-media loop runs with no credential.
+    registry.register(Arc::new(PollinationsImageProvider::from_config(
+        &config,
+        store.clone(),
+        results.clone(),
+        &public_base,
+    )));
 
     if let Some(gemini) =
         GeminiImageProvider::from_config(&config, store.clone(), results.clone(), &public_base)
@@ -246,16 +257,28 @@ mod tests {
     }
 
     #[test]
-    fn app_state_without_key_registers_only_stub_for_image() {
+    fn app_state_without_key_registers_stub_and_pollinations_for_image() {
         let state = app_state(GatewayConfig::default());
-        let image = state.registry.catalog().image;
-        assert_eq!(image.len(), 1);
-        assert_eq!(image[0].name, "stub");
+        let names: Vec<_> = state
+            .registry
+            .catalog()
+            .image
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        // Pollinations needs no key, so it is present even with a bare config; the
+        // key-gated gemini provider is not.
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"stub".to_string()));
+        assert!(names.contains(&"pollinations".to_string()));
+        // Image default stays the stub; pollinations is opt-in.
+        assert_eq!(state.registry.route(ProviderKind::Image, None).unwrap().name(), "stub");
+        assert!(state.registry.route(ProviderKind::Image, Some("pollinations")).is_ok());
         assert!(state.registry.route(ProviderKind::Image, Some("gemini")).is_err());
     }
 
     #[test]
-    fn app_state_with_key_registers_gemini_alongside_stub() {
+    fn app_state_with_key_registers_gemini_alongside_stub_and_pollinations() {
         let mut config = GatewayConfig::default();
         config.provider_keys.insert("gemini".into(), "k".into());
         let state = app_state(config);
@@ -267,6 +290,7 @@ mod tests {
             .map(|e| e.name)
             .collect();
         assert!(names.contains(&"stub".to_string()));
+        assert!(names.contains(&"pollinations".to_string()));
         assert!(names.contains(&"gemini".to_string()));
         // Default for image stays the stub (registered first); gemini is opt-in.
         assert_eq!(state.registry.route(ProviderKind::Image, None).unwrap().name(), "stub");

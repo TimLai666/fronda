@@ -206,9 +206,13 @@ a `GenerationProvider` trait + registry routes `(kind, provider)` to a
 provider, each reading its own key from config (bring-your-own-key). Phase 1
 ships **stub providers** so the full submit→poll→succeeded loop runs with no
 external keys — this is what lets the Fronda `HttpGenerationBackend` be
-exercised end to end against a real endpoint. Real providers (Gemini, fal,
-Replicate, ElevenLabs, …) are added as further trait implementations without
-protocol changes.
+exercised end to end against a real endpoint. Real providers are added as further trait implementations without protocol
+changes. Shipped: **Pollinations** (keyless — `GET {base}/prompt/{prompt}`,
+always registered, real AI images with no credential) and **Gemini** image
+(generateContent, registered only when a Google API key is configured). The
+image default stays the offline stub; real providers are opt-in via the
+request's `provider` field. More (fal, Replicate, ElevenLabs, Gemini video/
+audio) follow the same pattern.
 
 ## Testing
 

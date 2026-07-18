@@ -8,6 +8,7 @@
 pub mod config;
 pub mod gemini;
 pub mod jobs;
+pub mod pollinations;
 pub mod protocol;
 pub mod provider;
 pub mod registry;
@@ -17,6 +18,7 @@ pub mod stub;
 
 pub use config::GatewayConfig;
 pub use gemini::{GeminiConfig, GeminiImageProvider};
+pub use pollinations::{PollinationsConfig, PollinationsImageProvider};
 pub use protocol::{
     ErrorResponse, GenerateRequest, JobStatusResponse, ProviderCatalogEntry, ProvidersCatalog,
     SubmitResponse,

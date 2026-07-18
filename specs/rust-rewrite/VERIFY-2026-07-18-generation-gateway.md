@@ -95,3 +95,25 @@ cleanly without the env vars (CI-safe).
 fetches the catalog on open and shows provider/model dropdowns. gpui interaction
 (live fetch, dropdown selection) is verified by compile + structural tests per
 repo convention; a manual pass belongs to a future D9-style interactive check.
+
+## Real AI media end-to-end (key-free) — PASS, verified by maintainer
+
+Change `pollinations-image-provider`: a second image provider using Pollinations
+(`GET {base}/prompt/{prompt}` → real AI JPEG, NO auth), always registered
+alongside stub and (key-gated) Gemini. Image default stays stub; Pollinations is
+opt-in (`provider:"pollinations"`).
+
+Full HTTP-surface run against a live gateway (2026-07-18):
+- `GET /v1/providers` → image lists `pollinations` + `stub`.
+- `POST /v1/generate {"kind":"image","provider":"pollinations","prompt":"a red
+  cube on a white background, studio lighting"}` → `{jobId, queued}`.
+- Poll running→succeeded (~18s real Pollinations call).
+- Result URL is a capability UUID; fetched WITHOUT a bearer token → a genuine
+  **768×768 JPEG, 25,193 bytes** (EXIF manufacturer=sana). The image is a real
+  red cube matching the prompt.
+
+This is the "real AI media flows end to end" proof, achieved with **no credential
+of any kind** — the gap Gemini (paid, BYO Google key) leaves to the user. The
+gated `live_pollinations_returns_real_image_bytes` test also passed against the
+real service (2.37s). Everything remains key-free and offline in CI (stub
+default + mock provider tests); the live paths are env-gated.
