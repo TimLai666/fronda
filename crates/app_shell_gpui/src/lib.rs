@@ -44,6 +44,7 @@ pub mod help_view;
 pub mod home_model;
 #[cfg(feature = "desktop-app")]
 pub mod home_view;
+pub mod http_generation_backend;
 pub mod inspector_model;
 #[cfg(feature = "desktop-app")]
 pub mod inspector_view;

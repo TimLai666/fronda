@@ -610,6 +610,39 @@ pub fn apply_generation_outcome(
     Ok(())
 }
 
+// ── Generation submit seam (D6) ─────────────────────────────────
+
+/// A generation job handed to the backend's `submit` seam (decision D6).
+/// `kind` selects the media modality; the typed fields carry the essentials
+/// and `params` carries the opaque model-specific payload (voice, aspect
+/// ratio, references, …). Serializes camelCase so a BYO HTTP backend can read
+/// `durationSeconds`/`sourceUrl`/`targetLanguage` directly; absent optionals
+/// are omitted from the wire.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationRequest {
+    pub kind: ModelKind,
+    pub model: String,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_language: Option<String>,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub params: serde_json::Value,
+}
+
+/// The backend's acknowledgement of a submitted generation: the job id to
+/// persist on the in-flight media entry so the existing recovery/poll path
+/// (#216) can resume it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationSubmission {
+    pub backend_job_id: String,
+}
+
 // ── Export progress state machine (EXP-008~010) ─────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -976,7 +1009,8 @@ impl ModelCatalog {
 // ── New Model Catalog types (CAT-001~CAT-012) ────────────────────
 
 /// Catalog entry kind.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ModelKind {
     Video,
     Image,
@@ -1234,6 +1268,61 @@ pub fn clamp_image_count(count: i64, max_images: Option<i64>) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Generation submit seam (D6) ──
+
+    #[test]
+    fn generation_request_round_trips_camel_case() {
+        let req = GenerationRequest {
+            kind: ModelKind::Audio,
+            model: "elevenlabs-dubbing".into(),
+            prompt: "hello".into(),
+            duration_seconds: Some(12.5),
+            source_url: Some("https://cdn/in.mp4".into()),
+            target_language: Some("es".into()),
+            params: serde_json::json!({"voice": "aria"}),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["kind"], "audio");
+        assert_eq!(json["durationSeconds"], 12.5);
+        assert_eq!(json["sourceUrl"], "https://cdn/in.mp4");
+        assert_eq!(json["targetLanguage"], "es");
+        assert_eq!(json["params"]["voice"], "aria");
+        let back: GenerationRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn generation_request_omits_absent_optionals() {
+        let req = GenerationRequest {
+            kind: ModelKind::Image,
+            model: "nano-banana-2".into(),
+            prompt: "a fox".into(),
+            duration_seconds: None,
+            source_url: None,
+            target_language: None,
+            params: serde_json::Value::Null,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["kind"], "image");
+        assert!(json.get("durationSeconds").is_none());
+        assert!(json.get("sourceUrl").is_none());
+        assert!(json.get("targetLanguage").is_none());
+        assert!(json.get("params").is_none());
+        let back: GenerationRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn generation_submission_round_trips() {
+        let sub = GenerationSubmission {
+            backend_job_id: "job-123".into(),
+        };
+        let json = serde_json::to_value(&sub).unwrap();
+        assert_eq!(json["backendJobId"], "job-123");
+        let back: GenerationSubmission = serde_json::from_value(json).unwrap();
+        assert_eq!(back, sub);
+    }
 
     // ── Account (ACC-001~004) ──
 

@@ -9,8 +9,8 @@ use crate::read_tools::{
 };
 use crate::undo::{UndoCommand, UndoStack};
 use core_model::{
-    AnimPair, Clip, ClipType, Crop, Effect, Interpolation, Keyframe, KeyframeTrack, LayoutFit,
-    MatteAspect, MediaManifest, MediaManifestEntry, MediaSource, MulticamMemberKind,
+    AnimPair, Clip, ClipType, Crop, Effect, GenerationInput, Interpolation, Keyframe, KeyframeTrack,
+    LayoutFit, MatteAspect, MediaManifest, MediaManifestEntry, MediaSource, MulticamMemberKind,
     MulticamSource, MulticamSyncMap, TextRgba, TextStyle, Timeline, Transform, VideoLayout,
 };
 use generation_core::model_catalog;
@@ -290,6 +290,14 @@ pub trait FeedbackSender: Send + Sync {
 /// the backend could not be reached; the manifest stays untouched so a later
 /// recovery pass can retry. Unset on the pure/MCP path.
 pub trait GenerationBackend: Send + Sync {
+    /// Submit a generation job (decision D6). On success the backend returns the
+    /// job id to persist on the in-flight media entry; `Err` means the request
+    /// could not be placed and no entry should be registered.
+    fn submit(
+        &self,
+        req: &generation_core::GenerationRequest,
+    ) -> Result<generation_core::GenerationSubmission, String>;
+
     fn resume_job(&self, job_id: &str) -> Result<generation_core::GenerationOutcome, String>;
 }
 
@@ -1365,7 +1373,7 @@ impl ToolExecutor {
             "get_transcript" => self.cmd_get_transcript(args),
             "read_skill" => self.cmd_read_skill(args),
 
-            // ── Generation tools (stub — need remote API) ────────────────
+            // ── Generation tools (submit via backend seam; honest error when unwired) ──
             "generate_video" => self.cmd_generate_video(args),
             "generate_image" => self.cmd_generate_image(args),
             "generate_audio" => self.cmd_generate_audio(args),
@@ -8515,7 +8523,90 @@ impl ToolExecutor {
         }))
     }
 
-    // ── Generation tools (stub — need remote API) ──────────────────────────
+    // ── Generation tools ───────────────────────────────────────────────────
+
+    /// D6: submit an assembled generation job through the installed backend and
+    /// register an in-flight ("generating") media entry carrying the returned
+    /// job id, so the existing recovery/poll path (#216) can finish it. The
+    /// entry has no local file yet (empty external source, "pending" convention
+    /// mirroring the recovery fixture). Returns `None` when no backend is
+    /// installed — the caller then emits its existing honest "unavailable"
+    /// error unchanged.
+    #[allow(clippy::too_many_arguments)]
+    fn submit_generation(
+        &mut self,
+        kind: generation_core::ModelKind,
+        name: &str,
+        prompt: &str,
+        model: &str,
+        duration_seconds: Option<f64>,
+        source_url: Option<String>,
+        target_language: Option<String>,
+        params: Value,
+    ) -> Option<Result<Value, String>> {
+        let backend = self.generation_backend.clone()?;
+        let req = generation_core::GenerationRequest {
+            kind: kind.clone(),
+            model: model.to_string(),
+            prompt: prompt.to_string(),
+            duration_seconds,
+            source_url,
+            target_language,
+            params,
+        };
+        let submission = match backend.submit(&req) {
+            Ok(s) => s,
+            Err(e) => return Some(Err(format!("Generation submit failed: {e}"))),
+        };
+        let clip_type = match kind {
+            generation_core::ModelKind::Image => ClipType::Image,
+            generation_core::ModelKind::Audio => ClipType::Audio,
+            // Video (and the never-submitted-here Upscale) land on video.
+            _ => ClipType::Video,
+        };
+        let asset_id = Uuid::new_v4().to_string();
+        let entry = MediaManifestEntry {
+            id: asset_id.clone(),
+            name: name.to_string(),
+            r#type: clip_type,
+            source: MediaSource::External {
+                absolute_path: String::new(),
+            },
+            duration: duration_seconds.unwrap_or(0.0),
+            generation_input: Some(GenerationInput {
+                prompt: prompt.to_string(),
+                model: model.to_string(),
+                duration: duration_seconds.map(|d| d.round() as i64).unwrap_or(0),
+                backend_job_id: Some(submission.backend_job_id.clone()),
+                ..Default::default()
+            }),
+            source_width: None,
+            source_height: None,
+            source_fps: None,
+            has_audio: None,
+            folder_id: None,
+            cached_remote_url: None,
+            cached_remote_url_expires_at: None,
+            source_timecode_frame: None,
+            source_timecode_quanta: None,
+            source_timecode_drop_frame: None,
+            ai_tags: None,
+            ai_description: None,
+            ai_label_status: None,
+            generation_status: Some("generating".to_string()),
+        };
+        self.media_manifest.entries.push(entry);
+        Some(Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": format!(
+                    "Generation started (job {}); it will appear when ready.",
+                    submission.backend_job_id
+                )
+            }],
+            "mediaRef": asset_id,
+        })))
+    }
 
     fn cmd_generate_video(&mut self, args: &Value) -> Result<Value, String> {
         let prompt = args
@@ -8529,6 +8620,19 @@ impl ToolExecutor {
                 args.get("model").and_then(|v| v.as_str()),
             )?
             .id;
+
+        if let Some(res) = self.submit_generation(
+            generation_core::ModelKind::Video,
+            prompt,
+            prompt,
+            model,
+            Some(duration),
+            None,
+            None,
+            args.clone(),
+        ) {
+            return res;
+        }
 
         Ok(json!({
             "content": [{
@@ -8553,6 +8657,19 @@ impl ToolExecutor {
                 args.get("model").and_then(|v| v.as_str()),
             )?
             .id;
+
+        if let Some(res) = self.submit_generation(
+            generation_core::ModelKind::Image,
+            prompt,
+            prompt,
+            model,
+            None,
+            None,
+            None,
+            args.clone(),
+        ) {
+            return res;
+        }
 
         Ok(json!({
             "content": [{
@@ -8734,6 +8851,24 @@ impl ToolExecutor {
         };
         if let Some(err) = model_catalog::audio_validate_params(model.display_name, caps, &params) {
             return Err(err);
+        }
+
+        let name = if prompt.is_empty() {
+            "Generated audio"
+        } else {
+            prompt
+        };
+        if let Some(res) = self.submit_generation(
+            generation_core::ModelKind::Audio,
+            name,
+            prompt,
+            model.id,
+            duration_seconds.map(|d| d as f64),
+            None,
+            params.target_language.clone(),
+            args.clone(),
+        ) {
+            return res;
         }
 
         let is_music = caps.category == model_catalog::AudioCategory::Music;
@@ -11224,8 +11359,20 @@ mod tests {
         ToolExecutor::new(Timeline::default(), manifest)
     }
 
-    struct MockGenerationBackend;
+    #[derive(Default)]
+    struct MockGenerationBackend {
+        submitted: std::sync::Mutex<Vec<generation_core::GenerationRequest>>,
+    }
     impl GenerationBackend for MockGenerationBackend {
+        fn submit(
+            &self,
+            req: &generation_core::GenerationRequest,
+        ) -> Result<generation_core::GenerationSubmission, String> {
+            self.submitted.lock().unwrap().push(req.clone());
+            Ok(generation_core::GenerationSubmission {
+                backend_job_id: "job-ok".into(),
+            })
+        }
         fn resume_job(&self, job_id: &str) -> Result<generation_core::GenerationOutcome, String> {
             match job_id {
                 "job-ok" => Ok(generation_core::GenerationOutcome::Success {
@@ -11243,7 +11390,7 @@ mod tests {
     fn generation_recovery_full_chain_applies_outcomes() {
         let mut exec = make_recovery_executor();
         let rev0 = exec.revision();
-        exec.set_generation_backend(std::sync::Arc::new(MockGenerationBackend));
+        exec.set_generation_backend(std::sync::Arc::new(MockGenerationBackend::default()));
 
         let records = exec.recover_generations();
         assert_eq!(records.len(), 3);
@@ -11292,6 +11439,144 @@ mod tests {
             .iter()
             .all(|e| e.generation_status.as_deref() == Some("generating")));
         assert_eq!(exec.revision(), rev0);
+    }
+
+    // ── Generation submit seam (D6) ──
+
+    #[test]
+    fn generate_image_with_backend_submits_and_recovers() {
+        // Full D6 chain: submit → pending "generating" entry with the backend
+        // job id → recovery finds it → resume Success lands the result URLs.
+        let mut exec = make_executor();
+        let mock = std::sync::Arc::new(MockGenerationBackend::default());
+        exec.set_generation_backend(mock.clone());
+
+        let res = exec
+            .execute(
+                "generate_image",
+                &json!({"prompt": "a fox", "model": "nano-banana-2"}),
+            )
+            .unwrap();
+        assert_ne!(res["isError"], true, "submit is a non-error result");
+        assert!(res["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Generation started"));
+
+        // The mock recorded the assembled request.
+        let recorded = mock.submitted.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].model, "nano-banana-2");
+        assert_eq!(recorded[0].kind, generation_core::ModelKind::Image);
+        assert_eq!(recorded[0].prompt, "a fox");
+        drop(recorded);
+
+        // A pending "generating" entry carrying the backend job id was added.
+        assert_eq!(exec.media_manifest().entries.len(), 1);
+        let entry = &exec.media_manifest().entries[0];
+        assert_eq!(entry.generation_status.as_deref(), Some("generating"));
+        assert_eq!(entry.r#type, ClipType::Image);
+        assert_eq!(
+            entry
+                .generation_input
+                .as_ref()
+                .unwrap()
+                .backend_job_id
+                .as_deref(),
+            Some("job-ok")
+        );
+
+        // Recovery finds exactly this in-flight job.
+        let plan = generation_core::plan_generation_recovery(exec.media_manifest());
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].backend_job_id, "job-ok");
+
+        // Resume Success writes the result URLs and finishes the status.
+        exec.recover_generations();
+        let entry = &exec.media_manifest().entries[0];
+        assert_eq!(entry.generation_status.as_deref(), Some("none"));
+        assert_eq!(
+            entry.generation_input.as_ref().unwrap().result_urls,
+            Some(vec!["https://cdn/out.mp4".to_string()])
+        );
+    }
+
+    #[test]
+    fn generate_video_with_backend_registers_generating() {
+        let mut exec = make_executor();
+        let mock = std::sync::Arc::new(MockGenerationBackend::default());
+        exec.set_generation_backend(mock.clone());
+
+        let res = exec
+            .execute("generate_video", &json!({"prompt": "a fox", "duration": 8.0}))
+            .unwrap();
+        assert_ne!(res["isError"], true);
+
+        assert_eq!(exec.media_manifest().entries.len(), 1);
+        let entry = &exec.media_manifest().entries[0];
+        assert_eq!(entry.generation_status.as_deref(), Some("generating"));
+        assert_eq!(entry.r#type, ClipType::Video);
+        assert_eq!(entry.duration, 8.0);
+
+        let recorded = mock.submitted.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].kind, generation_core::ModelKind::Video);
+        assert_eq!(recorded[0].duration_seconds, Some(8.0));
+    }
+
+    #[test]
+    fn generate_audio_with_backend_registers_generating() {
+        let mut exec = make_executor();
+        let mock = std::sync::Arc::new(MockGenerationBackend::default());
+        exec.set_generation_backend(mock.clone());
+
+        let res = exec
+            .execute("generate_audio", &json!({"prompt": "narration"}))
+            .unwrap();
+        assert_ne!(res["isError"], true);
+
+        assert_eq!(exec.media_manifest().entries.len(), 1);
+        let entry = &exec.media_manifest().entries[0];
+        assert_eq!(entry.generation_status.as_deref(), Some("generating"));
+        assert_eq!(entry.r#type, ClipType::Audio);
+        assert_eq!(
+            entry
+                .generation_input
+                .as_ref()
+                .unwrap()
+                .backend_job_id
+                .as_deref(),
+            Some("job-ok")
+        );
+
+        assert_eq!(mock.submitted.lock().unwrap().len(), 1);
+        assert_eq!(
+            mock.submitted.lock().unwrap()[0].kind,
+            generation_core::ModelKind::Audio
+        );
+    }
+
+    #[test]
+    fn generate_tools_without_backend_keep_honest_error_and_add_nothing() {
+        // Zero-regression guard: with no backend installed each generate tool
+        // keeps its existing unavailable signalling and registers no asset.
+        let mut exec = make_executor();
+        let vid = exec
+            .execute("generate_video", &json!({"prompt": "a fox"}))
+            .unwrap();
+        assert_eq!(vid["isError"], true);
+        let img = exec
+            .execute("generate_image", &json!({"prompt": "a fox"}))
+            .unwrap();
+        assert_eq!(img["isError"], true);
+        let audio_err = exec
+            .execute("generate_audio", &json!({"prompt": "narration"}))
+            .unwrap_err();
+        assert!(audio_err.contains("unavailable"));
+        assert!(
+            exec.media_manifest().entries.is_empty(),
+            "no backend must register no assets"
+        );
     }
 
     #[test]
@@ -16695,7 +16980,7 @@ mod tests {
         // Nothing installed on the pure/MCP path.
         assert!(!exec.is_generation_available());
         assert!(!exec.is_transcription_available());
-        exec.set_generation_backend(std::sync::Arc::new(MockGenerationBackend));
+        exec.set_generation_backend(std::sync::Arc::new(MockGenerationBackend::default()));
         assert!(exec.is_generation_available());
         assert!(!exec.is_transcription_available());
     }

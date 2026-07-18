@@ -182,6 +182,14 @@ impl EditorStateHub {
                     Arc::clone(&self.project_root),
                 ),
             ));
+            // Generation backend (D6): install only when a Protocol v1 endpoint
+            // is configured (FRONDA_GENERATION_URL/_TOKEN). Missing config leaves
+            // the seam unset, so the generate tools keep their honest error and
+            // recovery is only logged.
+            if let Some(backend) = crate::http_generation_backend::HttpGenerationBackend::from_config()
+            {
+                exec.set_generation_backend(std::sync::Arc::new(backend));
+            }
         }
         // Seam availability changed — tell live MCP sessions (#250).
         if let Ok(service) = crate::mcp_service::McpService::global().lock() {
@@ -710,6 +718,15 @@ mod tests {
 
     struct SucceedingBackend;
     impl agent_contract::GenerationBackend for SucceedingBackend {
+        fn submit(
+            &self,
+            _req: &generation_core::GenerationRequest,
+        ) -> Result<generation_core::GenerationSubmission, String> {
+            Ok(generation_core::GenerationSubmission {
+                backend_job_id: "job-ok".into(),
+            })
+        }
+
         fn resume_job(
             &self,
             _job_id: &str,
