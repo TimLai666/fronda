@@ -61,6 +61,21 @@ pub fn provider_http_client() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
+/// Resolve the effective model for a request under the v1.1 provider contract:
+/// honor `requested` when it names a model this provider advertises (the picker
+/// sources model ids from `/v1/providers`, i.e. the provider namespace);
+/// otherwise fall back to `default`. The agent/tool path sends Fronda-catalog
+/// ids the provider does not advertise, so those cleanly fall back to the
+/// provider's default — zero regression for callers that don't use the picker.
+pub fn resolve_effective_model(requested: &str, default: &str, advertised: &[String]) -> String {
+    let r = requested.trim();
+    if !r.is_empty() && advertised.iter().any(|m| m == r) {
+        r.to_string()
+    } else {
+        default.to_string()
+    }
+}
+
 /// A provider's acknowledgement of a submitted job: the id the client polls.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderJob {
@@ -100,6 +115,23 @@ mod tests {
         }
         assert_eq!(ProviderKind::from_token("upscale"), None);
         assert_eq!(ProviderKind::from_token(""), None);
+    }
+
+    #[test]
+    fn resolve_effective_model_honors_advertised_else_defaults() {
+        let advertised = vec!["flux".to_string(), "sana".to_string()];
+        // Advertised → honored (the picker's selection flows through).
+        assert_eq!(resolve_effective_model("sana", "flux", &advertised), "sana");
+        assert_eq!(resolve_effective_model("flux", "flux", &advertised), "flux");
+        // Not advertised (agent path sends a Fronda-catalog id) → default.
+        assert_eq!(resolve_effective_model("veo-3", "flux", &advertised), "flux");
+        // Empty/whitespace request → default.
+        assert_eq!(resolve_effective_model("", "flux", &advertised), "flux");
+        assert_eq!(resolve_effective_model("  ", "flux", &advertised), "flux");
+        // Surrounding whitespace on an advertised id is tolerated.
+        assert_eq!(resolve_effective_model(" sana ", "flux", &advertised), "sana");
+        // An empty default (Pollinations: "no model param → server default") stays empty.
+        assert_eq!(resolve_effective_model("veo-3", "", &advertised), "");
     }
 
     #[test]

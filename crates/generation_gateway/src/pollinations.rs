@@ -25,15 +25,20 @@ use crate::config::GatewayConfig;
 use crate::jobs::JobStore;
 use crate::protocol::GenerateRequest;
 use crate::provider::{
-    provider_http_client, GenerationProvider, ProviderJob, ProviderKind, ProviderStatus,
+    provider_http_client, resolve_effective_model, GenerationProvider, ProviderJob, ProviderKind,
+    ProviderStatus,
 };
 use crate::results::ResultStore;
 
 /// The name the Pollinations provider registers under.
 pub const POLLINATIONS_NAME: &str = "pollinations";
 pub const DEFAULT_POLLINATIONS_BASE: &str = "https://image.pollinations.ai";
-/// Model advertised in the `/v1/providers` catalog (Pollinations' default).
-pub const DEFAULT_POLLINATIONS_MODEL: &str = "flux";
+/// Model advertised in the `/v1/providers` catalog (Pollinations' default and,
+/// currently, only image model). Verified against `GET {base}/models` on
+/// 2026-07-18, which returned `["sana"]`. Pollinations' model list is volatile
+/// (it was `flux` weeks earlier), so this is a point-in-time snapshot; fetching
+/// `/models` at startup to advertise the live set is a follow-up.
+pub const DEFAULT_POLLINATIONS_MODEL: &str = "sana";
 
 /// Resolved Pollinations connection settings. `base` is overridable (env/config);
 /// there is no key — the provider is always available.
@@ -190,7 +195,17 @@ impl GenerationProvider for PollinationsImageProvider {
         let results = self.results.clone();
         let public_base = self.public_base.clone();
         let prompt = req.prompt.clone();
-        let params = PollinationsParams::from_request_params(&req.params);
+        let mut params = PollinationsParams::from_request_params(&req.params);
+        // v1.1: honor the request's top-level model when it names an advertised
+        // model (the picker's selection); an explicit `params.model` passthrough
+        // still wins. An unadvertised id (the agent path) leaves it unset → the
+        // Pollinations server default.
+        if params.model.is_none() {
+            let effective = resolve_effective_model(&req.model, "", &self.models());
+            if !effective.is_empty() {
+                params.model = Some(effective);
+            }
+        }
         let task_job_id = job_id.clone();
 
         tokio::spawn(async move {

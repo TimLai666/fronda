@@ -5023,6 +5023,30 @@ impl ToolExecutor {
         Ok(model)
     }
 
+    /// Resolve a generate request's wire model under the v1.1 provider contract.
+    /// Returns the `model` to send on the request (`GenerationRequest.model`).
+    ///
+    /// With no `provider`, `requested` is a Fronda catalog id: strict-resolve +
+    /// plan-gate, then use its id (identical to the pre-v1.1 path). With a
+    /// `provider`, `requested` names a model in THAT provider's namespace (per
+    /// the generate schema — the picker sources ids from `/v1/providers`), so it
+    /// is passed through verbatim and is NOT rejected against Fronda's catalog
+    /// nor plan-gated: a bring-your-own provider owns its models, and the gateway
+    /// honors the id when it advertises it. Prevents the picker's provider-model
+    /// (e.g. `sana`) from tripping `resolve_generation_model`'s "Unknown model".
+    fn resolve_generation_wire_model(
+        &self,
+        kind: generation_core::ModelKind,
+        requested: Option<&str>,
+        provider: Option<&str>,
+    ) -> Result<String, String> {
+        if provider.is_some() {
+            Ok(requested.unwrap_or("").trim().to_string())
+        } else {
+            Ok(self.resolve_generation_model(kind, requested)?.id.to_string())
+        }
+    }
+
     /// #249: reject paid-only models on a free plan with the require-plan message.
     fn gate_model(&self, m: &model_catalog::ModelConfig) -> Result<(), String> {
         if model_catalog::model_available(self.is_paid_account(), m.paid_only) {
@@ -8620,18 +8644,17 @@ impl ToolExecutor {
             .get("provider")
             .and_then(|v| v.as_str())
             .map(String::from);
-        let model = self
-            .resolve_generation_model(
-                generation_core::ModelKind::Video,
-                args.get("model").and_then(|v| v.as_str()),
-            )?
-            .id;
+        let model = self.resolve_generation_wire_model(
+            generation_core::ModelKind::Video,
+            args.get("model").and_then(|v| v.as_str()),
+            provider.as_deref(),
+        )?;
 
         if let Some(res) = self.submit_generation(
             generation_core::ModelKind::Video,
             prompt,
             prompt,
-            model,
+            &model,
             provider,
             Some(duration),
             None,
@@ -8662,18 +8685,17 @@ impl ToolExecutor {
             .get("provider")
             .and_then(|v| v.as_str())
             .map(String::from);
-        let model = self
-            .resolve_generation_model(
-                generation_core::ModelKind::Image,
-                args.get("model").and_then(|v| v.as_str()),
-            )?
-            .id;
+        let model = self.resolve_generation_wire_model(
+            generation_core::ModelKind::Image,
+            args.get("model").and_then(|v| v.as_str()),
+            provider.as_deref(),
+        )?;
 
         if let Some(res) = self.submit_generation(
             generation_core::ModelKind::Image,
             prompt,
             prompt,
-            model,
+            &model,
             provider,
             None,
             None,
@@ -8703,19 +8725,43 @@ impl ToolExecutor {
     /// needs the remote backend, reported honestly.
     fn cmd_generate_audio(&mut self, args: &Value) -> Result<Value, String> {
         use model_catalog::AudioInput;
-        let model = match args.get("model").and_then(|v| v.as_str()) {
-            Some(id) => {
-                self.resolve_generation_model(generation_core::ModelKind::Audio, Some(id))?
-            }
-            None => {
-                let is_paid = self.is_paid_account();
-                model_catalog::catalog()
-                    .iter()
-                    .filter(|m| m.kind_str() == "audio")
-                    .find(|m| model_catalog::model_available(is_paid, m.paid_only))
-                    .ok_or_else(|| model_catalog::no_available_model_message("audio"))?
-            }
+        let provider = args
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let requested_model = args.get("model").and_then(|v| v.as_str());
+        let is_paid = self.is_paid_account();
+        // The first plan-available audio model (the pre-v1.1 default when `model`
+        // is omitted, and the caps fallback for a provider-namespace model).
+        let first_available_audio = || -> Result<&'static model_catalog::ModelConfig, String> {
+            model_catalog::catalog()
+                .iter()
+                .filter(|m| m.kind_str() == "audio")
+                .find(|m| model_catalog::model_available(is_paid, m.paid_only))
+                .ok_or_else(|| model_catalog::no_available_model_message("audio"))
         };
+        // v1.1: with a provider, `model` names a model in THAT provider's
+        // namespace — sent verbatim on the wire, caps from the matching Fronda
+        // model or the default, not plan-gated (the provider owns its models).
+        // Without a provider, resolve/gate the Fronda catalog model as before.
+        let (wire_model, model): (String, &'static model_catalog::ModelConfig) =
+            if provider.is_some() {
+                let caps = match requested_model
+                    .and_then(|id| model_catalog::model_by_id(id).filter(|m| m.kind_str() == "audio"))
+                {
+                    Some(m) => m,
+                    None => first_available_audio()?,
+                };
+                (requested_model.unwrap_or("").trim().to_string(), caps)
+            } else {
+                let m = match requested_model {
+                    Some(id) => {
+                        self.resolve_generation_model(generation_core::ModelKind::Audio, Some(id))?
+                    }
+                    None => first_available_audio()?,
+                };
+                (m.id.to_string(), m)
+            };
         let model_catalog::ModelCaps::Audio(caps) = &model.caps else {
             return Err(format!("Model '{}' is not an audio model.", model.id));
         };
@@ -8870,15 +8916,11 @@ impl ToolExecutor {
         } else {
             prompt
         };
-        let provider = args
-            .get("provider")
-            .and_then(|v| v.as_str())
-            .map(String::from);
         if let Some(res) = self.submit_generation(
             generation_core::ModelKind::Audio,
             name,
             prompt,
-            model.id,
+            &wire_model,
             provider,
             duration_seconds.map(|d| d as f64),
             None,
@@ -11599,6 +11641,57 @@ mod tests {
         assert_eq!(recorded[0].provider.as_deref(), Some("gemini"));
         assert_eq!(recorded[1].provider, None, "no provider arg → None");
         assert_eq!(recorded[2].provider.as_deref(), Some("elevenlabs"));
+    }
+
+    #[test]
+    fn generate_with_provider_passes_provider_namespace_model_verbatim() {
+        // The v1.1 picker sends the provider's own model id (from /v1/providers),
+        // which is NOT a Fronda catalog id. With a provider set it must ride on
+        // the wire verbatim — not trip resolve_generation_model's "Unknown model"
+        // (the break the picker chain hit before this fix).
+        let mut exec = make_executor();
+        let mock = std::sync::Arc::new(MockGenerationBackend::default());
+        exec.set_generation_backend(mock.clone());
+
+        let img = exec
+            .execute(
+                "generate_image",
+                &json!({"prompt": "a fox", "provider": "pollinations", "model": "sana"}),
+            )
+            .expect("provider-routed image must not error on a non-Fronda model");
+        assert_ne!(img["isError"], true);
+
+        let audio = exec
+            .execute(
+                "generate_audio",
+                &json!({"prompt": "narration", "provider": "gemini", "model": "gemini-2.5-flash-tts"}),
+            )
+            .expect("provider-routed audio must not error on a non-Fronda model");
+        assert_ne!(audio["isError"], true);
+
+        let recorded = mock.submitted.lock().unwrap();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[0].provider.as_deref(), Some("pollinations"));
+        assert_eq!(recorded[0].model, "sana", "provider model rides on req.model");
+        assert_eq!(recorded[1].provider.as_deref(), Some("gemini"));
+        assert_eq!(recorded[1].model, "gemini-2.5-flash-tts");
+    }
+
+    #[test]
+    fn generate_without_provider_still_rejects_unknown_model() {
+        // Zero-regression: the agent/tool path (no provider) keeps validating the
+        // model against Fronda's catalog — an unknown id is still a hard error.
+        let mut exec = make_executor();
+        exec.set_generation_backend(std::sync::Arc::new(MockGenerationBackend::default()));
+
+        let err = exec
+            .execute("generate_image", &json!({"prompt": "a fox", "model": "sana"}))
+            .unwrap_err();
+        assert!(err.contains("Unknown model"), "err was: {err}");
+        assert!(
+            exec.media_manifest().entries.is_empty(),
+            "a rejected model must register no asset"
+        );
     }
 
     #[test]

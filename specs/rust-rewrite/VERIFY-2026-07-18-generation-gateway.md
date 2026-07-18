@@ -169,6 +169,40 @@ Deliberately **not** changed (contract decision, not a mechanical fix):
   so a future "honor `req.model` when it names an advertised model" is the safe
   shape once a provider offers more than one.
 
+## Model picker wired end-to-end (2026-07-18)
+
+Direction chosen by the user after the hardening sweep: fully wire the v1.1
+model picker. Tracing the chain surfaced a real break the structural tests had
+missed — the picker's getter was unit-tested, but the full submit path was not:
+
+- **Tool-layer break (fixed).** The Fronda picker rides the chosen provider
+  model on the request's `model` (generation_view.rs:1187–1191, correct), but
+  `cmd_generate_*` ran that id through `resolve_generation_model`, which
+  hard-errors `"Unknown model 'sana'"` for anything not in Fronda's own catalog.
+  So *every* provider-routed generation (even `provider:"stub"` →
+  `model:"stub-video"`) died before reaching the wire. Fix: a
+  `resolve_generation_wire_model` seam — with a `provider` set, the model is
+  provider-namespaced and passes through verbatim (no catalog check, no
+  plan-gate); with no provider, the strict Fronda-catalog resolve + gate is
+  unchanged (agent path zero-regression). Applied to all three generate tools.
+- **Gateway honor (added).** Gemini and Pollinations now call
+  `resolve_effective_model(requested, default, advertised)` — honor `req.model`
+  when the provider advertises it, else the provider default. Proven end-to-end
+  by a URI-capturing Pollinations mock: `model=sana` (advertised) is forwarded to
+  the upstream URL; an unadvertised id is dropped → server default.
+- **Pollinations catalog corrected.** Its advertised model was the stale `flux`;
+  `GET https://image.pollinations.ai/models` returned `["sana"]` on 2026-07-18,
+  so the catalog now advertises `sana`. The list is volatile (was `flux` weeks
+  prior) — advertising the live `/models` set at startup is a noted follow-up.
+
+Tests: `resolve_effective_model` unit (honored/default/whitespace), the
+Pollinations forward/omit integration test, and two tool-layer tests
+(provider-namespace model passes verbatim; no-provider still rejects unknown).
+Workspace green (3213 passed). Caveat unchanged: both real providers advertise a
+single model today, so the picker's *model* dimension shows one option per
+provider — the plumbing is correct and exercised, but the visible multi-model
+choice appears only once a provider advertises more than one.
+
 ## Reference-gateway known limitations (follow-ups, not bugs)
 
 - The in-memory job/result store is unbounded — fine for a local single-user

@@ -25,7 +25,8 @@ use crate::config::GatewayConfig;
 use crate::jobs::JobStore;
 use crate::protocol::GenerateRequest;
 use crate::provider::{
-    provider_http_client, GenerationProvider, ProviderJob, ProviderKind, ProviderStatus,
+    provider_http_client, resolve_effective_model, GenerationProvider, ProviderJob, ProviderKind,
+    ProviderStatus,
 };
 use crate::results::ResultStore;
 
@@ -135,7 +136,10 @@ impl GenerationProvider for GeminiImageProvider {
             .update(&job_id, |rec| rec.status = ProviderStatus::Running);
 
         let client = self.client.clone();
-        let config = self.config.clone();
+        // v1.1: honor the request's model when it names one this provider
+        // advertises (picker selection); otherwise keep the configured default.
+        let mut config = self.config.clone();
+        config.model = resolve_effective_model(&req.model, &self.config.model, &self.models());
         let store = self.store.clone();
         let results = self.results.clone();
         let public_base = self.public_base.clone();

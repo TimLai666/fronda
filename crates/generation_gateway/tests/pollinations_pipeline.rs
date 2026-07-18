@@ -6,10 +6,15 @@
 //! with no API key anywhere in the loop.
 
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::{
-    http::header::CONTENT_TYPE as AXUM_CONTENT_TYPE, response::IntoResponse, routing::get, Router,
+    extract::{RawQuery, State},
+    http::header::CONTENT_TYPE as AXUM_CONTENT_TYPE,
+    response::IntoResponse,
+    routing::get,
+    Router,
 };
 use fronda_gen_gateway::{app_state, build_router, GatewayConfig};
 use reqwest::header::CONTENT_TYPE;
@@ -153,4 +158,100 @@ async fn without_any_key_image_catalog_lists_stub_and_pollinations() {
     assert_eq!(names.len(), 2, "names were: {names:?}");
     assert!(names.contains(&"stub"), "names were: {names:?}");
     assert!(names.contains(&"pollinations"), "names were: {names:?}");
+}
+
+/// A Pollinations mock that records each `/prompt` request's raw query string, so
+/// a test can assert which `model` (if any) the provider forwarded upstream.
+async fn spawn_recording_pollinations() -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let router = Router::new()
+        .route(
+            "/prompt/{prompt}",
+            get(
+                |State(cap): State<Arc<Mutex<Vec<String>>>>, RawQuery(q): RawQuery| async move {
+                    cap.lock().unwrap().push(q.unwrap_or_default());
+                    ([(AXUM_CONTENT_TYPE, "image/jpeg")], FAKE_JPEG.to_vec())
+                },
+            ),
+        )
+        .with_state(captured.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    (addr, captured)
+}
+
+/// Submit a job and poll it to `succeeded` (so the background provider task has
+/// run and hit the upstream). Panics on failure or timeout.
+async fn submit_and_wait(client: &reqwest::Client, base: &str, body: Value) {
+    let submit: Value = client
+        .post(format!("{base}/v1/generate"))
+        .bearer_auth("secret")
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = submit["jobId"].as_str().unwrap().to_string();
+    for _ in 0..200 {
+        let poll: Value = client
+            .get(format!("{base}/v1/jobs/{job_id}"))
+            .bearer_auth("secret")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        match poll["status"].as_str().unwrap() {
+            "succeeded" => return,
+            "failed" => panic!("job failed: {:?}", poll["error"]),
+            _ => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
+    panic!("job did not reach succeeded in time");
+}
+
+#[tokio::test]
+async fn pollinations_honors_advertised_model_and_omits_unadvertised() {
+    // v1.1 picker path: the request's top-level `model` reaches the upstream URL
+    // only when it names an advertised provider model. An unadvertised id (the
+    // agent path sends a Fronda-catalog id) is dropped → Pollinations' server
+    // default. This is the gateway half of "接通 model picker".
+    let (mock_addr, captured) = spawn_recording_pollinations().await;
+    let gw_addr = spawn_gateway(&format!("http://{mock_addr}")).await;
+    let base = format!("http://{gw_addr}");
+    let client = reqwest::Client::new();
+
+    // (1) req.model = the advertised model → forwarded as ?model=sana.
+    submit_and_wait(
+        &client,
+        &base,
+        json!({ "kind": "image", "provider": "pollinations", "model": "sana", "prompt": "a fox" }),
+    )
+    .await;
+    // (2) req.model = an unadvertised (Fronda-catalog) id → no model param.
+    submit_and_wait(
+        &client,
+        &base,
+        json!({ "kind": "image", "provider": "pollinations", "model": "nano-banana-2", "prompt": "a cat" }),
+    )
+    .await;
+
+    let queries = captured.lock().unwrap();
+    assert_eq!(queries.len(), 2, "queries: {queries:?}");
+    assert!(
+        queries[0].contains("model=sana"),
+        "advertised model must be forwarded, query was: {}",
+        queries[0]
+    );
+    assert!(
+        !queries[1].contains("model="),
+        "unadvertised model must be dropped (server default), query was: {}",
+        queries[1]
+    );
 }

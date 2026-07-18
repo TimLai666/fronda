@@ -167,7 +167,21 @@ the gateway routes to the kind's default provider.
   `kind`.
 - A named provider the gateway does not have (for that kind) → an explicit
   error (4xx), not a silent fallback.
-- `model` still selects the specific model **within** the chosen provider.
+- `model` selects the specific model **within** the chosen provider. When a
+  provider is set, `model` is a value from **that provider's namespace** (an id
+  the provider lists in `/v1/providers`), not a Fronda-catalog id. The reference
+  gateway **honors `model` when the chosen provider advertises it**, and
+  otherwise falls back to the provider's own default (`resolve_effective_model`).
+  This is what lets the Fronda model picker's selection flow through: the picker
+  sources model ids from `/v1/providers` and rides the chosen one on `model`.
+
+  Correspondingly, the Fronda client (`cmd_generate_*`) sends the provider's
+  model **verbatim** when a `provider` is set — it does **not** validate that id
+  against Fronda's own model catalog or apply Fronda plan-gating (a
+  bring-your-own provider owns its models). With no `provider`, `model` is a
+  Fronda-catalog id, strict-resolved and plan-gated as before, so the agent/tool
+  path is unchanged. An unadvertised id therefore degrades to the provider
+  default rather than erroring.
 
 ### `GET {base}/v1/providers`
 
