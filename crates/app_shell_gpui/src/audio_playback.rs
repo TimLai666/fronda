@@ -88,12 +88,17 @@ impl AudioRing {
     /// Push up to the free space; rejects a stale `epoch` entirely.
     /// Returns the number of samples accepted.
     pub fn push(&self, epoch: u64, samples: &[f32]) -> usize {
-        if epoch != self.current_epoch() {
-            return 0;
-        }
         let Ok(mut buf) = self.inner.lock() else {
             return 0;
         };
+        // Re-check the epoch UNDER the lock. `bump_epoch` clears under the same
+        // lock, so serializing the check against `clear` here closes a TOCTOU:
+        // a stale producer that passed a pre-lock check could otherwise block
+        // on the lock behind `clear`, then acquire it and append stale samples
+        // that survive the bump — exactly what the fence is meant to prevent.
+        if epoch != self.current_epoch() {
+            return 0;
+        }
         let n = samples.len().min(self.capacity.saturating_sub(buf.len()));
         buf.extend(samples[..n].iter().copied());
         n
@@ -759,6 +764,52 @@ mod tests {
         assert_eq!(ring.push(stale, &[2.0]), 0, "stale producer fenced out");
         assert_eq!(ring.len(), 0, "bump also cleared buffered samples");
         assert_eq!(ring.push(ring.current_epoch(), &[3.0]), 1);
+    }
+
+    // A stale producer racing a bump must never leave its samples behind: the
+    // final settled buffer holds only current-epoch (2.0) or nothing, never a
+    // stale marker (1.0). Exercises the push/clear lock-ordering many times to
+    // hit the race window that a pre-lock epoch check would let through.
+    #[test]
+    fn ring_stale_producer_never_survives_a_concurrent_bump() {
+        use std::sync::Arc;
+        // Many stale producers hammer push() against a stream of bumps+clears.
+        // After the last bump and a final drain, no stale marker (1.0) may
+        // remain — only current-epoch samples (2.0) or silence. Contended so
+        // the race window (producer blocked on the lock behind clear) is hit.
+        for _ in 0..200 {
+            let ring = Arc::new(AudioRing::new(4096));
+            let stale = ring.current_epoch();
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let producers: Vec<_> = (0..8)
+                .map(|_| {
+                    let ring = Arc::clone(&ring);
+                    let stop = Arc::clone(&stop);
+                    std::thread::spawn(move || {
+                        while !stop.load(Ordering::Relaxed) {
+                            ring.push(stale, &[1.0; 8]);
+                        }
+                    })
+                })
+                .collect();
+            for _ in 0..50 {
+                ring.bump_epoch();
+                std::thread::yield_now();
+            }
+            let last = ring.bump_epoch();
+            stop.store(true, Ordering::Relaxed);
+            for p in producers {
+                p.join().unwrap();
+            }
+            // Fresh push proves the ring is usable; then drain and check.
+            ring.push(last, &[2.0; 8]);
+            let mut out = vec![0.0f32; ring.capacity()];
+            ring.pop_into(&mut out);
+            assert!(
+                out.iter().all(|&s| s != 1.0),
+                "a stale-epoch sample survived the bump fence"
+            );
+        }
     }
 
     // ---- clock ------------------------------------------------------------
