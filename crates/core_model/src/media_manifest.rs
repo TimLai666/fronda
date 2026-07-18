@@ -205,6 +205,13 @@ pub struct GenerationInput {
         skip_serializing_if = "Option::is_none"
     )]
     pub result_urls: Option<Vec<String>>,
+    /// The v1.1 gateway provider this asset was generated through, if any
+    /// (Rust-native — the gateway/provider concept has no Swift equivalent).
+    /// Persisted so Rerun can re-route to the same provider; without it a
+    /// provider-namespace model id (e.g. `sana`) would trip the tool's
+    /// Fronda-catalog validation on rerun.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 impl Default for GenerationInput {
@@ -235,6 +242,7 @@ impl Default for GenerationInput {
             backend_job_id: None,
             output_index: None,
             result_urls: None,
+            provider: None,
         }
     }
 }
@@ -913,5 +921,28 @@ mod tests {
         assert!(!json.contains("aiTags"), "json={json}");
         assert!(!json.contains("aiDescription"), "json={json}");
         assert!(!json.contains("aiLabelStatus"), "json={json}");
+    }
+
+    #[test]
+    fn generation_input_provider_roundtrips_and_omits_when_none() {
+        // Rust-native extension field: round-trips when set, and is absent from
+        // JSON when None so old files and the Swift baseline (no such key) are
+        // unaffected.
+        let with = GenerationInput {
+            provider: Some("pollinations".into()),
+            model: "sana".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains("\"provider\":\"pollinations\""), "json={json}");
+        let restored: GenerationInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.provider.as_deref(), Some("pollinations"));
+
+        let without = GenerationInput::default();
+        let json = serde_json::to_string(&without).unwrap();
+        assert!(!json.contains("provider"), "None must be omitted: json={json}");
+        // A document without the provider key (a pre-extension file) decodes to None.
+        let restored: GenerationInput = serde_json::from_str(&json).unwrap();
+        assert!(restored.provider.is_none());
     }
 }

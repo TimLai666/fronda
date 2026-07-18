@@ -198,10 +198,29 @@ missed — the picker's getter was unit-tested, but the full submit path was not
 Tests: `resolve_effective_model` unit (honored/default/whitespace), the
 Pollinations forward/omit integration test, and two tool-layer tests
 (provider-namespace model passes verbatim; no-provider still rejects unknown).
-Workspace green (3213 passed). Caveat unchanged: both real providers advertise a
-single model today, so the picker's *model* dimension shows one option per
-provider — the plumbing is correct and exercised, but the visible multi-model
-choice appears only once a provider advertises more than one.
+Caveat unchanged: both real providers advertise a single model today, so the
+picker's *model* dimension shows one option per provider — the plumbing is
+correct and exercised, but the visible multi-model choice appears only once a
+provider advertises more than one.
+
+### Adversarial review + Rerun fix
+
+An independent adversarial review of the picker change confirmed all seven
+invariants hold (no bug in the changed lines) but surfaced one **real defect the
+change newly exposed**: before it, provider-routed generations always errored
+before creating a manifest entry; now they succeed, and `GenerationInput` had no
+`provider` field — so a picker-generated asset stored `model:"sana"` with the
+provider dropped. **Rerun** (`ai_edit_tab_view::generation_args_from_input`) then
+rebuilt the call without a provider → `cmd_generate_image` took the no-provider
+branch → `"Unknown model 'sana'"`. The exact break, reappearing on the rerun
+path. Fixed by persisting `provider` on `GenerationInput` (Rust-native additive
+field, `skip_serializing_if=None` so old files / the Swift baseline are
+unaffected), writing it in `submit_generation`, and re-emitting it from the rerun
+args builder. Tests: manifest serde round-trip/omit, the tool-layer test now
+asserts the persisted provider, and two rerun tests (provider preserved;
+no-provider stays absent). Also cleaned a pre-existing `question_mark` clippy nit
+in `selected_provider_model`. Workspace green (3214 default + 619 desktop-app,
+0 failed); clippy clean on all touched crates.
 
 ## Reference-gateway known limitations (follow-ups, not bugs)
 

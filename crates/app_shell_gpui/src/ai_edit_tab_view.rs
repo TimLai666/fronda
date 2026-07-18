@@ -125,6 +125,12 @@ fn generation_args_from_input(input: &GenerationInput) -> serde_json::Value {
     let mut set = |key: &str, value: serde_json::Value| {
         obj.insert(key.to_string(), value);
     };
+    // v1.1: re-route through the same gateway provider, so a provider-namespace
+    // model id (e.g. `sana`) passes verbatim instead of tripping the tool's
+    // Fronda-catalog validation on rerun.
+    if let Some(p) = &input.provider {
+        set("provider", serde_json::json!(p));
+    }
     if input.duration > 0 {
         set("duration", serde_json::json!(input.duration as f64));
     }
@@ -750,6 +756,38 @@ mod tests {
         assert_eq!(tool, "upscale_media");
         assert_eq!(args["mediaRef"], "asset-1");
         assert_eq!(args["model"], "topaz-upscaler");
+    }
+
+    #[test]
+    fn rerun_of_provider_generated_asset_preserves_provider_and_model() {
+        // A Pollinations-generated image stores a provider-namespace model id
+        // ("sana") + its provider. Rerun must re-emit BOTH so the tool takes the
+        // provider branch and passes "sana" verbatim — not re-validate it against
+        // Fronda's catalog (which would fail "Unknown model 'sana'").
+        let input = GenerationInput {
+            model: "sana".into(),
+            provider: Some("pollinations".into()),
+            prompt: "a fox".into(),
+            ..Default::default()
+        };
+        let a = asset(ClipType::Image, Some(input));
+        let (tool, args) = rerun_tool_call(&a).unwrap();
+        assert_eq!(tool, "generate_image");
+        assert_eq!(args["model"], "sana");
+        assert_eq!(args["provider"], "pollinations");
+    }
+
+    #[test]
+    fn rerun_without_provider_omits_the_field() {
+        // A Fronda-catalog generation (no provider) must not gain a provider arg.
+        let input = GenerationInput {
+            model: "nano-banana-2".into(),
+            provider: None,
+            ..Default::default()
+        };
+        let a = asset(ClipType::Image, Some(input));
+        let (_tool, args) = rerun_tool_call(&a).unwrap();
+        assert!(args.get("provider").is_none(), "no provider must stay absent");
     }
 
     #[test]

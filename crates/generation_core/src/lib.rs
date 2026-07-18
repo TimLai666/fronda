@@ -1708,6 +1708,7 @@ mod tests {
             backend_job_id: None,
             output_index: None,
             result_urls: None,
+            provider: None,
         };
         let snap = GenerationMachine::create_snapshot(
             &input,
@@ -1860,6 +1861,7 @@ mod tests {
             backend_job_id: None,
             output_index: None,
             result_urls: None,
+            provider: None,
         };
         let prep = GenerationMachine::rerun_from_input(&input, GenerationModality::Video).unwrap();
         assert_eq!(prep.prompt, "rerun test");

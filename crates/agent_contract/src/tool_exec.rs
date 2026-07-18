@@ -8604,6 +8604,7 @@ impl ToolExecutor {
                 model: model.to_string(),
                 duration: duration_seconds.map(|d| d.round() as i64).unwrap_or(0),
                 backend_job_id: Some(submission.backend_job_id.clone()),
+                provider: req.provider.clone(),
                 ..Default::default()
             }),
             source_width: None,
@@ -11675,6 +11676,18 @@ mod tests {
         assert_eq!(recorded[0].model, "sana", "provider model rides on req.model");
         assert_eq!(recorded[1].provider.as_deref(), Some("gemini"));
         assert_eq!(recorded[1].model, "gemini-2.5-flash-tts");
+        drop(recorded);
+
+        // The provider + provider-namespace model are persisted on the manifest
+        // entry so Rerun can re-route to the same provider (else a rerun of
+        // "sana" would trip Fronda-catalog validation).
+        let entries = &exec.media_manifest().entries;
+        assert_eq!(entries.len(), 2);
+        let g0 = entries[0].generation_input.as_ref().unwrap();
+        assert_eq!(g0.provider.as_deref(), Some("pollinations"));
+        assert_eq!(g0.model, "sana");
+        let g1 = entries[1].generation_input.as_ref().unwrap();
+        assert_eq!(g1.provider.as_deref(), Some("gemini"));
     }
 
     #[test]

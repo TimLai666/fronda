@@ -429,9 +429,7 @@ impl GenerationState {
     /// explicit pick, else the chosen provider's first model. None when no
     /// provider is chosen (the request keeps its catalog-model selection).
     pub fn selected_provider_model(&self) -> Option<&str> {
-        if self.selected_provider().is_none() {
-            return None;
-        }
+        self.selected_provider()?;
         self.provider_pick()
             .model
             .as_deref()
